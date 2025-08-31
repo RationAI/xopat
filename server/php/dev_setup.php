@@ -22,6 +22,7 @@ $replacer = function($match) use ($i18n) {
             require_openseadragon();
             require_lib("primer");
             require_lib("jquery");
+            require_lib("render");
             require_ui();
             require_core("deps");
             require_openseadragon();

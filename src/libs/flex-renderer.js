@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-08-25
-//! Git commit: --01bb5db-dirty
+//! Built on 2025-08-30
+//! Git commit: --cd99201-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -438,7 +438,6 @@
             const shader = new Shader(id, {
                 shaderConfig: shaderConfig,
                 webglContext: this.webglContext,
-                controls: shaderConfig._controls,
                 params: shaderConfig.params,
                 interactive: this.interactive,
 
@@ -1127,9 +1126,7 @@
          * @param {Object} privateOptions
          * @param {Object} privateOptions.shaderConfig              object bind with this ShaderLayer
          * @param {WebGLImplementation} privateOptions.webglContext
-         * @param {Object} privateOptions.controls
          * @param {Object} privateOptions.cache
-         *
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
          * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
@@ -3898,11 +3895,14 @@ precision mediump float;
 
 layout(location = 0) in mat3 a_transform_matrix;
 layout(location = 4) in vec2 a_texture_coords;
+layout(location = 5) in vec4 a_vecColor;
 
 uniform vec2 u_renderClippingParams;
+uniform mat3 u_geomMatrix;
 
 out vec2 v_texture_coords;
 flat out int instance_id;
+out vec4 v_vecColor;
 
 const vec3 viewport[4] = vec3[4] (
     vec3(0.0, 1.0, 1.0),
@@ -3916,9 +3916,13 @@ in vec2 a_positions;
 void main() {
     v_texture_coords = a_texture_coords;
 
+    mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
+
     vec3 space_2d = u_renderClippingParams.x > 0.5 ?
-        a_transform_matrix * vec3(a_positions, 1.0) :
-        a_transform_matrix * viewport[gl_VertexID];
+        matrix * vec3(a_positions, 1.0) :
+        matrix * viewport[gl_VertexID];
+
+    v_vecColor = a_vecColor;
 
     gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
     instance_id = gl_InstanceID;
@@ -3933,6 +3937,7 @@ uniform vec2 u_renderClippingParams;
 
 flat in int instance_id;
 in vec2 v_texture_coords;
+in vec4 v_vecColor;
 uniform sampler2D u_textures[${this._maxTextures}];
 
 layout(location=0) out vec4 outputColor;
@@ -3952,6 +3957,13 @@ void main() {
             }
         }
         outputStencil = 1.0;
+    } else if (u_renderClippingParams.y > 0.5) {
+        // Vector geometry draw path (per-vertex color)
+        outputColor = v_vecColor;
+        outputStencil = 1.0;
+    } else {
+        // Pure clipping path: write only to stencil (color target value is undefined)
+        outputColor = vec4(0.0);
     }
 }
 `;
@@ -3974,13 +3986,34 @@ void main() {
             this.matrixBufferClip = gl.createBuffer();
             this.firstPassVaoClip = gl.createVertexArray();
             this.positionsBufferClip = gl.createBuffer();
+
+            this.firstPassVaoGeom = gl.createVertexArray();
+            this.positionsBufferGeom = gl.createBuffer();
         }
 
         // Texture locations are 0->N uniform indexes, we do not load the data here yet as vao does not store them
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
 
-        // Setup all rendering props once beforehand
+
+        // Setup all rendering props once beforehand: geometry
+        gl.bindVertexArray(this.firstPassVaoGeom);
+        // Colors for geometry
+        this._colorAttrib = 5; // matches 'layout(location=5)'
+        gl.enableVertexAttribArray(this._colorAttrib);
+        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+        // a_positions (dynamic buffer, we may re-bind/retarget per primitive)
+        this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferGeom);
+        gl.enableVertexAttribArray(this._positionsBuffer);
+        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+        this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
+
+
+
+
+        // Setup all rendering props once beforehand: raster
         gl.bindVertexArray(vao);
         // Texture coords are vec2 * 4 coords for the textures, needs to be passed since textures can have offset
         this._texCoordsBuffer = gl.getAttribLocation(program, "a_texture_coords");
@@ -3988,18 +4021,17 @@ void main() {
         gl.enableVertexAttribArray(this._texCoordsBuffer);
         gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
         gl.vertexAttribDivisor(this._texCoordsBuffer, 0);
-
         // We call bufferData once, then we just call subData
         const maxTexCoordBytes = this._maxTextures * 8 * Float32Array.BYTES_PER_ELEMENT;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, maxTexCoordBytes, gl.DYNAMIC_DRAW);
-
         // To be able to use the clipping along with tile render, we pass points explicitly
         this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
-
         // Matrices position tiles, 3*3 matrix per tile sent as 3 attributes in
+        // Share the same per-instance transform setup as the raster VAO
         this._matrixBuffer = gl.getAttribLocation(program, "a_transform_matrix");
         const matLoc = this._matrixBuffer;
+        const maxMatrixBytes = this._maxTextures * 9 * Float32Array.BYTES_PER_ELEMENT;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
         gl.enableVertexAttribArray(matLoc);
         gl.enableVertexAttribArray(matLoc + 1);
@@ -4011,7 +4043,6 @@ void main() {
         gl.vertexAttribDivisor(matLoc + 1, 1);
         gl.vertexAttribDivisor(matLoc + 2, 1);
         // We call bufferData once, then we just call subData
-        const maxMatrixBytes = this._maxTextures * 9 * Float32Array.BYTES_PER_ELEMENT;
         gl.bufferData(gl.ARRAY_BUFFER, maxMatrixBytes, gl.STREAM_DRAW);
 
 
@@ -4077,7 +4108,7 @@ void main() {
         let wasClipping = true; // force first init (~ as if was clipping was true)
 
         for (const renderInfo of sourceArray) {
-            const source = renderInfo.tiles;
+            const rasterTiles = renderInfo.tiles;
             const attachments = [];
             // for (let i = 0; i < 1; i++) {
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
@@ -4121,32 +4152,80 @@ void main() {
                 wasClipping = false;
             }
 
-            // Then draw join tiles
-            gl.bindVertexArray(this.firstPassVao);
-            const tileCount = source.length;
-            let currentIndex = 0;
+            const tileCount = rasterTiles.length;
+            if (tileCount) {
+                // Then draw join tiles
+                gl.bindVertexArray(this.firstPassVao);
+                let currentIndex = 0;
+                while (currentIndex < tileCount) {
+                    const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
 
-            while (currentIndex < tileCount) {
-                const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
+                    for (let i = 0; i < batchSize; i++) {
+                        const tile = rasterTiles[currentIndex + i];
 
-                for (let i = 0; i < batchSize; i++) {
-                    const tile = source[currentIndex + i];
+                        gl.activeTexture(gl.TEXTURE0 + i);
+                        gl.bindTexture(gl.TEXTURE_2D, tile.texture);
 
-                    gl.activeTexture(gl.TEXTURE0 + i);
-                    gl.bindTexture(gl.TEXTURE_2D, tile.texture);
+                        this._tempMatrixData.set(tile.transformMatrix, i * 9);
+                        this._tempTexCoords.set(tile.position, i * 8);
+                    }
 
-                    this._tempMatrixData.set(tile.transformMatrix, i * 9);
-                    this._tempTexCoords.set(tile.position, i * 8);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
+
+                    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
+                    currentIndex += batchSize;
                 }
+            }
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
+            const vectors = renderInfo.vectors;
+            if (vectors && vectors.length) {
+                // Signal geometry branch in shader
+                gl.uniform2f(this._renderClipping, 1, 1);
+                gl.bindVertexArray(this.firstPassVaoGeom);
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
+                for (let vectorTile of vectors) {
+                    let batch = vectorTile.fills;
+                    if (batch) {
+                        // Upload per-tile transform matrix (we draw exactly 1 instance)
+                        gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
 
-                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
-                currentIndex += batchSize;
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
+
+                    batch = vectorTile.lines;
+                    if (batch) {
+                        if (!vectorTile.fills) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
+                }
+                gl.uniform2f(this._renderClipping, 0, 0);
             }
 
             this._renderOffset++;
@@ -4200,6 +4279,12 @@ void main() {
         // this.colorTextureB = null;
         // gl.deleteTexture(this.stencilTextureB);
         // this.stencilTextureB = null;
+
+        gl.deleteVertexArray(this.firstPassVaoGeom);
+        gl.deleteBuffer(this.positionsBufferGeom);
+        this.firstPassVaoGeom = null;
+        this.positionsBufferGeom = null;
+        this.matrixBufferGeom = null;
 
         this.stencilClipBuffer = null;
 
@@ -4276,7 +4361,7 @@ void main() {
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             // We have 'undefined' extra format for blank tiles
-            this._supportedFormats = ["rasterBlob", "context2d", "image", "undefined"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "undefined"];
             this.rebuildCounter = 0;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
@@ -4695,6 +4780,7 @@ void main() {
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
+                const vecPayload = [];
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
@@ -4728,13 +4814,26 @@ void main() {
                             //TODO consider drawing some error if the tile is in erroneous state
                             continue;
                         }
-                        payload.push({
-                            transformMatrix: this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix),
-                            dataIndex: tiledImageIndex,
-                            texture: tileInfo.texture,
-                            position: tileInfo.position,
-                            tile: tile
-                        });
+                        const transformMatrix = this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix);
+                        if (tileInfo.texture) {
+                            payload.push({
+                                transformMatrix,
+                                dataIndex: tiledImageIndex,
+                                texture: tileInfo.texture,
+                                position: tileInfo.position,
+                                tile: tile
+                            });
+                        } else if (tileInfo.vectors) {
+                            // Flatten fill + line meshes into a simple draw list
+
+                            if (tileInfo.vectors.fills) {
+                                tileInfo.vectors.fills.matrix = transformMatrix;
+                            }
+                            if (tileInfo.vectors.lines) {
+                                tileInfo.vectors.lines.matrix = transformMatrix;
+                            }
+                            vecPayload.push(tileInfo.vectors);
+                        }
                     }
                 }
 
@@ -4764,6 +4863,7 @@ void main() {
 
                 TI_PAYLOAD.push({
                     tiles: payload,
+                    vectors: vecPayload,
                     polygons: polygons,
                     dataIndex: tiledImageIndex,
                     _temp: overallMatrix, // todo dirty
@@ -4968,7 +5068,6 @@ void main() {
             let viewportSize = this._calculateCanvasSize();
 
             // SETUP CANVASES
-            this._size = new $.Point(viewportSize.x, viewportSize.y); // current viewport size, changed during resize event
             this._gl = this.renderer.gl;
             this._setupCanvases();
 
@@ -5007,6 +5106,106 @@ void main() {
             if (data instanceof CanvasRenderingContext2D) {
                 data = data.canvas;
             }
+
+            // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
+            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines))) {
+                const tileInfo = { texture: null, position: null, vectors: {} };
+
+                const buildBatch = (meshes) => {
+                    // Count totals
+                    let vCount = 0,
+                        iCount = 0;
+                    for (const m of meshes) {
+                        vCount += (m.vertices.length / 2);
+                        iCount += m.indices.length;
+                    }
+
+                    // Allocate batched arrays
+                    const positions = new Float32Array(vCount * 2);
+                    const colors    = new Uint8Array(vCount * 4);  // normalized RGBA
+                    const indices   = new Uint32Array(iCount);
+
+                    // Fill them
+                    let vOfs = 0,
+                        iOfs = 0,
+                        baseVertex = 0;
+                    for (const m of meshes) {
+                        positions.set(m.vertices, vOfs * 2);
+
+                        // fill color per-vertex (constant per feature)
+                        const rgba = m.color ? m.color : [0, 0, 0, 1];
+                        const r = Math.max(0, Math.min(255, Math.round(rgba[0] * 255)));
+                        const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
+                        const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
+                        const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
+                        for (let k = 0; k < (m.vertices.length / 2); k++) {
+                            const cOfs = (vOfs + k) * 4;
+                            colors[cOfs + 0] = r;
+                            colors[cOfs + 1] = g;
+                            colors[cOfs + 2] = b;
+                            colors[cOfs + 3] = a;
+                        }
+
+                        // rebase indices
+                        for (let k = 0; k < m.indices.length; k++) {
+                            indices[iOfs + k] = baseVertex + m.indices[k];
+                        }
+
+                        vOfs += (m.vertices.length / 2);
+                        iOfs += m.indices.length;
+                        baseVertex += (m.vertices.length / 2);
+                    }
+
+                    // Upload once
+                    const vboPos = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
+                    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+                    const vboCol = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
+                    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+
+                    const ibo = gl.createBuffer();
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+                    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+                    return { vboPos, vboCol, ibo, count: indices.length };
+                };
+
+                if (data.fills && data.fills.length) {
+                    tileInfo.vectors.fills = buildBatch(data.fills);
+                }
+                if (data.lines && data.lines.length) {
+                    tileInfo.vectors.lines = buildBatch(data.lines);
+                }
+
+                return Promise.resolve(tileInfo);
+            }
+
+
+            // if (cache.type === "vector-mesh") {
+            //     // We keep per-primitive VBOs so first pass can draw them without re-uploading every frame
+            //     const tileInfo = { texture: null, position: null, vectors: [] };
+            //
+            //     const meshes = Array.isArray(data.meshes) ? data.meshes : [];
+            //     for (const m of meshes) {
+            //         const positions = (m && m.positions) instanceof Float32Array ? m.positions : null;
+            //         if (!positions || positions.length === 0) continue;
+            //
+            //         const color = m.color && m.color.length === 4 ? m.color : [1, 0, 0, 1]; // default red
+            //
+            //         const vbo = gl.createBuffer();
+            //         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+            //         gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+            //         tileInfo.vectors.push({
+            //             buffer: vbo,
+            //             count: positions.length / 2,
+            //             color: new Float32Array(color)
+            //         });
+            //     }
+            //
+            //     return Promise.resolve(tileInfo);
+            // }
 
             return createImageBitmap(data).then(data => {
                 // if (!tiledImage.isTainted()) {
@@ -5054,6 +5253,7 @@ void main() {
                 const tileInfo = {
                     position: position,
                     texture: null,
+                    vectors: undefined,
                 };
 
                 try {
@@ -5100,10 +5300,34 @@ void main() {
             });
         }
 
+        // internalCacheFree(data) {
+        //     if (data && data.texture) {
+        //         this._gl.deleteTexture(data.texture);
+        //         data.texture = null;
+        //     }
+        // }
+
         internalCacheFree(data) {
-            if (data && data.texture) {
+            if (!data) {
+                return;
+            }
+            if (data.texture) {
                 this._gl.deleteTexture(data.texture);
                 data.texture = null;
+            }
+            if (data.vectors) {
+                const gl = this._gl;
+                if (data.vectors.fills) {
+                    gl.deleteBuffer(data.vectors.fills.vboPos);
+                    gl.deleteBuffer(data.vectors.fills.vboCol);
+                    gl.deleteBuffer(data.vectors.fills.ibo);
+                }
+                if (data.vectors.lines) {
+                    gl.deleteBuffer(data.vectors.lines.vboPos);
+                    gl.deleteBuffer(data.vectors.lines.vboCol);
+                    gl.deleteBuffer(data.vectors.lines.ibo);
+                }
+                data.vectors = null;
             }
         }
 
@@ -5407,4 +5631,1163 @@ void main() {
 
 })(OpenSeadragon);
 
+(function ($) {
+/**
+ * MVTTileJSONSource
+ * ------------------
+ * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
+ * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
+ * caches using the new `vector-mesh` format (fills + lines).
+ *
+ * Requirements:
+ *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
+ *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
+ *
+ * Usage:
+ *   const src = await OpenSeadragon.MVTTileJSONSource.from(
+ *     'https://tiles.example.com/basemap.json',
+ *     { style: defaultStyle() }
+ *   );
+ *   viewer.addTiledImage({ tileSource: src });
+ *
+ * Usage (local server for testing via docker):
+ *     Download desired vector tiles from the server, and run:
+ *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
+ *
+ * Alternatives (not supported):
+ *      PMTiles range queries
+ *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
+ *
+ *
+ * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
+ */
+$.MVTTileSource = class extends $.TileSource {
+    constructor({ template, scheme = 'xyz', tileSize = 512, minLevel = 0, maxLevel = 14, width, height, extent = 4096, style }) {
+        super({ width, height, tileSize, minLevel, maxLevel });
+        this.template = template;
+        this.scheme = scheme;
+        this.extent = extent;
+        this.style = style || defaultStyle();
+        this._worker = makeWorker();
+        this._pending = new Map(); // key -> {resolve,reject}
+
+        // Wire worker responses
+        this._worker.onmessage = (e) => {
+            const msg = e.data;
+            if (!msg || !msg.key) {
+                return;
+            }
+
+            const waiters = this._pending.get(msg.key);
+            if (!waiters) {
+                return;
+            }
+            this._pending.delete(msg.key);
+
+            if (msg.ok) {
+                const t = msg.data;
+                for (const ctx of waiters) {
+                    ctx.finish({
+                        fills: t.fills.map(packMesh),
+                        lines: t.lines.map(packMesh)
+                    }, undefined, 'vector-mesh');
+                }
+            } else {
+                for (const ctx of waiters) {
+                    ctx.fail(msg.error || 'Worker failed');
+                }
+            }
+        };
+
+        // Send config once
+        this._worker.postMessage({ type: 'config', extent: this.extent, style: this.style });
+    }
+
+    /**
+     * Determine if the data and/or url imply the image service is supported by
+     * this tile source.
+     * @function
+     * @param {Object|Array} data
+     * @param {String} url - optional
+     */
+    supports(data, url) {
+        return data["tiles"] && data["format"] === "pbf" && url.endsWith(".json");
+    }
+    /**
+     *
+     * @function
+     * @param {Object} data - the options
+     * @param {String} dataUrl - the url the image was retrieved from, if any.
+     * @param {String} postData - HTTP POST data in k=v&k2=v2... form or null
+     * @returns {Object} options - A dictionary of keyword arguments sufficient
+     *      to configure this tile sources constructor.
+     */
+    configure(data, dataUrl, postData) {
+        const tj = data;
+
+        // Basic TileJSON fields
+        const tiles = (tj.tiles && tj.tiles.length) ? tj.tiles : (tj.tilesURL ? [tj.tilesURL] : null);
+        if (!tiles) {
+            throw new Error('TileJSON missing tiles template');
+        }
+        const template = tiles[0];
+        const tileSize = tj.tileSize || 512;  // many vector tile sets use 512
+        const minLevel = tj.minzoom ? tj.minzoom : 0;
+        const maxLevel = tj.maxzoom ? tj.maxzoom : 14;
+        const scheme = tj.scheme || 'xyz'; // 'xyz' or 'tms'
+        const extent = (tj.extent && Number.isFinite(tj.extent)) ? tj.extent : 4096;
+
+        const width = Math.pow(2, maxLevel) * tileSize;
+        const height = width;
+
+        return {
+            template,
+            scheme,
+            tileSize,
+            minLevel,
+            maxLevel,
+            width,
+            height,
+            extent,
+            style: defaultStyle(),  // todo style
+        };
+    }
+
+    getTileUrl(level, x, y) {
+        const z = level;
+        const n = 1 << z;
+        const ty = (this.scheme === 'tms') ? (n - 1 - y) : y;
+        return this.template.replace('{z}', z).replace('{x}', x).replace('{y}', ty);
+    }
+
+    /**
+     * Return a FlexDrawer cache object directly (vector-mesh).
+     */
+    downloadTileStart(context) {
+        const tile = context.tile;
+        const key = context.src;
+
+        const list = this._pending.get(key);
+        if (list) {
+            list.push(context);
+        } else {
+            this._pending.set(key, [ context ]);
+        }
+
+        this._worker.postMessage({
+            type: 'tile',
+            key: key,
+            z: tile.level,
+            x: tile.x,
+            y: tile.y,
+            url: context.src
+        });
+    }
+};
+
+// ---------- Helpers ----------
+
+function packMesh(m) {
+    return {
+        vertices: new Float32Array(m.vertices),
+        indices: new Uint32Array(m.indices),
+        color: m.color || [1, 0, 0, 1],
+    };
+}
+
+function defaultStyle() {
+    // Super-minimal style mapping; replace as needed.
+    // layerName => {type:'fill'|'line', color:[r,g,b,a], widthPx?:number, join?:'miter'|'bevel'|'round', cap?:'butt'|'square'|'round'}
+    return {
+        layers: {
+            water:     { type: 'fill', color: [0.65, 0.80, 0.93, 1] },
+            landuse:   { type: 'fill', color: [0.95, 0.94, 0.91, 1] },
+            park:      { type: 'fill', color: [0.88, 0.95, 0.88, 1] },
+            building:  { type: 'fill', color: [0.93, 0.93, 0.93, 1] },
+            waterway:  { type: 'line', color: [0.55, 0.75, 0.90, 1], widthPx: 1.2, join: 'round', cap: 'round' },
+            road:      { type: 'line', color: [0.60, 0.60, 0.60, 1], widthPx: 1.5, join: 'round', cap: 'round' },
+        },
+        // Default if layer not listed
+        fallback: { type: 'line', color: [0.3, 0.3, 0.3, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
+    };
+}
+
+function makeWorker() {
+    // Prefer the inlined source if available
+    const inline = (OpenSeadragon && OpenSeadragon.__MVT_WORKER_SOURCE__);
+    if (inline) {
+        const blob = new Blob([inline], { type: "text/javascript" });
+        return new Worker((window.URL || window.webkitURL).createObjectURL(blob));
+    }
+
+    throw new Error('No worker source available');
+}
+
+})(OpenSeadragon);
+
+// fabric-tile-source.js (single rectangular tile, unit-normalized in worker)
+(function ($) {
+
+    $.FabricTileSource = class extends $.TileSource {
+        constructor(options) {
+            // options: { width, height, origin?, objects, workerLibs? }
+            super(options);
+
+            this.width = options.width;
+            this.height = options.height;
+
+            // Rectangular single tile
+            this.tileWidth = this.width;
+            this.tileHeight = this.height;
+            this.minLevel = 0;
+            this.maxLevel = 0;
+
+            this._origin = options.origin || { x: 0, y: 0 };
+            this._pending = new Map();
+
+            this._worker = makeWorker(options.workerLibs);
+
+            this._worker.postMessage({
+                type: 'config',
+                width: this.width,
+                height: this.height,
+                origin: this._origin
+            });
+
+            if (options.objects && options.objects.length > 0) {
+                let autoId = 0;
+                for (const o of options.objects) {
+                    const entries = normalizeToWorkerPrims(o);
+                    for (const entry of entries) {
+                        const id = entry.id || ('fab_' + (autoId++));
+                        this._worker.postMessage({
+                            type: 'addOrUpdate',
+                            id: id,
+                            fabric: entry.fabric,
+                            style: entry.style
+                        });
+                    }
+                }
+            }
+
+            this._worker.onmessage = (e) => {
+                const msg = e.data || {};
+
+                if (msg.type === 'tiles' && Array.isArray(msg.tiles)) {
+                    for (const t of msg.tiles) {
+                        this._deliverTileRecord(t);
+                    }
+                    return;
+                }
+
+                if (msg.key) {
+                    this._deliverTileRecord(msg);
+                }
+            };
+        }
+
+        supports(data, url) {
+            const hasObjects = data && Array.isArray(data.objects) && data.objects.length > 0;
+            const okFormat = !data.format || data.format === 'fabric' || data.format === 'native';
+            const looksJson = typeof url === 'string' ? url.toLowerCase().endsWith('.json') : true;
+
+            if (hasObjects && okFormat && looksJson) {
+                return true;
+            }
+
+            return false;
+        }
+
+        configure(data, dataUrl, postData) {
+            const objs = Array.isArray(data.objects) ? data.objects : [];
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+
+            const upd = (x, y) => {
+                if (x < minX) {
+                    minX = x;
+                }
+                if (y < minY) {
+                    minY = y;
+                }
+                if (x > maxX) {
+                    maxX = x;
+                }
+                if (y > maxY) {
+                    maxY = y;
+                }
+            };
+
+            for (const o of objs) {
+                if (o.type === 'rect') {
+                    upd(o.left, o.top);
+                    upd(o.left + o.width, o.top + o.height);
+                } else if (o.type === 'ellipse') {
+                    upd(o.left - o.rx, o.top - o.ry);
+                    upd(o.left + o.rx, o.top + o.ry);
+                } else if ((o.type === 'polygon' || o.type === 'polyline') && Array.isArray(o.points)) {
+                    for (const p of o.points) {
+                        upd(p.x, p.y);
+                    }
+                } else if (o.type === 'path' && o.factoryID === 'multipolygon' && Array.isArray(o.points)) {
+                    for (const ring of o.points) {
+                        for (const p of ring) {
+                            upd(p.x, p.y);
+                        }
+                    }
+                }
+            }
+
+            if (!isFinite(minX)) {
+                minX = 0;
+                minY = 0;
+                maxX = 1;
+                maxY = 1;
+            }
+
+            const width  = data.width ? data.width : Math.ceil(maxX - minX);
+            const height = data.height ? data.height : Math.ceil(maxY - minY);
+
+            // If caller provides the full image size, anchor at (0,0) so the tile is in-view.
+            // Otherwise, fall back to bbox origin.
+            const origin = (data.width && data.height) ? { x: 0, y: 0 } : { x: minX, y: minY };
+
+            return {
+                width: width,
+                height: height,
+                origin: origin,
+                // rectangular single tile
+                tileWidth: width,
+                tileHeight: height,
+                minLevel: 0,
+                maxLevel: 0,
+                objects: objs,
+                template: 'fabric://{z}/{x}/{y}',
+                scheme: 'xyz'
+            };
+        }
+
+        getTileUrl(level, x, y) {
+            return 'fabric://' + level + '/' + x + '/' + y;
+        }
+
+        downloadTileStart(context) {
+            const tile = context.tile;
+            const level = tile.level;
+            const x = tile.x;
+            const y = tile.y;
+
+            const key = this.getTileUrl(level, x, y);
+
+            // allow multiple waiters (main viewer + navigator)
+            const list = this._pending.get(key);
+            if (list) {
+                list.push(context);
+            } else {
+                this._pending.set(key, [ context ]);
+            }
+
+            this._worker.postMessage({
+                type: 'tiles',
+                z: 0,
+                keys: [ level + '/' + x + '/' + y ]
+            });
+        }
+
+        _deliverTileRecord(rec) {
+            const key = rec.key ? ('fabric://' + rec.key) : null;
+            if (!key) {
+                return;
+            }
+
+            const waiters = this._pending.get(key);
+            if (!waiters || waiters.length === 0) {
+                return;
+            }
+            this._pending.delete(key);
+
+            const toMeshes = (packed, defaultColor) => {
+                if (!packed) {
+                    return [];
+                }
+                const vertsBuf = packed.positions || packed.vertices;
+                const idxBuf = packed.indices;
+                return [{
+                    vertices: new Float32Array(vertsBuf),
+                    indices: new Uint32Array(idxBuf),
+                    color: Array.isArray(defaultColor) ? defaultColor : [ 1, 1, 1, 1 ]
+                }];
+            };
+
+            if (rec.error) {
+                for (const p of waiters) {
+                    p.fail(rec.error || 'Worker failed');
+                }
+                return;
+            }
+
+            const fills = toMeshes(rec.fills, [ 1, 1, 1, 1 ]);
+            const lines = toMeshes(rec.lines, [ 1, 1, 1, 1 ]);
+            for (const p of waiters) {
+                p.finish({ fills: fills, lines: lines }, undefined, 'vector-mesh');
+            }
+        }
+    };
+
+    // ---------- Helpers ----------
+
+    function makeWorker() {
+        const inline = OpenSeadragon && OpenSeadragon.__FABRIC_WORKER_SOURCE__;
+
+        if (inline) {
+            const blob = new Blob([ inline ], { type: 'text/javascript' });
+            const url = (window.URL || window.webkitURL).createObjectURL(blob);
+            return new Worker(url);
+        }
+
+        throw new Error('No FABRIC worker source available');
+    }
+
+    function hexToRgba(hex, a) {
+        const alpha = typeof a === 'number' ? a : 1;
+
+        if (!hex || typeof hex !== 'string') {
+            return [ 0, 0, 0, alpha ];
+        }
+
+        const s = hex.replace('#', '');
+
+        if (s.length === 3) {
+            const r = parseInt(s[0] + s[0], 16);
+            const g = parseInt(s[1] + s[1], 16);
+            const b = parseInt(s[2] + s[2], 16);
+            return [ r / 255, g / 255, b / 255, alpha ];
+        }
+
+        if (s.length >= 6) {
+            const r = parseInt(s.substring(0, 2), 16);
+            const g = parseInt(s.substring(2, 4), 16);
+            const b = parseInt(s.substring(4, 6), 16);
+            return [ r / 255, g / 255, b / 255, alpha ];
+        }
+
+        return [ 0, 0, 0, alpha ];
+    }
+
+    function normalizeToWorkerPrims(obj) {
+        const color = obj.color || '#ff0000';
+        const fill = hexToRgba(color, 0.6);
+        const stroke = hexToRgba(color, 1);
+
+        if (obj.type === 'rect') {
+            const x = obj.left;
+            const y = obj.top;
+            const w = obj.width;
+            const h = obj.height;
+
+            return [
+                {
+                    id: obj.id,
+                    fabric: { type: 'rect', x: x, y: y, w: w, h: h },
+                    style: { fill: fill, stroke: [ 0, 0, 0, 0 ], strokeWidth: 0 }
+                }
+            ];
+        }
+
+        if (obj.type === 'ellipse') {
+            const cx = obj.left;
+            const cy = obj.top;
+            const rx = obj.rx;
+            const ry = obj.ry;
+
+            return [
+                {
+                    id: obj.id,
+                    fabric: { type: 'ellipse', cx: cx, cy: cy, rx: rx, ry: ry, segments: 64 },
+                    style: { fill: fill, stroke: [ 0, 0, 0, 0 ], strokeWidth: 0 }
+                }
+            ];
+        }
+
+        if (obj.type === 'polygon' && Array.isArray(obj.points)) {
+            return [
+                {
+                    id: obj.id,
+                    fabric: { type: 'polygon', points: obj.points.map((p) => { return { x: p.x, y: p.y }; }) },
+                    style: { fill: fill, stroke: [ 0, 0, 0, 0 ], strokeWidth: 0 }
+                }
+            ];
+        }
+
+        if (obj.type === 'polyline' && Array.isArray(obj.points)) {
+            return [
+                {
+                    id: obj.id,
+                    fabric: { type: 'polyline', points: obj.points.map((p) => { return { x: p.x, y: p.y }; }) },
+                    style: { stroke: stroke, strokeWidth: obj.strokeWidth || 2 }
+                }
+            ];
+        }
+
+        if (obj.type === 'path' && obj.factoryID === 'multipolygon' && Array.isArray(obj.points)) {
+            const out = [];
+
+            for (const ring of obj.points) {
+                out.push({
+                    id: undefined,
+                    fabric: { type: 'polygon', points: ring.map((p) => { return { x: p.x, y: p.y }; }) },
+                    style: { fill: fill, stroke: [ 0, 0, 0, 0 ], strokeWidth: 0 }
+                });
+            }
+
+            return out;
+        }
+
+        return [];
+    }
+
+})(OpenSeadragon);
+
+//! flex-renderer 0.0.1
+//! Built on 2025-08-30
+//! Git commit: --cd99201-dirty
+//! http://openseadragon.github.io
+//! License: http://openseadragon.github.io/license/
+
+(function(root){
+  root.OpenSeadragon = root.OpenSeadragon || {};
+  // Full inlined worker source (libs + core)
+  root.OpenSeadragon.__MVT_WORKER_SOURCE__ = `
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=void 0;const SHIFT_LEFT_32=(1<<16)*(1<<16);const SHIFT_RIGHT_32=1/SHIFT_LEFT_32;const TEXT_DECODER_MIN_LENGTH=12;const utf8TextDecoder=typeof TextDecoder==="undefined"?null:new TextDecoder("utf-8");const PBF_VARINT=0;const PBF_FIXED64=1;const PBF_BYTES=2;const PBF_FIXED32=5;class Pbf{constructor(buf=new Uint8Array(16)){this.buf=ArrayBuffer.isView(buf)?buf:new Uint8Array(buf);this.dataView=new DataView(this.buf.buffer);this.pos=0;this.type=0;this.length=this.buf.length}readFields(readField,result,end=this.length){while(this.pos<end){const val=this.readVarint(),tag=val>>3,startPos=this.pos;this.type=val&7;readField(tag,result,this);if(this.pos===startPos)this.skip(val)}return result}readMessage(readField,result){return this.readFields(readField,result,this.readVarint()+this.pos)}readFixed32(){const val=this.dataView.getUint32(this.pos,true);this.pos+=4;return val}readSFixed32(){const val=this.dataView.getInt32(this.pos,true);this.pos+=4;return val}readFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getUint32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readSFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getInt32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readFloat(){const val=this.dataView.getFloat32(this.pos,true);this.pos+=4;return val}readDouble(){const val=this.dataView.getFloat64(this.pos,true);this.pos+=8;return val}readVarint(isSigned){const buf=this.buf;let val,b;b=buf[this.pos++];val=b&127;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<7;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<14;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<21;if(b<128)return val;b=buf[this.pos];val|=(b&15)<<28;return readVarintRemainder(val,isSigned,this)}readVarint64(){return this.readVarint(true)}readSVarint(){const num=this.readVarint();return num%2===1?(num+1)/-2:num/2}readBoolean(){return Boolean(this.readVarint())}readString(){const end=this.readVarint()+this.pos;const pos=this.pos;this.pos=end;if(end-pos>=TEXT_DECODER_MIN_LENGTH&&utf8TextDecoder){return utf8TextDecoder.decode(this.buf.subarray(pos,end))}return readUtf8(this.buf,pos,end)}readBytes(){const end=this.readVarint()+this.pos,buffer=this.buf.subarray(this.pos,end);this.pos=end;return buffer}readPackedVarint(arr=[],isSigned){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readVarint(isSigned));return arr}readPackedSVarint(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSVarint());return arr}readPackedBoolean(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readBoolean());return arr}readPackedFloat(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFloat());return arr}readPackedDouble(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readDouble());return arr}readPackedFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed32());return arr}readPackedSFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed32());return arr}readPackedFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed64());return arr}readPackedSFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed64());return arr}readPackedEnd(){return this.type===PBF_BYTES?this.readVarint()+this.pos:this.pos+1}skip(val){const type=val&7;if(type===PBF_VARINT)while(this.buf[this.pos++]>127){}else if(type===PBF_BYTES)this.pos=this.readVarint()+this.pos;else if(type===PBF_FIXED32)this.pos+=4;else if(type===PBF_FIXED64)this.pos+=8;else throw new Error(\`Unimplemented type: \${type}\`)}writeTag(tag,type){this.writeVarint(tag<<3|type)}realloc(min){let length=this.length||16;while(length<this.pos+min)length*=2;if(length!==this.length){const buf=new Uint8Array(length);buf.set(this.buf);this.buf=buf;this.dataView=new DataView(buf.buffer);this.length=length}}finish(){this.length=this.pos;this.pos=0;return this.buf.subarray(0,this.length)}writeFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeSFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeSFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeVarint(val){val=+val||0;if(val>268435455||val<0){writeBigVarint(val,this);return}this.realloc(4);this.buf[this.pos++]=val&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=val>>>7&127}writeSVarint(val){this.writeVarint(val<0?-val*2-1:val*2)}writeBoolean(val){this.writeVarint(+val)}writeString(str){str=String(str);this.realloc(str.length*4);this.pos++;const startPos=this.pos;this.pos=writeUtf8(this.buf,str,this.pos);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeFloat(val){this.realloc(4);this.dataView.setFloat32(this.pos,val,true);this.pos+=4}writeDouble(val){this.realloc(8);this.dataView.setFloat64(this.pos,val,true);this.pos+=8}writeBytes(buffer){const len=buffer.length;this.writeVarint(len);this.realloc(len);for(let i=0;i<len;i++)this.buf[this.pos++]=buffer[i]}writeRawMessage(fn,obj){this.pos++;const startPos=this.pos;fn(obj,this);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeMessage(tag,fn,obj){this.writeTag(tag,PBF_BYTES);this.writeRawMessage(fn,obj)}writePackedVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedVarint,arr)}writePackedSVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSVarint,arr)}writePackedBoolean(tag,arr){if(arr.length)this.writeMessage(tag,writePackedBoolean,arr)}writePackedFloat(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFloat,arr)}writePackedDouble(tag,arr){if(arr.length)this.writeMessage(tag,writePackedDouble,arr)}writePackedFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed32,arr)}writePackedSFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed32,arr)}writePackedFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed64,arr)}writePackedSFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed64,arr)}writeBytesField(tag,buffer){this.writeTag(tag,PBF_BYTES);this.writeBytes(buffer)}writeFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFixed32(val)}writeSFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeSFixed32(val)}writeFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeFixed64(val)}writeSFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeSFixed64(val)}writeVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeVarint(val)}writeSVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeSVarint(val)}writeStringField(tag,str){this.writeTag(tag,PBF_BYTES);this.writeString(str)}writeFloatField(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFloat(val)}writeDoubleField(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeDouble(val)}writeBooleanField(tag,val){this.writeVarintField(tag,+val)}}exports.default=Pbf;function readVarintRemainder(l,s,p){const buf=p.buf;let h,b;b=buf[p.pos++];h=(b&112)>>4;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<3;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<10;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<17;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<24;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&1)<<31;if(b<128)return toNum(l,h,s);throw new Error("Expected varint not more than 10 bytes")}function toNum(low,high,isSigned){return isSigned?high*4294967296+(low>>>0):(high>>>0)*4294967296+(low>>>0)}function writeBigVarint(val,pbf){let low,high;if(val>=0){low=val%4294967296|0;high=val/4294967296|0}else{low=~(-val%4294967296);high=~(-val/4294967296);if(low^4294967295){low=low+1|0}else{low=0;high=high+1|0}}if(val>=0x10000000000000000||val<-0x10000000000000000){throw new Error("Given varint doesn't fit into 10 bytes")}pbf.realloc(10);writeBigVarintLow(low,high,pbf);writeBigVarintHigh(high,pbf)}function writeBigVarintLow(low,high,pbf){pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos]=low&127}function writeBigVarintHigh(high,pbf){const lsb=(high&7)<<4;pbf.buf[pbf.pos++]|=lsb|((high>>>=3)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127}function makeRoomForExtraLength(startPos,len,pbf){const extraLen=len<=16383?1:len<=2097151?2:len<=268435455?3:Math.floor(Math.log(len)/(Math.LN2*7));pbf.realloc(extraLen);for(let i=pbf.pos-1;i>=startPos;i--)pbf.buf[i+extraLen]=pbf.buf[i]}function writePackedVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeVarint(arr[i])}function writePackedSVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSVarint(arr[i])}function writePackedFloat(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFloat(arr[i])}function writePackedDouble(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeDouble(arr[i])}function writePackedBoolean(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeBoolean(arr[i])}function writePackedFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed32(arr[i])}function writePackedSFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed32(arr[i])}function writePackedFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed64(arr[i])}function writePackedSFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed64(arr[i])}function readUtf8(buf,pos,end){let str="";let i=pos;while(i<end){const b0=buf[i];let c=null;let bytesPerSequence=b0>239?4:b0>223?3:b0>191?2:1;if(i+bytesPerSequence>end)break;let b1,b2,b3;if(bytesPerSequence===1){if(b0<128){c=b0}}else if(bytesPerSequence===2){b1=buf[i+1];if((b1&192)===128){c=(b0&31)<<6|b1&63;if(c<=127){c=null}}}else if(bytesPerSequence===3){b1=buf[i+1];b2=buf[i+2];if((b1&192)===128&&(b2&192)===128){c=(b0&15)<<12|(b1&63)<<6|b2&63;if(c<=2047||c>=55296&&c<=57343){c=null}}}else if(bytesPerSequence===4){b1=buf[i+1];b2=buf[i+2];b3=buf[i+3];if((b1&192)===128&&(b2&192)===128&&(b3&192)===128){c=(b0&15)<<18|(b1&63)<<12|(b2&63)<<6|b3&63;if(c<=65535||c>=1114112){c=null}}}if(c===null){c=65533;bytesPerSequence=1}else if(c>65535){c-=65536;str+=String.fromCharCode(c>>>10&1023|55296);c=56320|c&1023}str+=String.fromCharCode(c);i+=bytesPerSequence}return str}function writeUtf8(buf,str,pos){for(let i=0,c,lead;i<str.length;i++){c=str.charCodeAt(i);if(c>55295&&c<57344){if(lead){if(c<56320){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=c;continue}else{c=lead-55296<<10|c-56320|65536;lead=null}}else{if(c>56319||i+1===str.length){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189}else{lead=c}continue}}else if(lead){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=null}if(c<128){buf[pos++]=c}else{if(c<2048){buf[pos++]=c>>6|192}else{if(c<65536){buf[pos++]=c>>12|224}else{buf[pos++]=c>>18|240;buf[pos++]=c>>12&63|128}buf[pos++]=c>>6&63|128}buf[pos++]=c&63|128}}return pos}},{}],2:[function(require,module,exports){"use strict";var _pbf=_interopRequireDefault(require("pbf"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.Pbf=_pbf.default},{pbf:1}]},{},[2]);
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _vectorTile=require("@mapbox/vector-tile");self.vectorTile={VectorTile:_vectorTile.VectorTile}},{"@mapbox/vector-tile":3}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=Point;function Point(x,y){this.x=x;this.y=y}Point.prototype={clone(){return new Point(this.x,this.y)},add(p){return this.clone()._add(p)},sub(p){return this.clone()._sub(p)},multByPoint(p){return this.clone()._multByPoint(p)},divByPoint(p){return this.clone()._divByPoint(p)},mult(k){return this.clone()._mult(k)},div(k){return this.clone()._div(k)},rotate(a){return this.clone()._rotate(a)},rotateAround(a,p){return this.clone()._rotateAround(a,p)},matMult(m){return this.clone()._matMult(m)},unit(){return this.clone()._unit()},perp(){return this.clone()._perp()},round(){return this.clone()._round()},mag(){return Math.sqrt(this.x*this.x+this.y*this.y)},equals(other){return this.x===other.x&&this.y===other.y},dist(p){return Math.sqrt(this.distSqr(p))},distSqr(p){const dx=p.x-this.x,dy=p.y-this.y;return dx*dx+dy*dy},angle(){return Math.atan2(this.y,this.x)},angleTo(b){return Math.atan2(this.y-b.y,this.x-b.x)},angleWith(b){return this.angleWithSep(b.x,b.y)},angleWithSep(x,y){return Math.atan2(this.x*y-this.y*x,this.x*x+this.y*y)},_matMult(m){const x=m[0]*this.x+m[1]*this.y,y=m[2]*this.x+m[3]*this.y;this.x=x;this.y=y;return this},_add(p){this.x+=p.x;this.y+=p.y;return this},_sub(p){this.x-=p.x;this.y-=p.y;return this},_mult(k){this.x*=k;this.y*=k;return this},_div(k){this.x/=k;this.y/=k;return this},_multByPoint(p){this.x*=p.x;this.y*=p.y;return this},_divByPoint(p){this.x/=p.x;this.y/=p.y;return this},_unit(){this._div(this.mag());return this},_perp(){const y=this.y;this.y=this.x;this.x=-y;return this},_rotate(angle){const cos=Math.cos(angle),sin=Math.sin(angle),x=cos*this.x-sin*this.y,y=sin*this.x+cos*this.y;this.x=x;this.y=y;return this},_rotateAround(angle,p){const cos=Math.cos(angle),sin=Math.sin(angle),x=p.x+cos*(this.x-p.x)-sin*(this.y-p.y),y=p.y+sin*(this.x-p.x)+cos*(this.y-p.y);this.x=x;this.y=y;return this},_round(){this.x=Math.round(this.x);this.y=Math.round(this.y);return this},constructor:Point};Point.convert=function(p){if(p instanceof Point){return p}if(Array.isArray(p)){return new Point(+p[0],+p[1])}if(p.x!==undefined&&p.y!==undefined){return new Point(+p.x,+p.y)}throw new Error("Expected [x, y] or {x, y} point format")}},{}],3:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.VectorTileLayer=exports.VectorTileFeature=exports.VectorTile=void 0;exports.classifyRings=classifyRings;var _pointGeometry=_interopRequireDefault(require("@mapbox/point-geometry"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}class VectorTileFeature{constructor(pbf,end,extent,keys,values){this.properties={};this.extent=extent;this.type=0;this.id=undefined;this._pbf=pbf;this._geometry=-1;this._keys=keys;this._values=values;pbf.readFields(readFeature,this,end)}loadGeometry(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;const lines=[];let line;let cmd=1;let length=0;let x=0;let y=0;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(cmd===1){if(line)lines.push(line);line=[]}if(line)line.push(new _pointGeometry.default(x,y))}else if(cmd===7){if(line){line.push(line[0].clone())}}else{throw new Error(\`unknown command \${cmd}\`)}}if(line)lines.push(line);return lines}bbox(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;let cmd=1,length=0,x=0,y=0,x1=Infinity,x2=-Infinity,y1=Infinity,y2=-Infinity;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(x<x1)x1=x;if(x>x2)x2=x;if(y<y1)y1=y;if(y>y2)y2=y}else if(cmd!==7){throw new Error(\`unknown command \${cmd}\`)}}return[x1,y1,x2,y2]}toGeoJSON(x,y,z){const size=this.extent*Math.pow(2,z),x0=this.extent*x,y0=this.extent*y,vtCoords=this.loadGeometry();function projectPoint(p){return[(p.x+x0)*360/size-180,360/Math.PI*Math.atan(Math.exp((1-(p.y+y0)*2/size)*Math.PI))-90]}function projectLine(line){return line.map(projectPoint)}let geometry;if(this.type===1){const points=[];for(const line of vtCoords){points.push(line[0])}const coordinates=projectLine(points);geometry=points.length===1?{type:"Point",coordinates:coordinates[0]}:{type:"MultiPoint",coordinates:coordinates}}else if(this.type===2){const coordinates=vtCoords.map(projectLine);geometry=coordinates.length===1?{type:"LineString",coordinates:coordinates[0]}:{type:"MultiLineString",coordinates:coordinates}}else if(this.type===3){const polygons=classifyRings(vtCoords);const coordinates=[];for(const polygon of polygons){coordinates.push(polygon.map(projectLine))}geometry=coordinates.length===1?{type:"Polygon",coordinates:coordinates[0]}:{type:"MultiPolygon",coordinates:coordinates}}else{throw new Error("unknown feature type")}const result={type:"Feature",geometry:geometry,properties:this.properties};if(this.id!=null){result.id=this.id}return result}}exports.VectorTileFeature=VectorTileFeature;VectorTileFeature.types=["Unknown","Point","LineString","Polygon"];function readFeature(tag,feature,pbf){if(tag===1)feature.id=pbf.readVarint();else if(tag===2)readTag(pbf,feature);else if(tag===3)feature.type=pbf.readVarint();else if(tag===4)feature._geometry=pbf.pos}function readTag(pbf,feature){const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const key=feature._keys[pbf.readVarint()];const value=feature._values[pbf.readVarint()];feature.properties[key]=value}}function classifyRings(rings){const len=rings.length;if(len<=1)return[rings];const polygons=[];let polygon,ccw;for(let i=0;i<len;i++){const area=signedArea(rings[i]);if(area===0)continue;if(ccw===undefined)ccw=area<0;if(ccw===area<0){if(polygon)polygons.push(polygon);polygon=[rings[i]]}else if(polygon){polygon.push(rings[i])}}if(polygon)polygons.push(polygon);return polygons}function signedArea(ring){let sum=0;for(let i=0,len=ring.length,j=len-1,p1,p2;i<len;j=i++){p1=ring[i];p2=ring[j];sum+=(p2.x-p1.x)*(p1.y+p2.y)}return sum}class VectorTileLayer{constructor(pbf,end){this.version=1;this.name="";this.extent=4096;this.length=0;this._pbf=pbf;this._keys=[];this._values=[];this._features=[];pbf.readFields(readLayer,this,end);this.length=this._features.length}feature(i){if(i<0||i>=this._features.length)throw new Error("feature index out of bounds");this._pbf.pos=this._features[i];const end=this._pbf.readVarint()+this._pbf.pos;return new VectorTileFeature(this._pbf,end,this.extent,this._keys,this._values)}}exports.VectorTileLayer=VectorTileLayer;function readLayer(tag,layer,pbf){if(tag===15)layer.version=pbf.readVarint();else if(tag===1)layer.name=pbf.readString();else if(tag===5)layer.extent=pbf.readVarint();else if(tag===2)layer._features.push(pbf.pos);else if(tag===3)layer._keys.push(pbf.readString());else if(tag===4)layer._values.push(readValueMessage(pbf))}function readValueMessage(pbf){let value=null;const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const tag=pbf.readVarint()>>3;value=tag===1?pbf.readString():tag===2?pbf.readFloat():tag===3?pbf.readDouble():tag===4?pbf.readVarint64():tag===5?pbf.readVarint():tag===6?pbf.readSVarint():tag===7?pbf.readBoolean():null}if(value==null){throw new Error("unknown feature value")}return value}class VectorTile{constructor(pbf,end){this.layers=pbf.readFields(readTile,{},end)}}exports.VectorTile=VectorTile;function readTile(tag,layers,pbf){if(tag===3){const layer=new VectorTileLayer(pbf,pbf.readVarint()+pbf.pos);if(layer.length)layers[layer.name]=layer}}},{"@mapbox/point-geometry":2}]},{},[1]);
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
+// libs (Pbf, vectorTile, earcut) are concatenated before this file
+
+let EXTENT = 4096; let STYLE = {layers:{},fallback:{type:'line',color:[0,0,0,1],widthPx:1,join:'bevel',cap:'butt'}};
+self.onmessage = async (e) => {
+    const msg = e.data;
+    try {
+        if (msg.type === 'config') {
+            EXTENT = msg.extent || EXTENT; STYLE = msg.style || STYLE; return;
+        }
+        if (msg.type === 'tile') {
+            const {key, url, z, x, y} = msg;
+            // lazy-load libs
+            if (!self.Pbf || !self.vectorTile || !self.earcut) {
+                throw new Error('Missing libs');
+            }
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP '+resp.status);
+            const buf = await resp.arrayBuffer();
+            const vt = new self.vectorTile.VectorTile(new self.Pbf(new Uint8Array(buf)));
+
+            const fills = [], lines = [];
+            // Iterate layers
+            for (const lname in vt.layers) {
+                const lyr = vt.layers[lname];
+                const lstyle = STYLE.layers[lname] || STYLE.fallback;
+                for (let i=0;i<lyr.length;i++) {
+                    const feat = lyr.feature(i);
+                    const geom = feat.loadGeometry();
+                    const fstyle = lstyle; // TODO: evaluate by properties/zoom if needed
+                    if (feat.type === 3 && fstyle.type === 'fill') {
+                        // Polygon with holes; MVT ring rule: outer CW, holes CCW (y down)
+                        const polys = classifyRings(geom);
+                        for (const poly of polys) {
+                            const flat = []; const holes = []; let len=0;
+                            for (let r=0;r<poly.length;r++) {
+                                const ring = poly[r];
+                                if (r>0) holes.push(len);
+                                for (let k=0;k<ring.length;k++){ const p=ring[k]; flat.push(p.x, p.y); len++; }
+                            }
+                            const idx = self.earcut(flat, holes, 2);
+                            if (idx.length) {
+                                // Normalize to 0..1 UV for the renderer
+                                const verts = new Float32Array(flat.length);
+                                for (let j=0;j<flat.length;j+=2){ verts[j] = flat[j]/lyr.extent; verts[j+1] = flat[j+1]/lyr.extent; }
+                                fills.push({ vertices: verts.buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
+                            }
+                        }
+                    }
+                    if (feat.type === 2 && fstyle.type === 'line') {
+                        // Build stroke triangles (bevel joins + requested caps; miter threshold)
+                        const widthPx = fstyle.widthPx || 1.0;
+                        const widthTile = widthPx * (lyr.extent / (512)); // heuristic: px@512 tile
+                        for (let p=0;p<geom.length;p++) {
+                            const pts = geom[p];
+                            const mesh = strokePoly(pts, widthTile, fstyle.join||'bevel', fstyle.cap||'butt', fstyle.miterLimit||2.0);
+                            if (mesh && mesh.indices.length) {
+                                const verts = new Float32Array(mesh.vertices.length);
+                                for (let j=0;j<mesh.vertices.length;j+=2){ verts[j] = mesh.vertices[j]/lyr.extent; verts[j+1] = mesh.vertices[j+1]/lyr.extent; }
+                                lines.push({ vertices: verts.buffer, indices: new Uint32Array(mesh.indices).buffer, color: fstyle.color });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Transfer buffers
+            const transfer = [];
+            for (const a of fills) { transfer.push(a.vertices, a.indices); }
+            for (const a of lines) { transfer.push(a.vertices, a.indices); }
+            self.postMessage({ type:'tile', key, ok:true, data:{ fills, lines } }, transfer);
+        }
+    } catch (err) {
+        self.postMessage({ type:'tile', key: e.data && e.data.key, ok:false, error: String(err) });
+    }
+};
+
+// --- Helpers (worker) ---
+function ringArea(r){ let s=0; for(let i=0;i<r.length;i++){ const p=r[i], q=r[(i+1)%r.length]; s += p.x*q.y - q.x*p.y; } return 0.5*s; }
+function isOuter(r){ return ringArea(r) > 0; } // y-down: CW yields positive area
+function classifyRings(rings){
+    const polys=[]; let current=null;
+    for (let i=0;i<rings.length;i++){
+        const r=rings[i];
+        if (isOuter(r)) { current && polys.push(current); current=[r]; }
+        else { if (!current) { current=[r]; } else current.push(r); }
+    }
+    if (current) polys.push(current);
+    return polys;
+}
+
+function strokePoly(points, width, join, cap, miterLimit){
+    if (!points || points.length<2) return {vertices:[], indices:[]};
+    const half=width/2; const V=[]; const I=[];
+    let vi=0;
+    function addTri(a,b,c){ I.push(a,b,c); }
+    function addQuad(a,b,c,d){ I.push(a,b,c, c,b,d); }
+    function add(v){ V.push(v[0],v[1]); return vi++; }
+    function normal(a,b){ const dx=b.x-a.x, dy=b.y-a.y; const L=Math.hypot(dx,dy)||1; return [-dy/L, dx/L]; }
+    function miter(a,b,c){ const n0=normal(a,b), n1=normal(b,c); const t=[n0[0]+n1[0], n0[1]+n1[1]]; const tl=Math.hypot(t[0],t[1]); if (tl<1e-6) return { ok:false, n:n1, ml:1e9}; const m=[t[0]/tl, t[1]/tl]; const cos= (n0[0]*n1[0]+n0[1]*n1[1]); const ml = 1/Math.max(1e-6, Math.sqrt((1+cos)/2)); return { ok:true, n:m, ml}; }
+
+    for (let i=0;i<points.length-1;i++){
+        const a=points[i], b=points[i+1];
+        const n=normal(a,b);
+        const off=[n[0]*half, n[1]*half];
+        const aL=[a.x-off[0], a.y-off[1]], aR=[a.x+off[0], a.y+off[1]];
+        const bL=[b.x-off[0], b.y-off[1]], bR=[b.x+off[0], b.y+off[1]];
+
+        const i0=add(aL), i1=add(aR), i2=add(bL), i3=add(bR);
+        addQuad(i0,i1,i2,i3);
+
+        // Join at vertex b (if next segment exists)
+        if (i < points.length-2) {
+            const c=points[i+2];
+            const mit=miter(a,b,c);
+            if (join==='miter' && mit.ml <= (miterLimit||2)) {
+                // add miter triangle to extend outer edge
+                // Determine which side is outer using cross product sign
+                const v0=[bL[0]-bR[0], bL[1]-bR[1]]; const outerLeft = (v0[0]*(c.y-b.y) - v0[1]*(c.x-b.x)) > 0;
+                const mpt=[b.x+mit.n[0]*half/Math.max(1e-6,Math.sin(Math.acos((mit.ml*mit.ml-1)/(mit.ml*mit.ml+1)))), b.y+mit.n[1]*half/Math.max(1e-6,Math.sin(Math.acos((mit.ml*mit.ml-1)/(mit.ml*mit.ml+1))))];
+                const iM=add(mpt);
+                if (outerLeft) { addTri(i2,iM,i0); } else { addTri(i1,iM,i3); }
+            } else if (join==='round') {
+                // approximate round join with fan (8 segments)
+                const segs=8; const dirA=Math.atan2(a.y-b.y, a.x-b.x)+Math.PI/2; const dirB=Math.atan2(c.y-b.y, c.x-b.x)+Math.PI/2; let start=dirA, end=dirB;
+                // ensure sweep in correct direction (outer side)
+                let sweep=end-start; while (sweep<=0) sweep+=Math.PI*2; if (sweep>Math.PI) { const t=start; start=end; end=t; sweep=2*Math.PI-sweep; }
+                let prevIdx=add([b.x+Math.cos(start)*half, b.y+Math.sin(start)*half]);
+                for (let s=1;s<=segs;s++){ const t=start + sweep*s/segs; const curIdx=add([b.x+Math.cos(t)*half, b.y+Math.sin(t)*half]); addTri(i2, prevIdx, curIdx); prevIdx=curIdx; }
+            } else {
+                // bevel (default): connect outer corners with a triangle; choose side by turn
+                const cross=(b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);
+                if (cross>0) { // left turn => outer on left
+                    const iOuter=add([bL[0],bL[1]]); addTri(i2,iOuter,i0);
+                } else {
+                    const iOuter=add([bR[0],bR[1]]); addTri(i1,iOuter,i3);
+                }
+            }
+        }
+
+        // Caps at ends
+        if (i===0) {
+            if (cap==='square' || cap==='round') {
+                const capOff=[-n[0]*half, -n[1]*half];
+                const aL2=[aL[0]+capOff[0], aL[1]+capOff[1]]; const aR2=[aR[0]+capOff[0], aR[1]+capOff[1]];
+                const j0=add(aL2), j1=add(aR2); addQuad(j0,j1,i0,i1);
+            }
+        }
+        if (i===points.length-2) {
+            if (cap==='square' || cap==='round') {
+                const capOff=[n[0]*half, n[1]*half];
+                const bL2=[bL[0]+capOff[0], bL[1]+capOff[1]]; const bR2=[bR[0]+capOff[0], bR[1]+capOff[1]];
+                const j2=add(bL2), j3=add(bR2); addQuad(i2,i3,j2,j3);
+            }
+        }
+    }
+    return { vertices: V, indices: I };
+}
+
+`;
+})(typeof self !== 'undefined' ? self : window);
+//! flex-renderer 0.0.1
+//! Built on 2025-08-30
+//! Git commit: --cd99201-dirty
+//! http://openseadragon.github.io
+//! License: http://openseadragon.github.io/license/
+
+(function(root){
+  root.OpenSeadragon = root.OpenSeadragon || {};
+  // Full inlined worker source (libs + core)
+  root.OpenSeadragon.__FABRIC_WORKER_SOURCE__ = `
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
+// fabric-geom.worker.js  (single-rectangular-tile, unit-normalized)
+/* global self */
+
+let CONFIG = {
+    width: 0,
+    height: 0,
+    minLevel: 0,
+    maxLevel: 0,
+    origin: { x: 0, y: 0 }
+};
+
+// id -> { aabb:{x,y,w,h}, meshes:{fills,lines} } ; meshes are in IMAGE space
+const OBJECTS = new Map();
+
+// Messages:
+//  - { type: 'config', width, height, origin? }
+//  - { type: 'addOrUpdate', id, fabric, style }
+//  - { type: 'remove', id }
+//  - { type: 'tiles', z, keys:[ 'z/x/y', ... ] }  -> returns same unit batch for all keys (single-tile mode)
+
+self.onmessage = (e) => {
+    const m = e.data || {};
+
+    try {
+        if (m.type === 'config') {
+            if (typeof m.width === 'number') {
+                CONFIG.width = m.width;
+            }
+            if (typeof m.height === 'number') {
+                CONFIG.height = m.height;
+            }
+            if (m.origin) {
+                CONFIG.origin = m.origin;
+            }
+
+            CONFIG.minLevel = 0;
+            CONFIG.maxLevel = 0;
+
+            self.postMessage({ type: 'config', ok: true });
+            return;
+        }
+
+        if (m.type === 'addOrUpdate') {
+            const id = m.id;
+            const fabric = m.fabric;
+            const style = m.style;
+
+            const aabb = computeAABB(fabric);
+            const meshes = toMeshes(fabric, style);
+
+            OBJECTS.set(id, { aabb: aabb, meshes: meshes });
+
+            self.postMessage({ type: 'ack', id: id, ok: true });
+            return;
+        }
+
+        if (m.type === 'remove') {
+            const id = m.id;
+
+            OBJECTS.delete(id);
+
+            self.postMessage({ type: 'ack', ok: true });
+            return;
+        }
+
+        if (m.type === 'tiles') {
+            const unit = buildUnitBatchesFromAllObjects();
+
+            const pack = (b) => {
+                if (!b) {
+                    return undefined;
+                }
+                return {
+                    vertices: b.positions.buffer,
+                    colors: b.colors.buffer,
+                    indices: b.indices.buffer
+                };
+            };
+
+            const rec = {
+                fills: pack(unit.fills),
+                lines: pack(unit.lines)
+            };
+
+            const transfers = [];
+            if (rec.fills) {
+                transfers.push(rec.fills.vertices);
+                transfers.push(rec.fills.colors);
+                transfers.push(rec.fills.indices);
+            }
+            if (rec.lines) {
+                transfers.push(rec.lines.vertices);
+                transfers.push(rec.lines.colors);
+                transfers.push(rec.lines.indices);
+            }
+
+            const keys = Array.isArray(m.keys) && m.keys.length > 0 ? m.keys : [ '0/0/0' ];
+            const out = [];
+
+            for (const key of keys) {
+                out.push({ key: key, fills: rec.fills, lines: rec.lines });
+            }
+
+            self.postMessage({ type: 'tiles', z: 0, ok: true, tiles: out }, transfers);
+            return;
+        }
+    } catch (err) {
+        self.postMessage({ type: m.type, ok: false, error: String(err.stack || err) });
+    }
+};
+
+// ---- build a single unit-UV batch from everything ----
+
+function buildUnitBatchesFromAllObjects() {
+    const fills = [];
+    const lines = [];
+
+    for (const obj of OBJECTS.values()) {
+        if (obj.meshes.fills) {
+            for (const m of obj.meshes.fills) {
+                fills.push(normalizeMesh(m));
+            }
+        }
+        if (obj.meshes.lines) {
+            for (const m of obj.meshes.lines) {
+                lines.push(normalizeMesh(m));
+            }
+        }
+    }
+
+    const result = {
+        fills: fills.length > 0 ? makeBatch(fills) : undefined,
+        lines: lines.length > 0 ? makeBatch(lines) : undefined
+    };
+
+    return result;
+}
+
+function normalizeMesh(m) {
+    const W = CONFIG.width > 0 ? CONFIG.width : 1;
+    const H = CONFIG.height > 0 ? CONFIG.height : 1;
+    const ox = CONFIG.origin && typeof CONFIG.origin.x === 'number' ? CONFIG.origin.x : 0;
+    const oy = CONFIG.origin && typeof CONFIG.origin.y === 'number' ? CONFIG.origin.y : 0;
+
+    const src = m.vertices;
+    const out = new Float32Array(src.length);
+
+    for (let i = 0; i < src.length; i += 2) {
+        out[i] = (src[i] - ox) / W;
+        out[i + 1] = (src[i + 1] - oy) / H;
+    }
+
+    return {
+        vertices: out,
+        indices: m.indices,
+        color: m.color
+    };
+}
+
+// ---- meshing (image-space) ----
+
+function toMeshes(fabric, style) {
+    const colorFill = style && Array.isArray(style.fill) ? style.fill : [ 0, 0, 0, 0 ];
+    const colorLine = style && Array.isArray(style.stroke) ? style.stroke : [ 0, 0, 0, 1 ];
+    const widthPx = typeof style?.strokeWidth === 'number' ? style.strokeWidth : 1;
+
+    const outF = [];
+    const outL = [];
+
+    if (fabric.type === 'rect') {
+        const x = fabric.x;
+        const y = fabric.y;
+        const w = fabric.w;
+        const h = fabric.h;
+
+        if (colorFill[3] > 0) {
+            outF.push(triRect(x, y, w, h, colorFill));
+        }
+
+        if (colorLine[3] > 0 && widthPx > 0) {
+            const loop = [
+                { x: x, y: y },
+                { x: x + w, y: y },
+                { x: x + w, y: y + h },
+                { x: x, y: y + h },
+                { x: x, y: y }
+            ];
+            const m = strokeTriangles(loop, widthPx, colorLine);
+            if (m) {
+                outL.push(m);
+            }
+        }
+    } else if (fabric.type === 'ellipse') {
+        const cx = fabric.cx;
+        const cy = fabric.cy;
+        const rx = fabric.rx;
+        const ry = fabric.ry;
+        const segments = typeof fabric.segments === 'number' ? fabric.segments : 64;
+
+        const ring = [];
+        for (let k = 0; k < segments; k++) {
+            const t = (2 * Math.PI * k) / segments;
+            ring.push({ x: cx + rx * Math.cos(t), y: cy + ry * Math.sin(t) });
+        }
+
+        if (colorFill[3] > 0) {
+            const m = triPolygon([ ring ], colorFill);
+            if (m) {
+                outF.push(m);
+            }
+        }
+
+        if (colorLine[3] > 0 && widthPx > 0) {
+            const m = strokeTriangles(ring.concat([ ring[0] ]), widthPx, colorLine);
+            if (m) {
+                outL.push(m);
+            }
+        }
+    } else if (fabric.type === 'polygon') {
+        const rings = normalizeRings(fabric.points);
+
+        if (colorFill[3] > 0) {
+            const m = triPolygon(rings, colorFill);
+            if (m) {
+                outF.push(m);
+            }
+        }
+
+        if (colorLine[3] > 0 && widthPx > 0) {
+            const closed = rings[0].concat([ rings[0][0] ]);
+            const m = strokeTriangles(closed, widthPx, colorLine);
+            if (m) {
+                outL.push(m);
+            }
+        }
+    } else if (fabric.type === 'polyline') {
+        if (colorLine[3] > 0 && widthPx > 0) {
+            const m = strokeTriangles(fabric.points, widthPx, colorLine);
+            if (m) {
+                outL.push(m);
+            }
+        }
+    }
+
+    return { fills: outF, lines: outL };
+}
+
+function triRect(x, y, w, h, color) {
+    const vertices = new Float32Array([
+        x, y,
+        x + w, y,
+        x + w, y + h,
+        x, y + h
+    ]);
+
+    const indices = new Uint32Array([ 0, 1, 2, 0, 2, 3 ]);
+
+    return {
+        vertices: vertices,
+        indices: indices,
+        color: color
+    };
+}
+
+function triPolygon(rings, color) {
+    const flat = [];
+    const holes = [];
+
+    let len = 0;
+    for (let r = 0; r < rings.length; r++) {
+        const ring = rings[r];
+
+        if (r > 0) {
+            holes.push(len);
+        }
+
+        for (const p of ring) {
+            flat.push(p.x, p.y);
+            len = len + 1;
+        }
+    }
+
+    const idx = self.earcut ? self.earcut(flat, holes, 2) : [];
+
+    if (!idx || idx.length === 0) {
+        return null;
+    }
+
+    return {
+        vertices: Float32Array.from(flat),
+        indices: Uint32Array.from(idx),
+        color: color
+    };
+}
+
+function strokeTriangles(points, widthPx, color) {
+    const stroked = strokePoly(points, widthPx);
+
+    if (!stroked.indices || stroked.indices.length === 0) {
+        return null;
+    }
+
+    return {
+        vertices: Float32Array.from(stroked.vertices),
+        indices: Uint32Array.from(stroked.indices),
+        color: color
+    };
+}
+
+// Minimal polyline stroker (bevel joins, butt caps). Width is in IMAGE pixels.
+function strokePoly(points, widthPx) {
+    const half = widthPx * 0.5;
+
+    const verts = [];
+    const idx = [];
+
+    let base = 0;
+
+    for (let i = 1; i < points.length; i++) {
+        const p0 = points[i - 1];
+        const p1 = points[i];
+
+        const dx = p1.x - p0.x;
+        const dy = p1.y - p0.y;
+
+        const len = Math.hypot(dx, dy);
+        const safeLen = len > 0 ? len : 1;
+
+        const nx = -dy / safeLen;
+        const ny = dx / safeLen;
+
+        const v0 = [ p0.x - nx * half, p0.y - ny * half ];
+        const v1 = [ p0.x + nx * half, p0.y + ny * half ];
+        const v2 = [ p1.x - nx * half, p1.y - ny * half ];
+        const v3 = [ p1.x + nx * half, p1.y + ny * half ];
+
+        verts.push(v0[0], v0[1]);
+        verts.push(v1[0], v1[1]);
+        verts.push(v2[0], v2[1]);
+        verts.push(v3[0], v3[1]);
+
+        idx.push(base + 0, base + 1, base + 2);
+        idx.push(base + 1, base + 3, base + 2);
+
+        base = base + 4;
+    }
+
+    return { vertices: verts, indices: idx };
+}
+
+// ---- batching (same layout your renderer expects) ----
+
+function makeBatch(meshes) {
+    let vCount = 0;
+    let iCount = 0;
+
+    for (const m of meshes) {
+        vCount = vCount + (m.vertices.length / 2);
+        iCount = iCount + m.indices.length;
+    }
+
+    const positions = new Float32Array(vCount * 2);
+    const colors = new Uint8Array(vCount * 4);
+    const indices = new Uint32Array(iCount);
+
+    let vOfs = 0;
+    let iOfs = 0;
+    let base = 0;
+
+    for (const m of meshes) {
+        positions.set(m.vertices, vOfs * 2);
+
+        const r = clamp255(((m.color && m.color[0]) || 0) * 255);
+        const g = clamp255(((m.color && m.color[1]) || 0) * 255);
+        const b = clamp255(((m.color && m.color[2]) || 0) * 255);
+        const a = clamp255(((m.color && m.color[3]) || 1) * 255);
+
+        const localVerts = m.vertices.length / 2;
+
+        for (let k = 0; k < localVerts; k++) {
+            const c = (vOfs + k) * 4;
+            colors[c] = r;
+            colors[c + 1] = g;
+            colors[c + 2] = b;
+            colors[c + 3] = a;
+        }
+
+        for (let k = 0; k < m.indices.length; k++) {
+            indices[iOfs + k] = base + m.indices[k];
+        }
+
+        base = base + localVerts;
+        vOfs = vOfs + localVerts;
+        iOfs = iOfs + m.indices.length;
+    }
+
+    return { positions: positions, colors: colors, indices: indices };
+}
+
+function clamp255(v) {
+    const n = Math.round(v);
+    if (n < 0) {
+        return 0;
+    }
+    if (n > 255) {
+        return 255;
+    }
+    return n;
+}
+
+// ---- utils ----
+
+function normalizeRings(points) {
+    return [ points ];
+}
+
+function computeAABB(f) {
+    if (f.type === 'rect') {
+        return { x: f.x, y: f.y, w: f.w, h: f.h };
+    }
+
+    if (f.type === 'ellipse') {
+        return { x: f.cx - f.rx, y: f.cy - f.ry, w: 2 * f.rx, h: 2 * f.ry };
+    }
+
+    const pts = Array.isArray(f.points) ? f.points : [];
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (const p of pts) {
+        if (p.x < minX) {
+            minX = p.x;
+        }
+        if (p.y < minY) {
+            minY = p.y;
+        }
+        if (p.x > maxX) {
+            maxX = p.x;
+        }
+        if (p.y > maxY) {
+            maxY = p.y;
+        }
+    }
+
+    if (!isFinite(minX)) {
+        return { x: 0, y: 0, w: 0, h: 0 };
+    }
+
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+`;
+})(typeof self !== 'undefined' ? self : window);
 //# sourceMappingURL=flex-renderer.js.map
