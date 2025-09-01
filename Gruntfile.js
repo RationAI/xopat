@@ -6,12 +6,22 @@ module.exports = function(grunt) {
     // task to compile static server
     require("./server/static/build.grunt")(grunt);
     // utility tasks from separated files
-    grunt.registerTask('env', 'Generate Env Configuration Example.',
-        require('./server/utils/grunt/tasks/env')(grunt));
-    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file',
-        require('./server/utils/grunt/tasks/jsodc')(grunt));
-    grunt.registerTask("generate", "Generate a plugin or module",
-        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt));
+    grunt.registerTask('env',
+        'Generate Env Configuration Example.',
+        require('./server/utils/grunt/tasks/env')(grunt)
+    );
+    grunt.registerTask('docs', '' +
+        'Generate JSDoc documentation using theme configuration file',
+        require('./server/utils/grunt/tasks/jsodc')(grunt)
+    );
+    grunt.registerTask("generate",
+        "Generate a plugin or module",
+        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt)
+    );
+    grunt.registerTask("twinc",
+        'Tailwind incremental build/watch by parts.',
+        require('./server/utils/grunt/tasks/tailwind-incremental-builder')(grunt)
+    );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');
@@ -95,7 +105,35 @@ module.exports = function(grunt) {
                 acc.ui.files[`ui/index.min.js`] = ["ui/index.js"]
                 return acc;
             }, uglification, true, true),
-        }
+        },
+        // Custom twinc task
+        twinc: {
+            // global options
+            inputCSS: './src/assets/tailwind-spec.css',
+            configFile: './tailwind.config.js',
+            minify: false,          // true to minify output
+            debounceMs: 200,
+            // turn these on if you’re on WSL/Docker/NFS and miss events:
+            // usePolling: true,
+            // interval: 250,
+
+            // define your “parts”
+            parts: [
+                {
+                    name: 'ui',
+                    outFile: './src/libs/tailwind.ui.css',
+                    content: ['ui/**/*.{html,js,mjs}'],
+                    ignore: ['**/*.min.js', 'ui/index.js'],
+                },
+                {
+                    name: 'modules',
+                    outFile: './src/libs/tailwind.modules.css',
+                    content: ['modules/**/*.{html,js,mjs}'],
+                    ignore: ['**/*.min.js'],
+                },
+                // add more parts as needed...
+            ],
+        },
     });
 
     grunt.registerTask('default', []);

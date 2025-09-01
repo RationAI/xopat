@@ -826,14 +826,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                             size: Button.SIZE.SMALL,
                                             onClick: function () {
 
-                                                document.getElementById("top-slide").classList.toggle("hidden");
-                                                for (var c of document.getElementById("top-menus").children) {
-                                                    if (c.id !== "top-fullscreen") {
-                                                        c.classList.toggle("hidden");
-                                                    }
-                                                }
                                                 // add components which you want to be hidden on fullscreen here:
-                                                document.getElementById("top-side").classList.toggle("bg-base-200");
+                                                document.getElementById("top-user").classList.toggle("hidden");
+                                                document.getElementById("top-side-left").classList.toggle("hidden");
+
+                                                // cannot hide whole top-side, because it contains also fullscreen button
+                                                document.getElementById("top-side").classList.toggle("opaque-bg");
 
                                                 for(tab of Object.keys(USER_INTERFACE.RightSideMenu.menu.tabs)){
                                                     if (!USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
@@ -842,7 +840,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
                                                 if (APPLICATION_CONTEXT.getOption("toolBar", true)) {
-                                                    document.getElementById("toolbar-drag").classList.toggle("hidden");
+                                                    const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
+                                                    toolbarDivs.forEach((el) => el.classList.toggle("hidden"));
                                                 }
 
                                                 USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;

@@ -68,7 +68,12 @@ export class ShaderLayer extends BaseComponent {
         this.checkbox = new Checkbox({
             label: "",
             checked: this.visible,
-            onchange: (e) => { /* ... */ }
+            onchange: (e) => {
+                const checked = e.target.checked;
+                this.visible = checked;
+                this.setClass("dim", checked ? "" : "brightness-50");
+                this.cb.onToggleVisible?.(checked);
+            }
         });
         // mark as non-draggable
         const left = div({ class: "flex items-center gap-2 non-draggable" },

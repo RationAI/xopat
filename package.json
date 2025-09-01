@@ -19,7 +19,10 @@
     "test": "npx cypress run --browser chrome --e2e",
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "ex-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
-    "ex-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d"
+    "ex-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
+    "tw-precompile": "cross-env WATCH=1 WATCH_GLOBS='./ui/**/*.{html,js,mjs}' DEBUG_WATCH=1 node server/utils/tailwind/compile-state.js",
+    "tw-build": "npm run tw-precompile && npm run build-css",
+    "dev-init": "npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs && npm run tw-build"
   },
   "repository": {
     "type": "git",
@@ -47,6 +50,7 @@
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
+    "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
     "cypress": "^10.9.0",
