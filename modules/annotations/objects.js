@@ -287,7 +287,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(ofObject, iconRenderer, index) {
+    renderIcon(iconRenderer, index) {
         return new fabric.Control({
             x: 0.5,
             y: -0.5,
@@ -295,7 +295,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetY: 20 + 45 * index,
             cursorStyle: 'grab',
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = iconRenderer(ofObject);
+                const icon = iconRenderer(fabricObject);
                 const size = 36;
                 const radius = size / 2;
                 
@@ -329,7 +329,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
     renderAllControls(ofObject) {
         ofObject.controls = {
             private: this.renderIcon(
-                ofObject,
                 (obj) => obj.private ? 'visibility_lock' : 'visibility',
                 0
             ),
