@@ -17,8 +17,12 @@ import { Dropdown } from "./components/dropdown.mjs";
 import { Checkbox } from "./components/checkbox.mjs";
 import { Toolbar } from "./components/toolbar.mjs";
 import { Select } from "./components/select.mjs";
+import { ShaderLayer } from "./components/shaderLayer.mjs";
 
-const UI = { Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, Dropdown, Checkbox, Toolbar, Select };
+const UI = {
+    Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
+    Dropdown, Checkbox, Toolbar, Select, ShaderLayer
+};
 globalThis.UI = UI;
 
 globalThis.vanRegister = function (id, component) {

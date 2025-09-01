@@ -6,7 +6,6 @@ module.exports = {
     "./modules/**/*.{html,js}",
     "./plugins/**/*.{html,js}",
     "./src/**/*.{html,js}",
-    "./index.html",
     "!**/*.min.js",
   ],
   darkMode: ["selector", '[data-theme="catppuccin-mocha"]', '[data-theme="blood-moon"]'],

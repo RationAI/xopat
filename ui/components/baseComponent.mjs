@@ -158,7 +158,11 @@ class BaseComponent {
 
     setExtraProperty(key, value) {
         this.propertiesMap[key] = value;
-        this.propertiesStateMap[key].val = value instanceof Object ? value.join(" ") : value;
+        let stateMap = this.propertiesStateMap[key];
+        if (!stateMap) {
+            throw new Error("Extra property setter set without extra definition in the component constructor!");
+        }
+        stateMap.val = value instanceof Object ? value.join(" ") : value;
     }
 
     /**

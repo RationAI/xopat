@@ -492,7 +492,44 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             </div>
             <div class="non-draggable">${shaderLayer.htmlControls()}${filterUpdate.join("")}</div>${cacheApplied}
             </div>`);
-                },
+
+                        // const container = document.getElementById("data-layer-options");
+                        //
+                        // // map the mediator list to [{type, name}]
+                        // const availableShaders = OpenSeadragon
+                        //     .FlexRenderer
+                        //     .ShaderMediator
+                        //     .availableShaders()
+                        //     .map(s => ({ type: s.type(), name: s.name() }));
+                        //
+                        // // map filters if you want editable rows (optional)
+                        // const filters = {};
+                        // for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
+                        //     if (shaderConfig.params.hasOwnProperty(key)) {
+                        //         filters[key] = {
+                        //             name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
+                        //             value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
+                        //         };
+                        //     }
+                        // }
+                        //
+                        // const uiLayer = new UI.ShaderLayer({
+                        //     id: `${shaderLayer.id}-shader`,
+                        //     shaderLayer,
+                        //     shaderConfig: { ...shaderConfig, filters },
+                        //     availableShaders,
+                        //     callbacks: {
+                        //         onToggleVisible: (checked) => UTILITIES.shaderPartToogleOnOff(null, shaderLayer.id, checked),
+                        //         onChangeType: (type) => UTILITIES.changeVisualizationLayer({ value: type }, shaderLayer.id),
+                        //         onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
+                        //         onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
+                        //         onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
+                        //     }
+                        // });
+                        //
+                        // uiLayer.attachTo(container);
+
+                    },
                 htmlReset: () => {
                     //$("#data-layer-options").html();
                     document.getElementById("data-layer-options").innerHTML = "";
