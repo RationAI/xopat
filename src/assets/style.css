@@ -223,14 +223,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     text-overflow: ellipsis;
     cursor: auto;
 }
-.error-container::before {
-    content: 'warning';
-    font-family: 'Material Icons';
-    color: var(--color-icon-danger);
-    font-size: initial;
-    padding: 0px 0px;
-    /*vertical-align: sub;*/
-}
+
 .error-container code {
     display: none;
     padding: 3px 9px;

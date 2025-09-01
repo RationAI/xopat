@@ -904,6 +904,13 @@ html {
   min-height: fit-content;
 }
 
+.drawer {
+  position: relative;
+  display: grid;
+  grid-auto-columns: max-content auto;
+  width: 100%;
+}
+
 .dropdown {
   position: relative;
   display: inline-block;
@@ -1239,6 +1246,12 @@ html {
   margin-top: -1rem;
   margin-bottom: -1rem;
   margin-inline-end: -1rem;
+}
+
+.input-sm[type="number"]::-webkit-inner-spin-button {
+  margin-top: 0px;
+  margin-bottom: 0px;
+  margin-inline-end: -0px;
 }
 
 .join {
@@ -1641,6 +1654,10 @@ input.tab:checked + .tab-content,
   .btn-accent {
     --btn-color: var(--fallback-a);
   }
+
+  .btn-error {
+    --btn-color: var(--fallback-er);
+  }
 }
 
 @supports (color: color-mix(in oklab, black, black)) {
@@ -1704,6 +1721,10 @@ input.tab:checked + .tab-content,
   .btn-accent {
     --btn-color: var(--a);
   }
+
+  .btn-error {
+    --btn-color: var(--er);
+  }
 }
 
 .btn-secondary {
@@ -1716,6 +1737,12 @@ input.tab:checked + .tab-content,
   --tw-text-opacity: 1;
   color: var(--fallback-ac,oklch(var(--ac)/var(--tw-text-opacity)));
   outline-color: var(--fallback-a,oklch(var(--a)/1));
+}
+
+.btn-error {
+  --tw-text-opacity: 1;
+  color: var(--fallback-erc,oklch(var(--erc)/var(--tw-text-opacity)));
+  outline-color: var(--fallback-er,oklch(var(--er)/1));
 }
 
 .btn.glass {
@@ -2756,6 +2783,42 @@ details.collapse summary::-webkit-details-marker {
   width: 320px;
 }
 
+.artboard.phone-1.horizontal,
+      .artboard.phone-1.artboard-horizontal {
+  width: 568px;
+  height: 320px;
+}
+
+.artboard.phone-2.horizontal,
+      .artboard.phone-2.artboard-horizontal {
+  width: 667px;
+  height: 375px;
+}
+
+.artboard.phone-3.horizontal,
+      .artboard.phone-3.artboard-horizontal {
+  width: 736px;
+  height: 414px;
+}
+
+.artboard.phone-4.horizontal,
+      .artboard.phone-4.artboard-horizontal {
+  width: 812px;
+  height: 375px;
+}
+
+.artboard.phone-5.horizontal,
+      .artboard.phone-5.artboard-horizontal {
+  width: 896px;
+  height: 414px;
+}
+
+.artboard.phone-6.horizontal,
+      .artboard.phone-6.artboard-horizontal {
+  width: 1024px;
+  height: 320px;
+}
+
 .btm-nav-xs > *:where(.active) {
   border-top-width: 1px;
 }
@@ -2833,6 +2896,14 @@ details.collapse summary::-webkit-details-marker {
   width: 4rem;
   border-radius: 9999px;
   padding: 0px;
+}
+
+.input-sm {
+  height: 2rem;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 2rem;
 }
 
 .join.join-vertical {
@@ -3014,6 +3085,10 @@ details.collapse summary::-webkit-details-marker {
   position: static;
 }
 
+.\!fixed {
+  position: fixed !important;
+}
+
 .fixed {
   position: fixed;
 }
@@ -3060,6 +3135,11 @@ details.collapse summary::-webkit-details-marker {
 
 .m-2 {
   margin: 0.5rem;
+}
+
+.mx-1 {
+  margin-left: 0.25rem;
+  margin-right: 0.25rem;
 }
 
 .mx-2 {
@@ -3287,8 +3367,20 @@ details.collapse summary::-webkit-details-marker {
   padding-left: 0.25rem;
 }
 
+.pl-3 {
+  padding-left: 0.75rem;
+}
+
+.pr-1 {
+  padding-right: 0.25rem;
+}
+
 .pr-2 {
   padding-right: 0.5rem;
+}
+
+.pt-1 {
+  padding-top: 0.25rem;
 }
 
 .pt-3 {

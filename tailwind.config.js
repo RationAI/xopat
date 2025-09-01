@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: ["./ui/**/*", "./src/user-interface.js", "./server/templates/index.html"],
+  content: ["./ui/**/*", "./src/user-interface.js", "./server/templates/index.html", "./src/app.js"],
   darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
   theme: {
 

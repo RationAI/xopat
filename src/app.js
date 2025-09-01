@@ -903,6 +903,12 @@ onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display:
             title.attr('title', name);
         }
 
+        const slideName = document.getElementById('tissue-title-content');
+        if (slideName.parentElement.classList.contains('error-container')){
+            slideName.classList.remove('btn-primary');
+            slideName.classList.add('btn-error', 'btn-outline');
+        }
+
         if (imageData) {
             const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
             if (!hasMicrons || !hasDimMicrons) {
