@@ -440,96 +440,59 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 debugInfoContainer: 'panel-shaders',
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig) => {
-                    const container = $("#data-layer-options");
+                    const container = document.getElementById("data-layer-options");
 
-                    let fixed = UTILITIES.isJSONBoolean(shaderConfig.fixed, true);
-                    let isVisible = UTILITIES.isJSONBoolean(shaderConfig.visible, true);
-                    const dataId = shaderLayer.id;
-                    const title = shaderConfig.title || dataId;
-                    //let canChangeFilters = layer.hasOwnProperty("toggleFilters") && layer.toggleFilters;
+                    // map the mediator list to [{type, name}]
+                    const availableShaders = OpenSeadragon
+                        .FlexRenderer
+                        .ShaderMediator
+                        .availableShaders()
+                        .map(s => ({ type: s.type(), name: s.name() }));
 
-                    let style = isVisible ? (shaderConfig.params.use_mode === "clip" ? 'style="transform: translateX(10px);"' : "") : `style="filter: brightness(0.5);"`;
-                    const isModeShow = !shaderConfig.params.use_mode || shaderConfig.params.use_mode === "show";
-                    let modeChange = fixed && isModeShow ? "display: none;" : 'display: block;'; //do not show if fixed and show mode
-                    modeChange = `<span class="material-icons btn-pointer" data-mode="${isModeShow ? "blend" : shaderConfig.params.use_mode}"
-id="${dataId}-mode-toggle"
- style="width: 10%; float: right; ${modeChange}${isModeShow ? "color: var(--color-icon-tertiary);" : ""}"
-onclick="UTILITIES.changeModeOfLayer('${dataId}', this.dataset.mode);" title="${$.t('main.shaders.blendingExplain')}">payments</span>`;
-
-                    let availableShaders = "";
-                    for (let available of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
-                        let selected = available.type() === shaderConfig.type ? " selected" : "";
-                        availableShaders += `<option value="${available.type()}"${selected}>${available.name()}</option>`;
-                    }
-
-                    let filterUpdate = [];
-                    if (!fixed) {
-                        for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
-                            let found = shaderConfig.params.hasOwnProperty(key);
-                            if (found) {
-                                filterUpdate.push('<span>', OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                                    ':</span><input type="number" value="', shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key]),
-                                    '" style="width:80px;" onchange="UTILITIES.setFilterOfLayer(\'', dataId,
-                                    "', '", key, '\', Number.parseFloat(this.value));" class="form-control"><br>');
-                            }
+                    // map filters if you want editable rows (optional)
+                    const filters = {};
+                    for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
+                        if (shaderConfig.params.hasOwnProperty(key)) {
+                            filters[key] = {
+                                name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
+                                value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
+                            };
                         }
                     }
-                    const cacheApplied = shaderConfig._cacheApplied ?
-                        `<div class="p2 info-container rounded-2" style="width: 97%">
-${$.t('main.shaders.cache.' + shaderConfig._cacheApplied, {action: `UTILITIES.clearShaderCache('${dataId}');`})}</div>` : "";
-                    container.prepend(`<div class="shader-part resizable rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2" data-id="${dataId}" id="${dataId}-shader-part" ${style}>
-            <div class="h5 py-1 position-relative">
-              <input type="checkbox" class="form-control" ${isVisible ? 'checked' : ''}
-${shaderLayer.error ? 'disabled' : ''} onchange="UTILITIES.shaderPartToogleOnOff(this, '${dataId}');">
-              &emsp;<span style='width: 210px; vertical-align: bottom;' class="one-liner" title="${title}">${title}</span>
-              <div class="d-inline-block label-render-type pointer" style="float: right;">
-                  <label for="${dataId}-change-render-type"><span class="material-icons" style="width: 10%;">style</span></label>
-                  <select id="${dataId}-change-render-type" ${fixed ? "disabled" : ""}
-onchange="UTILITIES.changeVisualizationLayer(this, '${dataId}')" style="display: none;" class="form-control pointer input-sm">${availableShaders}</select>
-                </div>
-                ${modeChange}
-                <span class="material-icons" style="width: 10%; float: right;">swap_vert</span>
-            </div>
-            <div class="non-draggable">${shaderLayer.htmlControls()}${filterUpdate.join("")}</div>${cacheApplied}
-            </div>`);
 
-                        // const container = document.getElementById("data-layer-options");
-                        //
-                        // // map the mediator list to [{type, name}]
-                        // const availableShaders = OpenSeadragon
-                        //     .FlexRenderer
-                        //     .ShaderMediator
-                        //     .availableShaders()
-                        //     .map(s => ({ type: s.type(), name: s.name() }));
-                        //
-                        // // map filters if you want editable rows (optional)
-                        // const filters = {};
-                        // for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
-                        //     if (shaderConfig.params.hasOwnProperty(key)) {
-                        //         filters[key] = {
-                        //             name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                        //             value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
-                        //         };
-                        //     }
-                        // }
-                        //
-                        // const uiLayer = new UI.ShaderLayer({
-                        //     id: `${shaderLayer.id}-shader`,
-                        //     shaderLayer,
-                        //     shaderConfig: { ...shaderConfig, filters },
-                        //     availableShaders,
-                        //     callbacks: {
-                        //         onToggleVisible: (checked) => UTILITIES.shaderPartToogleOnOff(null, shaderLayer.id, checked),
-                        //         onChangeType: (type) => UTILITIES.changeVisualizationLayer({ value: type }, shaderLayer.id),
-                        //         onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
-                        //         onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
-                        //         onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
-                        //     }
-                        // });
-                        //
-                        // uiLayer.attachTo(container);
+                    const uiLayer = new UI.ShaderLayer({
+                        id: `${shaderLayer.id}-shader`,
+                        shaderLayer,
+                        shaderConfig: { ...shaderConfig, filters },
+                        availableShaders,
+                        callbacks: {
+                            onToggleVisible: (checked) => {
+                                let shader = uiLayer.layer;
+                                if (shader) {
+                                    if (checked) {
+                                        shader.visible = true;
+                                        // todo change visual using this.something()
+                                        //self.parentNode.parentNode.classList.remove("shader-part-error");
+                                    } else {
+                                        shader.visible = false;
+                                        //self.parentNode.parentNode.classList.add("shader-part-error");
+                                    }
+                                    VIEWER.drawer.rebuild(0);
+                                } else {
+                                    console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
+                                }
+                            },
+                            onChangeType: (type) => UTILITIES.changeVisualizationLayer({ value: type }, shaderLayer.id),
+                            onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
+                            onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
+                            onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
+                        }
+                    });
 
-                    },
+                    uiLayer.attachTo(container);
+                    console.log("shader part", shaderLayer.id, shaderConfig);
+
+                },
                 htmlReset: () => {
                     //$("#data-layer-options").html();
                     document.getElementById("data-layer-options").innerHTML = "";

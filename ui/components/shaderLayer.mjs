@@ -40,6 +40,7 @@ export class ShaderLayer extends BaseComponent {
         this.layer = options.shaderLayer;
         this.availableShaders = options.availableShaders || [];
         this.cb = options.callbacks || {};
+        this.body = new UI.RawHtml({extraClasses: {nd: "non-draggable"}}, this.layer.htmlControls());
 
         // --- derived state
         this.fixed = !!this.cfg?.fixed;
@@ -51,7 +52,7 @@ export class ShaderLayer extends BaseComponent {
         this.cacheApplied = this.cfg?._cacheApplied;
 
         // class names
-        this.classMap.base = "shader-part rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2";
+        this.classMap.base = "shader-part bg-gradient-to-r from-primary to-transparent rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2";
         this.classMap.resizable = "resizable";
         this.classMap.dim = this.visible ? "" : "brightness-50";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[10px]" : "";
@@ -129,7 +130,7 @@ export class ShaderLayer extends BaseComponent {
             id: this.layer.id + "-mode-toggle",     // keep legacy id
             size: Button.SIZE.SMALL,
             type: Button.TYPE.NONE,
-            extraProperties: { title: "Toggle blending / info", style: `float:right; ${shouldHide ? "display:none;" : ""}` },
+            extraProperties: { title: "Toggle blending / info", style: `float:right; ${this.cfg.fixed ? "display:none;" : ""}` },
             onClick: () => this.cb.onChangeMode?.(toMode)
         }, icon);
         // mark the button as non-draggable so only the handle drags
@@ -207,13 +208,6 @@ export class ShaderLayer extends BaseComponent {
     }
 
     create() {
-        const controlsHtml = this.layer?.htmlControls?.() || ""; // legacy HTML
-        const body = new Div({ extraClasses: { nd: "non-draggable" } },
-            // legacy controls HTML can be safely dropped in (BaseComponent already supports HTML strings)
-            controlsHtml,
-            this._buildFilters()
-        );
-
         // transform/dim styling
         this.setClass("clipNudge", this.visible && this.mode === "clip" ? "translate-x-[10px]" : "");
         this.setClass("dim", this.visible ? "" : "brightness-50");
@@ -221,12 +215,13 @@ export class ShaderLayer extends BaseComponent {
         return div(
             {
                 ...this.commonProperties,
-                id: `${this.layer.id}-shader-part`,            // NEW: legacy id
-                "data-id": this.layer.id,                      // NEW: used by sorter
+                id: `${this.layer.id}-shader-part`,
+                "data-id": this.layer.id,
                 class: `${this.classState.val}`
             },
             this._buildHeader(),
-            body.create(),
+            this.body.create(),
+            this._buildFilters(),
             this._buildCacheBanner()
         );
     }

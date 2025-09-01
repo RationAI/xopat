@@ -14,7 +14,6 @@
 const chokidar = require("chokidar");
 const micromatch = require("micromatch");
 const globParent = require("glob-parent");
-const fg = require("fast-glob");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -94,6 +93,22 @@ module.exports = function (grunt) {
             fs.copyFileSync(outFile, baselineCss);
             fs.writeFileSync(stateFile, JSON.stringify({ createdAt: Date.now() }, null, 2));
             grunt.log.ok("[twinc-merge] Baseline created.");
+        }
+
+        async function rebuildUI() {
+            if (!cfg.watch.some(x=>x.includes('ui/'))) {
+                return;
+            }
+
+            // 1) One-time full build to OUTFILE (uses config's default content)
+            grunt.log.writeln("[twinc-merge] Rebuild UI...");
+
+            return new Promise((resolve, reject) => {
+                // todo process platform change based on target platform
+                const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"],
+                    { stdio: "inherit", shell: process.platform === "win32" });
+                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`tailwindcss exited ${code}`))));
+            });
         }
 
         async function buildDeltaFor(fileAbsPosix, chunkPath) {
@@ -212,7 +227,11 @@ module.exports = function (grunt) {
                         await buildDeltaFor(file, chunk);
                         manifest[file] = path.relative(cacheDir, chunk);
                         fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-                        await mergeAll();
+
+                        await Promise.all([
+                            mergeAll(),
+                            rebuildUI()
+                        ]);
                     });
                 };
             }

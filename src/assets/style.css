@@ -457,7 +457,6 @@ input.switch:checked + label span {
     right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
-.shader-part {background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));}
 .shader-part span {width: 30%;display: inline-block;}
 #tutorials {max-height: 50vh;overflow-y: auto;}
 .tutorial-item {transition: all .2s ease-in-out;border: 3px solid transparent;

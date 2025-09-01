@@ -209,26 +209,6 @@ function initXopatLayers() {
             VIEWER.drawer.rebuild();
         };
 
-        /**
-         * @private
-         */
-        UTILITIES.shaderPartToogleOnOff = function (self, layerId) {
-            let shader = VIEWER.drawer.renderer.getShaderLayerConfig(layerId);
-            if (shader) {
-                if (self.checked) {
-                    shader.visible = true;
-                    self.parentNode.parentNode.classList.remove("shader-part-error");
-                } else {
-                    shader.visible = false;
-                    self.parentNode.parentNode.classList.add("shader-part-error");
-                }
-
-                VIEWER.drawer.rebuild(0);
-            } else {
-                console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': bad initialization?`);
-            }
-        };
-
         UTILITIES.changeVisualizationLayer = function (self, layerId) {
             let _this = $(self),
                 type = _this.val();

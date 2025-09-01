@@ -35,7 +35,7 @@ class Checkbox extends BaseComponent {
 
     create(){
         return  label({id: this.id, class: "cursor-pointer boxed", style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
-                input({ type: "checkbox", class: "checkbox", checked: this.checked ? "checked" : "", onchange: this.onchangeFunction }),
+                input({ type: "checkbox", class: "checkbox checkbox-xs", checked: this.checked ? "checked" : "", onchange: this.onchangeFunction }),
                 span({class: ""}, this.label),
             );
     }

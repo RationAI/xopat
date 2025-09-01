@@ -18,10 +18,11 @@ import { Checkbox } from "./components/checkbox.mjs";
 import { Toolbar } from "./components/toolbar.mjs";
 import { Select } from "./components/select.mjs";
 import { ShaderLayer } from "./components/shaderLayer.mjs";
+import { RawHtml } from "./components/rawHtml.mjs";
 
 const UI = {
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
-    Dropdown, Checkbox, Toolbar, Select, ShaderLayer
+    Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml
 };
 globalThis.UI = UI;
 
