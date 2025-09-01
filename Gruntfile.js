@@ -20,7 +20,7 @@ module.exports = function(grunt) {
     );
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
-        require('./server/utils/grunt/tasks/tailwind-incremental-builder')(grunt)
+        require('./server/utils/grunt/tasks/tailwind-builder')(grunt)
     );
 
     // library tasks
@@ -108,31 +108,25 @@ module.exports = function(grunt) {
         },
         // Custom twinc task
         twinc: {
-            // global options
-            inputCSS: './src/assets/tailwind-spec.css',
+            inputCSS:   './src/assets/tailwind-spec.css',
             configFile: './tailwind.config.js',
-            minify: false,          // true to minify output
-            debounceMs: 200,
-            // turn these on if you’re on WSL/Docker/NFS and miss events:
-            // usePolling: true,
-            // interval: 250,
-
-            // define your “parts”
-            parts: [
-                {
-                    name: 'ui',
-                    outFile: './src/libs/tailwind.ui.css',
-                    content: ['ui/**/*.{html,js,mjs}'],
-                    ignore: ['**/*.min.js', 'ui/index.js'],
-                },
-                {
-                    name: 'modules',
-                    outFile: './src/libs/tailwind.modules.css',
-                    content: ['modules/**/*.{html,js,mjs}'],
-                    ignore: ['**/*.min.js'],
-                },
-                // add more parts as needed...
+            outFile:    './src/libs/tailwind.min.css',   // single output
+            cacheDir:   './.twinc-cache',
+            watch: [
+                'ui/**/*.{html,js,mjs}',
+                'modules/**/*.{html,js,mjs}',
+                'plugins/**/*.{html,js}',
+                'src/**/*.{html,js}'
             ],
+            ignore: [
+                'ui/index.js',
+                'src/libs/**',
+                '.twinc-cache/**',
+                '**/*.min.js'
+            ],
+            minify: true,
+            debounceMs: 150,
+            // usePolling: true, interval: 250, // if needed on WSL/Docker/UNC
         },
     });
 

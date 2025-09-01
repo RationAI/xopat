@@ -10,7 +10,10 @@ module.exports = {
         './plugins/**/*.{html,js}',
         './src/**/*.{html,js}',
         '!**/*.min.js',
-        '!./ui/index.js'
+        // TODO how to ignore
+        // '!./ui/index.js',
+        // '!./src/libs/**',
+        // '!(.twinc-cache)/**'
     ],
     darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
     theme: {
