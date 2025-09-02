@@ -52,7 +52,7 @@ export class ShaderLayer extends BaseComponent {
         this.cacheApplied = this.cfg?._cacheApplied;
 
         // class names
-        this.classMap.base = "shader-part bg-gradient-to-r from-primary to-transparent rounded-3 mx-1 mb-2 pl-3 pt-1 pb-2";
+        this.classMap.base = "shader-part bg-gradient-to-r from-primary to-transparent rounded-3 mx-1 mb-2 pl-2 pt-1 pb-2";
         this.classMap.resizable = "resizable";
         this.classMap.dim = this.visible ? "" : "brightness-50";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[10px]" : "";

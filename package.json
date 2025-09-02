@@ -20,7 +20,8 @@
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "ex-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
     "ex-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
-    "tw-watch": "grunt twinc"
+    "tw-watch": "grunt twinc",
+    "dev-ui-2": "cross-env WATCH_PATTERN=ui/**/*.mjs grunt twinc"
   },
   "repository": {
     "type": "git",

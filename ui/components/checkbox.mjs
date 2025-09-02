@@ -31,13 +31,11 @@ class Checkbox extends BaseComponent {
         this.onchangeFunction = options["onchange"] || (() => {});
     }
 
-
-
     create(){
         return  label({id: this.id, class: "cursor-pointer boxed", style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
-                input({ type: "checkbox", class: "checkbox checkbox-xs", checked: this.checked ? "checked" : "", onchange: this.onchangeFunction }),
-                span({class: ""}, this.label),
-            );
+            input({ type: "checkbox", class: "checkbox checkbox-sm", checked: this.checked ? "checked" : "", onchange: this.onchangeFunction }),
+            this.label && span({class: ""}, this.label),
+        );
     }
 }
 

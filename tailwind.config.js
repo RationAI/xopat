@@ -13,7 +13,7 @@ module.exports = {
         // TODO how to ignore
         // '!./ui/index.js',
         // '!./src/libs/**',
-        // '!(.twinc-cache)/**'
+        // '!(.dev-cache)/**'
     ],
     darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
     theme: {

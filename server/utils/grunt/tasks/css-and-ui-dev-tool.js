@@ -64,14 +64,15 @@ module.exports = function (grunt) {
         const inputCSS   = abs(root, cfg.inputCSS   || "./src/assets/tailwind.css");
         const configFile = abs(root, cfg.configFile || "./tailwind.config.js");
         const outFile    = abs(root, cfg.outFile    || "./src/libs/tailwind.min.css");
-        const cacheDir   = abs(root, cfg.cacheDir   || "./.twinc-cache");
+        const cacheDir   = abs(root, "./.dev-cache");
         const baselineCss = path.join(cacheDir, "baseline.css"); // snapshot of the one-time full build
         const stateFile  = path.join(cacheDir, "state.json");
         const debounceMs = cfg.debounceMs ?? 150;
         const minify     = cfg.minify !== false; // default true
         const mmOpts     = { windows: false };
 
-        const watchGlobs = (cfg.watch || []).map((g) => absPosix(root, g));
+        const watchGlobs = process.env.WATCH_PATTERN ? [absPosix(root, process.env.WATCH_PATTERN)] :
+            (cfg.watch || []).map((g) => absPosix(root, g));
         const ignoreGlobs = (cfg.ignore || []).map((g) => absPosix(root, g));
         if (!watchGlobs.length) return grunt.fail.fatal("[twinc-merge] Provide twinc.watch globs.");
         if (!exists(inputCSS))  return grunt.fail.fatal(`[twinc-merge] inputCSS not found: ${inputCSS}`);
@@ -96,10 +97,6 @@ module.exports = function (grunt) {
         }
 
         async function rebuildUI() {
-            if (!cfg.watch.some(x=>x.includes('ui/'))) {
-                return;
-            }
-
             // 1) One-time full build to OUTFILE (uses config's default content)
             grunt.log.writeln("[twinc-merge] Rebuild UI...");
 
@@ -107,14 +104,14 @@ module.exports = function (grunt) {
                 // todo process platform change based on target platform
                 const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"],
                     { stdio: "inherit", shell: process.platform === "win32" });
-                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`tailwindcss exited ${code}`))));
+                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
             });
         }
 
         async function buildDeltaFor(fileAbsPosix, chunkPath) {
             // Build utilities-only for that single file (fast)
             const tmp = path.join(cacheDir, "utils.input.css");
-            fs.writeFileSync(tmp, "@tailwind utilities;\n");
+            fs.writeFileSync(tmp, "@tailwind components;\n@tailwind utilities;\n");
             await runTailwind({
                 grunt,
                 configFile,
@@ -184,6 +181,66 @@ module.exports = function (grunt) {
 
             // Debounce/serialize
             let isBuilding = false;
+            let flushTimer = null;
+            const pendingFiles = new Set();
+            let pendingNeedsUI = false;
+            let pendingMergeOnly = false;
+
+            function queueDelta(fileAbsPosix) {
+                pendingFiles.add(fileAbsPosix);
+                if (fileAbsPosix.includes('/ui/')) pendingNeedsUI = true; // posix path here
+                scheduleFlush();
+            }
+
+            function queueMergeOnly() {
+                pendingMergeOnly = true;
+                scheduleFlush();
+            }
+
+            function scheduleFlush() {
+                if (flushTimer) clearTimeout(flushTimer);
+                flushTimer = setTimeout(runBuildCycle, debounceMs);
+            }
+
+            async function runBuildCycle() {
+                if (isBuilding) return;               // don't drop; the pending flags/sets remain queued
+                isBuilding = true;
+
+                // take a snapshot of the current queue
+                const files = Array.from(pendingFiles);
+                pendingFiles.clear();
+                const needUI = pendingNeedsUI;
+                pendingNeedsUI = false;
+                const mergeOnly = pendingMergeOnly;
+                pendingMergeOnly = false;
+
+                try {
+                    // rebuild deltas for queued files
+                    for (const f of files) {
+                        const chunk = chunkPathFor(f);
+                        await buildDeltaFor(f, chunk);
+                        manifest[f] = path.relative(cacheDir, chunk);
+                    }
+                    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+                    // merge baseline + deltas (also when only unlink happened)
+                    await mergeAll();
+
+                    // one UI rebuild per cycle if any /ui/ file changed (no matter how many)
+                    if (needUI) {
+                        await rebuildUI();
+                    }
+                } catch (e) {
+                    grunt.log.error(e.message);
+                } finally {
+                    isBuilding = false;
+                    // if more work arrived while we were building, run another cycle
+                    if (pendingFiles.size || pendingNeedsUI || pendingMergeOnly) {
+                        scheduleFlush();
+                    }
+                }
+            }
+
             const scheduled = new Map();
             const schedule = (key, fn) => {
                 const prev = scheduled.get(key);
@@ -218,21 +275,14 @@ module.exports = function (grunt) {
                             delete manifest[file];
                             fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
                         }
-                        schedule("merge", () => mergeAll());
+                        // If the removed file was under /ui/, ensure we also kick a UI bundle rebuild
+                        if (file.includes('/ui/')) pendingNeedsUI = true;
+                        queueMergeOnly();
                         return;
                     }
 
-                    const chunk = chunkPathFor(file);
-                    schedule(file, async () => {
-                        await buildDeltaFor(file, chunk);
-                        manifest[file] = path.relative(cacheDir, chunk);
-                        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-
-                        await Promise.all([
-                            mergeAll(),
-                            rebuildUI()
-                        ]);
-                    });
+                    // add/change → queue delta; UI flag will be set inside queueDelta()
+                    queueDelta(file);
                 };
             }
 
@@ -244,9 +294,12 @@ module.exports = function (grunt) {
                     const w = watcher.getWatched();
                     const dirCount = Object.keys(w).length;
                     const fileCount = Object.values(w).reduce((a, v) => a + v.length, 0);
-                    grunt.log.writeln("[twinc-merge] Watcher ready.");
+                    for (const entry of watchRoots) {
+                        grunt.log.writeln(`[twinc-merge] Watching ${entry}...`);
+                    }
                     grunt.log.writeln(`[twinc-merge] Watched entries (dirs/files): ${dirCount}/${fileCount}`);
                     try { await ensureInitialOnce(); } catch (e) { grunt.fail.warn(e.message); }
+                    grunt.log.ok("[twinc-merge] Watcher started.");
                 })
                 .on("error", (e) => grunt.log.error("[twinc-merge] watcher error:", e));
             // keep task alive

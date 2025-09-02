@@ -443,7 +443,7 @@ input.switch:checked + label span {
 .inner-panel::after {content: '';}
 .inner-panel-simple {padding-left: 9px;padding-right: 5px;}
 .inner-panel-visible {padding: 0 5px 0 9px;}
-.inner-panel-hidden {padding: 0 5px 0 9px;transition: max-height 0.15s ease-in-out;overflow: hidden; display: none;
+.inner-panel-hidden {transition: max-height 0.15s ease-in-out;overflow: hidden; display: none;
     border-radius: 6px; width: calc(100% - 5px)}
 .inner-panel.loading::before {content: '';position: absolute;width: 100%;height: 100%;
     background: rgba(34, 34, 34, 0.68);top: 0;left: 0;}

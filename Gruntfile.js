@@ -20,7 +20,7 @@ module.exports = function(grunt) {
     );
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
-        require('./server/utils/grunt/tasks/tailwind-builder')(grunt)
+        require('./server/utils/grunt/tasks/css-and-ui-dev-tool')(grunt)
     );
 
     // library tasks
@@ -111,7 +111,7 @@ module.exports = function(grunt) {
             inputCSS:   './src/assets/tailwind-spec.css',
             configFile: './tailwind.config.js',
             outFile:    './src/libs/tailwind.min.css',   // single output
-            cacheDir:   './.twinc-cache',
+            cacheDir:   './.dev-cache',
             watch: [
                 'ui/**/*.{html,js,mjs}',
                 'modules/**/*.{html,js,mjs}',
@@ -121,7 +121,7 @@ module.exports = function(grunt) {
             ignore: [
                 'ui/index.js',
                 'src/libs/**',
-                '.twinc-cache/**',
+                '.dev-cache/**',
                 '**/*.min.js'
             ],
             minify: true,
