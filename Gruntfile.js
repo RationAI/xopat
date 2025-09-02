@@ -10,7 +10,7 @@ module.exports = function(grunt) {
         'Generate Env Configuration Example.',
         require('./server/utils/grunt/tasks/env')(grunt)
     );
-    grunt.registerTask('docs', '' +
+    grunt.registerTask('jsdoc', '' +
         'Generate JSDoc documentation using theme configuration file',
         require('./server/utils/grunt/tasks/jsodc')(grunt)
     );
@@ -131,13 +131,13 @@ module.exports = function(grunt) {
     });
 
     grunt.registerTask('default', []);
-    grunt.registerTask('all', ["uglify"]);
+    grunt.registerTask('minify', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('ui', ["uglify:ui"]);
     grunt.registerTask('buildUI', function (){
         grunt.log.writeln('esbuild');
-        const result = exec("npx esbuild --bundle --format=esm --outfile=ui/index.js ui/index.mjs");
+        const result = exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
         grunt.log.writeln(result);
     })
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {

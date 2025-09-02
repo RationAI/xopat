@@ -1,5 +1,5 @@
-import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
 
 const { i } = van.tags
 

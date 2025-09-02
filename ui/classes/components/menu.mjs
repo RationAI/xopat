@@ -1,10 +1,10 @@
-import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
 import { MenuTab } from "./menuTab.mjs";
-import { Join } from "./join.mjs";
-import { Div } from "./div.mjs";
-import { Button } from "./buttons.mjs";
-import { Dropdown } from "./dropdown.mjs";
+import { Join } from "../elements/join.mjs";
+import { Div } from "../elements/div.mjs";
+import { Button } from "../elements/buttons.mjs";
+import { Dropdown } from "../elements/dropdown.mjs";
 
 const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags

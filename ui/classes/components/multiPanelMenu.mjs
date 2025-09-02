@@ -1,8 +1,8 @@
-import van from "../vanjs.mjs";
+import van from "../../vanjs.mjs";
 import { MenuTab } from "./menuTab.mjs";
-import { Join } from "./join.mjs";
-import { Div } from "./div.mjs";
-import { Button } from "./buttons.mjs";
+import { Join } from "../elements/join.mjs";
+import { Div } from "../elements/div.mjs";
+import { Button } from "../elements/buttons.mjs";
 import { Menu } from "./menu.mjs";
 import { MultiPanelMenuTab } from "./multiPanelMenuTab.mjs";
 

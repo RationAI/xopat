@@ -1,6 +1,6 @@
-import van from "../vanjs.mjs";
+import van from "../../vanjs.mjs";
 const { div } = van.tags;
-import { BaseComponent } from "./baseComponent.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
 
 export class RawHtml extends BaseComponent {
     constructor(options, html = "") {

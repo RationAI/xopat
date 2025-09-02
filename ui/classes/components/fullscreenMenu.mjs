@@ -1,6 +1,6 @@
-import { BaseComponent } from "./baseComponent.mjs";
-import { Div } from "./div.mjs";
-import van from "../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
+import { Div } from "../elements/div.mjs";
+import van from "../../vanjs.mjs";
 
 const { div } = van.tags;
 

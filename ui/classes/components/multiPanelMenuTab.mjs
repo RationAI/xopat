@@ -1,9 +1,9 @@
-import { BaseComponent } from "./baseComponent.mjs";
-import van from "../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
+import van from "../../vanjs.mjs";
 
-import { FAIcon } from "./fa-icon.mjs";
-import { Button } from "./buttons.mjs";
-import { Div } from "./div.mjs";
+import { FAIcon } from "../elements/fa-icon.mjs";
+import { Button } from "../elements/buttons.mjs";
+import { Div } from "../elements/div.mjs";
 import { MenuTab } from "./menuTab.mjs";
 
 const { span, div } = van.tags

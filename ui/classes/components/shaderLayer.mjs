@@ -1,11 +1,11 @@
 // ui/components/shaderLayer.mjs
-import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
-import { Div } from "./div.mjs";
-import { Button } from "./buttons.mjs";
-import { Checkbox } from "./checkbox.mjs";
-import { Select } from "./select.mjs";
-import { FAIcon } from "./fa-icon.mjs";
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
+import { Div } from "../elements/div.mjs";
+import { Button } from "../elements/buttons.mjs";
+import { Checkbox } from "../elements/checkbox.mjs";
+import { Select } from "../elements/select.mjs";
+import { FAIcon } from "../elements/fa-icon.mjs";
 
 const { div, span, input, label, br } = van.tags;
 
@@ -91,6 +91,7 @@ export class ShaderLayer extends BaseComponent {
             id: this.id + "-change-render-type",
             title: "",
             selected: this.type,
+            extraClasses: { xs: "select-xs" },
             extraProperties: {"disabled": "", "value": this.type},
             onchange: (e) => {
                 const val = e.target.value;
@@ -104,22 +105,22 @@ export class ShaderLayer extends BaseComponent {
             this.renderTypeSelect.setExtraProperty("disabled", "disabled");
         }
 
-        const btn = new Button({
-            size: Button.SIZE.SMALL,
-            outline: Button.OUTLINE.DISABLE,
-            type: Button.TYPE.NONE,
-            onClick: () => {
-                this._selectVisible = !this._selectVisible;
-                this.renderTypeSelect.setClass("display", this._selectVisible ? "" : "hidden");
-            }
-        }, gear);
+        // const btn = new Button({
+        //     size: Button.SIZE.SMALL,
+        //     outline: Button.OUTLINE.DISABLE,
+        //     type: Button.TYPE.NONE,
+        //     onClick: () => {
+        //         this._selectVisible = !this._selectVisible;
+        //         this.renderTypeSelect.setClass("display", this._selectVisible ? "" : "hidden");
+        //     }
+        // }, gear);
 
         this.renderTypeSelect.setClass("display", "hidden");
         const wrap = new Div(
             { extraClasses: { inline: "inline-block non-draggable" }, extraProperties: {
                     "style": "float:right"
                 } }, // non-draggable
-            btn, this.renderTypeSelect
+            this.renderTypeSelect
         );
         return wrap.create();
     }

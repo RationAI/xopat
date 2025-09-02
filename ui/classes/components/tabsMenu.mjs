@@ -1,63 +1,49 @@
-import { BaseComponent } from "./baseComponent.mjs";
-import { Div } from "./div.mjs";
-import { FAIcon } from "./fa-icon.mjs";
-import { Button } from "./buttons.mjs";
-import van from "../vanjs.mjs";
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
+import { Div } from "../elements/div.mjs";
+import { FAIcon } from "../elements/fa-icon.mjs";
+import { Button } from "../elements/buttons.mjs";
 
-const { div, span } = van.tags;
+const { div, span } = van.tags
 
-/**
- * @class Toolbar
- * @extends BaseComponent
- * @description A draggable component that allows to add tabs with content and can be pinned to left or down
- * @example
- * const toolbar = new Toolbar({ id: "myToolbar", design: "TITLEICON" });
- * toolbar.addToToolbar({
- *      id: "tab1",
- *      icon: "fa-icon-name",
- *      title: "Tab 1",
- *      body: [span("Content for Tab 1")]
- * });
- */
-class Toolbar extends BaseComponent{
-    /**
-     * 
-     * @param {*} options
-     * @param {*} args
-     */
+class TabsMenu extends BaseComponent {
+
     constructor(options, ...args) {
         super(options,);
 
-        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
-        this.classMap["flex"] = "flex-col";
-        this.design = options.design || "TITLEICON";
-
         this.tabs = {};
         this.focused = undefined;
+        this.design = options.design || "TITLEICON";
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
         this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed" } });
 
-        if (args.length === 0){
-            this.display = "none";
-        }
         for (let i of args) {
-            this.addToToolbar(i);
+            this.addTab(i);
+        }
+
+        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
+        this.classMap["flex"] = "flex-col";
+
+        if (options) {
+            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
         }
     }
 
-    /**
-     * @description creates new toolbar item and adds it to the toolbar
-     * @param {*} item dictionary with  id, icon, title, body
-     */
-    addToToolbar(item) {
+    create() {
+        this.header.attachTo(this);
+        this.body.attachTo(this);
+        return div(
+            { ...this.commonProperties, ...this.extraProperties },
+            ...this.children
+        );
+    }
+
+    addTab(item) {
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-
-        this.header.setClass("display", "");
-        this.body.setClass("display", "");
 
         const tab = this.createTab(item);
         this.tabs[item.id] = tab;
@@ -66,21 +52,11 @@ class Toolbar extends BaseComponent{
         if (tab.contentDiv) {
             tab.contentDiv.attachTo(this.body);
         }
-
-        this.display = "";
-
-        if (Object.keys(this.tabs).length === 1) {
-            this.focus(item.id);
-            this.header.setClass("display", "hidden");
-        } else{
-            this.header.setClass("display", "");
-        }
-
     }
 
     /**
-     * @param {*} item dictionary with  id, icon, title, body
-     * @returns tuple of header Button and content Div components
+     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @returns {*} Button and Div components from VanJS framework
      */
     createTab(item) {
         const content = item["body"];
@@ -105,28 +81,11 @@ class Toolbar extends BaseComponent{
         if (content){
             c = new Div({ id: this.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
         };
-
         return {headerButton: b, contentDiv: c};
-
-    }
-
-    create() {
-        return div({id: `${this.id}`, class: "draggable boxed", 
-                    style: `position: fixed; 
-                            left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; 
-                            top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px; 
-                            display: ${this.display};
-                            z-index: 1000;`},
-                    div({class: "handle"}, "----"),
-                    this.header.create(),
-                    this.body.create()
-        );
     }
 
     /**
-     * 
-     * @param {*} id id of tab we want to focus
-     * @returns if the tab was focused
+     * @param {*} id of the item we want to focus
      */
     focus(id) {
         if (id in this.tabs) {
@@ -156,4 +115,4 @@ class Toolbar extends BaseComponent{
 
 }
 
-export { Toolbar };
+export { TabsMenu }

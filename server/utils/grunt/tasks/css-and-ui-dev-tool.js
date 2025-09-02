@@ -101,7 +101,6 @@ module.exports = function (grunt) {
             grunt.log.writeln("[twinc-merge] Rebuild UI...");
 
             return new Promise((resolve, reject) => {
-                // todo process platform change based on target platform
                 const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"],
                     { stdio: "inherit", shell: process.platform === "win32" });
                 child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
