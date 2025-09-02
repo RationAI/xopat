@@ -946,8 +946,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     const checkbox = new UI.Checkbox({
                         id: `visual-menu-ul-visual-checkbox-${tKey}`,
                         label: tKey,
-                        checked: !t.hidden,
-                        onchange: () => {t.toggleHiden()},
+                        checked: !APPLICATION_CONTEXT.getOption(`${tKey}-hidden`, false),
+                        onchange: () => {t.toggleHiden(), APPLICATION_CONTEXT.setOption(`${tKey}-hidden`, t.hidden);},
                     });
                     visualMenuContent.appendChild(checkbox.create());
                 }
@@ -1049,17 +1049,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
 
-                if (APPLICATION_CONTEXT.getOption("navigator") === undefined){
-                    APPLICATION_CONTEXT.setOption("navigator", true);
-                }
-
                 // defaultly open menus
                 for(i of Object.keys(this.menu.tabs)){
-                    if (APPLICATION_CONTEXT.getOption(i)){
+                    if (APPLICATION_CONTEXT.getOption(`${i}-open`, true)){
                         this.menu.tabs[i]._setFocus();
                     }
                     else{
                         this.menu.tabs[i]._removeFocus();
+                    }
+
+                    if (APPLICATION_CONTEXT.getOption(`${i}-hidden`, false)){
+                        this.menu.tabs[i].toggleHiden();
                     }
                 }
             },
@@ -1145,6 +1145,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         ),
                     )
                 this.menu.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+
+                if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
+                    this.menu.tabs[id]._setFocus();
+                }
+                else{
+                    this.menu.tabs[id]._removeFocus();
+                }
+
+                if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
+                    this.menu.tabs[id].toggleHiden();
+                }
             },
             createShadersMenu: function () {
                 const innerHTML = `

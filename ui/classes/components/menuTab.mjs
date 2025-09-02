@@ -72,21 +72,21 @@ class MenuTab {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton.id != this.headerButton.id) {
                 tab._removeFocus();
-                APPLICATION_CONTEXT.setOption(tab.id, false);
+                APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
             }
         };
 
         if (this.focused) {
-            APPLICATION_CONTEXT.setOption(this.id, false);
+            APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
             this._removeFocus();
         } else {
-            APPLICATION_CONTEXT.setOption(this.id, true);
+            APPLICATION_CONTEXT.setOption(`${this.id}-open`, true);
             this._setFocus();
         };
     }
 
     unfocus(){
-        APPLICATION_CONTEXT.setOption(this.id, false);
+        APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
         this._removeFocus();
     }
 
