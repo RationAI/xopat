@@ -54,7 +54,7 @@ class MultiPanelMenuTab extends MenuTab{
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: "Pin to fullscreen", style: "position: absolute; top: 0px;"},
+            extraProperties: { title: "Pin to fullscreen mode", style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 this.togglePinned();
                 if (pinIcon.classMap["name"] === "fa-thumbtack") {
@@ -93,6 +93,10 @@ class MultiPanelMenuTab extends MenuTab{
             }, this.closedButton, this.openDiv);
 
         this.fullId = this.parent.id + "-c-" + item.id;
+        if (APPLICATION_CONTEXT.getOption(`${this.id}-pinned`, false)){
+            this.parent.pinnedTabs[this.id] = true;
+            pinIcon.changeIcon("fa-thumbtack-slash");
+        }
         return [undefined, c];
     }
 
@@ -170,8 +174,10 @@ class MultiPanelMenuTab extends MenuTab{
 
     togglePinned(){
         if (this.parent.pinnedTabs[this.id]){
+            APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, false);
             this.parent.pinnedTabs[this.id] = false;
         } else{
+            APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, true);
             this.parent.pinnedTabs[this.id] = true;
         }
     }
