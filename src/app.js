@@ -463,11 +463,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     const uiLayer = new UI.ShaderLayer({
                         id: `${shaderLayer.id}-shader`,
                         shaderLayer,
-                        shaderConfig: { ...shaderConfig, filters },
+                        shaderConfig: shaderConfig,
+                        availableFilters: filters,
                         availableShaders,
                         callbacks: {
                             onToggleVisible: (checked) => {
-                                let shader = uiLayer.layer;
+                                let shader = uiLayer.cfg;
                                 if (shader) {
                                     if (checked) {
                                         shader.visible = true;
@@ -482,16 +483,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                                     console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
                                 }
                             },
-                            onChangeType: (type) => UTILITIES.changeVisualizationLayer({ value: type }, shaderLayer.id),
+                            onChangeType: (type) => UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
                             onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
                             onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
                             onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
                         }
                     });
 
-                    uiLayer.attachTo(container);
-                    console.log("shader part", shaderLayer.id, shaderConfig);
-
+                    uiLayer.prependedTo(container);
                 },
                 htmlReset: () => {
                     //$("#data-layer-options").html();
@@ -1103,6 +1102,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
             console.error(e);
+        }
+        //https://github.com/mrdoob/stats.js
+        if (APPLICATION_CONTEXT.getOption("debugMode")) {
+            (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.url+'src/external/stats.js';document.head.appendChild(script);})()
         }
     };
 

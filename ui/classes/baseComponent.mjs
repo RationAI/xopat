@@ -58,15 +58,55 @@ class BaseComponent {
         this.refreshClassState();
         this.refreshPropertiesState();
 
-        if (document.getElementById(element.id) !== null) {
-            document.getElementById(element.id).appendChild(this.create());
+        if (element instanceof BaseComponent) {
+            const mount = document.getElementById(element.id);
+            if (document.getElementById(element.id) === null) {
+                element._children.push(this);
+            } else {
+                mount.append(this.create());
+            }
+        } else {
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
 
-        }else if (element instanceof BaseComponent) {
-            element.addChildren(this);
-        }else {
-            van.add(element,
-                this.create());
+            if (!mount) {
+                console.error(`Element ${element} not found`);
+                van.add(element, this.create());
+            } else {
+                mount.append(this.create());
+            }
         }
+    }
+
+    /**
+     *
+     * @param {*} element - The element to prepend the component to
+     */
+    prependedTo(element) {
+        this.refreshClassState();
+        this.refreshPropertiesState();
+
+        if (element instanceof BaseComponent) {
+            const mount = document.getElementById(element.id);
+            if (document.getElementById(element.id) === null) {
+                element._children.unshift(this);
+            } else {
+                mount.prepend(this.create());
+            }
+        } else {
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
+
+            if (!mount) {
+                console.error(`Element ${element} not found`);
+                van.add(element, this.create());
+            } else {
+                mount.prepend(this.create());
+            }
+        }
+
     }
 
     /**

@@ -62,7 +62,7 @@ export class ShaderMenu extends BaseComponent {
             {
                 id: "shaders",
                 name: "shaders",
-                class: "select select-bordered select-lg align-middle w-4/5 max-w-xs cursor-pointer text-xl text-lg",
+                class: "select select-bordered select-md align-middle w-4/5 max-w-xs cursor-pointer text-xl text-lg",
                 "aria-label": "Visualization",
                 value: this.selectedShader,
                 onchange: (e) => {

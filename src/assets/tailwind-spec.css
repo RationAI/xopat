@@ -1,3 +1,100 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+    /* Text-like inputs + select + textarea → DaisyUI .input */
+    input:not([type]),
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    input[type="search"],
+    input[type="url"],
+    input[type="tel"],
+    input[type="date"],
+    input[type="time"],
+    input[type="datetime-local"],
+    input[type="month"],
+    input[type="week"],
+    select,
+    textarea {
+        @apply input input-bordered w-full;
+    }
+
+    /* Track */
+    input[type="range"]:not(.range){
+        -webkit-appearance: none; appearance: none;
+        width: 100%; height: 0.5rem; /* ~h-2 */
+        border-radius: 9999px;
+        background-color: var(--fallback-b3, oklch(var(--b3)/1)); /* base-300-ish */
+        cursor: pointer;
+    }
+    input[type="range"]:not(.range):focus { outline: none; }
+
+    /* WebKit thumb */
+    input[type="range"]:not(.range)::-webkit-slider-thumb{
+        -webkit-appearance: none; appearance: none;
+        width: 1rem; height: 1rem; /* ~w-4 h-4 to w-5 h-5 if you like */
+        border-radius: 9999px;
+        background: var(--fallback-bc, oklch(var(--bc)/1));       /* base-content */
+        border: 2px solid var(--fallback-b1, oklch(var(--b1)/1)); /* base-100 border */
+        position: relative;
+    }
+
+    /* Firefox thumb */
+    input[type="range"]:not(.range)::-moz-range-thumb{
+        width: 1rem; height: 1rem; border-radius: 9999px;
+        background: var(--fallback-bc, oklch(var(--bc)/1));
+        border: 2px solid var(--fallback-b1, oklch(var(--b1)/1));
+    }
+    input[type="range"]:not(.range)::-moz-range-track{
+        height: 0.5rem; border-radius: 9999px;
+        background-color: var(--fallback-b3, oklch(var(--b3)/1));
+    }
+
+    /* ——— Compact NUMBER ——— */
+    input[type="number"]:not(.input) {
+        @apply input input-bordered input-sm;
+        /* small, predictable width; tweak as needed */
+        width: 7.5ch;                 /* fits e.g. “-1234.5” */
+        text-align: right;
+    }
+    /* Remove browser quirks on spinners */
+    input[type="number"]::-webkit-inner-spin-button,
+    input[type="number"]::-webkit-outer-spin-button { margin: 0; }
+    input[type="number"] { -moz-appearance: textfield; } /* Firefox */
+
+    /* Optional: quick width overrides via data attribute */
+    input[type="number"][data-ch="4"] { width: 5.5ch; }
+    input[type="number"][data-ch="8"] { width: 9.5ch; }
+
+    /* ——— Styled COLOR swatch ——— */
+    /* Native <input type=color> (no DaisyUI class) */
+    input[type="color"]:not(.color-input) {
+        -webkit-appearance: none; appearance: none;
+        @apply inline-block align-middle rounded-btn border;
+        width: 1.75rem;               /* compact chip */
+        height: 1.25rem;
+        padding: 0;
+        background: transparent;
+        /* subtle border using DaisyUI tokens */
+        border-color: var(--fallback-b3, oklch(var(--b3)/1));
+    }
+    input[type="color"]:not(.color-input):focus {
+        @apply outline-none ring-2 ring-primary/40;
+    }
+
+    /* WebKit swatch */
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+    input[type="color"]::-webkit-color-swatch { border: none; border-radius: .375rem; }
+
+    /* Firefox swatch */
+    input[type="color"]::-moz-focus-inner { padding: 0; border: 0; }
+    input[type="color"]::-moz-color-swatch { border: none; border-radius: .375rem; }
+
+    /* Optional: disabled state */
+    input:disabled,
+    select:disabled,
+    textarea:disabled { @apply opacity-50 cursor-not-allowed; }
+}

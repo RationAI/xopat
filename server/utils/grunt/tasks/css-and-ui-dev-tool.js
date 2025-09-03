@@ -110,7 +110,16 @@ module.exports = function (grunt) {
         async function buildDeltaFor(fileAbsPosix, chunkPath) {
             // Build utilities-only for that single file (fast)
             const tmp = path.join(cacheDir, "utils.input.css");
-            fs.writeFileSync(tmp, "@tailwind components;\n@tailwind utilities;\n");
+
+            if (!fs.existsSync(tmp)) {
+                const srcCss = path.resolve(root, "src/assets/tailwind-spec.css");
+                if (!fs.existsSync(srcCss)) {
+                    throw new Error(`Tailwind build not found at ${srcCss}.`);
+                }
+                fs.mkdirSync(path.dirname(tmp), { recursive: true });
+                fs.copyFileSync(srcCss, tmp);
+            }
+
             await runTailwind({
                 grunt,
                 configFile,
@@ -138,7 +147,13 @@ module.exports = function (grunt) {
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) {
                 if (lockExistsRecent()) { grunt.log.writeln("[twinc-merge] Full build in progress/recent; skipping."); return; }
                 fs.writeFileSync(LOCK, String(Date.now()));
-                try { await fullBuildOnce(); } finally { try { fs.unlinkSync(LOCK); } catch {} }
+                try {
+                    await fullBuildOnce();
+                    return true;
+                } finally {
+                    try { fs.unlinkSync(LOCK); } catch {}
+                }
+                return false;
             }
         }
 
@@ -201,8 +216,8 @@ module.exports = function (grunt) {
                 flushTimer = setTimeout(runBuildCycle, debounceMs);
             }
 
-            async function runBuildCycle() {
-                if (isBuilding) return;               // don't drop; the pending flags/sets remain queued
+            async function runBuildCycle(retry = true) {
+                if (isBuilding && retry) return;               // don't drop; the pending flags/sets remain queued
                 isBuilding = true;
 
                 // take a snapshot of the current queue
@@ -231,6 +246,11 @@ module.exports = function (grunt) {
                     }
                 } catch (e) {
                     grunt.log.error(e.message);
+                    if (retry && e.message?.includes("ENOENT")) {
+                        if (await ensureInitialOnce()) {
+                            await runBuildCycle(false);
+                        }
+                    }
                 } finally {
                     isBuilding = false;
                     // if more work arrived while we were building, run another cycle
@@ -239,19 +259,6 @@ module.exports = function (grunt) {
                     }
                 }
             }
-
-            const scheduled = new Map();
-            const schedule = (key, fn) => {
-                const prev = scheduled.get(key);
-                if (prev) clearTimeout(prev);
-                const t = setTimeout(async () => {
-                    scheduled.delete(key);
-                    if (isBuilding) return;
-                    try { isBuilding = true; await fn(); }
-                    finally { isBuilding = false; }
-                }, debounceMs);
-                scheduled.set(key, t);
-            };
 
             const matchesWatch = (file) => {
                 const f = toPosix(file);

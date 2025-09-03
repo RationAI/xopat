@@ -604,6 +604,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
+        Tooltip: new UI.GlobalTooltip(),
+
         // TODO make new component for main-panel -> add methods from user-interface RightSideMenu
         // `<div id="${id}" -> id MENU, on components we will access through API
         // class="inner-panel ${pluginId}-plugin-root -> must be for every top level component of some plugin
@@ -947,7 +949,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-eye-slash", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
+                }, { id: "visual", icon: "fa-window-restore", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
                 );
 
                 this.menu.attachTo(this.context);
@@ -1064,8 +1066,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const { div } = van.tags;
 
                 const viewer = div();
-                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 300px; width: 300px;">
-                                        <div id="panel-navigator" style=" height: 300px; width: 300px;"></div>
+                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 360px; width: 360px;">
+                                        <div id="panel-navigator" style=" height: 360px; width: 360px;"></div>
                                     </div>`;
 
                 const slideName = this.CreateSlideTop();
@@ -1077,6 +1079,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
+                // todo override background with this color (does not work)
+                // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
+                // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
                 this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
                 this.menu.attachTo(this.context);
 
@@ -1105,19 +1110,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     onClick: function () {
                         UTILITIES.copyToClipboard(this.textContent);
                     }
-                    },);
+                    });
 
                 const checkbox = new UI.Div(
                     {id: "global-tissue-visibility",
                     class: "",
-                    extraClasses: {btn: "btn btn-primary btn-sm"},
+                    extraClasses: {btn: "btn btn-primary btn-sm w-full"},
                     style: "display: flex; align-items: center;"},
                     input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
                         onchange: function () {
                             VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
                         }}))
 
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraProperties:{style: "width:300px"}}, checkbox, text);
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text);
                 return menu;
             },
 
@@ -1235,7 +1240,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 return new UI.ShaderMenu({
                     pinned: false,
                     opacity: 1,
-                    onShaderChange: (value) => UTILITIES.changeVisualizationLayer({ value }),
+                    onShaderChange: (value) => UTILITIES.setBackgroundAndGoal(undefined, value),
                     onOpacityChange: (v) => UTILITIES.setGlobalLayerOpacity?.(v),
                     onCacheSnapshotByName: () => UTILITIES.storeVisualizationSnapshot(true),
                     onCacheSnapshotByOrder: () => UTILITIES.storeVisualizationSnapshot(false),

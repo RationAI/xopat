@@ -19,7 +19,7 @@ const { span, div } = van.tags
  * {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"}, -> these will create MultiPanelMenuTab in multiPanelMenu
  * {id: "s3", icon: settingsIcon, title: "Content3", body: "Settings3"},)
  */
-class MultiPanelMenuTab extends MenuTab{
+class MultiPanelMenuTab extends MenuTab {
 
     /**
      * @param {*} item dictionary with id, icon, title, body which will be created
@@ -85,11 +85,11 @@ class MultiPanelMenuTab extends MenuTab{
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200"},
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
-            }, div(...content), this.openButton);
+            }, div({ style: "width: 360px;" }, ...content), this.openButton);
 
         let c = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
-            extraClasses: {display: "", flex: "flex flex-col", item: "ui-menu-item"} 
+            extraClasses: {display: "", flex: "flex flex-col", item: "ui-menu-item"}
             }, this.closedButton, this.openDiv);
 
         this.fullId = this.parent.id + "-c-" + item.id;

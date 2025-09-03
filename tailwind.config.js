@@ -17,7 +17,19 @@ module.exports = {
     ],
     darkMode: ["selector", '[data-theme="xOpat-dark"]', '[data-theme="xOpat-light"'],
     theme: {
-
+        spacing: {
+            px: '1px',
+            0: '0rem',
+            0.5: '0.125rem',   // 2px
+            1: '0.25rem',      // 4px
+            1.5: '0.375rem',   // 6px
+            2: '0.5rem',       // 8px
+            2.5: '0.625rem',   // 10px
+            3: '0.75rem',      // 12px
+            3.5: '0.875rem',   // 14px
+            4: '1rem',         // 16px (keep if you need it)
+            // ...continue as you prefer
+        },
     },
     plugins: [
         require("daisyui")
@@ -36,6 +48,10 @@ module.exports = {
                     "success": "#84cc16",
                     "warning": "#f59e0b",
                     "error":  "#ef4444",
+                    '--rounded-box': '0.5rem',
+                    '--rounded-btn': '0.375rem',
+                    '--rounded-badge': '0.25rem',
+                    '--tab-radius': '0.375rem',
                 },
                 "xOpat-dark": {
                     "primary": "#668ca1",
@@ -47,6 +63,10 @@ module.exports = {
                     "success": "#84cc16",
                     "warning": "#f59e0b",
                     "error":  "#ef4444",
+                    '--rounded-box': '0.5rem',
+                    '--rounded-btn': '0.375rem',
+                    '--rounded-badge': '0.25rem',
+                    '--tab-radius': '0.375rem',
                 },
                 "xOpat-detached-mode": {
                     primary: "#89b4fa", // blue
@@ -58,6 +78,11 @@ module.exports = {
                     success: "#a6e3a1", // green
                     warning: "#f9e2af", // yellow
                     error: "#f38ba8", // red
+                    '--rounded-box': '0.5rem',
+                    '--rounded-btn': '0.375rem',
+                    '--rounded-badge': '0.25rem',
+                    /* (optional) slightly smaller base text */
+                    '--tab-radius': '0.375rem',
                 },
             },
         ],

@@ -436,7 +436,6 @@ input.switch:checked + label span {
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .material-icons {color: var(--color-border-inverse);}
 #top-side {z-index: 99;}
-#openseadragon-view {background: var(--color-bg-tertiary)}
 #right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
@@ -457,7 +456,6 @@ input.switch:checked + label span {
     right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
-.shader-part span {width: 30%;display: inline-block;}
 #tutorials {max-height: 50vh;overflow-y: auto;}
 .tutorial-item {transition: all .2s ease-in-out;border: 3px solid transparent;
     background: rgb(34 39 46 / 22%); cursor:pointer;}
@@ -573,6 +571,40 @@ input.selectable-image-row-context:checked + div {
     50% { opacity: 0.5; }
     to { opacity: 1; }
 }
+
+/* One row of controls */
+.shader-controls-row {
+    display: grid;
+    grid-template-columns:
+    minmax(0, var(--side, 30%))  /* left, max 30% */
+    minmax(0, 1fr)               /* middle, flexible */
+    minmax(0, var(--side, 30%)); /* right, max 30% */
+    gap: .5rem;                    /* adjust as needed */
+    align-items: center;
+}
+
+/* Let arbitrary incoming children shrink and not overflow */
+.shader-controls-row > * {
+    min-width: 0;
+    overflow: hidden;              /* optional: hide overly wide inner HTML */
+}
+
+/* Place elements into columns depending on how many arrive */
+.shader-controls-row > :nth-child(1) { grid-column: 1; }
+.shader-controls-row > :nth-child(2) { grid-column: 2; }
+.shader-controls-row > :nth-child(3) { grid-column: 3; }
+
+/* If there's only one child, center it (the “mid” rule) */
+.shader-controls-row > :only-child { grid-column: 2; }
+
+/* Small screens: stack vertically */
+@media (max-width: 560px) {
+    .shader-controls-row {
+        grid-template-columns: 1fr;
+    }
+    .shader-controls-row > * { grid-column: auto; }
+}
+
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
@@ -581,40 +613,6 @@ input.selectable-image-row-context:checked + div {
 a {cursor: pointer;}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
-/* For some reason Github css does not style input range */
-input[type=range] { height: 25px;  -webkit-appearance: none; /*margin: 3px 0;*/ width: 65%; background: transparent;
-    vertical-align: middle; margin: 0;}
-input[type=range].with-direct-input { width: calc(70% - 80px);}
-input[type=range]:focus { outline: none;}
-input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer;  background: var(--color-icon-tertiary);
-    border-radius: 7px; border: 0 }
-input[type=range]::-webkit-slider-thumb { box-shadow: 0 0 3px var(--color-text-tertiary); border: 0 solid; height: 18px;
-    width: 18px; border-radius: 25px; background: var(--color-bg-primary);
-    cursor: pointer; -webkit-appearance: none; margin-top: -5px;}
-input[type=range]:focus::-webkit-slider-runnable-track {  background: var(--color-icon-tertiary);}
-
-input[type=range]::-moz-range-track { width: 100%; height: 8px; cursor: pointer;  background: var(--color-icon-tertiary);
-    border-radius: 7px; border: 0;}
-input[type=range]::-moz-range-thumb { box-shadow: 0 0 3px var(--color-bg-tertiary); border: 0 solid; height: 18px;
-    width: 18px; border-radius: 25px; background: var(--color-bg-primary); cursor: pointer;}
-input[type=range]::-ms-track { width: 100%; height: 8px; cursor: pointer; background: transparent;
-    border-color: transparent; color: transparent;}
-input[type=range]::-ms-fill-lower { background: var(--color-icon-tertiary); border: 0 solid; border-radius: 14px; }
-input[type=range]::-ms-fill-upper { background: var(--color-icon-tertiary); border: 0 solid; border-radius: 14px;}
-input[type=range]::-ms-thumb { margin-top: 1px; box-shadow: 0 0 3px var(--color-text-tertiary); border: 0 solid ;
-    height: 18px; width: 18px; border-radius: 25px; background: var(--color-bg-primary); cursor: pointer;}
-input[type=range]:focus::-ms-fill-lower { background: var(--color-icon-tertiary);}
-input[type=range]:focus::-ms-fill-upper { background: var(--color-icon-tertiary);}
-
-input[type=range]:disabled::-webkit-slider-runnable-track { background: var(--color-bg-tertiary);}
-input[type=range]:disabled::-webkit-slider-thumb { box-shadow: 0 0 1px var(--color-text-tertiary); background: var(--color-bg-primary);}
-input[type=range]:disabled::-moz-range-track { background: var(--color-bg-tertiary);}
-input[type=range]:disabled::-moz-range-thumb { box-shadow: 0 0 1px var(--color-text-tertiary); background: var(--color-bg-primary);}
-input[type=range]:disabled::-ms-fill-lower { background: var(--color-bg-tertiary); }
-input[type=range]:disabled::-ms-fill-upper { background: var(--color-bg-tertiary); }
-input[type=range]:disabled::-ms-thumb { box-shadow: 0 0 3px var(--color-text-tertiary); background: var(--color-bg-primary); }
-
-
 ::-webkit-scrollbar {background: transparent;margin: 25px 0 25px 0;width: 14px;height: 14px;}
 ::-webkit-scrollbar-track {background: transparent;}
 ::-webkit-scrollbar-thumb {height: 6px;border: 4px solid rgba(0, 0, 0, 0);background-clip: padding-box;
@@ -622,10 +620,3 @@ input[type=range]:disabled::-ms-thumb { box-shadow: 0 0 3px var(--color-text-ter
     -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);}
 ::-webkit-scrollbar-button {width: 0;height: 0;display: none;}
 ::-webkit-scrollbar-corner {background-color: transparent;}
-input[type=color] {cursor: pointer}
-input[type=number]::-webkit-inner-spin-button,
-input[type=number]::-webkit-outer-spin-button {-webkit-appearance: none;margin: 0;}
-input[type=number] {-moz-appearance:textfield;}
-@-moz-document url-prefix() {
-    input[type=color] {padding: 7px 14px;width: 50px;}
-}

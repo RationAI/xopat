@@ -12,6 +12,7 @@ const { span } = van.tags
  * @description A internal tab component for the menu component
  * @example
  * const tab = new MenuTab({id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"}, menu);
+ * todo extend base component!
  */
 class MenuTab {
     /**

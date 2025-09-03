@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-09-02
+//! Built on 2025-09-03
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -1359,11 +1359,14 @@
          * Get HTML code of the ShaderLayer's controls.
          * @returns {String} HTML code
          */
-        htmlControls() {
-            const controlsHtmls = [];
+        htmlControls(wrapper = null, classes = "", css = "") {
+            let controlsHtmls = [];
             for (const controlName in this._controls) {
                 const control = this[controlName];
-                controlsHtmls.push(control.toHtml(true));
+                controlsHtmls.push(control.toHtml(classes, css));
+            }
+            if (wrapper) {
+                controlsHtmls = controlsHtmls.map(wrapper);
             }
             return controlsHtmls.join("");
         }
@@ -1490,13 +1493,23 @@
                     if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
                         console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
                         this.storeProperty(controlName, def);
-                        channel = def;
+                        channel = predefined.default || def;
                     }
 
                     if (!sourceDef.acceptsChannelCount(channel.length)) {
                         console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
                         this.storeProperty(controlName, def);
-                        channel = def;
+                        channel = predefined.default || def;
+
+                        // if def is not compatible with the channel count, try to stack it
+                        if (!sourceDef.acceptsChannelCount(channel.length)) {
+                            channel = def;
+                            console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
+                            while (channel.length < 5 && !sourceDef.acceptsChannelCount(channel.length)) {
+                                channel += def;
+                            }
+                            this.storeProperty(controlName, channel);
+                        }
                     }
 
                     if (channel !== options[controlName]) {
@@ -1900,7 +1913,7 @@ ${code}
          * Register simple UI element by providing necessary object
          * implementation:
          *  { defaults: function() {...}, // object with all default values for all supported parameters
-             html: function(uniqueId, params, css="") {...}, //how the HTML UI controls look like
+             html: function(uniqueId, params, classes="", css="") {...}, //how the HTML UI controls look like
             glUniformFunName: function() {...}, //what function webGL uses to pass this attribute to GPU
             decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
                                                     gl[glUniformFunName()](...) can pass to GPU
@@ -1962,9 +1975,9 @@ ${code}
                 return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
             // returns string corresponding to html code for injection
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input class="form-control input-sm" style="${css}" min="${params.min}" max="${params.max}"
+                return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
     step="${params.step}" type="number" id="${uniqueId}">`;
             },
             glUniformFunName: function() {
@@ -1987,10 +2000,10 @@ ${code}
             defaults: function() {
                 return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 return `${title}<input type="range" style="${css}"
-    class="with-direct-input" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
+    class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
             },
             glUniformFunName: function() {
                 return "uniform1f";
@@ -2012,9 +2025,9 @@ ${code}
             defaults: function() {
                 return { title: "Color", interactive: true, default: "#fff900" };
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="form-control input-sm">`;
+                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
             },
             glUniformFunName: function() {
                 return "uniform3fv";
@@ -2045,12 +2058,12 @@ ${code}
             defaults: function() {
                 return { title: "Checkbox", interactive: true, default: true };
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 let value = this.decode(params.default) ? "checked" : "";
                 //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
                 return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
-    class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
+    class="${classes}" onchange="this.value=this.checked; return true;">`;
             },
             glUniformFunName: function() {
                 return "uniform1i";
@@ -2280,7 +2293,7 @@ ${code}
          *  - either: delay toHtml to trigger insertion later (not nice)
          *  - do not allow changes before init call, these changes must happen at constructor
          */
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             throw "FlexRenderer.UIControls.IControl::toHtml() must be implemented.";
         }
 
@@ -2580,13 +2593,11 @@ ${code}
             this._needsLoad = true;
         }
 
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             if (!this.params.interactive) {
                 return "";
             }
-            const result = this.component.html(this.id, this.params, controlCss);
-            // todo fix api breakLine
-            return `<div class="flex">${result}</div>`;
+            return this.component.html(this.id, this.params, classes, css);
         }
 
         define() {
@@ -2662,14 +2673,11 @@ ${code}
             this._c1.glLoaded(program, gl);
         }
 
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             if (!this._c1.params.interactive) {
                 return "";
             }
-            // todo fix, do not use primer, use better approach
-            let cls = breakLine ? "" : "";
-            return `<div class='flex' ${cls} ${controlCss}>${this._c1.toHtml(false, 'flex: 1')}
-        ${this._c2.toHtml(false)}</div>`;
+            return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
         }
 
         define() {
@@ -6203,7 +6211,7 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-09-02
+//! Built on 2025-09-03
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -6376,7 +6384,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-09-02
+//! Built on 2025-09-03
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

@@ -6,6 +6,7 @@ import { Button } from "../elements/buttons.mjs";
 import { Checkbox } from "../elements/checkbox.mjs";
 import { Select } from "../elements/select.mjs";
 import { FAIcon } from "../elements/fa-icon.mjs";
+import { RawHtml } from "../elements/rawHtml.mjs";
 
 const { div, span, input, label, br } = van.tags;
 
@@ -40,7 +41,8 @@ export class ShaderLayer extends BaseComponent {
         this.layer = options.shaderLayer;
         this.availableShaders = options.availableShaders || [];
         this.cb = options.callbacks || {};
-        this.body = new UI.RawHtml({extraClasses: {nd: "non-draggable"}}, this.layer.htmlControls());
+
+        this.body = new RawHtml({extraClasses: {nd: "non-draggable"}}, this.layer.htmlControls(html => `<div class="shader-controls-row">${html}</div>`));
 
         // --- derived state
         this.fixed = !!this.cfg?.fixed;
@@ -48,7 +50,7 @@ export class ShaderLayer extends BaseComponent {
         this.mode = (this.cfg?.params?.use_mode) || "show";   // "show" | "clip" | "blend"
         this.type = this.cfg?.type;
         this.title = this.cfg?.title || this.layer?.id;
-        this.filters = options.shaderConfig?.filters || {};   // { key: {name, value} }
+        this.filters = options.availableFilters || {};   // { key: {name, value} }
         this.cacheApplied = this.cfg?._cacheApplied;
 
         // class names
@@ -158,7 +160,7 @@ export class ShaderLayer extends BaseComponent {
 
     _buildHeader() {
         return div(
-            { class: "h5 py-1 relative flex items-center gap-2" },
+            { class: "h5 py-1 relative flex items-center gap-2 truncate max-w-full" },
             this._buildHeaderLeft(),
             this._buildRenderTypeSelector(),
             this._buildModeToggle(),
@@ -194,7 +196,7 @@ export class ShaderLayer extends BaseComponent {
     }
 
     _buildCacheBanner() {
-        if (!this.cacheApplied) return div();
+        if (!this.cacheApplied) return undefined;
         const clearBtn = new Button({
             size: Button.SIZE.TINY,
             type: Button.TYPE.SECONDARY,
@@ -202,8 +204,8 @@ export class ShaderLayer extends BaseComponent {
         }, new FAIcon({ name: "fa-broom" }), span("Clear cache"));
 
         return div(
-            { class: "p-2 rounded-2 bg-base-200 mt-2", style: "width:97%;" },
-            span({ class: "text-xs" }, `Cache: ${this.cacheApplied} `),
+            { class: "p-2 rounded-2 bg-base-200 mt-2 flex", style: "width:97%;" },
+            span({ class: "text-xs flex-1" }, `Cache: ${this.cacheApplied} `),
             clearBtn.create()
         );
     }

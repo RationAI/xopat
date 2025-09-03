@@ -209,15 +209,9 @@ function initXopatLayers() {
             VIEWER.drawer.rebuild();
         };
 
-        UTILITIES.changeVisualizationLayer = function (self, layerId) {
-            let _this = $(self),
-                type = _this.val();
+        UTILITIES.changeVisualizationLayer = function (layerId, type) {
             let factoryClass = OpenSeadragon.FlexRenderer.ShaderMediator.getClass(type);
             if (factoryClass !== undefined) {
-
-                // todo sync config somehow
-                self.dataset.title = factoryClass.name();
-
                 let shader = VIEWER.drawer.renderer.getShaderLayerConfig(layerId);
                 if (shader) {
                     shader.type = type;
@@ -230,7 +224,6 @@ function initXopatLayers() {
             } else {
                 console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': unknown type!`);
             }
-            _this.html("");
         };
 
         /**
@@ -321,7 +314,13 @@ function initXopatLayers() {
                     const message = tiledImage.source.getMetadata();
                     if (message.error) {
                         let node = $(`#${key}-shader-part`);
-                        node.prepend(`<div class="p2 error-container rounded-2">${$.t('main.shaders.faulty')}<code>${message.error}</code></div>`);
+                        const alert = new UI.Alert({
+                            mode: "warning",
+                            title: $.t('main.shaders.faulty'),
+                            description: `<code>${message.error}</code>`,
+                            compact: true
+                        });
+                        alert.prependedTo(node);
                         break;
                     }
                 }
