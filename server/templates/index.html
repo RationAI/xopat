@@ -104,7 +104,7 @@
 
 <div id="fullscreen-menu" class="bg-base-100"></div>
 
-<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 335px; height: calc(100% - 45px); overflow-y: auto;"></div>
+<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
 <div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
     <div id="bottom-menu-left"></div>
@@ -155,7 +155,6 @@ window.onerror = function (message, file, line, col, error) {
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
         }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {'next #global-opacity' : $.t('tutorials.basic.5'), runIf: withLayers
         }, {
             'next #__tisue_list' : $.t('tutorials.basic.6'),
             runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}

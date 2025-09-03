@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-08-31
+//! Built on 2025-09-02
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -2585,7 +2585,8 @@ ${code}
                 return "";
             }
             const result = this.component.html(this.id, this.params, controlCss);
-            return breakLine ? `<div>${result}</div>` : result;
+            // todo fix api breakLine
+            return `<div class="flex">${result}</div>`;
         }
 
         define() {
@@ -2665,9 +2666,10 @@ ${code}
             if (!this._c1.params.interactive) {
                 return "";
             }
-            let cls = breakLine ? "" : "class='d-inline-block'";
-            return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'width: 48%;')}
-        ${this._c2.toHtml(false, 'width: 12%;')}</div>`;
+            // todo fix, do not use primer, use better approach
+            let cls = breakLine ? "" : "";
+            return `<div class='flex' ${cls} ${controlCss}>${this._c1.toHtml(false, 'flex: 1')}
+        ${this._c2.toHtml(false)}</div>`;
         }
 
         define() {
@@ -4616,11 +4618,19 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             tiledImage.__wglCompositeHandler = e => {
                 const shader = this.renderer.getShaderLayer(shaderId);
                 const config = shader.getConfig();
-                // eslint-disable-next-line camelcase
-                config.params.use_blend = tiledImage.compositeOperation;
-                // eslint-disable-next-line camelcase
-                config.params.use_mode = 'blend';
-                shader.resetMode(config.params, false);
+                const operation = tiledImage.compositeOperation;
+                if (operation) {
+                    // eslint-disable-next-line camelcase
+                    config.params.use_blend = operation;
+                    // eslint-disable-next-line camelcase
+                    config.params.use_mode = 'blend';
+                } else {
+                    // eslint-disable-next-line camelcase
+                    delete config.params.use_blend;
+                    // eslint-disable-next-line camelcase
+                    config.params.use_mode = 'show';
+                }
+                shader.resetMode(config.params, true);
                 this._requestRebuild(0);
             };
 
@@ -6193,7 +6203,7 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-08-31
+//! Built on 2025-09-02
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -6366,7 +6376,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-08-31
+//! Built on 2025-09-02
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

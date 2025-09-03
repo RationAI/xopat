@@ -697,7 +697,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             VIEWER.addTiledImage({
                 tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
                 index: 0,
-                opacity: $("#global-opacity input").val(),
                 replace: false,
                 success: (event) => {
                     event.item.getConfig = type => undefined;
@@ -763,7 +762,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     }
                 }
             }
-            imageOpts.push(`<div class="inner-panel-content noselect" id="inner-panel-content-1">
+            imageOpts.push(`<div class="inner-panel-content noselect">
             <div>
                  <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
                  <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
@@ -1138,7 +1137,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         VIEWER.raiseEvent('before-canvas-reload');
 
         const toOpen = [];
-        const opacity = Number.parseFloat($("global-opacity").val()) || 1;
         let openedSources = 0;
         let successOpenedSources = 0;
         const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
@@ -1158,7 +1156,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             console.log("Opening image", source, kind, imageIndex, lastBGIndex);
             window.VIEWER.addTiledImage({
                 tileSource: source.source || source, //todo dirty
-                opacity: opacity,
                 index: imageIndex,
                 success: (event) => {
                     event.item.__origin = source;

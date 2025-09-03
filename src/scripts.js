@@ -6,17 +6,6 @@ function initXopatScripts() {
         (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.url+'src/external/stats.js';document.head.appendChild(script);})()
     }
 
-    // opacity of general layer available everywhere
-    $("#global-opacity input").on("input", function() {
-        let val = $(this).val();
-        for (let imageIndex = 0; imageIndex < VIEWER.world.getItemCount(); imageIndex++) {
-            const image = VIEWER.world.getItemAt(imageIndex);
-            if (!image.getBackgroundConfig) {
-                image.setOpacity(val);
-            }
-        }
-    });
-
     $(VIEWER.element).on('contextmenu', function(event) {
         event.preventDefault();
     });
