@@ -1271,30 +1271,30 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     let newX = e.clientX - offsetX;
                     let newY = e.clientY - offsetY;
 
-        // ----- Logika pro přilepení k okrajům -----
+                    // ----- Snappping logic -----
 
-                    // Přilepení k levému okraji
+                    // left
                     if (newX < SNAP_DISTANCE) {
                         draggableBox.style["max-width"] = "100px";
                         newY = viewportHeight / 2 - draggableBox.offsetHeight / 2; // Center vertically
                         newX = 0;
                     }
 
-                    // Přilepení k dolnímu okraji
+                    // bottom
                     else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
                         newY = viewportHeight - boxHeight;
                         newX = viewportWidth / 2 - boxWidth / 2; // Center horizontally
                     }
 
-                    // Zabraňte přetažení mimo okraje (volitelné, pokud nechceš "snap", ale jen omezení)
+                    // cannot be dragged out of viewport
                     newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
                     newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
 
                     draggableBox.style.left = `${newX}px`;
                     draggableBox.style.top = `${newY}px`;
 
-                    APPLICATION_CONTEXT.setOption('toolbarPositionLeft', newX);
-                    APPLICATION_CONTEXT.setOption('toolbarPositionTop', newY);
+                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionLeft`, newX);
+                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionTop`, newY);
                 });
 
                 document.addEventListener('mouseup', () => {
