@@ -660,31 +660,64 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     span({ class: "f3-light header-sep" },
                     "Appearance"),
                   themeSelect.create(),
-                  this.createCheckbox("Show ToolBar", function () {APPLICATION_CONTEXT.setOption('toolBar', this.checked);$('#toolbar-drag').toggleClass('hidden');}, APPLICATION_CONTEXT.getOption('toolBar', true)),
-                  this.createCheckbox("Show Scale Bar", function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('scaleBar', true)),
-                  this.createCheckbox("Show Status Bar", function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, APPLICATION_CONTEXT.getOption('statusBar', true)),
+                  this.createCheckbox(
+                    "toolbar-checkbox", 
+                    "Show ToolBars", 
+                    function () {
+                        APPLICATION_CONTEXT.setOption('toolBar', this.checked);
+                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]'); 
+                        toolbarDivs.forEach(div => div.classList.toggle('hidden'));
+                    },
+                    APPLICATION_CONTEXT.getOption('toolBar', true)),
+
+                  this.createCheckbox(
+                    "scalebar-checkbox", 
+                    "Show Scale Bar", 
+                    function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, 
+                    APPLICATION_CONTEXT.getOption('scaleBar', true)),
+
+                  this.createCheckbox(
+                    "statusbar-checkbox",
+                    "Show Status Bar", 
+                    function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, 
+                    APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
                   div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
-                  this.createCheckbox("Disable Cookies", function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox(
+                    "cookies-checkbox", 
+                    "Disable Cookies", 
+                    function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);$('#settings-notification').css('visibility', 'visible');},
+                    APPLICATION_CONTEXT.getOption('bypassCookies', false)),
                   ),
                   div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Other", ),
-                  this.createCheckbox("Debug Mode", function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
-                  this.createCheckbox("Debug Rendering", function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked, false);$('#settings-notification').css('visibility', 'visible');}),
+                  this.createCheckbox(
+                    "debug-checkbox", 
+                    "Debug Mode", 
+                    function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
+                    APPLICATION_CONTEXT.getOption('debugMode', false)),
+                  this.createCheckbox(
+                    "render-checkbox", 
+                    "Debug Rendering", 
+                    function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
+                    APPLICATION_CONTEXT.getOption('webglDebugMode', false)),
                   ),
                 );
                 result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
 
                 return result;
             },
-            createCheckbox: function (text, onchangeFunction, checked=false) {
-                const {input, label } = van.tags;
-                return label({ style: "font-weight: initial; user-select: none;", class: "btn-pointer d-flex"},
-                        input({ type: "checkbox", class: "form-control v-align-middle", checked: "checked" ? checked : "", onchange: onchangeFunction }),
-                        "\u00A0" + text,
-                );
+            createCheckbox: function (id, text, onchangeFunction, checked) {
+                const cb = new UI.Checkbox({
+                    id: id,
+                    label: text,
+                    checked: checked,
+                    onchange: onchangeFunction
+                    });
+                return cb.create();
             },
+
             getLogo(positionBottom, positionRight) {
                 const { path, svg } = van.tags("http://www.w3.org/2000/svg");
                 const {span, div} = van.tags();
@@ -839,10 +872,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                     }
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
-                                                if (APPLICATION_CONTEXT.getOption("toolBar", true)) {
-                                                    const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                                                    toolbarDivs.forEach((el) => el.classList.toggle("hidden"));
-                                                }
+                                                const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
+                                                toolbarDivs.forEach((el) => el.classList.toggle("hidden"));
 
                                                 USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
                                             }
@@ -1236,7 +1267,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     })
                 menu.attachTo($("#bottom-menu-center"));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
-
+                if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
+                    document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
+                };
             },
             makeDraggable(id){
                 const draggableBox = document.getElementById(id);
@@ -1272,30 +1305,30 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     let newX = e.clientX - offsetX;
                     let newY = e.clientY - offsetY;
 
-        // ----- Logika pro přilepení k okrajům -----
+                    // ----- Snappping logic -----
 
-                    // Přilepení k levému okraji
+                    // left
                     if (newX < SNAP_DISTANCE) {
                         draggableBox.style["max-width"] = "100px";
                         newY = viewportHeight / 2 - draggableBox.offsetHeight / 2; // Center vertically
                         newX = 0;
                     }
 
-                    // Přilepení k dolnímu okraji
+                    // bottom
                     else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
                         newY = viewportHeight - boxHeight;
                         newX = viewportWidth / 2 - boxWidth / 2; // Center horizontally
                     }
 
-                    // Zabraňte přetažení mimo okraje (volitelné, pokud nechceš "snap", ale jen omezení)
+                    // cannot be dragged out of viewport
                     newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
                     newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
 
                     draggableBox.style.left = `${newX}px`;
                     draggableBox.style.top = `${newY}px`;
 
-                    APPLICATION_CONTEXT.setOption('toolbarPositionLeft', newX);
-                    APPLICATION_CONTEXT.setOption('toolbarPositionTop', newY);
+                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionLeft`, newX);
+                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionTop`, newY);
                 });
 
                 document.addEventListener('mouseup', () => {

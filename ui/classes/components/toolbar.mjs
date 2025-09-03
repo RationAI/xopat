@@ -113,12 +113,11 @@ class Toolbar extends BaseComponent{
     create() {
         return div({id: `${this.id}`, class: "draggable boxed", 
                     style: `position: fixed; 
-                            left: ${APPLICATION_CONTEXT.getOption("toolbarPositionLeft", 50)}px; 
-                            top: ${APPLICATION_CONTEXT.getOption("toolbarPositionTop", 50)}px; 
+                            left: ${APPLICATION_CONTEXT.getOption(`toolbar-${this.id}-PositionLeft`, 50)}px; 
+                            top: ${APPLICATION_CONTEXT.getOption(`toolbar-${this.id}-PositionTop`, 50)}px; 
                             display: ${this.display};
                             z-index: 1000;`},
                     div({class: "handle"}, "----"),
-                    this.header.create(),
                     this.body.create()
         );
     }
