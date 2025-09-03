@@ -118,7 +118,6 @@ class Toolbar extends BaseComponent{
                             display: ${this.display};
                             z-index: 1000;`},
                     div({class: "handle"}, "----"),
-                    this.header.create(),
                     this.body.create()
         );
     }
