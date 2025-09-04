@@ -1284,6 +1284,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
                 };
+
+                // snapping  to left side if set in cookies
+                if (APPLICATION_CONTEXT.getOption(`toolbar-${ownerPluginId}-PositionLeft`) == 0){
+                    document.getElementById(`toolbar-${ownerPluginId}`).style["max-width"] = "100px";
+                }
+
             },
             makeDraggable(id){
                 const draggableBox = document.getElementById(id);
@@ -1341,8 +1347,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     draggableBox.style.left = `${newX}px`;
                     draggableBox.style.top = `${newY}px`;
 
-                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionLeft`, newX);
-                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionTop`, newY);
+                    APPLICATION_CONTEXT.setOption(`${id}-PositionLeft`, newX);
+                    APPLICATION_CONTEXT.setOption(`${id}-PositionTop`, newY);
                 });
 
                 document.addEventListener('mouseup', () => {
