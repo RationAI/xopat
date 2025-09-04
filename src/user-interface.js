@@ -875,7 +875,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
                                                 const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                                                toolbarDivs.forEach((el) => el.classList.toggle("hidden"));
+                                                toolbarDivs.forEach((el) => el.classList.add("hidden"));
 
                                                 USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
                                             }
