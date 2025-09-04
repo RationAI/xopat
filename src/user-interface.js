@@ -902,35 +902,35 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }, { id: "settings", icon: "fa-gear", title: "Settings", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
                     { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
                     { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                    { id: "share", icon: "fa-share-nodes", title: "Share", body: this.getShareDropdownBody(), class: UI.Dropdown},
+                    { id: "share", icon: "fa-share-nodes", title: "Share", items: [
+                            {
+                                id: "global-export",
+                                domID: true,
+                                label: $.t("main.bar.exportFile"),
+                                hint: $.t("main.bar.explainExportFile"),
+                                onClick: () => {
+                                    UTILITIES.export();
+                                    this.menu.closeTab("share");
+                                },
+                                icon: "fa-download"
+                            },
+                            {
+                                id: "copy-url-inner",
+                                domID: true,
+                                label: $.t("main.bar.exportUrl"),
+                                hint: $.t("main.bar.explainExportUrl"),
+                                onClick: () => {
+                                    UTILITIES.copyUrlToClipboard();
+                                    this.menu.closeTab("share");
+                                },
+                                icon: "fa-link"
+                            }
+                        ], class: UI.Dropdown},
                     { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
                 );
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
-            },
-
-            getShareDropdownBody: function () {
-                const b1 = new UI.Button({
-                    id: "global-export",
-                    extraProperties: { "data-i18n": "[title]main.bar.explainExportFile" },
-                    size: UI.Button.SIZE.SMALL,
-                    onClick: () => {
-                        UTILITIES.export();
-                        this.menu.closeTab("share");
-                    },
-                }, new UI.FAIcon({ name: "fa-download" }), "Export");
-
-                const b2 = new UI.Button({
-                    id: "copy-url-inner",
-                    extraProperties: { "data-i18n": "[title]main.bar.explainExportUrl" },
-                    size: UI.Button.SIZE.SMALL,
-                    onClick: () => {
-                        UTILITIES.copyUrlToClipboard();
-                        this.menu.closeTab("share");
-                    },
-                }, new UI.FAIcon({ name: "fa-link" }), "URL");
-                return [b1, b2];
             },
         },
 
@@ -949,42 +949,35 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "visual", icon: "fa-window-restore", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
+                }, { id: "view", icon: "fa-window-restore", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
                 );
 
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.TITLEICON);
             },
 
-            addCloneButton: function () {
-                const visualMenuContent = document.getElementById("visual-menu-ul-visual");
-                const button = new UI.Button({
-                    id: `visual-menu-ul-visual-button-clone`,
-                    size: UI.Button.SIZE.SMALL,
-                    onClick: () => {
-                        UTILITIES.clone();
-                    },
-                }, new UI.FAIcon({ name: "fa-clone" }), "Clone the viewer");
-                visualMenuContent.appendChild(button.create());
-            },
-
             refreshVisualDropdown: function () {
-                const visualMenuContent = document.getElementById("visual-menu-ul-visual");
-                visualMenuContent.innerHTML = "";
-                this.addCloneButton();
+                const tab = this.menu.getTab('view');
+                tab.clear();
+                tab.addItem({
+                    id: 'clone-viewer',
+                    onClick: () => UTILITIES.clone(),
+                    icon: "fa-clone",
+                    label: "Clone the viewer",
+                });
 
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
-
                 for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
-                    const checkbox = new UI.Checkbox({
+                    tab.addItem({
                         id: `visual-menu-ul-visual-checkbox-${tKey}`,
-                        label: tKey,
-                        checked: !APPLICATION_CONTEXT.getOption(`${tKey}-hidden`, false),
-                        onchange: () => {t.toggleHiden(), APPLICATION_CONTEXT.setOption(`${tKey}-hidden`, t.hidden);},
+                        onClick: () => UTILITIES.clone(),
+                        icon: t.iconName,
+                        label: t.title,
+                        selected: !APPLICATION_CONTEXT.getOption(`${tKey}-hidden`, false),
+                        onClick: () => {t.toggleHiden(), APPLICATION_CONTEXT.setOption(`${tKey}-hidden`, t.hidden);},
+                        section: 'right-menu',
                     });
-                    visualMenuContent.appendChild(checkbox.create());
                 }
-
             },
         },
 
@@ -1005,27 +998,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: "Plugins", body: [], class: UI.Dropdown});
-            },
-
-            // TODO find out what should this do
-            _sync() {
+                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: "Plugins", body: [], class: UI.Dropdown});
             },
 
             // should add submenus to plugin menu
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
 
-                // adds button to topPluginsMenu and new div to the fullscreenMenu
-                const visualMenuContent = document.getElementById("visual-menu-ul-plugins");
-
-                if(document.getElementById(ownerPluginId) === null){
-                    const button = new UI.Button({
-                            id: ownerPluginId,
-                            size: UI.Button.SIZE.SMALL,
-                            onClick: function () {USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`)}},
-                        new UI.FAIcon(icon), ownerPluginId);
-
-                    visualMenuContent.appendChild(button.create());
+                if(!this.pluginListMenu.getItem(ownerPluginId)){
+                    this.pluginListMenu.addItem({
+                        id: ownerPluginId,
+                        icon: pluginMeta(ownerPluginId, "icon"),
+                        label: pluginMeta(ownerPluginId, "name"),
+                        onClick: () => USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`),
+                    });
 
                     const InsideMenu = new UI.TabsMenu({
                         id: `${ownerPluginId}-submenu`,

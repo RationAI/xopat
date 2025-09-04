@@ -37,7 +37,10 @@ class MultiPanelMenuTab extends MenuTab {
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });
+        //todo dirty?
+        this.iconName = inIcon.options.name;
+        this.title = inText;
 
         this.closedButton = new Button({
             id: this.parent.id + "-b-closed-" + item.id,
@@ -83,7 +86,7 @@ class MultiPanelMenuTab extends MenuTab {
 
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
-            extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200"},
+            extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200", radius: "rouded-tl-md rounded-bl-md"},
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
             }, div({ style: "width: 360px;" }, ...content), this.openButton);
 

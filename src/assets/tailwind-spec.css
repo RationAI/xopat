@@ -19,7 +19,7 @@
     input[type="week"],
     select,
     textarea {
-        @apply input input-bordered w-full;
+        @apply input-bordered w-full;
     }
 
     /* Track */
@@ -55,7 +55,7 @@
 
     /* ——— Compact NUMBER ——— */
     input[type="number"]:not(.input) {
-        @apply input input-bordered input-sm;
+        @apply input-bordered input-sm;
         /* small, predictable width; tweak as needed */
         width: 7.5ch;                 /* fits e.g. “-1234.5” */
         text-align: right;

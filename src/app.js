@@ -1140,6 +1140,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         VIEWER.raiseEvent('before-canvas-reload');
 
         const toOpen = [];
+        const openedBaseImages = [];
+        let activeVis = null;
         let openedSources = 0;
         let successOpenedSources = 0;
         const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
@@ -1205,12 +1207,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             // First, configure external shaders
             const renderOutput = {};
-            // TODO named! ensure each entry has name or define one
-            for (; i <= lastValidBgIndex; i++) renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i]};
+            for (; i <= lastValidBgIndex; i++) {
+                const bgRef = openedBaseImages[i];
+                renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i], name: bgRef.name || data[bgRef.dataReference] };
+            }
             Object.assign(renderOutput, shaders);
             UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
             VIEWER.drawer.overrideConfigureAll(renderOutput);
-            console.log("renderOutput", renderOutput);
+            console.log("Opening configuration.", renderOutput, "with data", toOpen);
 
             // Then, attach to-open images
             i = 0;
@@ -1224,12 +1228,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 if (isSecureMode) delete bg.protocol;
                 const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
                 toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
+                openedBaseImages.push(bg);
             }
         } else if (selectedIndex >= 0) {
             let selectedImage = background[selectedIndex];
             if (isSecureMode) delete selectedImage.protocol;
             const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
             toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
+            openedBaseImages.push(selectedImage);
         }
 
         if (renderingWithWebGL) {
@@ -1254,7 +1260,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             }
 
-            const activeVis = visualizations[activeVisIndex];
+            activeVis = visualizations[activeVisIndex];
             VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
             const sourcesToOpen = {};
             const lastBgIndex = toOpen.length;
@@ -1265,6 +1271,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 shaderConfig.tiledImages = [];
                 const sources = shaderConfig.dataReferences.map(rId =>
                     VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]]));
+                shaderConfig.name = shaderConfig.name || data[rId] || shaderId;
                 for (let dataSource of sources) {
                     // Find unique sources and map them to indexes
                     let index = sourcesToOpen[dataSource];

@@ -1,5 +1,7 @@
 import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
+import { Button } from "../elements/buttons.mjs";
+import { FAIcon } from "../elements/fa-icon.mjs";
 import van from "../../vanjs.mjs";
 
 const { div } = van.tags;
@@ -41,6 +43,12 @@ class FullscreenMenu extends BaseComponent{
         this.tabs = {};
 
         this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full", color: "bg-base-100"} });
+        this.closeBtn = new Button({
+            size: Button.SIZE.TINY,
+            type: Button.TYPE.NONE,
+           onClick: () => this.unfocusAll(),
+            extraClasses: {position: "absolute right-2"}
+        }, new FAIcon({name: 'fa-close'}));
         for (let i of args) {
             this.addTab(i);
         }
@@ -59,17 +67,16 @@ class FullscreenMenu extends BaseComponent{
         }
 
         this.tabs[item.id] = item;
-        item.setClass("display", "hidden");
+        item.setClass("display", "hidden right-0");
 
         item.attachTo(this.content);
-
     }
 
     create(){
         return div({ id: "overlay", class: "hidden" },
-                    div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
-                    div({ id: "overlay-content" }, this.content.create()),
-                );
+            div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
+            div({ id: "overlay-content", class: "relative" }, this.closeBtn.create(), this.content.create()),
+        );
     }
 
     /**
@@ -96,7 +103,6 @@ class FullscreenMenu extends BaseComponent{
             }
 
             tab.setClass("display", "hidden");
-
         }
     }
 
@@ -104,7 +110,7 @@ class FullscreenMenu extends BaseComponent{
         for (let tab of Object.values(this.tabs)) {
             tab.setClass("display", "hidden");
         }
-        document.getElementById("overlay").classList.toggle("hidden");
+        document.getElementById("overlay").classList.add("hidden");
     }
 
 

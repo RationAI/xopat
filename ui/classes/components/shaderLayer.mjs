@@ -44,23 +44,18 @@ export class ShaderLayer extends BaseComponent {
 
         this.body = new RawHtml({extraClasses: {nd: "non-draggable"}}, this.layer.htmlControls(html => `<div class="shader-controls-row">${html}</div>`));
 
-        // --- derived state
-        this.fixed = !!this.cfg?.fixed;
-        this.visible = this.cfg?.visible !== false;
-        this.mode = (this.cfg?.params?.use_mode) || "show";   // "show" | "clip" | "blend"
-        this.type = this.cfg?.type;
-        this.title = this.cfg?.title || this.layer?.id;
+        this.fixed = !!this.cfg.fixed;
+        this.visible = this.cfg.visible !== false;
+        this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "clip" | "blend"
+        this.type = this.cfg.type;
+        this.title = this.cfg.name;
         this.filters = options.availableFilters || {};   // { key: {name, value} }
-        this.cacheApplied = this.cfg?._cacheApplied;
+        this.cacheApplied = this.cfg._cacheApplied;
 
-        // class names
         this.classMap.base = "shader-part bg-gradient-to-r from-primary to-transparent rounded-3 mx-1 mb-2 pl-2 pt-1 pb-2";
         this.classMap.resizable = "resizable";
         this.classMap.dim = this.visible ? "" : "brightness-50";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[10px]" : "";
-
-        // parts we’ll need to mutate later
-        this._selectVisible = false;
     }
 
     // ---- small helpers
@@ -106,16 +101,6 @@ export class ShaderLayer extends BaseComponent {
         if (this.fixed) {
             this.renderTypeSelect.setExtraProperty("disabled", "disabled");
         }
-
-        // const btn = new Button({
-        //     size: Button.SIZE.SMALL,
-        //     outline: Button.OUTLINE.DISABLE,
-        //     type: Button.TYPE.NONE,
-        //     onClick: () => {
-        //         this._selectVisible = !this._selectVisible;
-        //         this.renderTypeSelect.setClass("display", this._selectVisible ? "" : "hidden");
-        //     }
-        // }, gear);
 
         this.renderTypeSelect.setClass("display", "hidden");
         const wrap = new Div(

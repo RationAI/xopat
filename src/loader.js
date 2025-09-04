@@ -194,10 +194,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     /**
      * Get one of allowed plugin meta keys
      * @param id
-     * @param {string} metaKey one of "name", "description", "author", "version"
+     * @param {string} metaKey one of "name", "description", "author", "version", "icon"
      */
     window.pluginMeta = function(id, metaKey) {
-        return ["name", "description", "author", "version"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+        return ["name", "description", "author", "version", "icon"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
     }
 
     /**

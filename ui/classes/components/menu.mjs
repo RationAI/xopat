@@ -41,6 +41,7 @@ class Menu extends BaseComponent {
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
         for (let i of args) {
+            // todo require ID
             if (i.class === Dropdown) {
                 this.addDropdown(i);
                 continue;
@@ -71,6 +72,15 @@ class Menu extends BaseComponent {
     }
 
     /**
+     * Retrieve tab item
+     * @param id
+     * @return {*}
+     */
+    getTab(id) {
+        return this.tabs[id];
+    }
+
+    /**
      *
      * @param {*} id id of the item we want to delete
      */
@@ -81,25 +91,29 @@ class Menu extends BaseComponent {
     }
 
     /**
-     * 
-     * @param {*} item 
+     * @param {Dropdown|object} item. If object, DropDown contructor params are accepted, which among other include support for:
+     *   sections: [
+     *     { id: "actions" },
+     *     { id: "recent", title: "Open Projects", order: 10 },
+     *   ],
+     *   items: [
+     *     { id: "new",   section: "actions", label: "New Project…", icon: "add" },
+     *     { id: "open",  section: "actions", label: "Open…", icon: "folder_open", kbd: "⌘O", href: "#" },
+     *     { id: "clone", section: "actions", label: "Clone Repository…", icon: "content_copy" },
+     *     { id: "xopat", section: "recent",  label: "xopat", icon: "widgets", selected: true },
+     *   ],
      * @description adds a dropdown type item to the menu
      */
     addDropdown(item){
-        if (item.class !== Dropdown){
-            throw new Error("Item for addDropdown needs to be of type Dropdown");
+        if (item.class !== Dropdown || !item.id){
+            throw new Error("Item for addDropdown needs to be of type Dropdown and have id property!");
         }
-        const tab = new Dropdown({
-            id: item.id,
-            parentId: this.id,
-            icon: item.icon,
-            title: item.title,
-            onClick: item.onClick || (() => {}),
-            },
-            ...item.body
-        )
+        const id = item.id;
+        item.parentId = this.id;
+        item.onClick = item.onClick || (() => {});
+        const tab = new Dropdown(item);
 
-        this.tabs[item.id] = tab;
+        this.tabs[id] = tab;
 
 
         tab.headerButton.setClass("join", "join-item");
@@ -118,6 +132,7 @@ class Menu extends BaseComponent {
         }
 
         tab.attachTo(this.header);
+        return tab;
     }
 
     /**
@@ -151,6 +166,7 @@ class Menu extends BaseComponent {
         if (tab.contentDiv) {
             tab.contentDiv.attachTo(this.body);
         }
+        return tab;
     }
 
     /**

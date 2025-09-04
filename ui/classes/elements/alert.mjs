@@ -76,24 +76,6 @@ export class Alert extends BaseComponent {
         ].filter(Boolean).join(" ");
     }
 
-    _setTooltip(open) {
-        this._tooltipOpen = !!open;
-        const wrap = document.getElementById(`${this.id}-ttwrap`);
-        if (wrap) {
-            wrap.classList.toggle("tooltip-open", this._tooltipOpen);
-            // If opening, also focus the alert for accessibility
-            if (this._tooltipOpen) {
-                const alertEl = document.getElementById(this.id);
-                alertEl?.focus?.();
-                document.addEventListener("click", this._outsideHandler, { capture: true });
-                document.addEventListener("keydown", this._escHandler, { capture: true });
-            } else {
-                document.removeEventListener("click", this._outsideHandler, { capture: true });
-                document.removeEventListener("keydown", this._escHandler, { capture: true });
-            }
-        }
-    }
-
     create() {
         const titleNode = this.title
             ? div({class:"font-semibold"}, this.title)
@@ -131,7 +113,9 @@ export class Alert extends BaseComponent {
                 onmouseenter: () => USER_INTERFACE.Tooltip.show(alertNode, {
                     content: this.description, placement: "bottom", trigger: "both", interactive: true, offset: 8
                 }),
-                onmouseleave: () => {/* let outside click handler close it; hover-out won't auto-close if user is interacting */}
+                onmouseleave: () => {
+                    USER_INTERFACE.Tooltip.hide();
+                }
             },
             iconSvg(this.mode, { soft: this.soft }),
             div(titleNode),

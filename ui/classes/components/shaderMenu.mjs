@@ -1,6 +1,7 @@
 // ui/components/ShaderMenu.mjs
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
+import { FAIcon } from "../elements/fa-icon.mjs";
 
 const { div, span, select, option, label, input, br, ul, li, a } = van.tags;
 
@@ -62,7 +63,7 @@ export class ShaderMenu extends BaseComponent {
             {
                 id: "shaders",
                 name: "shaders",
-                class: "select select-bordered select-md align-middle w-4/5 max-w-xs cursor-pointer text-xl text-lg",
+                class: "select select-bordered select-sm align-middle w-4/5 max-w-xs cursor-pointer text-xl text-lg",
                 "aria-label": "Visualization",
                 value: this.selectedShader,
                 onchange: (e) => {

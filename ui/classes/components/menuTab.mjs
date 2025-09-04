@@ -8,6 +8,8 @@ const ui = { Button, Div, FAIcon };
 const { span } = van.tags
 
 /**
+ * todo extend base component?
+ *
  * @class MenuTab
  * @description A internal tab component for the menu component
  * @example
@@ -34,13 +36,18 @@ class MenuTab {
     }
 
     /**
+     * todo: private?
      * @param {*} item dictionary with id, icon, title, body which will be created
      * @returns {*} Button and Div components from VanJS framework
      */
     createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });        
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });
+
+        //todo dirty?
+        this.iconName = inIcon.options.name;
+        this.title = inText;
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
