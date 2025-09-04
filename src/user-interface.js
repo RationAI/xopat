@@ -1281,6 +1281,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     })
                 menu.attachTo($("#bottom-menu-center"));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
+                this.stayOnScreen(`toolbar-${ownerPluginId}`);
+
                 if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
                 };
@@ -1290,6 +1292,41 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     document.getElementById(`toolbar-${ownerPluginId}`).style["max-width"] = "100px";
                 }
 
+            },
+
+            stayOnScreen(id){
+                const myDiv = document.getElementById(id);
+                function keepDivOnScreen() {
+                    const rect = myDiv.getBoundingClientRect();
+                    const viewportWidth = window.innerWidth;
+                    const viewportHeight = window.innerHeight;
+
+                    // Check horizontal position
+                    if (rect.right > viewportWidth) {
+                        myDiv.style.left = viewportWidth - rect.width + "px";
+                    }
+
+                    if (rect.left < 0) {
+                        myDiv.style.left = "0px";
+                    } else if (rect.left < APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`)) {
+                        myDiv.style.left = APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`) + "px";
+                    }
+
+                    // Check vertical position
+                    if (rect.bottom > viewportHeight) {
+                        myDiv.style.top = viewportHeight - rect.height + "px";
+                    } else if (rect.top < APPLICATION_CONTEXT.getOption(`${id}-PositionTop`)) {
+                        myDiv.style.top = APPLICATION_CONTEXT.getOption(`${id}-PositionTop`) + "px";
+                    }
+
+                    if (rect.top < document.getElementById('top-side').offsetHeight) {
+                        myDiv.style.top = document.getElementById('top-side').offsetHeight + "px";
+                    }
+                }
+
+                window.addEventListener('scroll', keepDivOnScreen);
+                window.addEventListener('resize', keepDivOnScreen);
+                keepDivOnScreen();
             },
             makeDraggable(id){
                 const draggableBox = document.getElementById(id);
