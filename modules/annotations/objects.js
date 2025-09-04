@@ -288,7 +288,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(ofObject, iconRenderer, valueRenderer, index) {
+    renderIcon(iconRenderer, valueRenderer, index) {
         return new fabric.Control({
             x: 0.5,
             y: -0.5,
@@ -296,9 +296,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetY: 20 + 45 * index,
             cursorStyle: 'grab',
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(ofObject);
+                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
                 const value = valueRenderer ? (
-                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(ofObject)
+                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
                 ) : null;
                 const showValue = value !== null && value !== undefined && value !== '';
                 
@@ -308,7 +308,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 let totalWidth = iconSize;
                 let textWidth = 0;
                 
-                // Calculate text dimensions if value is present
                 if (showValue) {
                     ctx.font = `${iconSize * 0.4}px Arial`;
                     textWidth = ctx.measureText(value).width;
@@ -316,18 +315,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 }
                 
                 const height = iconSize;
-                const radius = height / 2; // Use full rounding (height/2 for pill shape)
+                const radius = height / 2;
                 
-                // Adjust position to align left edge consistently
                 const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
                 
                 ctx.save();
                 ctx.translate(leftAlignedX, top);
                 ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
                 
-                // Draw fully rounded background (pill/capsule shape)
                 const halfWidth = totalWidth / 2;
-                const halfHeight = height / 2;
                 
                 ctx.beginPath();
                 ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
@@ -337,12 +333,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.fillStyle = 'white';
                 ctx.fill();
                 
-                // outline
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
                 
-                // icon (positioned on the left side)
                 const iconX = -halfWidth + iconSize / 2;
                 ctx.font = `${iconSize * 0.8}px "Material Icons"`;
                 ctx.textAlign = 'center';
@@ -350,7 +344,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.fillStyle = 'black';
                 ctx.fillText(icon, iconX, 3);
                 
-                // value text (positioned to the right of the icon)
                 if (showValue) {
                     const textX = iconX + iconSize / 2 + padding + textWidth / 2;
                     ctx.font = `${iconSize * 0.5}px Segoe UI`;
@@ -368,13 +361,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
     renderAllControls(ofObject) {
         ofObject.controls = {
             private: this.renderIcon(
-                ofObject,
                 (obj) => obj.private ? 'visibility_lock' : 'visibility',
                 undefined,
                 0,
             ),
             comments: this.renderIcon(
-                ofObject,
                 'comment',
                 (obj) => obj.comments?.length ?? 0,
                 1,
