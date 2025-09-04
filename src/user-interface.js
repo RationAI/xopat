@@ -1112,17 +1112,26 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                     });
 
-                const checkbox = new UI.Div(
-                    {id: "global-tissue-visibility",
-                    class: "",
-                    extraClasses: {btn: "btn btn-primary btn-sm w-full"},
-                    style: "display: flex; align-items: center;"},
-                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
-                        onchange: function () {
-                            VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
-                        }}))
+                const checkbox = new UI.Checkbox({
+                    id: "global-tissue-visibility",
+                    label: "",
+                    checked: true,
+                    onchange: function () {
+                        VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);
+                    },
+                });
 
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text);
+                const copyButton = new UI.Button({
+                    id: "tissue-title-copy",
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: function () {
+                        UTILITIES.copyToClipboard(text.textContent);
+                    },
+                    extraProperties: { title: "Copy", style: "width: 30px" },
+                }, new UI.FAIcon({ name: "fa-copy" }),);
+
+
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text, copyButton);
                 return menu;
             },
 
