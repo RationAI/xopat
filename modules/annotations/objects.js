@@ -62,6 +62,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "private",
+        "comments",
     ];
 
     /**
@@ -287,7 +288,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(ofObject, iconRenderer, index) {
+    renderIcon(ofObject, iconRenderer, valueRenderer, index) {
         return new fabric.Control({
             x: 0.5,
             y: -0.5,
@@ -295,17 +296,44 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetY: 20 + 45 * index,
             cursorStyle: 'grab',
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = iconRenderer(ofObject);
-                const size = 36;
-                const radius = size / 2;
+                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(ofObject);
+                const value = valueRenderer ? (
+                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(ofObject)
+                ) : null;
+                const showValue = value !== null && value !== undefined && value !== '';
+                
+                const iconSize = 36;
+                const padding = 8;
+                
+                let totalWidth = iconSize;
+                let textWidth = 0;
+                
+                // Calculate text dimensions if value is present
+                if (showValue) {
+                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    textWidth = ctx.measureText(value).width;
+                    totalWidth = iconSize + padding + textWidth + padding;
+                }
+                
+                const height = iconSize;
+                const radius = height / 2; // Use full rounding (height/2 for pill shape)
+                
+                // Adjust position to align left edge consistently
+                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
                 
                 ctx.save();
-                ctx.translate(left, top);
+                ctx.translate(leftAlignedX, top);
                 ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
                 
-                // bg
+                // Draw fully rounded background (pill/capsule shape)
+                const halfWidth = totalWidth / 2;
+                const halfHeight = height / 2;
+                
                 ctx.beginPath();
-                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.closePath();
+                
                 ctx.fillStyle = 'white';
                 ctx.fill();
                 
@@ -314,12 +342,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.lineWidth = 1;
                 ctx.stroke();
                 
-                // icon
-                ctx.font = `${size * 0.8}px "Material Icons"`;
+                // icon (positioned on the left side)
+                const iconX = -halfWidth + iconSize / 2;
+                ctx.font = `${iconSize * 0.8}px "Material Icons"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
-                ctx.fillText(icon, 0, 2);
+                ctx.fillText(icon, iconX, 3);
+                
+                // value text (positioned to the right of the icon)
+                if (showValue) {
+                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
+                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(value, textX, 1);
+                }
 
                 ctx.restore();
             },
@@ -331,7 +370,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
             private: this.renderIcon(
                 ofObject,
                 (obj) => obj.private ? 'visibility_lock' : 'visibility',
-                0
+                undefined,
+                0,
+            ),
+            comments: this.renderIcon(
+                ofObject,
+                'comment',
+                (obj) => obj.comments?.length ?? 0,
+                1,
             ),
         };
     }

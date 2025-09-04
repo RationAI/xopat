@@ -759,6 +759,8 @@ ${editIcon}
             }
             if (toRemove) {
                 canvas.remove(toRemove);
+                const wasSelected = this.canvas.getActiveObject() === toRemove;
+                if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
                 this._context.raiseEvent('annotation-delete', {object: toRemove});
             }
             canvas.setActiveObject(toAdd);
@@ -770,6 +772,8 @@ ${editIcon}
             }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
+            const wasSelected = this.canvas.getActiveObject() === toRemove;
+            if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
             this._context.raiseEvent('annotation-delete', {object: toRemove});
         }
         canvas.renderAll();

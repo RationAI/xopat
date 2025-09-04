@@ -33,8 +33,36 @@ It can be called several times during one edit action.
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
 
+##### annotation-selected | ``{object: fabric.Object}``
+This event is fired when user selects an annotation.
+
+##### annotation-deselected | ``{object: fabric.Object}``
+This event is fired when user deselects an annotation.
+
 ##### annotation-set-private | ``{object: fabric.Object}``
-This event is fired when the `private` property of an annotation changes
+This event is fired when the `private` property of an annotation changes.
+
+##### annotation-add-comment | ``{object: fabric.Object, comment: AnnotationComment}``
+This event is fired when a comment is added, one by one.
+```ts
+type AnnotationComment = {
+  id: string;
+  author: {
+    id: string;
+    name: string;
+  };
+  content: string;
+  createdAt: Date;
+  removed?: boolean;
+}
+```
+
+##### annotation-delete-comment | ``{object: fabric.Object, commentId: string}``
+This event is fired when a comment is deleted, one by one.
+
+##### annotation-set-comments | ``{object: fabric.Object, comments: AnnotationComment[]}``
+This event is fired when all comments are set for an object.
+*For definition of `AnnotationComment` see `annotation-add-comment`*
 
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 

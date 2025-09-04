@@ -3,6 +3,17 @@
  * @type {OSDAnnotations}
  *
  * @typedef {{x: number, y: number}} Point
+ * 
+ * @typedef {{
+ * 	id: string,
+ * 	author: {
+ * 		id: string,
+ * 		name: string,
+ * 	},
+ * 	content: string,
+ * 	createdAt: Date,
+ * 	removed?: boolean,
+ * }} AnnotationComment
  *
  * Consider https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
  *    - blending ?
@@ -891,6 +902,42 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Add comment to annotation
+	 * @param {fabric.Object} annotation Any annotation
+	 * @param {AnnotationComment} comment Comment to add
+	 */
+	addComment(annotation, comment) {
+		if (!annotation.comments) annotation.comments = [];
+		annotation.comments.push(comment);
+		this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+	}
+
+	/**
+	 * Delete comment from annotation
+	 * @param {fabric.Object} annotation Any annotation
+	 * @param {string} comment Comment ID to delete
+	 * @returns {boolean} Whether the comment to delete was found
+	 */
+	deleteComment(annotation, commentId) {
+		if (!annotation.comments) return false;
+		const found = annotation.comments.findIndex(c => c.id === commentId);
+		if (found === -1) return false;
+		annotation.comments.splice(found, 1);
+		this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
+		return true;
+	}
+
+	/**
+	 * Set comments for annotation
+	 * @param {fabric.Object} annotation Any annotation
+	 * @param {AnnotationComment[]} comment Comments to set
+	 */
+	setComments(annotation, comments) {
+		annotation.comments = comments;
+		this.raiseEvent('annotation-set-comments', {object: annotation, comments});
+	}
+
+	/**
 	 * Add annotation to the canvas. Annotation will have NEW identity
 	 * (unlike helper annotation which is meant for visual purposes only).
 	 * If you wish to update annotation (type / geometry) but keep identity,
@@ -934,11 +981,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise @private
 	 */
 	deleteAnnotation(annotation, _raise=true) {
+		const wasSelected = this.canvas.getActiveObject() === annotation;
+		
 		annotation.off('selected');
 		this.canvas.remove(annotation);
 		this.history.push(null, annotation);
 		this.canvas.renderAll();
-		if (_raise) this.raiseEvent('annotation-delete', {object: annotation});
+		
+		if (_raise) {
+			this.raiseEvent('annotation-delete', {object: annotation});
+			if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
+		}
 	}
 
 	/**
@@ -1770,7 +1823,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_objectDeselected(event) {
 		if (this.disabledInteraction || !event.target) return;
-		// this.raiseEvent('annotation-deselected', {object: event.target});
+		this.raiseEvent('annotation-deselected', {object: event.target});
 
 		//todo make sure deselect prevent does not prevent also deletion
 		try {
@@ -1807,7 +1860,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 					let factory = this.getAnnotationObjectFactory(object.factoryID);
 					if (factory) {
 						factory.selected(object);
-						// this.raiseEvent('annotation-selected', {object});
+						this.raiseEvent('annotation-selected', {object});
 					}
 				}
 			}

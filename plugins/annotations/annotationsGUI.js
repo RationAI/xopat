@@ -15,6 +15,19 @@ class AnnotationsGUI extends XOpatPlugin {
 	 * }} AnnotationMenuOptions
 	 */
 
+	/**
+	 * @typedef {{
+	 * 	id: string,
+	 * 	author: {
+	 * 		id: string,
+	 * 		name: string,
+	 * 	},
+	 * 	content: string,
+	 * 	createdAt: Date,
+	 * 	removed?: boolean,
+	 * }} AnnotationComment
+	 */
+
 	static annotationMenuIconOrder = [
 		"private", "locked", "comments"
 	]
@@ -91,6 +104,10 @@ class AnnotationsGUI extends XOpatPlugin {
 
 		this._copiedAnnotation = null;
 		this._copiedPos = {x: 0, y: 0};
+		this._selectedAnnot = null;
+
+		this._refreshCommentsInterval = null;
+		this._commentsMoved = false;
 	}
 
 	async setupFromParams() {
@@ -158,6 +175,49 @@ class AnnotationsGUI extends XOpatPlugin {
 	}
 
 	initHTML() {
+
+		USER_INTERFACE.addHtml(`
+			<div class="fixed flex-col shadow-lg rounded-lg border p-4 max-w-sm w-80 max-h-96 overflow-hidden" id="annotation-comments-menu" 
+				 style="top: 48px; left: 12px; z-index: 2; background: var(--color-bg-primary); border-color: var(--color-border-primary); display: none;">
+				<div class="flex items-center justify-between btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
+					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
+					<button class="hover:opacity-75 text-sm" id="comments-toggle-btn">
+						<span class="material-icons" style="color: var(--color-icon-secondary); font-size: 30px;">keyboard_arrow_up</span>
+					</button>
+				</div>
+				
+				<div class="flex-1 overflow-y-auto space-y-3 my-4" id="comments-list">
+				</div>
+				
+				<div class="pt-3" id="comments-input-section" style="border-top: 1px solid var(--color-border-secondary);">
+					<div class="flex gap-2">
+						<input 
+							type="text" 
+							placeholder="Add a comment..." 
+							class="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none"
+							style="border-color: var(--color-border-secondary); background: var(--color-bg-primary); color: var(--color-text-primary);"
+							id="comment-input"
+							onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
+							onfocus="this.style.borderColor = 'var(--color-border-info)'"
+							onblur="this.style.borderColor = 'var(--color-border-secondary)'"
+						>
+						<button 
+							class="px-3 py-2 btn btn-pointer material-icons"
+							style="font-size: 22px;"
+							onclick="${this.THIS}._addComment()"
+						>
+							send
+						</button>
+					</div>
+				</div>
+			</div>
+		`, this.id);
+
+		this._initCommentsTitlebar()
+
+		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
+		this.context.addHandler('annotation-deselected', () => this._annotationDeselected());
+
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
@@ -301,6 +361,353 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		$("#annotation-convertor-options").html(
 			Object.values(convertor.options).map(option => UIComponents.Elements[option.type]?.(option)).join("<br>")
 		);
+	}
+
+	/**
+	 * Add comment from the user
+	 */
+	_addComment() {
+		if (!this._selectedAnnot) return;
+		const input = document.getElementById('comment-input');
+		const commentText = input.value.trim();
+		
+		if (!commentText) return;
+		
+		const user = XOpatUser.instance();
+		
+		const comment = {
+			id: crypto.randomUUID(),
+			author: {
+				id: user.id,
+				name: user.name,
+			},
+			content: commentText,
+			createdAt: new Date(),
+			removed: false,
+		};
+		
+		this.context.addComment(this._selectedAnnot, comment);
+		this.context.canvas.requestRenderAll();
+		this._renderSingleComment(comment);
+		input.value = '';
+		
+		const commentsList = document.getElementById('comments-list');
+		if (commentsList) {
+			commentsList.scrollTop = 0;
+		}
+	}
+
+	/**
+	 * Initialize the comments titlebar for dragging
+	 */
+	_initCommentsTitlebar() {
+		const titlebar = document.getElementById("annotation-comments-titlebar");
+
+		titlebar.style.cursor = "grab";
+
+		titlebar.addEventListener("mousedown", e => this._commentsMouseDown(e));
+		titlebar.addEventListener("mouseup", e => this._commentsMouseUp(e));
+	}
+
+	/**
+	 * Generate a consistent color corresponding to a username
+	 * @param {string} username 
+	 * @returns {string} HSL CSS color string
+	 */
+	getColorForUser(username) {
+		let hash = 0;
+		for (let i = 0; i < username.length; i++) {
+			const char = username.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash;
+		}
+		
+		const positiveHash = Math.abs(hash);
+		
+		const hue = positiveHash % 360;
+		
+		const saturation = 65;
+		const lightness = 45;
+		
+		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+	}
+
+	/**
+	 * Expand or collapse comments
+	 */
+	_toggleCommentsExpanded() {
+		const root = document.getElementById('annotation-comments-menu');
+		const commentsList = document.getElementById('comments-list');
+		const inputSection = document.getElementById('comments-input-section');
+		const arrow = document.getElementById('comments-toggle-btn').querySelector('span');
+		
+		const isExpanded = !commentsList.classList.contains('hidden');
+		
+		if (isExpanded) {
+			root.classList.remove('w-80');
+			root.classList.add('w-52');
+			commentsList.classList.add('hidden');
+			inputSection.classList.add('hidden');
+			arrow.textContent = 'keyboard_arrow_down';
+		} else {
+			root.classList.add('w-80');
+			root.classList.remove('w-52');
+			commentsList.classList.remove('hidden');
+			inputSection.classList.remove('hidden');
+			arrow.textContent = 'keyboard_arrow_up';
+		}
+	}
+
+	/**
+	 * Clear all existing comments from the comments list
+	 */
+	_clearComments() {
+		const commentsList = document.getElementById('comments-list');
+		if (commentsList) {
+			commentsList.innerHTML = '';
+		}
+	}
+
+	_commentsMouseDown(e) {
+		e.preventDefault();
+
+		if (this._isDragging) {
+			this._commentsMouseUp();
+			return;
+		}
+		
+		this._isDragging = false;
+		this._commentsMoved = false;
+		this._dragStartPos = {x: e.clientX, y: e.clientY};
+		
+		const root = document.getElementById('annotation-comments-menu');
+		if (root) {
+			this._dragStartElementPos = {
+				left: root.offsetLeft,
+				top: root.offsetTop
+			};
+		}
+
+		this._commentsDragListener = (e) => this._commentsMouseMove(e);
+		this._commentsUpListener = (e) => this._commentsMouseUp();
+
+		document.addEventListener("mousemove", this._commentsDragListener);
+		document.addEventListener("mouseup", this._commentsUpListener);
+	}
+
+	_commentsMouseUp() {
+		const titlebar = document.getElementById("annotation-comments-titlebar");
+		if (titlebar) titlebar.style.cursor = "grab";
+		document.body.style.cursor = "";
+
+		// clear existing listeners
+		if (this._commentsDragListener) {
+			document.removeEventListener("mousemove", this._commentsDragListener);
+			this._commentsDragListener = null;
+		}
+		if (this._commentsUpListener) {
+			document.removeEventListener("mouseup", this._commentsUpListener);
+			this._commentsUpListener = null;
+		}
+
+		// collapse on no movement
+		if (!this._commentsMoved) {
+			this._toggleCommentsExpanded();
+		}
+		
+		this._isDragging = false;
+		this._commentsMoved = false;
+	}
+
+	_commentsMouseMove(e) {
+		const root = document.getElementById('annotation-comments-menu');
+		const titlebar = document.getElementById("annotation-comments-titlebar");
+		if (!root || !this._dragStartPos) return;
+
+		const deltaX = e.clientX - this._dragStartPos.x;
+		const deltaY = e.clientY - this._dragStartPos.y;
+
+		const threshold = 5;
+		if (!this._isDragging && (Math.abs(deltaX) > threshold || Math.abs(deltaY) > threshold)) {
+			this._isDragging = true;
+			this._commentsMoved = true;
+			titlebar.style.cursor = "grabbing";
+		}
+
+		if (this._isDragging && this._dragStartElementPos) {
+			root.style.left = (this._dragStartElementPos.left + deltaX) + "px";
+			root.style.top = (this._dragStartElementPos.top + deltaY) + "px";
+		}
+	}
+
+	/**
+	 * Render comments from an array of comment objects
+	 * @param {AnnotationComment[]} comments - Array of comment objects to render
+	 */
+	_renderComments() {
+		const comments = this._selectedAnnot.comments;
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) {
+			console.warn('annotationsGUI: comments list element not found');
+			return;
+		}
+		let visibleComments = [];
+		let noComments = false;
+
+		this._clearComments();
+
+		if (!comments || comments.length === 0) noComments = true;
+		else {
+			visibleComments = comments
+				.filter(comment => !comment.removed)
+				.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+			if (visibleComments.length === 0) noComments = true;
+		}
+
+		if (noComments) {
+			const noCommentsElement = document.createElement('div');
+			noCommentsElement.id = 'comments-list-empty'
+			noCommentsElement.className = 'rounded-md flex items-center justify-center py-8 px-4 gap-2 select-none';
+			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
+			
+			noCommentsElement.innerHTML = `
+				<span class="material-icons text-4xl" style="color: var(--color-text-tertiary);">chat_bubble_outline</span>
+				<p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
+			`;
+			
+			commentsList.appendChild(noCommentsElement);
+			return;
+		}
+
+		visibleComments.forEach(comment => {
+			this._renderSingleComment(comment);
+		});
+	}
+
+	/**
+	 * Render a single comment element
+	 * @param {AnnotationComment[]} comment - Comment object to render
+	 */
+	_renderSingleComment(comment) {
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) return;
+
+		const noCommentsElement = document.getElementById("comments-list-empty");
+		if (noCommentsElement) noCommentsElement.remove();
+
+		const commentElement = document.createElement('div');
+		commentElement.className = 'rounded-lg p-3 border-l-4';
+		commentElement.style.background = 'var(--color-bg-canvas-inset)';
+		commentElement.style.borderLeftColor = this.getColorForUser(comment.author.name);
+		commentElement.dataset.commentId = comment.id;
+
+		const createdAt = new Date(comment.createdAt);
+		const timeAgo = this._formatTimeAgo(createdAt);
+
+		commentElement.innerHTML = `
+			<div class="flex items-start justify-between mb-1">
+				<span class="font-medium text-sm" style="color: var(--color-text-primary);">${this._escapeHtml(comment.author.name)}</span>
+				<span name="created-at" class="text-xs" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
+			</div>
+			<p class="text-sm" style="color: var(--color-text-secondary);">${this._escapeHtml(comment.content)}</p>
+		`;
+
+		commentsList.insertBefore(commentElement, commentsList.firstChild);
+	}
+
+	/**
+	 * Format a date as a time ago string
+	 * @param {Date} date - Date to format
+	 * @returns {string} - Formatted time ago string
+	 */
+	_formatTimeAgo(date) {
+		const now = new Date();
+		const diffMs = now - date;
+		const diffSecs = Math.floor(diffMs / 1000);
+		const diffMins = Math.floor(diffSecs / 60);
+		const diffHours = Math.floor(diffMins / 60);
+		const diffDays = Math.floor(diffHours / 24);
+
+		if (diffSecs < 60) return 'just now';
+		if (diffMins < 60) return `${diffMins}m ago`;
+		if (diffHours < 24) return `${diffHours}h ago`;
+		if (diffDays < 7) return `${diffDays}d ago`;
+		if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+		if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+		return `${Math.floor(diffDays / 365)}y ago`;
+	}
+
+	/**
+	 * Escape HTML to prevent XSS attacks
+	 * @param {string} text - Text to escape
+	 * @returns {string} - HTML escaped text
+	 */
+	_escapeHtml(text) {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
+	}
+
+	_annotationSelected(object) {
+		this._selectedAnnot = object;
+		const menu = document.getElementById("annotation-comments-menu");
+		menu.style.display = 'flex';
+		this._renderComments(object.comments);
+		
+		this._startCommentsRefresh();
+	}
+
+	_annotationDeselected() {
+		this._selectedAnnot = null;
+		const menu = document.getElementById("annotation-comments-menu");
+		menu.style.display = 'none';
+		this._clearComments();
+		
+		this._stopCommentsRefresh();
+	}
+
+	/**
+	 * Start the interval to refresh comment timestamps
+	 */
+	_startCommentsRefresh() {
+		this._stopCommentsRefresh();
+		
+		this._refreshCommentsInterval = setInterval(() => {
+			this._refreshCommentTimestamps();
+		}, 30_000);
+	}
+
+	/**
+	 * Stop the comment timestamp refresh interval
+	 */
+	_stopCommentsRefresh() {
+		if (this._refreshCommentsInterval) {
+			clearInterval(this._refreshCommentsInterval);
+			this._refreshCommentsInterval = null;
+		}
+	}
+
+	/**
+	 * Refresh the timestamp display for all visible comments
+	 */
+	_refreshCommentTimestamps() {
+		if (!this._selectedAnnot || !this._selectedAnnot.comments) {
+			return;
+		}
+
+		this._selectedAnnot.comments.forEach(comment => {
+			if (comment.removed) return;
+			
+			const commentElement = document.querySelector(`[data-comment-id="${comment.id}"]`);
+			if (!commentElement) return;
+
+			const timestampSpan = commentElement.querySelector('span[name="created-at"]');
+			if (!timestampSpan) return;
+
+			const timeAgo = this._formatTimeAgo(comment.createdAt);
+			timestampSpan.textContent = timeAgo;
+		});
 	}
 
 	switchModeActive(id, factory=undefined, isLeftClick) {
