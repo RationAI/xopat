@@ -875,7 +875,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                                 }
                                                 //document.getElementById("right-side-menu").classList.toggle("hidden");
                                                 const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                                                toolbarDivs.forEach((el) => el.classList.toggle("hidden"));
+                                                toolbarDivs.forEach((el) => el.classList.add("hidden"));
 
                                                 USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
                                             }
@@ -1097,17 +1097,26 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                     });
 
-                const checkbox = new UI.Div(
-                    {id: "global-tissue-visibility",
-                    class: "",
-                    extraClasses: {btn: "btn btn-primary btn-sm w-full"},
-                    style: "display: flex; align-items: center;"},
-                    input({ type: "checkbox", checked: "checked", class: "form-control mr-1",
-                        onchange: function () {
-                            VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0)
-                        }}))
+                const checkbox = new UI.Checkbox({
+                    id: "global-tissue-visibility",
+                    label: "",
+                    checked: true,
+                    onchange: function () {
+                        VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);
+                    },
+                });
 
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text);
+                const copyButton = new UI.Button({
+                    id: "tissue-title-copy",
+                    size: UI.Button.SIZE.SMALL,
+                    onClick: function () {
+                        UTILITIES.copyToClipboard(text.textContent);
+                    },
+                    extraProperties: { title: "Copy", style: "width: 30px" },
+                }, new UI.FAIcon({ name: "fa-copy" }),);
+
+
+                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text, copyButton);
                 return menu;
             },
 
@@ -1257,9 +1266,52 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     })
                 menu.attachTo($("#bottom-menu-center"));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
+                this.stayOnScreen(`toolbar-${ownerPluginId}`);
+
                 if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
                 };
+
+                // snapping  to left side if set in cookies
+                if (APPLICATION_CONTEXT.getOption(`toolbar-${ownerPluginId}-PositionLeft`) == 0){
+                    document.getElementById(`toolbar-${ownerPluginId}`).style["max-width"] = "100px";
+                }
+
+            },
+
+            stayOnScreen(id){
+                const myDiv = document.getElementById(id);
+                function keepDivOnScreen() {
+                    const rect = myDiv.getBoundingClientRect();
+                    const viewportWidth = window.innerWidth;
+                    const viewportHeight = window.innerHeight;
+
+                    // Check horizontal position
+                    if (rect.right > viewportWidth) {
+                        myDiv.style.left = viewportWidth - rect.width + "px";
+                    }
+
+                    if (rect.left < 0) {
+                        myDiv.style.left = "0px";
+                    } else if (rect.left < APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`)) {
+                        myDiv.style.left = APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`) + "px";
+                    }
+
+                    // Check vertical position
+                    if (rect.bottom > viewportHeight) {
+                        myDiv.style.top = viewportHeight - rect.height + "px";
+                    } else if (rect.top < APPLICATION_CONTEXT.getOption(`${id}-PositionTop`)) {
+                        myDiv.style.top = APPLICATION_CONTEXT.getOption(`${id}-PositionTop`) + "px";
+                    }
+
+                    if (rect.top < document.getElementById('top-side').offsetHeight) {
+                        myDiv.style.top = document.getElementById('top-side').offsetHeight + "px";
+                    }
+                }
+
+                window.addEventListener('scroll', keepDivOnScreen);
+                window.addEventListener('resize', keepDivOnScreen);
+                keepDivOnScreen();
             },
             makeDraggable(id){
                 const draggableBox = document.getElementById(id);
@@ -1317,8 +1369,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     draggableBox.style.left = `${newX}px`;
                     draggableBox.style.top = `${newY}px`;
 
-                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionLeft`, newX);
-                    APPLICATION_CONTEXT.setOption(`toolbar-${id}-PositionTop`, newY);
+                    APPLICATION_CONTEXT.setOption(`${id}-PositionLeft`, newX);
+                    APPLICATION_CONTEXT.setOption(`${id}-PositionTop`, newY);
                 });
 
                 document.addEventListener('mouseup', () => {
