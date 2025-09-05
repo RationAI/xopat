@@ -51,6 +51,7 @@
         "defaultTitle": "Custom Visualization",
         "cacheByOrder": "Remember settings by layers order",
         "cacheByName": "Remember settings by layer name",
+        "notAvailable": "No overlays available",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."

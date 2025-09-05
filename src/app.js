@@ -692,7 +692,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (world.getItemCount() < 1) {
             $("#global-tissue-visibility").removeClass("d-inline-block");
             $("#panel-images").html("").css('display', 'none');
-            $("#panel-shaders").css('display', 'none');
             VIEWER.addTiledImage({
                 tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
                 index: 0,
@@ -943,8 +942,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     layerWorldItem = VIEWER.world.getItemAt(++layerPosition);
                 } while (layerWorldItem);
 
-                $("#panel-shaders").css('display', 'block');
-
                 // Init swwitching between goals
                 let i = 0;
                 // todo test change of visualization
@@ -965,12 +962,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
-
-                $("#panel-shaders").css('display', 'none');
                 eventOpts.error = $.t('messages.overlaysDisabled');
             }
-        } else {
-            $("#panel-shaders").css('display', 'none');
         }
         handleSyntheticEventFinish(eventOpts);
     }

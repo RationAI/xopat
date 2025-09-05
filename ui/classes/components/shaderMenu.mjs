@@ -58,6 +58,10 @@ export class ShaderMenu extends BaseComponent {
     }
 
     _buildHeaderRow() {
+        const shaderGoalList = this.shaders.map((s) => option({ value: s.value }, s.label));
+        if (shaderGoalList.length === 0) {
+            shaderGoalList.push(option({ value: "", }, $.t('main.shaders.notAvailable')));
+        }
         // Shader select
         const shaderSelect = select(
             {
@@ -72,11 +76,10 @@ export class ShaderMenu extends BaseComponent {
                 },
                 title: $.t("main.shaders.select") ?? "Select shader",
             },
-            ...this.shaders.map((s) => option({ value: s.value }, s.label))
+            ...shaderGoalList
         );
 
-        // Cache snapshot dropdown (DaisyUI)
-        // wrapper kept as field to toggle 'dropdown-open'
+        // todo implement using dropdown!
         this._cacheDropdownWrap = div(
             { class: "dropdown dropdown-end float-right relative" },
             // trigger
@@ -100,8 +103,7 @@ export class ShaderMenu extends BaseComponent {
             ul(
                 {
                     tabindex: "0",
-                    class:
-                        "dropdown-content menu p-2 shadow bg-base-100 rounded-box w-48 z-[1]",
+                    class: "dropdown-content menu shadow bg-base-100 rounded-box w-48 z-[1]",
                 },
                 li(
                     a(
