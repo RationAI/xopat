@@ -179,11 +179,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		USER_INTERFACE.addHtml(`
 			<div class="fixed flex-col shadow-lg rounded-lg border p-4 max-w-sm w-80 max-h-96 overflow-hidden" id="annotation-comments-menu" 
 				 style="top: 48px; left: 12px; z-index: 2; background: var(--color-bg-primary); border-color: var(--color-border-primary); display: none;">
-				<div class="flex items-center justify-between btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
-					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
-					<button class="hover:opacity-75 text-sm" id="comments-toggle-btn">
-						<span class="material-icons" style="color: var(--color-icon-secondary); font-size: 30px;">keyboard_arrow_up</span>
+				<div class="flex items-center gap-3 btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
+					<button class="text-sm" id="comments-toggle-btn">
+						<span class="material-icons" style="color: var(--color-icon-secondary); font-size: 30px;">keyboard_arrow_down</span>
 					</button>
+					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
 				</div>
 				
 				<div class="flex-1 overflow-y-auto space-y-3 my-4" id="comments-list">
@@ -448,13 +448,13 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			root.classList.add('w-52');
 			commentsList.classList.add('hidden');
 			inputSection.classList.add('hidden');
-			arrow.textContent = 'keyboard_arrow_down';
+			arrow.textContent = 'keyboard_arrow_right';
 		} else {
 			root.classList.add('w-80');
 			root.classList.remove('w-52');
 			commentsList.classList.remove('hidden');
 			inputSection.classList.remove('hidden');
-			arrow.textContent = 'keyboard_arrow_up';
+			arrow.textContent = 'keyboard_arrow_down';
 		}
 	}
 
