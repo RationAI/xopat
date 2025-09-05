@@ -605,14 +605,43 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
+		const user = XOpatUser.instance();
+		const isAuthor = user.id === comment.author.id;
+		const deleteButtonHtml = isAuthor ? 
+			`<button class="relative px-2 py-1" title="Delete comment" data-confirmed="false">
+				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
+				<div class="show-hint hidden right-[40px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+					<span>Click again to delete</span>
+				</div>
+			</button>` : '';
+
 		commentElement.innerHTML = `
-			<div class="flex items-start justify-between mb-1">
+			<div class="flex justify-between items-center mb-1">
 				<span class="font-medium text-sm" style="color: var(--color-text-primary);">${this._escapeHtml(comment.author.name)}</span>
-				<span name="created-at" class="text-xs" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
+				<div class="flex items-center justify-center">
+					<span name="created-at" class="text-xs" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
+					${deleteButtonHtml}
+				</div>
 			</div>
 			<p class="text-sm" style="color: var(--color-text-secondary);">${this._escapeHtml(comment.content)}</p>
 		`;
 
+		if (isAuthor) {
+			const deleteButton = commentElement.querySelector('button[title="Delete comment"]');
+			deleteButton.addEventListener('click', (event) => {
+				const confirmed = event.currentTarget.dataset.confirmed === 'true';
+				if (confirmed) {
+					this._deleteComment(comment.id);
+				} else {
+					event.currentTarget.dataset.confirmed = 'true';
+					event.currentTarget.querySelector('.show-hint').classList.remove('hidden');
+				}
+			});
+			deleteButton.addEventListener('mouseleave', (event) => {
+				event.currentTarget.dataset.confirmed = 'false';
+				event.currentTarget.querySelector('.show-hint').classList.add('hidden');
+			});
+		}
 		commentsList.insertBefore(commentElement, commentsList.firstChild);
 	}
 
@@ -647,6 +676,24 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const div = document.createElement('div');
 		div.textContent = text;
 		return div.innerHTML;
+	}
+
+	/**
+	 * Delete a comment by ID
+	 * @param {string} commentId - ID of the comment to delete
+	 */
+	_deleteComment(commentId) {
+		this.context.deleteComment(this._selectedAnnot, commentId);
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) return;
+		const comment = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
+		if (comment) comment.remove();
+		this.context.canvas.requestRenderAll();
+
+		if (this._selectedAnnot.comments.filter(c => !c.removed).length === 0) {
+			this._clearComments();
+			this._renderComments();
+		}
 	}
 
 	_annotationSelected(object) {
