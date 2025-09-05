@@ -479,10 +479,20 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     this._body.html("");
                 }
                 ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
+                
+                let top = mouseEvent.pageY + 5;
+                let left = mouseEvent.pageX - 15;
+                
+                if ((top + this._body.height()) > window.innerHeight) {
+                    top = mouseEvent.pageY - this._body.height() - 5;
+                }
+                if ((left + this._body.width()) > window.innerWidth) {
+                    left = mouseEvent.pageX - this._body.width() + 15;
+                }
                 this._body.css({
                     display: "block",
-                    top: mouseEvent.pageY + 5,
-                    left: mouseEvent.pageX - 15
+                    top: top,
+                    left: left
                 });
             }
         },
