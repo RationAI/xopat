@@ -641,7 +641,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             getSettingsBody: function () {
-                const { div, span, a, option, select, b } = van.tags;
+                const { div, span, a, b } = van.tags;
                 const logo = this.getLogo(-70, 20);
 
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
@@ -843,20 +843,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
-         *
-         * @namespace USER_INTERFACE.Toolbar
-         */
-        Toolbar:{
-            context: $("#bottom-menu-center"),
-            menu: "",
-            init: function () {
-                this.menu = new UI.Toolbar({
-                    id: "toolbar",})
-                this.menu.attachTo(this.context);
-            }
-        },
-
-        /**
          * Application TopRightMenu
          * @namespace USER_INTERFACE.TopRightMenu
          */
@@ -993,14 +979,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     });
                 }
             },
-        },
-
-        TopLeftWindowMenu:{
-            context: $("#top-side-left"),
-            menu: "",
-            init: function () {
-
-            }
         },
 
         /**

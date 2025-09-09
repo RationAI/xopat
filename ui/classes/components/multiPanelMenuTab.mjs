@@ -34,7 +34,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.id = item.id;
     }
 
-    createTab(item) {
+    _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });

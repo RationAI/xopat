@@ -59,7 +59,7 @@ class Toolbar extends BaseComponent{
         this.header.setClass("display", "");
         this.body.setClass("display", "");
 
-        const tab = this.createTab(item);
+        const tab = this._createTab(item);
         this.tabs[item.id] = tab;
 
         tab.headerButton.attachTo(this.header);
@@ -82,7 +82,7 @@ class Toolbar extends BaseComponent{
      * @param {*} item dictionary with  id, icon, title, body
      * @returns tuple of header Button and content Div components
      */
-    createTab(item) {
+    _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
