@@ -641,7 +641,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             getSettingsBody: function () {
-                const { div, span, a, option, select, b } = van.tags;
+                const { div, span, a, b } = van.tags;
                 const logo = this.getLogo(-70, 20);
 
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
@@ -661,11 +661,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
 
                 const themeSelect = new UI.Select(
-                    { id: "theme-select", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}, title: "Theme: " },
+                    { id: "theme-select", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}, title: $.t('settings.theme.title') },
                     { value: "", selected: "selected", hidden: "hidden", text: themePretty },
-                    { value: "auto", text: "Automatic" },
-                    { value: "light", text: "Light Theme" },
-                    { value: "dark", text: "Dark Theme" }
+                    { value: "auto", text: $.t('settings.theme.auto') },
+                    { value: "light", text: $.t('settings.theme.light') },
+                    { value: "dark", text: $.t('settings.theme.dark') }
                 );
                 const settings = div(
                   div({ class: "boxed"},
@@ -674,7 +674,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   themeSelect.create(),
                   this.createCheckbox(
                     "toolbar-checkbox", 
-                    "Show ToolBars", 
+                    $.t('settings.toolBar'),
                     function () {
                         APPLICATION_CONTEXT.setOption('toolBar', this.checked);
                         const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]'); 
@@ -683,8 +683,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('toolBar', true)),
 
                   this.createCheckbox(
-                    "scalebar-checkbox", 
-                    "Show Scale Bar", 
+                    "scalebar-checkbox",
+                      $.t('settings.scaleBar'),
                     function () {
                         APPLICATION_CONTEXT.setOption('scaleBar', this.checked);
                         for (let viewer of viewerManager.viewers) {
@@ -695,7 +695,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                   this.createCheckbox(
                     "statusbar-checkbox",
-                    "Show Status Bar", 
+                    $.t('settings.statusBar'),
                     function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, 
                     APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
@@ -703,7 +703,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
                   this.createCheckbox(
                     "cookies-checkbox", 
-                    "Disable Cookies", 
+                    $.t('settings.cookies'),
                     function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('bypassCookies', false)),
                   ),
@@ -711,12 +711,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   span({ class: "f3-light header-sep" }, "Other", ),
                   this.createCheckbox(
                     "debug-checkbox", 
-                    "Debug Mode", 
+                    $.t('settings.debugMode'),
                     function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('debugMode', false)),
                   this.createCheckbox(
                     "render-checkbox", 
-                    "Debug Rendering", 
+                    $.t('settings.debugRender'),
                     function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('webglDebugMode', false)),
                   ),
@@ -813,7 +813,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (errMessage || plugin.loaded){
                     actionPart = div({ id: `load-plugin-${plugin.id}` },
                                         button({class: "btn btn-disabled" },
-                                            "Loaded"
+                                            $.t('common.Loaded')
                                         )
                                     )
                 } else{
@@ -845,20 +845,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 )
                 return plugin_div;
             },
-        },
-
-        /**
-         *
-         * @namespace USER_INTERFACE.Toolbar
-         */
-        Toolbar:{
-            context: $("#bottom-menu-center"),
-            menu: "",
-            init: function () {
-                this.menu = new UI.Toolbar({
-                    id: "toolbar",})
-                this.menu.attachTo(this.context);
-            }
         },
 
         SlidesMenu: new UI.SlideSwitcherMenu(),
@@ -920,10 +906,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "settings", icon: "fa-gear", title: "Settings", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
-                    { id: "plugins", icon: "fa-puzzle-piece", title: "Plugins", body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
-                    { id: "tutorial", icon: "fa-graduation-cap", title: "Tutorial", body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                    { id: "share", icon: "fa-share-nodes", title: "Share", items: [
+                }, { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
+                    { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
+                    { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+                    { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
                             {
                                 id: "global-export",
                                 domID: true,
@@ -947,7 +933,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                 icon: "fa-link"
                             }
                         ], class: UI.Dropdown},
-                    { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || "Not logged in", body: undefined, styleOverride: true, class: UI.MenuButton}
+                    { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
                 );
 
                 this.menu.attachTo(this.context);
@@ -970,7 +956,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" },
-                }, { id: "view", icon: "fa-window-restore", title: "View", body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
+                }, { id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
                 );
 
                 this.menu.attachTo(this.context);
@@ -1008,14 +994,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
         },
 
-        TopLeftWindowMenu:{
-            context: $("#top-side-left"),
-            menu: "",
-            init: function () {
-
-            }
-        },
-
         /**
          * Application Vertical Menu (right side)
          * @namespace USER_INTERFACE.TopPluginsMenu
@@ -1025,7 +1003,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: "Plugins", body: [], class: UI.Dropdown});
+                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'), body: [], class: UI.Dropdown});
             },
 
             // should add submenus to plugin menu
@@ -1087,8 +1065,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu = new UI.MultiPanelMenu({
                     id: "myMenu",
                 },
-                {id: "navigator", icon: "fa-map", title: "Navigator", body: [slideName.create(), viewer]},
-                {id: "Shaders Menu", icon: "fa-eye", title: "Shaders Menu", body: [this.createShadersMenu()]})
+                {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: [slideName.create(), viewer]},
+                {id: "Shaders Menu", icon: "fa-eye", title: $.t('main.shaders.title'), body: [this.createShadersMenu()]})
 
                 this.menu.set(UI.Menu.DESIGN.TITLEONLY);
                 // todo override background with this color (does not work)
@@ -1139,7 +1117,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     onClick: function () {
                         UTILITIES.copyToClipboard(text.textContent);
                     },
-                    extraProperties: { title: "Copy", style: "width: 30px" },
+                    extraProperties: { title: $.t('main.bar.copy'), style: "width: 30px" },
                 }, new UI.FAIcon({ name: "fa-copy" }),);
 
 
@@ -1148,71 +1126,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                const { div, span, h3 } = van.tags();
-                const titleHtmlIn = div();
-                titleHtmlIn.innerHTML = titleHtml;
-
-                const htmlIn = div();
-                htmlIn.innerHTML = html;
-
-                const hiddenHtmlIn = div();
-                hiddenHtmlIn.innerHTML = hiddenHtml;
-
-
-                let content =
-                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
-                        div(
-                            span({
-                                class: "material-icons inline-arrow plugins-pin btn-pointer",
-                                id: `${id}-pin`,
-                                onclick: function(){
-                                    let toVisible = this.offsetParent.lastChild;
-                                    if (toVisible.classList.contains('force-visible')){
-                                        toVisible.classList.remove('force-visible');
-                                        this.classList.remove('opened');
-                                    } else{
-                                        toVisible.classList.add('force-visible');
-                                        this.classList.add('opened');
-                                    }
-                                },
-                                style: "padding: 0;" },
-                                "navigate_next",
-                            ),
-                            h3({
-                                class: "d-inline-block h3 btn-pointer",
-                                onclick: function(){
-                                    let toVisible = this.previousElementSibling.offsetParent.lastChild;
-                                    if (toVisible.classList.contains('force-visible')){
-                                        toVisible.classList.remove('force-visible');
-                                        this.previousElementSibling.classList.remove('opened');
-                                    } else{
-                                        toVisible.classList.add('force-visible');
-                                        this.previousElementSibling.classList.add('opened');
-                                    }
-                                } },
-                                title,
-                            ),
-                            titleHtmlIn,
-                        ),
-                        div({ class: "inner-panel-visible" },
-                            htmlIn,
-                        ),
-                        div({ class: "inner-panel-hidden" },
-                            hiddenHtmlIn,
-                        ),
-                    )
-                this.menu.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
-
-                if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
-                    this.menu.tabs[id]._setFocus();
-                }
-                else{
-                    this.menu.tabs[id]._removeFocus();
-                }
-
-                if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
-                    this.menu.tabs[id].toggleHiden();
-                }
+                this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
             createShadersMenu: function () {
 //                 const innerHTML = `

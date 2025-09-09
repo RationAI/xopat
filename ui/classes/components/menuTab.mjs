@@ -16,12 +16,13 @@ const { span } = van.tags
  * const tab = new MenuTab({id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"}, menu);
  * todo extend base component!
  */
-class MenuTab {
+class MenuTab extends BaseComponent {
     /**
      * @param {*} item dictionary with id, icon, title, body which will be created
      * @param {*} parent parent menu component
      */
     constructor(item, parent) {
+        super({},);
         this.parent = parent;
         this.style = "ICONTITLE";
         this.styleOverride = item["styleOverride"] || false;
@@ -29,7 +30,7 @@ class MenuTab {
         this.hidden = false;
         this.id = item.id;
 
-        const [headerButton, contentDiv] = this.createTab(item);
+        const [headerButton, contentDiv] = this._createTab(item);
 
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
@@ -40,7 +41,7 @@ class MenuTab {
      * @param {*} item dictionary with id, icon, title, body which will be created
      * @returns {*} Button and Div components from VanJS framework
      */
-    createTab(item) {
+    _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });

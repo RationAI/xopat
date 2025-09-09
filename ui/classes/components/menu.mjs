@@ -7,7 +7,7 @@ import { Button } from "../elements/buttons.mjs";
 import { Dropdown } from "../elements/dropdown.mjs";
 
 const ui = { Join, Div, Button, MenuTab };
-const { div } = van.tags
+const { div, span, h3 } = van.tags()
 
 /**
  * @class Menu
@@ -231,6 +231,65 @@ class Menu extends BaseComponent {
             this.header.setClass("hidden", "hidden");
         } else {
             this.header.setClass("hidden", "");
+        }
+    }
+
+    appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
+        const titleHtmlIn = div();
+        titleHtmlIn.innerHTML = titleHtml;
+
+        const htmlIn = div();
+        htmlIn.innerHTML = html;
+
+        const hiddenHtmlIn = div();
+        hiddenHtmlIn.innerHTML = hiddenHtml;
+
+        let content =
+            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                div({onclick: this.clickHeader},
+                    span({
+                        class: "material-icons inline-arrow plugins-pin btn-pointer",
+                        id: `${id}-pin`,
+                        style: "padding: 0;" },
+                        "navigate_next",
+                    ),
+                    h3({
+                        class: "d-inline-block h3 btn-pointer",},
+                        title,
+                    ),
+                    titleHtmlIn,
+                ),
+                div({ class: "inner-panel-visible" },
+                    htmlIn,
+                ),
+                div({ class: "inner-panel-hidden" },
+                    hiddenHtmlIn,
+                ),
+            );  
+
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+
+        if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
+            this.tabs[id]._setFocus();
+        }
+        else{
+            this.tabs[id]._removeFocus();
+        }
+
+        if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
+            this.tabs[id].toggleHiden();
+        }
+    }
+
+    clickHeader() {
+        const toVisible = this.offsetParent.lastChild;
+        if (toVisible.classList.contains('force-visible')){
+            toVisible.classList.remove('force-visible');
+            this.childNodes[0].classList.remove('opened')
+        } else{
+            toVisible.classList.add('force-visible');
+            this.childNodes[0].classList.add('opened')
+
         }
     }
 

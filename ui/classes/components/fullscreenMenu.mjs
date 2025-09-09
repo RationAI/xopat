@@ -46,7 +46,7 @@ class FullscreenMenu extends BaseComponent{
         this.closeBtn = new Button({
             size: Button.SIZE.TINY,
             type: Button.TYPE.NONE,
-           onClick: () => this.unfocusAll(),
+            onClick: () => this.unfocusAll(),
             extraClasses: {position: "absolute right-2"}
         }, new FAIcon({name: 'fa-close'}));
         for (let i of args) {

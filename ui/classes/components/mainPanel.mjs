@@ -48,38 +48,6 @@ class MainPanel extends Menu {
         this.append(title, titleHtml, html, id, pluginId);
     }
 
-    appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-        const titleHtmlIn = div();
-        titleHtmlIn.innerHTML = titleHtml;
-
-        const htmlIn = div();
-        htmlIn.innerHTML = html;
-
-        const hiddenHtmlIn = div();
-        hiddenHtmlIn.innerHTML = hiddenHtml;
-
-        let content =
-            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
-                div(
-                    span({ class: `material-icons inline-arrow plugins-pin btn-pointer`, id: `${id}-pin`, onclick: `USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parent().parent().children().eq(2));`, style: `padding: 0;` },
-                        `navigate_next`,
-                    ),
-                    h3({ class: `d-inline-block h3 btn-pointer`, onclick: `USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parent().parent().children().eq(2));` },
-                        `${title} `,
-                    ),
-                    `${titleHtmlIn}`,
-                ),
-                div({ class: `inner-panel-visible` },
-                    `${htmlIn}`,
-                ),
-                div({ class: `inner-panel-hidden` },
-                    `${hiddenHtmlIn}`,
-                ),
-            )
-
-        van.add(document.getElementById(this.tabs["base"].contentDiv.id), content);
-    }
-
     replaceExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
         $(`.${pluginId}-plugin-root`).remove();
         this.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
@@ -89,15 +57,6 @@ class MainPanel extends Menu {
         htmlIn.innerHTML = html;
         let content = div({ id: id, class: "inner-panel " + pluginId + "-plugin-root inner-panel-simple" }, htmlIn);
         van.add(document.getElementById(this.tabs["base"].contentDiv.id), content);
-    }
-    clickHeader(jQSelf, jQTargetParent) {
-        if (jQTargetParent.hasClass('force-visible')) {
-            jQTargetParent.removeClass('force-visible');
-            jQSelf.removeClass('opened');
-        } else {
-            jQSelf.addClass('opened');
-            jQTargetParent.addClass('force-visible');
-        }
     }
     open() {
         if (this.opened) return;

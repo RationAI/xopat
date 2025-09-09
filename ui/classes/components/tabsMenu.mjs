@@ -45,7 +45,7 @@ class TabsMenu extends BaseComponent {
             throw new Error("Item for menu needs every property set.");
         }
 
-        const tab = this.createTab(item);
+        const tab = this._createTab(item);
         this.tabs[item.id] = tab;
 
         tab.headerButton.attachTo(this.header);
@@ -58,7 +58,7 @@ class TabsMenu extends BaseComponent {
      * @param {*} item dictionary with id, icon, title, body which will be created
      * @returns {*} Button and Div components from VanJS framework
      */
-    createTab(item) {
+    _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
         let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });        
