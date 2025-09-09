@@ -316,6 +316,13 @@ or an object to specify a file on the web. The object properties (almost) map to
 }
 ```` 
 
+## Dynamic Loading
+As workers and js modules (recommended usage), the viewer does not offer advanced tools for
+loading these scripts dynamically. You need to use **relative** file names and instantiate
+your worker or import a module. Relative paths must begin in the repository root. With plugins and
+modules, the easiest way is to extend appropriate interface and retrieve ``this.PLUGIN_ROOT`` or
+``this.MODULE_ROOT`` respectively, against which you can import local files.
+
 ## Caveats
 The plugins should integrate into exporting/importing events, otherwise the user will have to re-create
 the state on each reload - which might be fatal wrt. user experience. Also, you can set dirty state

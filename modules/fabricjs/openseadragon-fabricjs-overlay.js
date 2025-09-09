@@ -57,6 +57,13 @@
         return data;
     };
 
+    // Fabric Controls rendering was mibehaving when replacing objects
+    const _origDrawControls = fabric.Object.prototype.drawControls;
+    fabric.Object.prototype.drawControls = function(ctx, styleOverride) {
+        if (!this.canvas)  return;
+        return _origDrawControls.call(this, ctx, styleOverride);
+    };
+
     /**
      * Find object under mouse by iterating
      * @param e mouse event

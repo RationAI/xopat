@@ -884,8 +884,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		annotation.internalID = annotation.instaceID || annotation.created;
-		if (!_dangerousSkipHistory) this.history.push(annotation);
-		this.canvas.setActiveObject(annotation);
+        if (!_dangerousSkipHistory) this.history.push(annotation);
+        this.canvas.discardActiveObject();
+        this.canvas.setActiveObject(annotation);
 
 		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 		this.canvas.renderAll();
@@ -986,7 +987,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		const wasSelected = this.canvas.getActiveObject() === annotation;
 		
 		annotation.off('selected');
-		this.canvas.remove(annotation);
+        annotation.off('deselected');
+        this.canvas.remove(annotation);
 		this.history.push(null, annotation);
 		this.canvas.renderAll();
 		
@@ -1107,7 +1109,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 
-		this.canvas.remove(previous);
+        const wasActive = (this.canvas.getActiveObject() === previous);
+        if (wasActive) {
+            this.canvas.discardActiveObject();
+        }
+        this.canvas.remove(previous);
+        previous.off('selected');
+        previous.off('deselected');
+
 		this.canvas.add(next);
 		this.canvas.renderAll();
 
