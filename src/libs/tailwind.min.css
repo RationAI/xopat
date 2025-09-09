@@ -5035,10 +5035,6 @@ details.collapse summary::-webkit-details-marker {
   width: auto;
 }
 
-.w-full {
-  width: 100%;
-}
-
 .max-w-sm {
   max-width: 24rem;
 }
@@ -5086,6 +5082,10 @@ details.collapse summary::-webkit-details-marker {
   -webkit-user-select: all;
      -moz-user-select: all;
           user-select: all;
+}
+
+.resize-none {
+  resize: none;
 }
 
 .resize {
