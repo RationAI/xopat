@@ -166,6 +166,40 @@ Also, for multi-tile fethching see ``src/external/dziexttilesource.js`` Extended
 > the ``TileSource::configure()`` function, where you can parse the URL or metadata to build your own tile
 > urls. Just remember to keep the order of URLs given as ``data`` param to ``data_group_protocol``.
 
+### Extending TiledImage
+
+TiledImage can be extended to add custom functionality. The api supports:
+
+````js
+/**
+ * Set required image lossless format for transfer.
+ * @param {Boolean} value
+ */    
+requireLossless(value) {
+    
+}
+
+/**
+ * Slide Metadata
+ * @typedef {Object} SlideMetadata
+ * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
+ * @property {number} [microns=undefined] - The microns in average.
+ * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.
+ * @property {number} [micronsY=undefined] - The pixel size in Y direction, can be used instead of microns.
+ */
+
+/**
+ * Retrieve slide metadata. Can be arbitrary key-value list, even nested.
+ * Some properties, hovewer, have a special meagning. These are documented in the 
+ * return function.
+ * @return {SlideMetadata|undefined}
+ */
+getMetadata() {
+    return undefined;
+}
+
+TODO... also probably attach them to the prorotype to trigger docs or at least force the docs by using @function and @memberof
+````
 
 # FIXME update docs
  
@@ -201,8 +235,6 @@ It is an one-liner expression evaluated at startup. This can be done in several 
    - **API Extension** ``getMetadata()`` - implement method to access image metadata for each image source in the array independently - 
    this methods can be omitted, but if present the viewer adjusts layer UI with error warning on all layers that use the data for which
    the metadata contains ``error`` key (with a message).
-   - **API Extension** ``setFormat()`` - that gives you an argument of preferred format (string, e.g. `"png"`) parsed from available viewer static and dynamic configuration,
-   you can decide whether to respect the format.
 3. Implement a ``TileSource`` interface that uses the metadata available from stage 2 to fetch multiple tiles.
 Build a request, send query and read all image tiles from the server response. See  [Advanced Data API model documentation](https://openseadragon.github.io/examples/advanced-data-model/).  
    - You must respect the tile order and provide

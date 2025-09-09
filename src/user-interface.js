@@ -685,7 +685,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox(
                     "scalebar-checkbox", 
                     "Show Scale Bar", 
-                    function () {APPLICATION_CONTEXT.setOption('scaleBar', this.checked);$('#viewer-magnification').toggleClass('hidden');  $('#viewer-scale-bar').toggleClass('hidden')}, 
+                    function () {
+                        APPLICATION_CONTEXT.setOption('scaleBar', this.checked);
+                        for (let viewer of viewerManager.viewers) {
+                            viewer.scalebar.setActive(this.checked);
+                        }
+                    },
                     APPLICATION_CONTEXT.getOption('scaleBar', true)),
 
                   this.createCheckbox(
@@ -1680,24 +1685,6 @@ ${label}
                 return false;
             }
         },
-
-        /**
-         * Show demo page with error message
-         * @param enable
-         * @param [explainErrorHtml=undefined]
-         */
-        toggleDemoPage: function (enable, explainErrorHtml = undefined) {
-            const overlay = document.getElementById('viewer-demo-advertising');
-            if (enable) {
-                const explain = document.getElementById('viewer-demo-error-description');
-                explain.innerHTML = explainErrorHtml || $.t('error.defaultDemoHtml');
-                VIEWER.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
-                overlay.style.display = 'block';
-            } else {
-                VIEWER.removeOverlay(overlay);
-                overlay.style.display = 'none';
-            }
-        }
     };
 
     // Make loading show

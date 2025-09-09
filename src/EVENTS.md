@@ -39,7 +39,7 @@ Events have their name (for which you register) and when invoked, a parameter is
 to the handler function that might contain a lot of useful data.
 ### General Events
 
-#### `open` | e: {source: TileSource, reopenCounter: number}
+#### `open` | e: {source: TileSource}
 Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
 It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
 initial load).

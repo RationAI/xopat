@@ -436,7 +436,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @memberOf VIEWER
      * @event warn-user
      */
-    VIEWER.addHandler('warn-user', e => {
+    viewerManager.broadcastHandler('warn-user', e => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
     }, -Infinity);
@@ -453,16 +453,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @memberOf VIEWER
      * @event error-user
      */
-    VIEWER.addHandler('error-user', e => {
+    viewerManager.broadcastHandler('error-user', e => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
-    VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+    viewerManager.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    viewerManager.broadcastHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
-    VIEWER.addHandler('add-item-failed', e => {
+    viewerManager.broadcastHandler('add-item-failed', e => {
         if (notified) return;
         if (e.message && e.message.statusCode) {
             //todo check if the first background
@@ -498,11 +498,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     /**
      * Set current viewer real world measurements. Set undefined values to fallback to pixels.
+     * @param {OpenSeadragon.Viewer} viewer
      * @param microns
      * @param micronsX
      * @param micronsY
      */
-    window.UTILITIES.setImageMeasurements = function (microns, micronsX, micronsY) {
+    window.UTILITIES.setImageMeasurements = function (viewer, microns, micronsX, micronsY) {
         let ppm = microns, ppmX = micronsX, ppmY = micronsY,
             lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
         if (ppmX && ppmY) {
@@ -531,7 +532,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
         }
 
-        VIEWER.makeScalebar({
+        viewer.makeScalebar({
             pixelsPerMeter: ppm,
             pixelsPerMeterX: ppmX,
             pixelsPerMeterY: ppmY,
@@ -548,8 +549,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         });
         // TODO make in destroy???
         if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
-            $('#viewer-magnification').toggleClass('hidden');
-            $('#viewer-scale-bar').toggleClass('hidden');
+            viewer.scalebar.setActive(false);
         }
     };
 
@@ -760,90 +760,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         return updated;
     };
 
-    // window.UTILITIES.setBackgroundAndGoal = function(bgIndex = undefined, goalIndex = undefined) {
-    //
-    //     let updated = false;
-    //     const mode = APPLICATION_CONTEXT.getOption("viewMode");
-    //     if (bgIndex !== undefined) {
-    //         if (mode && !["juxta", "stacked", "single"].includes(mode)) {
-    //             console.error("Invalid view mode!");
-    //             APPLICATION_CONTEXT.setOption("viewMode", "juxta");
-    //         }
-    //         let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-    //         if (typeof activeBackground === "string") {
-    //             // maybe try parsing array?
-    //             activeBackground = [Number.parseInt(activeBackground)];
-    //         } else if (activeBackground && !Array.isArray(activeBackground)) {
-    //             console.error("Invalid argument active background!");
-    //             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", 0);
-    //         }
-    //
-    //         if (bgIndex instanceof Number) {
-    //             bgIndex = [bgIndex];
-    //         }
-    //
-    //         updated = bgIndex.length !== activeBackground.length;
-    //         for (let i in bgIndex) {
-    //             const bgIndexItem = bgIndex[i];
-    //             if (APPLICATION_CONTEXT.config.background.length <= bgIndexItem) {
-    //                 console.error("Invalid background index!");
-    //                 return;
-    //             }
-    //             if (!updated && activeBackground[i] !== bgIndexItem) {
-    //                 updated = true;
-    //             }
-    //         }
-    //
-    //         if (updated) {
-    //             APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
-    //         }
-    //     }
-    //     if (goalIndex !== undefined && APPLICATION_CONTEXT.config.visualizations.length > goalIndex) {
-    //         let activeViz = APPLICATION_CONTEXT.getOption('activeVisualizationIndex', 0, false);
-    //         if (typeof activeBackground === "string") {
-    //             // maybe try parsing array?
-    //             activeBackground = [Number.parseInt(activeBackground)];
-    //         } else if (activeBackground && !Array.isArray(activeBackground)) {
-    //             console.error("Invalid argument active background!");
-    //             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", 0);
-    //         }
-    //
-    //         if (bgIndex instanceof Number) {
-    //             bgIndex = [bgIndex];
-    //         }
-    //
-    //
-    //
-    //         const config = bgIndex === undefined ? VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") :
-    //             APPLICATION_CONTEXT.config.background[bgIndex];
-    //         if (config) {
-    //             config.goalIndex = goalIndex;
-    //         }
-    //         APPLICATION_CONTEXT.setOption("activeVisualizationIndex", goalIndex);
-    //         updated = true;
-    //     }
-    //
-    //     if (updated) {
-    //         APPLICATION_CONTEXT.openViewerWith(
-    //             APPLICATION_CONTEXT.config.data,
-    //             APPLICATION_CONTEXT.config.background,
-    //             APPLICATION_CONTEXT.config.visualizations
-    //         );
-    //     }
-    // };
-
-    //initialization of UI and handling of background image load errors
-    let reopenCounter = -1;
     function handleSyntheticOpenEvent(viewer, successLoadedItemCount) {
-        reopenCounter += 1; //so that immediately the value is set
-
-        const confData = APPLICATION_CONTEXT.config.data,
-            confBackground = APPLICATION_CONTEXT.config.background,
-            world = viewer.world;
-
+        const world = viewer.world;
         if (world.getItemCount() < 1) {
-            $("#global-tissue-visibility").removeClass("d-inline-block");
-            $("#panel-images").html("").css('display', 'none');
             viewer.addTiledImage({
                 tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
                 index: 0,
@@ -851,14 +770,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 success: (event) => {
                     event.item.getConfig = type => undefined;
                     //TODO: USER_INTERFACE.toggleDemoPage(true);
-                    handleSyntheticEventFinishWithValidData(0, 1);
+                    handleSyntheticEventFinishWithValidData(viewer, 0, 1);
                 }
             });
             return;
         }
 
         if (successLoadedItemCount === 0) {
-            USER_INTERFACE.toggleDemoPage(true, $.t('error.invalidDataHtml'));
+            viewer.toggleDemoPage(true, $.t('error.invalidDataHtml'));
         } else {
             // TODO propose fix in OpenSeadragon
             // Fix indexing: OSD has race conditions when we call addTiledImage subsequently with defined indexes
@@ -871,165 +790,24 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 } else {
                     index++;
                 }
-            }
-        }
-
-        if (confBackground.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground")) {
-            let i = 0, selectedImageLayer = 0;
-            let imageOpts = [];
-            let largestWidth = -1,
-                imageNode = $("#image-layer-options");
-            //image-layer-options can be missing --> populate menu only if exists
-            if (imageNode) {
-                for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
-                    const image = confBackground[idx],
-                        worldItem =  world.getItemAt(i),
-                        referencedImage = worldItem?.getConfig("background");
-
-                    if (image == referencedImage) {
-                        //todo not very flexible...
-                        if (image.hasOwnProperty("lossless") && image.lossless) {
-                            worldItem.source.fileFormat = "png";
-                        }
-                        let width = worldItem.getContentSize().x;
-                        if (width > largestWidth) {
-                            largestWidth = width;
-                            selectedImageLayer = i;
-                        }
-                        imageOpts.push(`
-    <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
-    onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
-    <span class="pr-1" style="color: var(--color-text-tertiary)">${$.t('common.Image')}</span>
-    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
-    max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
-                        i++;
-                    } else {
-                        imageOpts.push(`
-    <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
-    <span class="pr-1" style="color: var(--color-text-danger)">${$.t('common.Faulty')}</span>
-    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
-    max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
-                    }
+                // Set lossless if required
+                const conf = item.getConfig("background");
+                if (item.source.hasOwnProperty("requireLossless") && conf?.hasOwnProperty("lossless")) {
+                    item.source.requireLossless(conf.lossless);
                 }
             }
-            imageOpts.push(`<div class="inner-panel-content noselect">
-            <div>
-                 <span id="images-pin" class="material-icons btn-pointer inline-arrow" onclick="USER_INTERFACE.RightSideMenu.clickHeader($(this), $(this).parents().eq(1).children().eq(1));" style="padding: 0;"> navigate_next </span>
-                 <h3 class="d-inline-block btn-pointer" onclick="USER_INTERFACE.RightSideMenu.clickHeader($(this.previousElementSibling), $(this).parents().eq(1).children().eq(1));">Images</h3>
-            </div>
-            <div id="image-layer-options" class="inner-panel-hidden">`);
-            imageOpts = imageOpts.reverse();
-            imageOpts.push("</div></div>");
-            $("#panel-images").html(imageOpts.join("")).css('display', 'block');
-
-            $("#global-tissue-visibility").removeClass("d-inline-block");
-            handleSyntheticEventFinishWithValidData(selectedImageLayer, i);
-            return;
         }
 
-        const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-        if (confBackground.length > 1) {
-            let html = "";
-            for (let idx = 0; idx < confBackground.length; idx++ ) {
-                const image = confBackground[idx],
-                    imagePath = confData[image.dataReference];
-
-                if (APPLICATION_CONTEXT.secure) delete image.protocolPreview;
-
-                const eventArgs = {
-                    server: APPLICATION_CONTEXT.env.client.image_group_server,
-                    usesCustomProtocol: !!image.protocolPreview,
-                    image: imagePath,
-                    imagePreview: null,
-                };
-
-                // todo replace raiseAwaitEvent with native function
-                //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
-                VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {
-                    let blobUrl;
-                    if (!eventArgs.imagePreview) {
-                        const previewUrlmaker = new Function("path,data", "return " +
-                            (image.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
-                        eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
-                    } else if (typeof eventArgs.imagePreview !== "string") {
-                        //treat as blob
-                        blobUrl = eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
-                    }
-
-                    const img = new Image();
-                    img.onload = () => {
-                        let child = img;
-                        if (img.width < img.height) {
-                            child = document.createElement("canvas"),
-                            context = child.getContext("2d");
-                            child.width = img.height;
-                            child.height = img.width;
-                            context.setTransform(0,-1, 1,0, 0, child.width/2);
-                            context.drawImage(img, 0, 0);
-                        }
-                        child.style.width = '180px';
-                        $(`#tissue-preview-item-${idx}`).append(child);
-                        if (blobUrl) URL.revokeObjectURL(blobUrl);
-                    };
-                    img.onerror = img.onabort = () => {
-                        $(`#tissue-preview-item-${idx}`).append('<span class="material-icons" style="color: darkred">warning</span>');
-                        if (blobUrl) URL.revokeObjectURL(blobUrl);
-                    };
-                    img.src = eventArgs.imagePreview;
-                });
-
-                // todo remove set background and goal
-                html += `
-    <div id="tissue-preview-item-${idx}" onclick="UTILITIES.setBackgroundAndGoal(${idx});"
-    class="${activeIndex == idx ? 'selected' : ''} pointer position-relative mx-2 my-2 color-bg-canvas overflow-hidden" 
-    style="width: 180px; height: 90px; border-bottom: 1px solid var(--color-bg-backdrop); border-radius: 21px;">
-    <span class="tissue-label">${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])}</span>
-</div>`;
-            }
-
-            $("#panel-images").html(`<div id="tissue-preview-container">${html}</div>`);
-        } else {
-            $("#panel-images").html("").css('display', 'none');
-        }
-
-        if (confBackground.length > 0) {
-            $("#global-tissue-visibility").css("display", "flex");
-
-            const image = confBackground[activeIndex],
-                worldItem =  world.getItemAt(0),
-                referencedImage = worldItem?.getConfig("background");
-
-            if (image == referencedImage) {
-                //todo not very flexible...
-                if (image.hasOwnProperty("lossless") && image.lossless && worldItem) {
-                    worldItem.source.fileFormat = "png";
-                }
-            } else {
-                console.warn("Background image failed to load.");
-            }
-            handleSyntheticEventFinishWithValidData(0, 1);
-        } else {
-            $("#global-tissue-visibility").removeClass("d-inline-block");
-            let selectedIndex = 0;
-            // try to find at least one valid config to use as a reference in case
-            if (successLoadedItemCount > 0) {
-                for (; selectedIndex < world.getItemCount(); selectedIndex++) {
-                    if (world.getItemAt(selectedIndex).getConfig("visualization")) {
-                        break;
-                    }
-                }
-            }
-
-            handleSyntheticEventFinishWithValidData(selectedIndex, 0);
-        }
+        // todo check args, do we need to search for at least one valid reference image? test stacked mode + X bg overlays
+        handleSyntheticEventFinishWithValidData(viewer, 0, 1);
     }
 
-    function handleSyntheticEventFinishWithValidData(referenceImage, layerPosition) {
+    function handleSyntheticEventFinishWithValidData(viewer, referenceImage, layerPosition) {
         //Todo once rewritten, treat always low level item as the reference layer (index == 0)
 
         //the viewer scales differently-sized layers sich that the biggest rules the visualization
         //this is the largest image layer, or possibly the rendering layers layer
-        const tiledImage = VIEWER.world.getItemAt(referenceImage);
+        const tiledImage = viewer.world.getItemAt(referenceImage);
         const imageData = tiledImage?.getConfig();
 
         const title = $("#tissue-title-header").removeClass('error-container');
@@ -1074,26 +852,30 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
         }
 
-        if (!VIEWER.scalebar) {
-            UTILITIES.setImageMeasurements(imageData?.microns, imageData?.micronsX, imageData?.micronsY);
+        if (!viewer.scalebar) {
+            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
         }
-        VIEWER.scalebar.linkReferenceTileSourceIndex(referenceImage);
+        viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
         const eventOpts = {};
 
         if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
-            let layerWorldItem = VIEWER.world.getItemAt(layerPosition);
+            let layerWorldItem = viewer.world.getItemAt(layerPosition);
             const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
             if (layerWorldItem) {
                 const async = APPLICATION_CONTEXT.getOption("fetchAsync");
                 do {
+                    // todo legacy, remove setFormat support....
                     if (layerWorldItem.source.setFormat) {
                         const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
-                        const lossless = !activeVis.hasOwnProperty("lossless") || activeVis.lossless;
+                        const lossless = activeVis.lossless;
                         const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
                         layerWorldItem.source.setFormat(format);
                     }
-                    layerWorldItem = VIEWER.world.getItemAt(++layerPosition);
+                    if (layerWorldItem.source.requireLossless) {
+                        layerWorldItem.source.requireLossless(activeVis.lossless);
+                    }
+                    layerWorldItem = viewer.world.getItemAt(++layerPosition);
                 } while (layerWorldItem);
 
                 // Init swwitching between goals
@@ -1119,20 +901,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 eventOpts.error = $.t('messages.overlaysDisabled');
             }
         }
-        handleSyntheticEventFinish(eventOpts);
-    }
 
-    let loadTooLongTimeout = null;
-    //fired when all TiledImages are on their respective places
-    function handleSyntheticEventFinish(opts={}) {
-
-        if (reopenCounter === 0) {
+        if (!viewer.__initialized) {
+            viewer.__initialized = true;
             runLoader();
 
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                window.VIEWER.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
-                window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
+                viewer.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
+                viewer.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
             if (window.innerHeight < 630 || window.innerWidth < 900) {
@@ -1143,44 +920,35 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             window.onerror = null;
 
+            // todo remove this feature?
             try {
                 if (window.opener && window.opener.VIEWER) {
-                    VIEWER.tools.link( window.opener.VIEWER);
+                    viewer.tools.link(window.opener.VIEWER);
                 }
             } catch (e) {
                 //pass opener access can throw exception - not available to us
             }
 
-            const firstTimeVisit = APPLICATION_CONTEXT.AppCookies.get("_shadersPin",
-                APPLICATION_CONTEXT.getOption("bypassCookies") ? false : null) === null;
-            if (!USER_INTERFACE.Errors.active && firstTimeVisit) {
-                setTimeout(() => {
-                    USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'),
-                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')})
-                    );
-                }, 2000);
-            }
+            // todo better way of first visit...
+            // const firstTimeVisit = APPLICATION_CONTEXT.AppCookies.get("_shadersPin",
+            //     APPLICATION_CONTEXT.getOption("bypassCookies") ? false : null) === null;
+            // if (!USER_INTERFACE.Errors.active && firstTimeVisit) {
+            //     setTimeout(() => {
+            //         USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'),
+            //             $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')})
+            //         );
+            //     }, 2000);
+            // }
         }
-
-        if (USER_INTERFACE.Errors.active) {
-            $("#viewer-container").addClass("disabled"); //preventive
-        }
-
         //todo INHERITS OpenSeadragon todo comment - check for API changes in open event in future
-        opts.source = VIEWER.world.getItemAt(0)?.source;
-        opts.reopenCounter = reopenCounter;
+        eventOpts.source = viewer.world.getItemAt(0)?.source;
         /**
          * Manual OpenSeadragon open event firing, see OpenSeadragon.Viewer#open
          * It is guaranteed to be called upon app start.
          * @memberOf VIEWER
          * @event open
          */
-        VIEWER.raiseEvent('open', opts);
-        USER_INTERFACE.Loading.show(false);
-        if (loadTooLongTimeout) clearTimeout(loadTooLongTimeout);
-
-        //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
-        APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
+        viewer.raiseEvent('open', eventOpts);
     }
 
     /**
@@ -1228,15 +996,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             /*------------ Initialization of UI -----------------------*/
             /*---------------------------------------------------------*/
 
-
-
-
             /**
              * First loading of the viewer from a clean state.
              * @memberOf VIEWER
              * @event before-first-open
              */
-            await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', {
+            await viewerManager.raiseEventAwaiting('before-first-open', {
                 data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
             }).catch(e =>
                 {
@@ -1307,12 +1072,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (bgSpecWasUnset && vizSpecWasUnset) {
             if (bgs.length > 0) {
                 activeBg = 0;
+                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBg);
             } else if (vis.length > 0) {
                 activeViz = 0;
+                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
             }
         } else {
             if (vizSpecWasUnset && vis.length > 0) {
                 activeViz = 0;
+                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
             }
         }
 
@@ -1382,7 +1150,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 viewer.addTiledImage({
                     tileSource: source.source || source,
                     index,
-                    success: (event) => {
+                    success: event => {
+                        event.item.__targetIndex = index;
                         // Attach contextual config getters for this item
                         if (kind === "background") {
                             const bgIdx = ctx.bgIndexForItem(index);
@@ -1412,8 +1181,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                             },
                             opacity: 0,
                             index,
-                            success: () => resolve(false),
-                            error: () => resolve(false)
+                            success: event => {
+                                event.item.__targetIndex = index;
+                                resolve(false)
+                            },
+                            error: event => {
+                                event.item.__targetIndex = index;
+                                resolve(false)
+                            }
                         });
                     }
                 });
@@ -1560,12 +1335,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             // Open backgrounds first, then viz layers
             let idx = 0;
+            let successOpened = 0;
             for (; idx <= lastBgIdx; idx++) {
-                await openTile(viewer, toOpen[idx], "background", idx, ctx);
+                if (await openTile(viewer, toOpen[idx], "background", idx, ctx) === true) {
+                    successOpened++;
+                }
             }
             for (; idx < toOpen.length; idx++) {
-                await openTile(viewer, toOpen[idx], "visualization", idx, ctx);
+                if (await openTile(viewer, toOpen[idx], "visualization", idx, ctx) === true) {
+                    successOpened++;
+                }
             }
+            handleSyntheticOpenEvent(viewer, successOpened);
         };
 
         // 3) Drive all viewers according to plan
@@ -1577,199 +1358,27 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             8000
         );
 
-        Promise.allSettled(tasks)
-            .then(() => {
-                USER_INTERFACE.SlidesMenu.refresh();
-                // todo open?
-                USER_INTERFACE.SlidesMenu.open();
+        Promise.allSettled(tasks).then(() => {
+            USER_INTERFACE.SlidesMenu.refresh();
+            // todo open?
+            USER_INTERFACE.SlidesMenu.open();
 
-                clearTimeout(loadTooLongTimeout);
-                USER_INTERFACE.Loading.show(false);
-                // select first viewer as active if needed
-                VM.setActive(0);
-            })
-            .catch((e) => {
-                console.error("Open failed:", e);
-                clearTimeout(loadTooLongTimeout);
-                USER_INTERFACE.Loading.show(false);
-            });
+            clearTimeout(loadTooLongTimeout);
+            USER_INTERFACE.Loading.show(false);
+            // select first viewer as active if needed
+            VM.setActive(0);
+        }).catch((e) => {
+            console.error("Open failed:", e);
+            clearTimeout(loadTooLongTimeout);
+            USER_INTERFACE.Loading.show(false);
+        }).then(() => {
+            if (USER_INTERFACE.Errors.active) {
+                $("#viewer-container").addClass("disabled"); //preventive
+            }
+            //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
+            APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
+        });
     }
-
-    // /**
-    //  * Open desired configuration on the current viewer
-    //  * @param data
-    //  * @param background
-    //  * @param visualizations
-    //  * @param bgSpec
-    //  * @param vizSpec
-    //  */
-    // APPLICATION_CONTEXT.openViewerWith = function (
-    //     data = undefined,
-    //     background = undefined,
-    //     visualizations= undefined,
-    //     bgSpec = undefined,
-    //     vizSpec = undefined,
-    // ) {
-    //     USER_INTERFACE.Loading.show(true);
-    //     VIEWER.close();
-    //
-    //     const isSecureMode = APPLICATION_CONTEXT.secure;
-    //     let renderingWithWebGL = visualizations?.length > 0;
-    //     loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-    //
-    //     const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-    //     config.data = data;
-    //     config.background = background;
-    //     config.visualizations = visualizations;
-    //
-    //     const toOpen = [];
-    //     const openedBaseImages = [];
-    //     let activeVis = null;
-    //     let openedSources = 0;
-    //     let successOpenedSources = 0;
-    //     const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
-    //     const selectedIndex = isModeStacked || background.length < 1 ? -1 : APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-    //     const handleFinishOpenImageEvent = success => {
-    //         openedSources--;
-    //         if (success) successOpenedSources++;
-    //         if (openedSources <= 0) handleSyntheticOpenEvent(successOpenedSources);
-    //     };
-    //     let imageOpener = (source, kind, imageIndex, lastBGIndex) => {
-    //         const item = VIEWER.world.getItemAt(imageIndex);
-    //         if (item && item.__origin === source) {
-    //             return;
-    //         }
-    //
-    //         openedSources++;
-    //         console.log("Opening image", source, kind, imageIndex, lastBGIndex);
-    //         window.VIEWER.addTiledImage({
-    //             tileSource: source.source || source, //todo dirty
-    //             index: imageIndex,
-    //             success: (event) => {
-    //                 event.item.__origin = source;
-    //                 event.item.__targetIndex = imageIndex;
-    //
-    //                 if (kind === "background") {
-    //                     let index = isModeStacked ? imageIndex : selectedIndex;
-    //                     event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.background[index] : undefined
-    //                 } else if (kind === "visualization") {
-    //                     event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")] : undefined
-    //                 } else {
-    //                     event.item.getConfig = type => undefined;
-    //                 }
-    //                 handleFinishOpenImageEvent(true);
-    //             },
-    //             error: (e) => {
-    //                 VIEWER.addTiledImage({
-    //                     tileSource: {
-    //                         type: "_blank",
-    //                         error: e.message || $.t('error.slide.pending') + " " + $.t('error.slide.imageLoadFail') + ' ' + source
-    //                     },
-    //                     opacity: 0,
-    //                     index: imageIndex,
-    //                     success: (event) => {
-    //                         event.item.__targetIndex = imageIndex;
-    //                         event.item.getConfig = type => undefined;
-    //                         handleFinishOpenImageEvent(false);
-    //                     },
-    //                     error: (e) => {
-    //                         handleFinishOpenImageEvent(false);
-    //                     }
-    //                 });
-    //             }
-    //         });
-    //     };
-    //     const openAll = (shaders, numOfVisLayersAtTheEnd) => {
-    //         if (toOpen.length < 1) {
-    //             handleFinishOpenImageEvent(false);
-    //             return;
-    //         }
-    //
-    //         let i = 0;
-    //         let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
-    //
-    //         // First, configure external shaders
-    //         const renderOutput = {};
-    //         for (; i <= lastValidBgIndex; i++) {
-    //             const bgRef = openedBaseImages[i];
-    //             renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i], name: bgRef.name || data[bgRef.dataReference] };
-    //         }
-    //         Object.assign(renderOutput, shaders);
-    //         UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
-    //         VIEWER.drawer.overrideConfigureAll(renderOutput);
-    //         console.log("Opening configuration.", renderOutput, "with data", toOpen);
-    //
-    //         // Then, attach to-open images
-    //         i = 0;
-    //         for (; i <= lastValidBgIndex; i++) imageOpener(toOpen[i], "background", i, lastValidBgIndex);
-    //         for (; i < toOpen.length; i++) imageOpener(toOpen[i], "visualization", i, lastValidBgIndex);
-    //     };
-    //
-    //     if (isModeStacked) {
-    //         for (let i = 0; i < background.length; i++) {
-    //             const bg = background[i];
-    //             if (isSecureMode) delete bg.protocol;
-    //             const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-    //             toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
-    //             openedBaseImages.push(bg);
-    //         }
-    //     } else if (selectedIndex >= 0) {
-    //         let selectedImage = background[selectedIndex];
-    //         if (isSecureMode) delete selectedImage.protocol;
-    //         const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-    //         toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
-    //         openedBaseImages.push(selectedImage);
-    //     }
-    //
-    //     if (renderingWithWebGL) {
-    //         try {
-    //             UTILITIES.testRendering();
-    //         } catch (e) {
-    //             console.error(e);
-    //             USER_INTERFACE.Errors.show($.t('error.renderTitle'), `${$.t('error.renderDesc')} <br><code>${e}</code>`, true);
-    //         }
-    //
-    //         //prepare rendering can disable layers
-    //         APPLICATION_CONTEXT.prepareRendering();
-    //         let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
-    //         if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
-    //             // binding background config overrides active visualization, only if not in stacked mode
-    //             const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false)],
-    //                 defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
-    //
-    //             if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
-    //                 activeVisIndex = defaultIndex;
-    //                 APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeVisIndex);
-    //             }
-    //         }
-    //
-    //         activeVis = visualizations[activeVisIndex];
-    //         VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
-    //         const sourcesToOpen = {};
-    //         const lastBgIndex = toOpen.length;
-    //         let counter = toOpen.length;
-    //         for (let shaderId in activeVis.shaders) {
-    //
-    //             const shaderConfig = activeVis.shaders[shaderId];
-    //             shaderConfig.tiledImages = [];
-    //             const sources = shaderConfig.dataReferences.map(rId =>
-    //                 VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]]));
-    //             shaderConfig.name = shaderConfig.name || data[rId] || shaderId;
-    //             for (let dataSource of sources) {
-    //                 // Find unique sources and map them to indexes
-    //                 let index = sourcesToOpen[dataSource];
-    //                 if (index === undefined) {
-    //                     sourcesToOpen[dataSource] = index = counter++;
-    //                     toOpen.push(dataSource);
-    //                 }
-    //                 shaderConfig.tiledImages.push(index);
-    //             }
-    //         }
-    //         openAll(activeVis.shaders, counter - lastBgIndex);
-    //         return;
-    //     }
-    //     openAll({}, 0);
-    // }
 
     initXopatScripts();
     function checkLocalState() {

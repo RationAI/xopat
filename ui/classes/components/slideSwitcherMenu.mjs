@@ -2,36 +2,19 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
 import {Div} from "../elements/div.mjs";
-import {Button} from "../elements/buttons.mjs";
 import {FAIcon} from "../elements/fa-icon.mjs";
 import {FloatingWindow} from "./floatingWindow.mjs";
 
-const { div, input, label, img, span } = van.tags;
+const { div, input, label, img, span, button } = van.tags;
 
 /**
- * SlideSwitcher (embedded in its own FloatingWindow)
- *
- * Options:
- *  - id?: string                    // window id; default "slide-switcher"
- *  - title?: string                 // window + toolbar title; default "Slide Switcher"
- *  - width?: number                 // default 520
- *  - height?: number                // default 460
- *  - startLeft?: number             // persisted by FloatingWindow
- *  - startTop?: number
- *
- *  - data?: string[]                // optional; else APPLICATION_CONTEXT.getOption("data")
- *  - background?: Array<{...}>      // optional; else APPLICATION_CONTEXT.getOption("background")
- *  - maxThumbsHeight?: number       // inner list max height (px); default auto (adapts to window)
- *
- * Public helpers:
- *  - open(): void                   // attach window to document.body (or focus if already)
- *  - close(): void
- *  - refresh(): void                // re-reads data/background from APPLICATION_CONTEXT
+ * SlideSwitcherMenu (compact, instant selection; embedded FloatingWindow)
  */
 export class SlideSwitcherMenu extends BaseComponent {
     constructor(options = {}) {
         super(options);
         this._needsRefresh = true;
+        this._suspendUpdates = false; // used to batch "Clear all"
     }
 
     // ---------- public ----------
@@ -46,25 +29,16 @@ export class SlideSwitcherMenu extends BaseComponent {
             this.t = this.options.startTop ?? 80;
 
             // State
-            this.stacked = !!APPLICATION_CONTEXT.getOption?.("stackedBackground");
-            this.selected = new Set();
+            this.stacked = !!APPLICATION_CONTEXT.getOption("stackedBackground");
+            const pre = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+            const selection = (Array.isArray(pre) ? pre : (pre ? [pre] : [0])).map(Number.parseInt);
+            this.selected = new Set(selection);
 
             // UI refs
             this._listEl = null;
             this._toolbarEl = null;
 
-            // Controls
-            this._btnOpen = new Button({
-                extraClasses: { btn: "btn btn-primary btn-sm" },
-                onClick: () => this._applySelection("replace"),
-            }, span({}, "Open Selected"));
-
-            this._btnAdd = new Button({
-                extraClasses: { btn: "btn btn-ghost btn-sm" },
-                onClick: () => this._applySelection("add"),
-            }, span({}, "Add Selected"));
-
-            // Floating window host (we’ll pass our content as child)
+            // Floating window host
             this._fw = new FloatingWindow({
                 id: this.windowId,
                 title: this.title,
@@ -76,7 +50,7 @@ export class SlideSwitcherMenu extends BaseComponent {
                 onClose: () => this.options.onClose?.(),
                 onPopout: (w) => this.options.onPopout?.(w),
             }, new Div({
-                    extraClasses: {body: "card-body p-2 gap-2 flex-1 min-h-0 overflow-hidden"}
+                    extraClasses: { body: "card-body p-1 gap-1 flex-1 min-h-0 overflow-hidden" }
                 },
                 (this._toolbarEl = this._renderToolbar()),
                 (this._listEl = this._renderList([])),
@@ -88,32 +62,25 @@ export class SlideSwitcherMenu extends BaseComponent {
         } else {
             this._fw.focus();
         }
-        if (this._needsRefresh) {
-            this.refresh();
-        }
+        if (this._needsRefresh) this.refresh();
     }
 
-    close() {
-        this._fw.close();
-    }
-
-    opened() {
-        return this._fw && this._fw.opened();
-    }
+    close() { this._fw.close(); }
+    opened() { return this._fw && this._fw.opened(); }
 
     refresh() {
-        if (!this.opened()) {
-            this._needsRefresh = true;
-            return;
-        }
+        if (!this.opened()) { this._needsRefresh = true; return; }
 
         // Data sources
         this.data = this.options.data ?? APPLICATION_CONTEXT.config.data ?? [];
         this.background = this.options.background ?? APPLICATION_CONTEXT.config.background ?? [];
+
+        // Re-render list
         const parent = this._listEl.parentNode;
         const newList = this._renderList(this.background);
         parent.replaceChild(newList, this._listEl);
         this._listEl = newList;
+        this._needsRefresh = false;
     }
 
     // ---------- internals ----------
@@ -125,7 +92,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         const path = this.data?.[bg.dataReference] ?? "";
         if (bg?.name) return bg.name;
         try {
-            return (globalThis.UTILITIES?.fileNameFromPath?.(path)) ?? (path.split(/[\\/]/).pop() || "(unnamed)");
+            return (globalThis.UTILITIES.fileNameFromPath(path)) ?? (path.split(/[\\/]/).pop() || "(unnamed)");
         } catch {
             return path.split(/[\\/]/).pop() || "(unnamed)";
         }
@@ -140,82 +107,122 @@ export class SlideSwitcherMenu extends BaseComponent {
             undefined,
             { deriveOverlayFromBackgroundGoals: true },
         );
-        // remember last opened set for better "Add Selected"
-        this.options.onOpen?.(Array.isArray(bgIndices) ? bgIndices : [bgIndices]);
-        APPLICATION_CONTEXT.setOption("activeBackgroundIndex", Array.isArray(bgIndices) ? bgIndices : [bgIndices]);
+        APPLICATION_CONTEXT.setOption?.("activeBackgroundIndex", Array.isArray(bgIndices) ? bgIndices : [bgIndices]);
     }
 
-    _applySelection(mode /* replace | add */) {
+    _openCurrentSelection() {
+        // Called after any change; if empty, still trigger one update with [] so the app can clear.
         const chosen = Array.from(this.selected).sort((a,b)=>a-b);
-        if (!chosen.length) return;
-
-        if (mode === "replace") {
-            this._openWith(chosen);
-            return;
-        }
-
-        const existing = APPLICATION_CONTEXT.getOption("activeBackgroundIndex");
-        const merged = Array.isArray(existing)
-            ? Array.from(new Set([...existing, ...chosen])).sort((a,b)=>a-b)
-            : chosen;
-
-        this._openWith(merged);
+        this._openWith(chosen);
     }
 
-    _onCardClick(idx) { this._openWith([idx]); }
+    _onCardClick(idx) {
+        // Single-open: replace selection with just this idx, update once
+        this._suspendUpdates = true;
+        // Uncheck all checkboxes visually
+        this.selected.clear();
+        const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
+        checks.forEach(ch => { ch.checked = false; });
+        // select the clicked one
+        this.selected.add(idx);
+        const box = document.getElementById(`${this.windowId}-chk-${idx}`);
+        if (box) box.checked = true;
+        this._toggleCardRing(idx, true);
+        // remove rings from others
+        checks.forEach(ch => {
+            const i = Number(ch.getAttribute("data-idx"));
+            if (i !== idx) this._toggleCardRing(i, false);
+        });
+        this._suspendUpdates = false;
+        this._openCurrentSelection();
+    }
 
     _onCheck(idx, checked) {
         if (checked) this.selected.add(idx);
         else this.selected.delete(idx);
+        this._toggleCardRing(idx, checked);
+        if (!this._suspendUpdates) this._openCurrentSelection();
     }
+
+    _toggleCardRing(idx, on) {
+        const card = document.getElementById(`${this.windowId}-card-${idx}`);
+        if (!card) return;
+        card.classList.toggle("ring", !!on);
+        card.classList.toggle("ring-primary", !!on);
+        card.classList.toggle("ring-offset-1", !!on);
+    }
+
+    _clearAll = () => {
+        if (!this.selected.size) return;
+        this._suspendUpdates = true;
+        this.selected.clear();
+        const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
+        checks.forEach(ch => { ch.checked = false; });
+        // remove all rings
+        const cards = document.querySelectorAll(`#${this.windowId}-list .slide-card`);
+        cards.forEach(c => c.classList.remove("ring","ring-primary","ring-offset-1"));
+        this._suspendUpdates = false;
+        // Single update
+        this._openCurrentSelection();
+    };
 
     _renderToolbar() {
         const toggleId = `${this.windowId}-stacked`;
         return div({ class: "flex items-center justify-between gap-2 px-2 py-1 border border-base-300 bg-base-100" },
-            div({ class: "flex items-center gap-2" },
+            // left: tiny title
+            div({ class: "flex items-center gap-2 text-sm" },
                 new FAIcon({ name: "fa-images" }).create(),
                 span({ class: "font-semibold" }, this.title),
             ),
-            div({ class: "flex items-center gap-3" },
+            // right: stacked toggle + clear
+            div({ class: "flex items-center gap-2" },
                 div({ class: "form-control" },
-                    label({ for: toggleId, class: "label cursor-pointer gap-2" },
-                        span({ class: "label-text text-sm" }, "Stacked view"),
+                    label({ for: toggleId, class: "label cursor-pointer gap-2 py-0" },
+                        span({ class: "label-text text-xs" }, "Stacked"),
                         input({
                             id: toggleId, type: "checkbox",
-                            class: "toggle toggle-sm",
+                            class: "toggle toggle-xs",
                             checked: this.stacked,
                             onchange: (e) => {
                                 this.stacked = !!e.target.checked;
                                 APPLICATION_CONTEXT.setOption?.("stackedBackground", this.stacked);
-                                if (this.selected.size) this._applySelection("replace");
+                                // Re-open with current selection immediately so mode applies
+                                this._openCurrentSelection();
                             }
                         })
                     )
                 ),
-                this._btnAdd.create(),
-                this._btnOpen.create(),
+                button({
+                    class: "btn btn-ghost btn-xs",
+                    title: "Clear all selections",
+                    onclick: this._clearAll
+                }, "Clear")
             )
         );
     }
 
     _renderSlideCard(idx, bg) {
         const viewable = this._isViewable(bg);
-        const disabled = !viewable;
-        const classes = "card bg-base-200 border border-base-300 hover:border-primary transition " +
-            (disabled ? "opacity-50 pointer-events-none " : "cursor-pointer ");
+        if (!viewable) return null;
 
         const name = this._displayName(bg);
         const checkboxId = `${this.windowId}-chk-${idx}`;
         const checked = this.selected.has(idx);
 
-        const thumb = img({
+        const imageEl = img({
             id: `${this.windowId}-thumb-${idx}`,
-            class: "w-full h-24 object-center bg-base-300 object-contain",
+            // absolute so the translate is deterministic; rotate into a horizontal row
+            class: "block h-auto w-full rotate-90 select-none shrink-0 w-full",
             alt: name,
-            onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
             draggable: "false",
+            onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
         });
+        const thumbWrap = div({ class: "relative h-20 overflow-hidden" },
+            div({ class: "absolute left-1 top-1 z-10  px-2 py-1 text-xs font-medium truncate" }, name),
+            imageEl
+        );
 
+        // request preview url (kept from your current logic)
         const imagePath = this.data[bg.dataReference];
         const eventArgs = {
             server: APPLICATION_CONTEXT.env.client.image_group_server,
@@ -224,7 +231,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             imagePreview: null,
         };
 
-        // todo better reference - global event relay?
+        //todo correct VIEWER ref
         VIEWER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
             let blobUrl;
             if (!eventArgs.imagePreview) {
@@ -232,67 +239,50 @@ export class SlideSwitcherMenu extends BaseComponent {
                     (bg.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
                 eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
             } else if (typeof eventArgs.imagePreview !== "string") {
-                //treat as blob
                 blobUrl = eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
             }
-
-            // const img = new Image();
-            // img.onload = () => {
-            //     let child = img;
-            //     if (img.width < img.height) {
-            //         child = document.createElement("canvas");
-            //         const context = child.getContext("2d");
-            //         child.width = img.height;
-            //         child.height = img.width;
-            //         context.setTransform(0,-1, 1,0, 0, child.width/2);
-            //         context.drawImage(img, 0, 0);
-            //     }
-            //     child.style.width = '180px';
-            //     $(`#tissue-preview-item-${idx}`).append(child);
-            //     if (blobUrl) URL.revokeObjectURL(blobUrl);
-            // };
-            // img.onerror = img.onabort = () => {
-            //     $(`#tissue-preview-item-${idx}`).append('<span class="material-icons" style="color: darkred">warning</span>');
-            //     if (blobUrl) URL.revokeObjectURL(blobUrl);
-            // };
-            thumb.src = eventArgs.imagePreview;
+            imageEl.src = eventArgs.imagePreview;
+            // (optional) revoke later if you attach onload; safe to omit here
         });
 
-        const header = div({ class: "card-title text-sm px-3 pt-2 select-none truncate" }, name);
-
-        const body = div({ class: "card-body p-2 gap-2" },
-            div({ class: "flex items-center gap-2" },
-                input({
-                    id: checkboxId, type: "checkbox",
-                    class: "checkbox checkbox-sm",
-                    checked,
-                    onchange: (e) => this._onCheck(idx, e.target.checked),
-                    onclick: (e) => e.stopPropagation(),
-                }),
-                label({ for: checkboxId, class: "label-text text-xs truncate" }, "Select"),
-            ),
+        return div({
+                id: `${this.windowId}-card-${idx}`,
+                class: "slide-card bg-base-200 border border-base-300 transition " +
+                    (checked ? "ring ring-primary ring-offset-1 " : "") +
+                    "cursor-pointer flex flex-row",
+                onclick: () => this._onCardClick(idx),
+            },
+            div({
+                class: "relative bg-base-300 w-10",
+                style: "width: 80px"
+            }, input({
+                id: checkboxId,
+                "data-idx": idx,
+                type: "checkbox",
+                class: "absolute left-1 top-1 z-10 checkbox checkbox-xs",
+                checked: checked,
+                onclick: (e) => e.stopPropagation(),
+                onchange: (e) => this._onCheck(idx, e.target.checked),
+                title: "Add/remove from view"
+            })),
+            thumbWrap
         );
-
-        return div({ class: classes, onclick: () => this._onCardClick(idx) }, thumb, header, body);
     }
 
     _renderList(backgroundList) {
         const items = [];
         for (let i = 0; i < backgroundList.length; i++) {
-            const bg = backgroundList[i];
-            if (!this._isViewable(bg)) continue;
-            items.push(this._renderSlideCard(i, bg));
+            const card = this._renderSlideCard(i, backgroundList[i]);
+            if (card) items.push(card);
         }
 
-        // Adaptive height: fill remaining space of the window content
         return div({
-            class: "p-2 grid gap-2 overflow-auto flex-1 min-h-0",
-            style: "grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));",
+            id: `${this.windowId}-list`,
+            class: "p-1 grid gap-1 overflow-auto flex-1 min-h-0",
+            style: "grid-template-columns: repeat(auto-fill, minmax(240px, 90px));",
         }, ...items);
     }
 
-    // BaseComponent contract — when someone calls create(), we return the FloatingWindow’s element.
-    create() {
-        return this._fw.create();
-    }
+    // BaseComponent contract
+    create() { return this._fw.create(); }
 }

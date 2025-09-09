@@ -1221,11 +1221,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
 
     // 2) Manager that tracks the active viewer
-    window.ViewerManager = class {
+    window.ViewerManager = class extends OpenSeadragon.EventSource {
         constructor(ENV, CONFIG) {
+            super();
             this.ENV = ENV;
             this.CONFIG = CONFIG;
             this.viewers = [];
+            this.broadcastEvents = {};
             this.active = null;
 
             // layout container
@@ -1372,6 +1374,102 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
                 maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
             });
+            
+            for (let event in this.broadcastEvents) {
+                const eventList = this.broadcastEvents[event];
+                for (let handler in eventList) {
+                    viewer.addHandler(event, handler, ...eventList[handler]);
+                }
+            }
+
+            // todo move the initialization elsewhere... or restructure code a bit
+            viewer.addHandler('open', () => {
+                const DELAY = 90;
+                let last = 0;
+                new OpenSeadragon.MouseTracker({
+                    userData: 'pixelTracker',
+                    element: "viewer-container",
+                    moveHandler: function (e) {
+                        // if we are the main active viewer
+                        if (VIEWER === viewer) {
+                            const now = Date.now();
+                            if (now - last < DELAY) return;
+                            last = now;
+                            const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
+                            if (!image) return;
+                            const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+                            const position = image.windowToImageCoordinates(screen);
+
+                            let result = [`${Math.round(position.x)}, ${Math.round(position.y)} px`];
+                            //bit hacky, will improve once we refactor openseadragon rendering
+                            const hasBg = APPLICATION_CONTEXT.config.background.length > 0;
+                            let tidx = 0;
+
+                            const viewport = VIEWER.viewport.windowToViewportCoordinates(screen);
+                            if (hasBg) {
+                                const pixel = getPixelData(screen, viewport, tidx);
+                                if (pixel) {
+                                    result.push(`tissue: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
+                                } else {
+                                    result.push(`tissue: -`)
+                                }
+                                tidx++;
+                            }
+
+                            // TODO return overlay
+                            // if (vis) {
+                            //     const pixel = getPixelData(screen, viewport, tidx);
+                            //     if (pixel) {
+                            //         result.push(`overlay: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
+                            //     } else {
+                            //         result.push(`overlay: -`)
+                            //     }
+                            // }
+                            USER_INTERFACE.Status.show(result.join("<br>"));
+                        }
+                    }
+                });
+
+                /**
+                 * @param screen
+                 * @param viewportPosition
+                 * @param {number|OpenSeadragon.TiledImage} tiledImage
+                 */
+                function getPixelData(screen, viewportPosition, tiledImage) {
+                    function changeTile() {
+                        let tiles = tiledImage.lastDrawn;
+                        //todo verify tiles order, need to ensure we prioritize higher resolution!!!
+                        for (let i = 0; i < tiles.length; i++) {
+                            if (tiles[i].bounds.containsPoint(viewportPosition)) {
+                                return tiles[i];
+                            }
+                        }
+                        return undefined;
+                    }
+
+                    if (Number.isInteger(tiledImage)) {
+                        tiledImage = VIEWER.world.getItemAt(tiledImage);
+                        if (!tiledImage) {
+                            //some error since we are missing the tiled image
+                            return undefined;
+                        }
+                    }
+                    let tile;
+                    tile = changeTile();
+                    if (!tile) return undefined;
+
+                    // get position on a current tile
+                    let x = screen.x - tile.position.x;
+                    let y = screen.y - tile.position.y;
+
+                    //todo: reads canvas context out of the result, not the original data
+                    let canvasCtx = tile.getCanvasContext();
+                    let relative_x = Math.round((x / tile.size.x) * canvasCtx.canvas.width);
+                    let relative_y = Math.round((y / tile.size.y) * canvasCtx.canvas.height);
+                    return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
+                }
+            });
+            
             viewer.gestureSettingsMouse.clickToZoom = false;
             new OpenSeadragon.Tools(viewer);
 
@@ -1381,8 +1479,54 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 return viewer.drawer.renderer.urlMaker;
             };
 
+            /**
+             * Show demo page with error message
+             * todo move to utils
+             * @param enable
+             * @param [explainErrorHtml=undefined]
+             */
+            viewer.toggleDemoPage = (enable, explainErrorHtml = undefined) => {
+                const overlay = document.getElementById('viewer-demo-advertising');
+                if (enable) {
+                    const explain = document.getElementById('viewer-demo-error-description');
+                    explain.innerHTML = explainErrorHtml || $.t('error.defaultDemoHtml');
+                    this.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
+                    overlay.style.display = 'block';
+                } else {
+                    this.removeOverlay(overlay);
+                    overlay.style.display = 'none';
+                }
+            };
+
             this.viewers[index] = viewer;
             this._wire(viewer);
+        }
+
+        /**
+         * Add an event handler for a given event.
+         * @function
+         * Registers event for each viewer
+         */
+        broadcastHandler(eventName, handler, ...args) {
+            let eventList = this.broadcastEvents[eventName];
+            if (!eventList) {
+                eventList = {};
+                this.broadcastEvents[eventName] = eventList;
+            }
+            eventList[handler] = args;
+            for (let v of this.viewers) {
+                v.addHandler(eventName, handler, ...args);
+            }
+        }
+        
+        cancelBroadcast(eventName, handler) {
+            let eventList = this.broadcastEvents[eventName];
+            if (eventList) {
+                delete eventList[handler];
+            }
+            for (let v of this.viewers) {
+                v.removeHandler(eventName, handler);
+            }
         }
 
         delete(index) {

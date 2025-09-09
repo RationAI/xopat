@@ -34,9 +34,6 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
     getMetadata() {
         return {error: 'No data available. The layer is empty.'};
     }
-    setFormat(format) {
-        this.fileFormat = format;
-    }
     setColor(color) {
         this.color = color;
     }

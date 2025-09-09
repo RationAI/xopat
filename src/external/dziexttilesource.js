@@ -210,6 +210,7 @@ $.ExtendedDziTileSource = class extends $.TileSource {
         return this.ImageArray[index];
     }
 
+    // todo legacy remove support...
     setFormat(format) {
         this.fileFormat = format;
 

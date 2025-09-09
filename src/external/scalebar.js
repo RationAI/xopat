@@ -167,7 +167,7 @@
             if (this.__cachedZoom !== zoom) {
                 this.__cachedZoom = zoom;
 
-                let tiledImage = this.getReferencedTiledImage() || this.viewer.world.getItemAt(0);
+                let tiledImage = this.viewer.world.getItemAt(0);
                 //todo proprietary func from before OSD 2.0, remove? search API
                 this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
             }
@@ -200,19 +200,20 @@
 
         _init: function (options) {
             if (!options.destroy) {
+                this.id = options.viewer + "-scale-bar";
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
                     this.scalebarContainer.style.position = "relative";
                     this.scalebarContainer.style.margin = "0";
                     this.scalebarContainer.style.pointerEvents = "none";
-                    this.scalebarContainer.id = "viewer-scale-bar";
+                    this.scalebarContainer.id = this.id;
                 }
                 this.viewer.container.appendChild(this.scalebarContainer);
 
                 if (!this.magnificationContainer) {
                     this.magnificationContainer = document.createElement("div");
-                    this.magnificationContainer.id = "viewer-magnification";
+                    this.magnificationContainer.id = this.id + "-magnification";
                     // this.magnificationContainer.style.display = "none";
 
                     if (this.magnification > 0) {
@@ -253,7 +254,7 @@
                         values.reverse();
 
                         const updateZoom = (mag) => {
-                            const image = this.getReferencedTiledImage();
+                            const image = this.viewer.world.getItemAt(0);
                             if (!image) {
                                 throw "Linked referenced image does not exist!";
                             }
@@ -266,7 +267,7 @@
                         };
 
                         const reflectUpdate = (e) => {
-                            const image = this.getReferencedTiledImage();
+                            const image = this.viewer.world.getItemAt(0);
                             if (!image) {
                                 console.error("Linked referenced image does not exist!");
                             }
@@ -365,10 +366,22 @@
             } else {
                 this._active = false;
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
-                let container = document.getElementById("viewer-scale-bar");
+                let container = document.getElementById(this.id);
                 if (container) container.remove();
-                container = document.getElementById("viewer-scale-bar");
-                if (container) container.remove();
+            }
+        },
+
+        setActive: function(active) {
+            if (this._active == active) return;
+            this._active = active;
+            if (active) {
+                this.magnificationContainer.style.visibility = "visible";
+                this.container.style.visibility = "visible";
+                this.viewer.addHandler("update-viewport", this.refreshHandler);
+            } else {
+                this.magnificationContainer.style.visibility = "hidden";
+                this.container.style.visibility = "hidden";
+                this.viewer.removeHandler("update-viewport", this.refreshHandler);
             }
         },
 
