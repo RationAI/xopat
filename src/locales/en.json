@@ -35,10 +35,12 @@
         "clone": "Clone the viewer and synchronize"
       },
       "navigator": {
+        "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
         "faultyViz": "Invalid Data"
       },
       "shaders": {
+        "title": "Shaders Menu",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",
@@ -58,6 +60,10 @@
         }
       },
       "bar": {
+        "pinFullscreen": "Pin to Fullscreen Menu",
+        "copy": "Copy",
+        "view": "View",
+        "share": "Share",
         "exportUrl": "URL",
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
@@ -143,6 +149,7 @@
     },
     "settings": {
       "theme": {
+        "title": "Theme",
         "auto": "Automatic",
         "light": "Light Theme",
         "dark": "Dark Theme",
@@ -163,6 +170,7 @@
     },
     "common": {
       "Load": "Load",
+      "Loaded": "Loaded",
       "Loading": "Loading",
       "Exit": "Exit",
       "Failed": "Failed",

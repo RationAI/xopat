@@ -57,7 +57,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: "Pin to fullscreen mode", style: "position: absolute; top: 0px;"},
+            extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 this.togglePinned();
                 if (pinIcon.classMap["name"] === "fa-thumbtack") {
