@@ -24,6 +24,7 @@ class AnnotationsGUI extends XOpatPlugin {
 	 * 	},
 	 * 	content: string,
 	 * 	createdAt: Date,
+	 *  replyTo?: string,
 	 * 	removed?: boolean,
 	 * }} AnnotationComment
 	 */
@@ -191,16 +192,15 @@ class AnnotationsGUI extends XOpatPlugin {
 				
 				<div class="pt-3" id="comments-input-section" style="border-top: 1px solid var(--color-border-secondary);">
 					<div class="flex gap-2">
-						<input 
+						<textarea 
 							type="text" 
 							placeholder="Add a comment..." 
-							class="flex-1 px-3 py-2 text-sm border rounded-md focus:outline-none"
-							style="border-color: var(--color-border-secondary); background: var(--color-bg-primary); color: var(--color-text-primary);"
+							class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
 							id="comment-input"
+							rows="2"
 							onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
-							onfocus="this.style.borderColor = 'var(--color-border-info)'"
-							onblur="this.style.borderColor = 'var(--color-border-secondary)'"
-						>
+						></textarea>
 						<button 
 							class="px-3 py-2 btn btn-pointer material-icons"
 							style="font-size: 22px;"
@@ -393,7 +393,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		
 		const commentsList = document.getElementById('comments-list');
 		if (commentsList) {
-			commentsList.scrollTop = 0;
+			commentsList.scrollTop = commentsList.scrollHeight;
 		}
 	}
 
@@ -551,50 +551,94 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			console.warn('annotationsGUI: comments list element not found');
 			return;
 		}
-		let visibleComments = [];
-		let noComments = false;
-
 		this._clearComments();
-
-		if (!comments || comments.length === 0) noComments = true;
-		else {
-			visibleComments = comments
-				.filter(comment => !comment.removed)
-				.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-			if (visibleComments.length === 0) noComments = true;
-		}
-
-		if (noComments) {
+		if (!comments || comments.filter(c => !c.removed).length === 0) {
 			const noCommentsElement = document.createElement('div');
-			noCommentsElement.id = 'comments-list-empty'
+			noCommentsElement.id = 'comments-list-empty';
 			noCommentsElement.className = 'rounded-md flex items-center justify-center py-8 px-4 gap-2 select-none';
 			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
-			
 			noCommentsElement.innerHTML = `
 				<span class="material-icons text-4xl" style="color: var(--color-text-tertiary);">chat_bubble_outline</span>
 				<p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
 			`;
-			
 			commentsList.appendChild(noCommentsElement);
 			return;
 		}
 
-		visibleComments.forEach(comment => {
-			this._renderSingleComment(comment);
+		const roots = [];
+		const replies = [];
+		comments.forEach(comment => {
+			if (!comment.replyTo) {
+				roots.push(comment);
+			} else if (!comment.removed) {
+				replies.push(comment);
+			}
+		});
+		roots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+		replies.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+		
+		const rootMap = new Map(roots.filter(c => !c.removed).map(c => [c.id, c]));
+		const renderedRemoved = new Set();
+		// render comments and replies
+		roots.forEach(root => {
+			const rootReplies = replies.filter(r => r.replyTo === root.id)
+			if (root.removed && rootReplies.length) {
+				this._renderSingleComment(root, null, true);
+			} else if (!root.removed) {
+				this._renderSingleComment(root);
+			}
+			rootReplies
+				.forEach(reply => {
+					this._renderSingleComment(reply, root.id);
+				});
+		});
+
+		// render orphan replies (sorted)
+		const orphanGroups = {};
+		replies.filter(r => !rootMap.has(r.replyTo)).forEach(orphan => {
+			if (!orphanGroups[orphan.replyTo]) orphanGroups[orphan.replyTo] = [];
+			orphanGroups[orphan.replyTo].push(orphan);
+		});
+		Object.keys(orphanGroups).forEach(parentId => {
+			const alreadyRendered = roots.some(root => root.id === parentId && root.removed);
+			if (!renderedRemoved.has(parentId) && !alreadyRendered) {
+				this._renderSingleComment({ id: parentId, removed: true }, null, true);
+				renderedRemoved.add(parentId);
+				orphanGroups[parentId]
+					.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+					.forEach(orphan => {
+						this._renderSingleComment(orphan, parentId);
+					});
+			}
 		});
 	}
 
 	/**
 	 * Render a single comment element
 	 * @param {AnnotationComment[]} comment - Comment object to render
+	 * @param {string | null} [parentId=null] - ID of comment's parent or null
+	 * @param {boolean} [isRemovedPlaceholder=false] - If this comment is a [deleted] placeholder
 	 */
-	_renderSingleComment(comment) {
+	_renderSingleComment(comment, parentId = null, isRemovedPlaceholder = false) {
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
 
 		const noCommentsElement = document.getElementById("comments-list-empty");
 		if (noCommentsElement) noCommentsElement.remove();
+
+		// placeholder
+		if (isRemovedPlaceholder) {
+			const removedEl = document.createElement('div');
+			removedEl.className = 'rounded-lg p-3 border-l-4';
+			removedEl.style.background = 'var(--color-bg-canvas-inset)';
+			removedEl.style.borderLeftColor = '#888';
+			removedEl.style.color = '#888';
+			removedEl.style.fontStyle = 'italic';
+			removedEl.textContent = '[removed]';
+			removedEl.dataset.commentId = comment.id;
+			commentsList.appendChild(removedEl);
+			return;
+		}
 
 		const commentElement = document.createElement('div');
 		commentElement.className = 'rounded-lg p-3 border-l-4';
@@ -602,25 +646,39 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		commentElement.style.borderLeftColor = this.getColorForUser(comment.author.name);
 		commentElement.dataset.commentId = comment.id;
 
+		if (comment.replyTo) {
+			commentElement.style.marginLeft = '2em';
+		}
+
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
 		const user = XOpatUser.instance();
 		const isAuthor = user.id === comment.author.id;
 		const deleteButtonHtml = isAuthor ? 
-			`<button class="relative px-2 py-1" title="Delete comment" data-confirmed="false">
+			`<button class="relative" title="Delete comment" data-confirmed="false">
 				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
-				<div class="show-hint hidden right-[40px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+				<div class="show-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
 					<span>Click again to delete</span>
 				</div>
 			</button>` : '';
+
+		let replyButtonHtml = '';
+		if (!comment.replyTo) {
+			replyButtonHtml = `
+				<button class="relative" title="Reply to comment" data-reply="${comment.id}">
+					<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);">reply</span>
+				</button>
+			`;
+		}
 
 		commentElement.innerHTML = `
 			<div class="flex justify-between items-center mb-1">
 				<span class="font-medium text-sm" style="color: var(--color-text-primary);">${this._escapeHtml(comment.author.name)}</span>
 				<div class="flex items-center justify-center">
-					<span name="created-at" class="text-xs" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
+					<span name="created-at" class="text-xs mr-2" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
 					${deleteButtonHtml}
+					${replyButtonHtml}
 				</div>
 			</div>
 			<p class="text-sm" style="color: var(--color-text-secondary);">${this._escapeHtml(comment.content)}</p>
@@ -642,7 +700,85 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 				event.currentTarget.querySelector('.show-hint').classList.add('hidden');
 			});
 		}
-		commentsList.insertBefore(commentElement, commentsList.firstChild);
+
+		// reply UI
+		if (!comment.replyTo) {
+			const replyBtn = commentElement.querySelector('button[data-reply]');
+			if (replyBtn) {
+				replyBtn.addEventListener('click', () => {
+					if (commentElement.querySelector('.reply-box')) return;
+					const replyBox = document.createElement('div');
+					replyBox.className = 'reply-box mt-2 flex flex-col gap-2';
+					replyBox.innerHTML = `
+						<textarea
+							class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
+							rows="2"
+							placeholder="Add a reply..."
+						></textarea>
+						<div class="flex gap-2 justify-end">
+							<button class="reply-cancel-btn btn px-2 py-1 rounded text-xs text-[var(--color-text-primary)] hover:text-black" type="button" aria-selected="true">Cancel</button>
+							<button class="reply-submit-btn btn btn-pointer px-2 py-1 rounded text-xs" type="button">Reply</button>
+						</div>
+					`;
+					commentElement.appendChild(replyBox);
+					// Cancel button
+					replyBox.querySelector('.reply-cancel-btn').addEventListener('click', () => {
+						replyBox.remove();
+					});
+					// Submit button
+					replyBox.querySelector('.reply-submit-btn').addEventListener('click', () => {
+						const textarea = replyBox.querySelector('textarea');
+						const text = textarea.value.trim();
+						if (!text) return;
+						// Add reply comment
+						this._addReplyComment(comment.id, text);
+						replyBox.remove();
+					});
+				});
+			}
+		}
+
+		// insert replies after parent
+		if (parentId) {
+			const parentEl = commentsList.querySelector(`[data-comment-id="${parentId}"]`);
+			if (parentEl && parentEl.nextSibling) {
+				commentsList.insertBefore(commentElement, parentEl.nextSibling);
+			} else if (parentEl) {
+				commentsList.appendChild(commentElement);
+			} else {
+				// If parent is not found, just append (should not happen with new logic)
+				commentsList.appendChild(commentElement);
+			}
+		} else {
+			commentsList.appendChild(commentElement);
+		}
+	}
+
+	/**
+	 * Add a reply comment from the user
+	 * @param {string} parentId - ID of comment's parent
+	 * @param {*} text - Contents of reply
+	 */
+	_addReplyComment(parentId, text) {
+		const user = XOpatUser.instance();
+		const id = crypto.randomUUID();
+		const newComment = {
+			id,
+			author: { id: user.id, name: user.name },
+			content: text,
+			createdAt: new Date(),
+			replyTo: parentId,
+			removed: false
+		};
+		if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
+		this._selectedAnnot.comments.push(newComment);
+		this._renderComments();
+
+		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
+		if (addedComment) addedComment.scrollIntoView({ block: "end" });
+
+		this.context.canvas.requestRenderAll();
 	}
 
 	/**
@@ -686,8 +822,37 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.deleteComment(this._selectedAnnot, commentId);
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
-		const comment = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
-		if (comment) comment.remove();
+		const comment = this._selectedAnnot.comments.find(c => c.id === commentId);
+		const commentParent = this._selectedAnnot.comments.find(c => c.id === comment.replyTo)
+		const commentEl = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
+
+		const hasReplies = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === commentId);
+		const removeParentPlaceholder =
+			comment.replyTo &&
+			!this._selectedAnnot.comments.some(c => !c.removed && comment.replyTo === c.id) &&
+			commentParent?.removed
+
+		if (removeParentPlaceholder) {
+			const commentParentId = commentParent?.id;
+			if (commentParentId) commentsList.querySelector(`[data-comment-id="${commentParentId}"]`).remove();
+		}
+		
+		if (commentEl) {
+			if (hasReplies) {
+				// replace with placeholder
+				const removedEl = document.createElement('div');
+				removedEl.className = 'rounded-lg p-3 border-l-4';
+				removedEl.style.background = 'var(--color-bg-canvas-inset)';
+				removedEl.style.borderLeftColor = '#888';
+				removedEl.style.color = '#888';
+				removedEl.style.fontStyle = 'italic';
+				removedEl.textContent = '[removed]';
+				removedEl.dataset.commentId = commentId;
+				commentEl.replaceWith(removedEl);
+			} else {
+				commentEl.remove();
+			}
+		}
 		this.context.canvas.requestRenderAll();
 
 		if (this._selectedAnnot.comments.filter(c => !c.removed).length === 0) {
