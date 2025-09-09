@@ -12,6 +12,7 @@
  * 	},
  * 	content: string,
  * 	createdAt: Date,
+ *  replyTo?: string,
  * 	removed?: boolean,
  * }} AnnotationComment
  *
@@ -922,7 +923,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (!annotation.comments) return false;
 		const found = annotation.comments.findIndex(c => c.id === commentId);
 		if (found === -1) return false;
-		annotation.comments.splice(found, 1);
+		// annotation.comments.splice(found, 1);
+		annotation.comments[found].removed = true; 
 		this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
 		return true;
 	}
