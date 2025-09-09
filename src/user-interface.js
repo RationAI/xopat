@@ -856,6 +856,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
+        SlidesMenu: new UI.SlideSwitcherMenu(),
+
         /**
          * Application TopRightMenu
          * @namespace USER_INTERFACE.TopRightMenu
@@ -974,17 +976,23 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const tab = this.menu.getTab('view');
                 tab.clear();
                 tab.addItem({
+                    id: 'preview',
+                    onClick: () => USER_INTERFACE.SlidesMenu.open(),
+                    icon: "fa-rectangle-list",
+                    label: $.t('main.global.preview'),
+                });
+                tab.addItem({
                     id: 'clone-viewer',
                     onClick: () => UTILITIES.clone(),
                     icon: "fa-clone",
-                    label: "Clone the viewer",
+                    label: $.t('main.global.clone'),
                 });
+
 
                 const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
                 for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
                     tab.addItem({
                         id: `visual-menu-ul-visual-checkbox-${tKey}`,
-                        onClick: () => UTILITIES.clone(),
                         icon: t.iconName,
                         label: t.title,
                         selected: !APPLICATION_CONTEXT.getOption(`${tKey}-hidden`, false),
@@ -1153,7 +1161,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                 class: "material-icons inline-arrow plugins-pin btn-pointer",
                                 id: `${id}-pin`,
                                 onclick: function(){
-                                    toVisible = this.offsetParent.lastChild;
+                                    let toVisible = this.offsetParent.lastChild;
                                     if (toVisible.classList.contains('force-visible')){
                                         toVisible.classList.remove('force-visible');
                                         this.classList.remove('opened');
@@ -1168,7 +1176,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             h3({
                                 class: "d-inline-block h3 btn-pointer",
                                 onclick: function(){
-                                    toVisible = this.previousElementSibling.offsetParent.lastChild;
+                                    let toVisible = this.previousElementSibling.offsetParent.lastChild;
                                     if (toVisible.classList.contains('force-visible')){
                                         toVisible.classList.remove('force-visible');
                                         this.previousElementSibling.classList.remove('opened');
@@ -1270,7 +1278,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} icon
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
-                menu = new UI.Toolbar({
+                const menu = new UI.Toolbar({
                     id: `toolbar-${ownerPluginId}`},
                     {
                     id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",

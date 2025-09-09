@@ -21,12 +21,16 @@ import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { RawHtml } from "./classes/elements/rawHtml.mjs";
 import { ShaderMenu } from "./classes/components/shaderMenu.mjs";
 import { Alert } from "./classes/elements/alert.mjs";
+import { StretchGrid } from "./classes/elements/stretch-grid.mjs";
+import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
+import { SlideSwitcherMenu } from "./classes/components/slideSwitcherMenu.mjs";
 
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
 const UI = {
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
-    Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip
+    Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip, StretchGrid,
+    FloatingWindow, SlideSwitcherMenu
 };
 globalThis.UI = UI;
 

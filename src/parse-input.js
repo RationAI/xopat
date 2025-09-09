@@ -170,13 +170,14 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     session = _parse(viz);
                     session.__fromLocalStorage = true;
                 }
-                window.localStorage.removeItem("xoSessionCache");
             } else {
                 strData = window.sessionStorage.getItem("xoSessionCache");
                 const data = strData && strData !== "undefined" && JSON.parse(strData);
-                postData = data;
-                session = data.visualization && _parse(data.visualization);
-                session.__fromLocalStorage = true;
+                if (data) {
+                    postData = data;
+                    session = data.visualization && _parse(data.visualization);
+                    session.__fromLocalStorage = true;
+                }
             }
         } else if (!session.error) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)

@@ -32,7 +32,8 @@
       "global": {
         "tissue": "Tissue",
         "layerOpacity": "Opacity",
-        "clone": "Clone the viewer and synchronize"
+        "clone": "Clone the viewer",
+        "preview": "Data Window"
       },
       "navigator": {
         "faultyTissue": "Faulty {{slide}}",

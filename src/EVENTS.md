@@ -120,6 +120,8 @@ fully re-usable for your purposes, **using custom annotation objects to perform 
 
 ### Rendering-Related Events
 
+TODO update
+
 #### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
 Fired when the UI wants to know what is a slide _preview url_, which can be constructed
 from ``server`` on which `image` slide identification lives. If `imagePreview`

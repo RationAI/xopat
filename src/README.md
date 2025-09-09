@@ -130,7 +130,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`permaLoadPlugins` - remember loaded plugins, default `true`,
     - [O]`bypassCookies` - do not use cookies, default `false`, cookies are necessary for user setup memory
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
-    - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays 
+    - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
     - [O]`fetchAsync` - by default uses generic multiplexing on tile protocols to support async fetching, overrideable behaviour

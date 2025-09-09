@@ -408,7 +408,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     &description=${encodeURIComponent('ERROR: The visualization requires canvasses in order to work.')}`;
     }
 
-    const headers = $.extend({}, ENV.client.headers, CONFIG.params.headers);
+
+    window.viewerManager = new ViewerManager(ENV, CONFIG);
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
@@ -418,97 +419,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @type OpenSeadragon.Viewer
      * @see {@link https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html}
      */
-    window.VIEWER = OpenSeadragon({
-        id: "osd",
-        prefixUrl: ENV.openSeadragonPrefix + "images",
-        showNavigator: true,
-        maxZoomPixelRatio: 2,
-        zoomPerClick: 2,
-        zoomPerScroll: 1.7,
-        blendTime: 0,
-        // This is due to annotations (multipolygon brush) that are disabled during animations
-        // ease out behavior makes user think they can already start drawing and slows them down
-        animationTime: 0,
-        showNavigationControl: false,
-        navigatorId: "panel-navigator",
-        loadTilesWithAjax : true,
-        drawer: 'flex-renderer',
-        drawerOptions: {
-            'flex-renderer': {
-                webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
-                debugInfoContainer: 'panel-shaders',
-                interactive: true,
-                htmlHandler: (shaderLayer, shaderConfig) => {
-                    const container = document.getElementById("data-layer-options");
-
-                    // map the mediator list to [{type, name}]
-                    const availableShaders = OpenSeadragon
-                        .FlexRenderer
-                        .ShaderMediator
-                        .availableShaders()
-                        .map(s => ({ type: s.type(), name: s.name() }));
-
-                    // map filters if you want editable rows (optional)
-                    const filters = {};
-                    for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
-                        if (shaderConfig.params.hasOwnProperty(key)) {
-                            filters[key] = {
-                                name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                                value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
-                            };
-                        }
-                    }
-
-                    const uiLayer = new UI.ShaderLayer({
-                        id: `${shaderLayer.id}-shader`,
-                        shaderLayer,
-                        shaderConfig: shaderConfig,
-                        availableFilters: filters,
-                        availableShaders,
-                        callbacks: {
-                            onToggleVisible: (checked) => {
-                                let shader = uiLayer.cfg;
-                                if (shader) {
-                                    if (checked) {
-                                        shader.visible = true;
-                                        // todo change visual using this.something()
-                                        //self.parentNode.parentNode.classList.remove("shader-part-error");
-                                    } else {
-                                        shader.visible = false;
-                                        //self.parentNode.parentNode.classList.add("shader-part-error");
-                                    }
-                                    VIEWER.drawer.rebuild(0);
-                                } else {
-                                    console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
-                                }
-                            },
-                            onChangeType: (type) => UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
-                            onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
-                            onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
-                            onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
-                        }
-                    });
-
-                    uiLayer.prependedTo(container);
-                },
-                htmlReset: () => {
-                    //$("#data-layer-options").html();
-                    document.getElementById("data-layer-options").innerHTML = "";
-                }
-            }
-        },
-        ajaxHeaders: headers,
-        splitHashDataForPost: true,
-        subPixelRoundingForTransparency:
-            navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
-                OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
-                OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-        debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-        maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+    Object.defineProperty(window, "VIEWER", {
+        get: window.viewerManager.get.bind(window.viewerManager)
     });
-    VIEWER.gestureSettingsMouse.clickToZoom = false;
-    new OpenSeadragon.Tools(VIEWER);
 
     /**
      * Event to fire if you want to avoid explicit warning handling,
@@ -641,64 +554,303 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     };
 
     /**
-     * Change background image if not in stacked mode
-     * @param {Number} [bgIndex=undefined]
-     * @param {Number} [goalIndex=undefined]
+     * Parse & set active background(s) and overlay(s).
+     * - activeBackgroundIndex: undefined | number | number[]
+     * - activeVisualizationIndex: undefined | number | (number|undefined)[]
+     *
+     * If arg is null => erase (set option to undefined).
+     * If arg is undefined => keep the stored option.
+     *
+     * @param {Number|Array<number>|undefined|null} [bgSpec=undefined]
+     * @param {Number|Array<number>|undefined|null} [vizSpec=undefined]
+     * @param {{deriveOverlayFromBackgroundGoals?: boolean}} opts
+     *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex
+     *        (array in non-stacked; single number in stacked).
      */
-    window.UTILITIES.setBackgroundAndGoal = function(bgIndex = undefined, goalIndex = undefined) {
+    window.UTILITIES.parseBackgroundAndGoal = function (
+        bgSpec = undefined,
+        vizSpec = undefined,
+        { deriveOverlayFromBackgroundGoals = false } = {}
+    ) {
+        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
+        const cfg = APPLICATION_CONTEXT.config || {};
+        const backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
+        const vizCount = Array.isArray(cfg.visualizations) ? cfg.visualizations.length : 0;
+
+        const clampIndex = (i, max) =>
+            Number.isInteger(i) && i >= 0 && i < max ? i : undefined;
+
+        const normIndexValue = (v, max) => (v == null ? undefined : clampIndex(v, max));
+
+        // Normalize an index or array of indices; preserves explicit undefined entries (via null/undefined)
+        const normalizeIndexArg = (arg, max) => {
+            if (arg == null) return undefined; // null or undefined => undefined
+            if (Array.isArray(arg)) {
+                return arg.map(v => normIndexValue(v, max));
+            }
+            return clampIndex(arg, max);
+        };
+
+        // From a bgArg produce: undefined | number | number[]
+        const selectBackgroundIndices = (bgArg, bgCount) => {
+            const norm = normalizeIndexArg(bgArg, bgCount);
+            if (norm === undefined) return undefined; // no backgrounds requested
+            if (Array.isArray(norm)) {
+                // drop undefined & duplicates while preserving order
+                const seen = new Set();
+                const out = [];
+                for (const v of norm) {
+                    if (v === undefined) continue;
+                    if (!seen.has(v)) {
+                        seen.add(v);
+                        out.push(v);
+                    }
+                }
+                if (out.length === 0) return undefined;
+                return out.length === 1 ? out[0] : out;
+            }
+            return norm;
+        };
+
+        // Build visualization spec for NON-STACKED mode
+        const buildVisForNonStacked = (visArg, bgIndices) => {
+            if (bgIndices === undefined) return undefined;
+
+            const toAlignedArray = (len, sourceArray) => {
+                const out = new Array(len);
+                for (let i = 0; i < len; i++) {
+                    const raw = sourceArray[i];
+                    out[i] = raw === undefined ? undefined : clampIndex(raw, vizCount);
+                }
+                return out;
+            };
+
+            // If a single number: apply it to all selected backgrounds
+            if (Number.isInteger(visArg)) {
+                if (Array.isArray(bgIndices)) {
+                    const idx = clampIndex(visArg, vizCount);
+                    return bgIndices.map(() => idx);
+                }
+                return clampIndex(visArg, vizCount);
+            }
+
+            // If an array: align 1:1 to backgrounds (truncate/ignore extra overlays)
+            if (Array.isArray(visArg)) {
+                const norm = visArg.map(v => (v == null ? undefined : clampIndex(v, vizCount)));
+                if (Array.isArray(bgIndices)) return toAlignedArray(bgIndices.length, norm);
+                // single bg: take first defined overlay
+                const first = norm.find(v => v !== undefined);
+                return first === undefined ? undefined : first;
+            }
+
+            // visArg undefined => no overlays
+            if (Array.isArray(bgIndices)) return bgIndices.map(() => undefined);
+            return undefined;
+        };
+
+        // Derive overlays from cfg.background[i].goalIndex (used when flag is on)
+        const deriveVisFromGoals = (bgIndices) => {
+            const getGoal = (i) => {
+                const g = backgrounds[i] && typeof backgrounds[i].goalIndex === "number"
+                    ? backgrounds[i].goalIndex
+                    : undefined;
+                return clampIndex(g, vizCount);
+            };
+
+            if (bgIndices === undefined) return undefined;
+
+            if (stacked) {
+                // Stacked => a single overlay picked from the first selected background
+                const firstIdx = Array.isArray(bgIndices) ? bgIndices[0] : bgIndices;
+                return getGoal(firstIdx);
+            }
+
+            if (Array.isArray(bgIndices)) return bgIndices.map(getGoal);
+            return getGoal(bgIndices);
+        };
 
         let updated = false;
-        if (bgIndex !== undefined && APPLICATION_CONTEXT.config.background.length > bgIndex) {
-            if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
-                console.error("UTILITIES::setBackgroundAndGoal not supported in stackedBackground mode! Call setBackgroundAndGoal with undefined bgIndex.");
-                bgIndex = undefined;
-            } else {
-                let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-                if (typeof activeBackground === "string") activeBackground = Number.parseInt(activeBackground);
-                if (activeBackground !== bgIndex) {
-                    APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+
+        // ---------- Handle bgSpec (null => erase; undefined => keep; value => set) ----------
+        let effectiveBg;          // what we'll treat as the current bg selection (number|array|undefined)
+        if (bgSpec === null) {
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", undefined);
+            updated = true;
+            effectiveBg = undefined;
+        } else if (bgSpec === undefined) {
+            effectiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+        } else {
+            const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
+            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+            if (JSON.stringify(prevActiveBg) !== JSON.stringify(newActiveBg)) {
+                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", newActiveBg);
+                updated = true;
+            }
+            effectiveBg = newActiveBg;
+        }
+
+        // Always have a convenient array view of selected backgrounds
+        const selectedBgArray =
+            effectiveBg === undefined ? [] : (Array.isArray(effectiveBg) ? effectiveBg : [effectiveBg]);
+
+        // We will need bgIndices in later logic
+        const bgIndicesForViz = effectiveBg === undefined
+            ? undefined
+            : (Array.isArray(effectiveBg) ? effectiveBg : effectiveBg);
+
+        // ---------- Handle vizSpec / derivation ----------
+        if (vizSpec === null) {
+            // erase overlays
+            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", undefined);
+            updated = true;
+        } else {
+            // When derive flag is ON, derive overlays from per-background goalIndex,
+            // regardless of whether vizSpec is provided or undefined.
+            let desiredActiveVis;
+            if (deriveOverlayFromBackgroundGoals) {
+                desiredActiveVis = deriveVisFromGoals(bgIndicesForViz);
+            } else if (vizSpec !== undefined) {
+                if (stacked) {
+                    // stacked => only a single overlay is allowed
+                    if (Array.isArray(vizSpec)) {
+                        const first = vizSpec.find(v => v != null && Number.isInteger(v));
+                        desiredActiveVis = first == null ? undefined : clampIndex(first, vizCount);
+                    } else {
+                        desiredActiveVis = clampIndex(vizSpec, vizCount);
+                    }
+                } else {
+                    desiredActiveVis = buildVisForNonStacked(vizSpec, bgIndicesForViz);
+                }
+            } // else: vizSpec === undefined and derive flag is false => keep existing option
+
+            if (typeof desiredActiveVis !== "undefined") {
+                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
+                if (JSON.stringify(prevActiveVis) !== JSON.stringify(desiredActiveVis)) {
+                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", desiredActiveVis);
                     updated = true;
+                }
+
+                // Persist per-background goalIndex in NON-STACKED mode when we have a concrete desiredActiveVis
+                if (!stacked && selectedBgArray.length > 0) {
+                    if (Array.isArray(desiredActiveVis)) {
+                        selectedBgArray.forEach((bgIdx, i) => {
+                            const ov = desiredActiveVis[i];
+                            if (ov === undefined) return;
+                            const b = backgrounds[bgIdx];
+                            if (!b) return;
+                            if (b.goalIndex !== ov) {
+                                b.goalIndex = ov;
+                                updated = true;
+                            }
+                        });
+                    } else if (Number.isInteger(desiredActiveVis)) {
+                        selectedBgArray.forEach(bgIdx => {
+                            const b = backgrounds[bgIdx];
+                            if (!b) return;
+                            if (b.goalIndex !== desiredActiveVis) {
+                                b.goalIndex = desiredActiveVis;
+                                updated = true;
+                            }
+                        });
+                    }
                 }
             }
         }
-        if (goalIndex !== undefined && APPLICATION_CONTEXT.config.visualizations.length > goalIndex) {
-            const config = bgIndex === undefined ? VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") :
-                APPLICATION_CONTEXT.config.background[bgIndex];
-            if (config) {
-                config.goalIndex = goalIndex;
-            }
-            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", goalIndex);
-            updated = true;
-        }
 
-        if (updated) {
-            APPLICATION_CONTEXT.openViewerWith(
-                APPLICATION_CONTEXT.config.data,
-                APPLICATION_CONTEXT.config.background,
-                APPLICATION_CONTEXT.config.visualizations
-            );
-        }
+        return updated;
     };
+
+    // window.UTILITIES.setBackgroundAndGoal = function(bgIndex = undefined, goalIndex = undefined) {
+    //
+    //     let updated = false;
+    //     const mode = APPLICATION_CONTEXT.getOption("viewMode");
+    //     if (bgIndex !== undefined) {
+    //         if (mode && !["juxta", "stacked", "single"].includes(mode)) {
+    //             console.error("Invalid view mode!");
+    //             APPLICATION_CONTEXT.setOption("viewMode", "juxta");
+    //         }
+    //         let activeBackground = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
+    //         if (typeof activeBackground === "string") {
+    //             // maybe try parsing array?
+    //             activeBackground = [Number.parseInt(activeBackground)];
+    //         } else if (activeBackground && !Array.isArray(activeBackground)) {
+    //             console.error("Invalid argument active background!");
+    //             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", 0);
+    //         }
+    //
+    //         if (bgIndex instanceof Number) {
+    //             bgIndex = [bgIndex];
+    //         }
+    //
+    //         updated = bgIndex.length !== activeBackground.length;
+    //         for (let i in bgIndex) {
+    //             const bgIndexItem = bgIndex[i];
+    //             if (APPLICATION_CONTEXT.config.background.length <= bgIndexItem) {
+    //                 console.error("Invalid background index!");
+    //                 return;
+    //             }
+    //             if (!updated && activeBackground[i] !== bgIndexItem) {
+    //                 updated = true;
+    //             }
+    //         }
+    //
+    //         if (updated) {
+    //             APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
+    //         }
+    //     }
+    //     if (goalIndex !== undefined && APPLICATION_CONTEXT.config.visualizations.length > goalIndex) {
+    //         let activeViz = APPLICATION_CONTEXT.getOption('activeVisualizationIndex', 0, false);
+    //         if (typeof activeBackground === "string") {
+    //             // maybe try parsing array?
+    //             activeBackground = [Number.parseInt(activeBackground)];
+    //         } else if (activeBackground && !Array.isArray(activeBackground)) {
+    //             console.error("Invalid argument active background!");
+    //             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", 0);
+    //         }
+    //
+    //         if (bgIndex instanceof Number) {
+    //             bgIndex = [bgIndex];
+    //         }
+    //
+    //
+    //
+    //         const config = bgIndex === undefined ? VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") :
+    //             APPLICATION_CONTEXT.config.background[bgIndex];
+    //         if (config) {
+    //             config.goalIndex = goalIndex;
+    //         }
+    //         APPLICATION_CONTEXT.setOption("activeVisualizationIndex", goalIndex);
+    //         updated = true;
+    //     }
+    //
+    //     if (updated) {
+    //         APPLICATION_CONTEXT.openViewerWith(
+    //             APPLICATION_CONTEXT.config.data,
+    //             APPLICATION_CONTEXT.config.background,
+    //             APPLICATION_CONTEXT.config.visualizations
+    //         );
+    //     }
+    // };
 
     //initialization of UI and handling of background image load errors
     let reopenCounter = -1;
-    function handleSyntheticOpenEvent(successLoadedItemCount) {
+    function handleSyntheticOpenEvent(viewer, successLoadedItemCount) {
         reopenCounter += 1; //so that immediately the value is set
 
         const confData = APPLICATION_CONTEXT.config.data,
             confBackground = APPLICATION_CONTEXT.config.background,
-            world = VIEWER.world;
+            world = viewer.world;
 
         if (world.getItemCount() < 1) {
             $("#global-tissue-visibility").removeClass("d-inline-block");
             $("#panel-images").html("").css('display', 'none');
-            VIEWER.addTiledImage({
+            viewer.addTiledImage({
                 tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
                 index: 0,
                 replace: false,
                 success: (event) => {
                     event.item.getConfig = type => undefined;
-                    USER_INTERFACE.toggleDemoPage(true);
+                    //TODO: USER_INTERFACE.toggleDemoPage(true);
                     handleSyntheticEventFinishWithValidData(0, 1);
                 }
             });
@@ -791,6 +943,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     imagePreview: null,
                 };
 
+                // todo replace raiseAwaitEvent with native function
                 //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
                 VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {
                     let blobUrl;
@@ -825,6 +978,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     img.src = eventArgs.imagePreview;
                 });
 
+                // todo remove set background and goal
                 html += `
     <div id="tissue-preview-item-${idx}" onclick="UTILITIES.setBackgroundAndGoal(${idx});"
     class="${activeIndex == idx ? 'selected' : ''} pointer position-relative mx-2 my-2 color-bg-canvas overflow-hidden" 
@@ -1102,184 +1256,520 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
     };
 
-    let _allowRecursionReload = true;
+
     /**
-     * Open desired configuration on the current viewer
-     * @param data
-     * @param background
-     * @param visualizations
+     * Open desired configuration into one or more viewer instances (no VIEWER global access here).
+     * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
+     * - In non-stacked mode with multiple backgrounds selected, creates multiple viewers (one per bg).
+     * - In stacked mode (or single bg) uses a single viewer.
+     *
+     * @param {Array|undefined} data
+     * @param {Array|undefined} background
+     * @param {Array|undefined} visualizations
+     * @param {number|number[]|undefined|null} bgSpec
+     * @param {number|number[]|undefined|null} vizSpec
+     * @param {{deriveOverlayFromBackgroundGoals?: boolean}} [opts]
      */
     APPLICATION_CONTEXT.openViewerWith = function (
-        data,
-        background,
-        visualizations=[],
+        data = undefined,
+        background = undefined,
+        visualizations = undefined,
+        bgSpec = undefined,
+        vizSpec = undefined,
+        opts = {}
     ) {
         USER_INTERFACE.Loading.show(true);
-        VIEWER.close();
 
-        const isSecureMode = APPLICATION_CONTEXT.secure;
-        let renderingWithWebGL = visualizations?.length > 0;
-        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-
+        // -- update CONFIG if new values are provided (undefined => keep ; null not expected here)
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-        config.data = data;
-        config.background = background;
-        config.visualizations = visualizations;
-        /**
-         * Fired before visualization is initialized and loaded.
-         * @memberOf VIEWER
-         * @event before-canvas-reload
-         */
-        VIEWER.raiseEvent('before-canvas-reload');
+        if (typeof data !== "undefined") config.data = data;
+        if (typeof background !== "undefined") config.background = background;
+        if (typeof visualizations !== "undefined") config.visualizations = visualizations;
 
-        const toOpen = [];
-        const openedBaseImages = [];
-        let activeVis = null;
-        let openedSources = 0;
-        let successOpenedSources = 0;
-        const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
-        const selectedIndex = isModeStacked || background.length < 1 ? -1 : APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
-        const handleFinishOpenImageEvent = success => {
-            openedSources--;
-            if (success) successOpenedSources++;
-            if (openedSources <= 0) handleSyntheticOpenEvent(successOpenedSources);
-        };
-        let imageOpener = (source, kind, imageIndex, lastBGIndex) => {
-            const item = VIEWER.world.getItemAt(imageIndex);
-            if (item && item.__origin === source) {
-                return;
+        const cfg = APPLICATION_CONTEXT.config;
+        const bgs = Array.isArray(cfg.background) ? cfg.background : [];
+        const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
+        const env = APPLICATION_CONTEXT.env;
+        const isSecureMode = !!APPLICATION_CONTEXT.secure;
+        
+        // 1) Normalize selection via the parser (also persists options as needed)
+        UTILITIES.parseBackgroundAndGoal(bgSpec, vizSpec, {
+            deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
+        });
+
+        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
+        let activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+        let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
+
+        // Ensure we open at least something if possible
+        const bgSpecWasUnset  = activeBg  === undefined;
+        const vizSpecWasUnset = activeViz === undefined;
+        if (bgSpecWasUnset && vizSpecWasUnset) {
+            if (bgs.length > 0) {
+                activeBg = 0;
+            } else if (vis.length > 0) {
+                activeViz = 0;
             }
+        } else {
+            if (vizSpecWasUnset && vis.length > 0) {
+                activeViz = 0;
+            }
+        }
 
-            openedSources++;
-            console.log("Opening image", source, kind, imageIndex, lastBGIndex);
-            window.VIEWER.addTiledImage({
-                tileSource: source.source || source, //todo dirty
-                index: imageIndex,
-                success: (event) => {
-                    event.item.__origin = source;
-                    event.item.__targetIndex = imageIndex;
+        // Build per-viewer plan:
+        // - stacked => single viewer, backgrounds = all cfg.background (or empty if none)
+        // - non-stacked:
+        //     - activeBg is number => single viewer with that bg
+        //     - activeBg is array  => N viewers, each with one bg (in order)
+        //     - activeBg undefined => single viewer, no bg (blank/error tile)
+        const bgPlan = (() => {
+            if (stacked) {
+                return [{type: "stacked", bgIndices: bgs.map((_, i) => i)}];
+            }
+            if (Array.isArray(activeBg)) {
+                return activeBg.map(idx => ({type: "single", bgIndices: [idx]}));
+            }
+            if (Number.isInteger(activeBg)) {
+                return [{type: "single", bgIndices: [activeBg]}];
+            }
+            return [{type: "single", bgIndices: []}];
+        })();
 
-                    if (kind === "background") {
-                        let index = isModeStacked ? imageIndex : selectedIndex;
-                        event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.background[index] : undefined
-                    } else if (kind === "visualization") {
-                        event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")] : undefined
-                    } else {
-                        event.item.getConfig = type => undefined;
-                    }
-                    handleFinishOpenImageEvent(true);
-                },
-                error: (e) => {
-                    VIEWER.addTiledImage({
-                        tileSource: {
-                            type: "_blank",
-                            error: e.message || $.t('error.slide.pending') + " " + $.t('error.slide.imageLoadFail') + ' ' + source
-                        },
-                        opacity: 0,
-                        index: imageIndex,
-                        success: (event) => {
-                            event.item.__targetIndex = imageIndex;
-                            event.item.getConfig = type => undefined;
-                            handleFinishOpenImageEvent(false);
-                        },
-                        error: (e) => {
-                            handleFinishOpenImageEvent(false);
+        // 2) Ensure we have a ViewerManager and correct number of viewers (>= 1)
+        const VM = viewerManager;
+
+        const desiredCount = Math.max(1, bgPlan.length);
+        // Add missing viewers
+        for (let i = 0; i < desiredCount; i++) {
+            if (!VM.viewers[i]) VM.add(i);
+        }
+        // Remove extra viewers, but never below 1 and keep index 0 alive
+        for (let i = VM.viewers.length - 1; i >= desiredCount; i--) {
+            if (i === 0) continue; // never remove the first viewer
+            VM.delete(i);
+        }
+
+        // Helper: clean a viewer fully
+        const resetViewer = (v) => {
+            try {
+                // Clear all items
+                if (v.world) {
+                    const count = v.world.getItemCount();
+                    for (let i = count - 1; i >= 0; i--) {
+                        const it = v.world.getItemAt(i);
+                        try {
+                            v.world.removeItem(it);
+                        } catch (_) {
                         }
-                    });
+                    }
                 }
+            } catch (e) {
+                console.warn("Viewer reset failed:", e);
+            }
+        };
+
+        // Helper: build a tileSource URL for a background entry
+        const bgUrlFromEntry = (bgEntry) => {
+            const proto = bgEntry.protocol || env.client.image_group_protocol;
+            const make = new Function("path,data", "return " + proto);
+            const d = cfg.data[bgEntry.dataReference];
+            return make(env.client.image_group_server, d);
+        };
+
+        // Helper: open one tile into a viewer with bookkeeping
+        const openTile = (viewer, source, kind, index, ctx) => {
+            return new Promise((resolve) => {
+                viewer.addTiledImage({
+                    tileSource: source.source || source,
+                    index,
+                    success: (event) => {
+                        // Attach contextual config getters for this item
+                        if (kind === "background") {
+                            const bgIdx = ctx.bgIndexForItem(index);
+                            event.item.getConfig = (type) =>
+                                !type || type === "background" ? cfg.background[bgIdx] : undefined;
+                        } else if (kind === "visualization") {
+                            const vIdx = ctx.vizIndexForItem(index);
+                            event.item.getConfig = (type) =>
+                                !type || type === "visualization" ? cfg.visualizations[vIdx] : undefined;
+                        } else {
+                            event.item.getConfig = () => undefined;
+                        }
+                        resolve(true);
+                    },
+                    error: (e) => {
+                        // fallback blank item (hidden)
+                        viewer.addTiledImage({
+                            tileSource: {
+                                type: "_blank",
+                                error:
+                                    (e && e.message) ||
+                                    $.t("error.slide.pending") +
+                                    " " +
+                                    $.t("error.slide.imageLoadFail") +
+                                    " " +
+                                    (source && source.toString ? source.toString() : "")
+                            },
+                            opacity: 0,
+                            index,
+                            success: () => resolve(false),
+                            error: () => resolve(false)
+                        });
+                    }
+                });
             });
         };
-        const openAll = (shaders, numOfVisLayersAtTheEnd) => {
-            if (toOpen.length < 1) {
-                handleFinishOpenImageEvent(false);
-                return;
+
+        // Helper: configure shaders/rendering for a viewer + open its images
+        const openIntoViewer = async (viewer, entry, viewerIndex) => {
+            resetViewer(viewer);
+
+            const toOpen = [];
+            const openedBase = [];
+
+            // (A) BACKGROUNDS
+            if (entry.type === "stacked") {
+                for (const bgi of entry.bgIndices) {
+                    const bg = bgs[bgi];
+                    if (!bg) continue;
+                    const bgCopy = {...bg};
+                    if (isSecureMode) delete bgCopy.protocol;
+                    toOpen.push(bgUrlFromEntry(bgCopy));
+                    openedBase.push(bgCopy);
+                }
+            } else {
+                const bgi = entry.bgIndices[0];
+                if (Number.isInteger(bgi)) {
+                    const bg = bgs[bgi];
+                    if (bg) {
+                        const bgCopy = {...bg};
+                        if (isSecureMode) delete bgCopy.protocol;
+                        toOpen.push(bgUrlFromEntry(bgCopy));
+                        openedBase.push(bgCopy);
+                    }
+                }
             }
 
-            let i = 0;
-            let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
-
-            // First, configure external shaders
-            const renderOutput = {};
-            for (; i <= lastValidBgIndex; i++) {
-                const bgRef = openedBaseImages[i];
-                renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i], name: bgRef.name || data[bgRef.dataReference] };
+            // (B) Decide visualization(s) for this viewer
+            // stacked: activeViz must be a single number (or undefined)
+            // non-stacked:
+            //   - if activeViz is number => apply to all viewers
+            //   - if array => align by viewerIndex
+            let visIndexForThis = undefined;
+            if (stacked) {
+                if (Number.isInteger(activeViz)) visIndexForThis = activeViz;
+            } else {
+                if (Array.isArray(activeViz)) {
+                    const v = activeViz[viewerIndex];
+                    visIndexForThis = Number.isInteger(v) ? v : undefined;
+                } else if (Number.isInteger(activeViz)) {
+                    visIndexForThis = activeViz;
+                }
             }
-            Object.assign(renderOutput, shaders);
-            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
-            VIEWER.drawer.overrideConfigureAll(renderOutput);
-            console.log("Opening configuration.", renderOutput, "with data", toOpen);
 
-            // Then, attach to-open images
-            i = 0;
-            for (; i <= lastValidBgIndex; i++) imageOpener(toOpen[i], "background", i, lastValidBgIndex);
-            for (; i < toOpen.length; i++) imageOpener(toOpen[i], "visualization", i, lastValidBgIndex);
+            const renderingWithWebGL = Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
+
+            // (C) If rendering with WebGL, prepare renderer and append visualization sources
+            let shaderConfigMap = {};
+            let numVisLayersAtEnd = 0;
+
+            if (renderingWithWebGL) {
+                try {
+                    UTILITIES.testRendering();
+                } catch (e) {
+                    console.error(e);
+                    USER_INTERFACE.Errors.show(
+                        $.t("error.renderTitle"),
+                        `${$.t("error.renderDesc")} <br><code>${e}</code>`,
+                        true
+                    );
+                }
+
+                APPLICATION_CONTEXT.prepareRendering();
+
+                const vIdx = visIndexForThis;
+                const activeV = vis[vIdx];
+                if (viewer.drawer && viewer.drawer.renderer && viewer.drawer.renderer.createUrlMaker) {
+                    viewer.drawer.renderer.createUrlMaker(activeV, isSecureMode);
+                }
+
+                const sourcesToOpen = {};
+                const lastBgIndex = toOpen.length;
+                let counter = toOpen.length;
+
+                shaderConfigMap = activeV.shaders || {};
+                for (const shaderId in shaderConfigMap) {
+                    const shaderCfg = shaderConfigMap[shaderId];
+                    shaderCfg.tiledImages = [];
+                    const refs = (shaderCfg.dataReferences || []).map((rid) =>
+                        viewer.drawer.renderer.urlMaker(env.client.data_group_server, [cfg.data[rid]])
+                    );
+                    shaderCfg.name = shaderCfg.name || cfg.data[shaderCfg.dataReferences?.[0]] || shaderId;
+
+                    for (const src of refs) {
+                        let idx = sourcesToOpen[src];
+                        if (idx === undefined) {
+                            sourcesToOpen[src] = idx = counter++;
+                            toOpen.push(src);
+                        }
+                        shaderCfg.tiledImages.push(idx);
+                    }
+                }
+
+                numVisLayersAtEnd = counter - lastBgIndex;
+
+                // Configure renderer (background layers first)
+                const renderOutput = {};
+                for (let i = 0; i < openedBase.length; i++) {
+                    const bgRef = openedBase[i];
+                    renderOutput[`bg_${i}`] = {
+                        type: "identity",
+                        tiledImages: [i],
+                        name: bgRef.name || cfg.data[bgRef.dataReference]
+                    };
+                }
+                Object.assign(renderOutput, shaderConfigMap);
+                UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+
+                if (viewer.drawer && viewer.drawer.overrideConfigureAll) {
+                    viewer.drawer.overrideConfigureAll(renderOutput);
+                }
+            }
+
+            // (D) Finally add the images to the viewer world
+            if (toOpen.length === 0) {
+                // Add a single hidden blank to keep viewer usable
+                toOpen.push({type: "_blank"});
+            }
+
+            // helpers for contextual getConfig in items
+            let lastBgIdx = toOpen.length - numVisLayersAtEnd - 1;
+            const ctx = {
+                bgIndexForItem: (itemIndex) => {
+                    // itemIndex within the sequence [0..lastBgIdx] are backgrounds
+                    // map local background order back to cfg.background index
+                    if (entry.type === "stacked") {
+                         // 0..lastBgIdx
+                        return entry.bgIndices[itemIndex];
+                    } else {
+                        return entry.bgIndices[0];
+                    }
+                },
+                vizIndexForItem: () => visIndexForThis
+            };
+
+            // Open backgrounds first, then viz layers
+            let idx = 0;
+            for (; idx <= lastBgIdx; idx++) {
+                await openTile(viewer, toOpen[idx], "background", idx, ctx);
+            }
+            for (; idx < toOpen.length; idx++) {
+                await openTile(viewer, toOpen[idx], "visualization", idx, ctx);
+            }
         };
 
-        if (isModeStacked) {
-            for (let i = 0; i < background.length; i++) {
-                const bg = background[i];
-                if (isSecureMode) delete bg.protocol;
-                const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-                toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
-                openedBaseImages.push(bg);
-            }
-        } else if (selectedIndex >= 0) {
-            let selectedImage = background[selectedIndex];
-            if (isSecureMode) delete selectedImage.protocol;
-            const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
-            toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
-            openedBaseImages.push(selectedImage);
-        }
+        // 3) Drive all viewers according to plan
+        const tasks = bgPlan.map((entry, i) => openIntoViewer(VM.viewers[i], entry, i));
 
-        if (renderingWithWebGL) {
-            try {
-                UTILITIES.testRendering();
-            } catch (e) {
-                console.error(e);
-                USER_INTERFACE.Errors.show($.t('error.renderTitle'), `${$.t('error.renderDesc')} <br><code>${e}</code>`, true);
-            }
+        // Show a gentle “loading too long” message if it drags on
+        const loadTooLongTimeout = setTimeout(
+            () => Dialogs.show($.t("error.slide.pending"), 15000, Dialogs.MSG_WARN),
+            8000
+        );
 
-            //prepare rendering can disable layers
-            APPLICATION_CONTEXT.prepareRendering();
-            let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
-            if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
-                // binding background config overrides active visualization, only if not in stacked mode
-                const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false)],
-                    defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
+        Promise.allSettled(tasks)
+            .then(() => {
+                USER_INTERFACE.SlidesMenu.refresh();
+                // todo open?
+                USER_INTERFACE.SlidesMenu.open();
 
-                if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
-                    activeVisIndex = defaultIndex;
-                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeVisIndex);
-                }
-            }
-
-            activeVis = visualizations[activeVisIndex];
-            VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
-            const sourcesToOpen = {};
-            const lastBgIndex = toOpen.length;
-            let counter = toOpen.length;
-            for (let shaderId in activeVis.shaders) {
-
-                const shaderConfig = activeVis.shaders[shaderId];
-                shaderConfig.tiledImages = [];
-                const sources = shaderConfig.dataReferences.map(rId =>
-                    VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]]));
-                shaderConfig.name = shaderConfig.name || data[rId] || shaderId;
-                for (let dataSource of sources) {
-                    // Find unique sources and map them to indexes
-                    let index = sourcesToOpen[dataSource];
-                    if (index === undefined) {
-                        sourcesToOpen[dataSource] = index = counter++;
-                        toOpen.push(dataSource);
-                    }
-                    shaderConfig.tiledImages.push(index);
-                }
-            }
-            openAll(activeVis.shaders, counter - lastBgIndex);
-            return;
-        }
-        openAll({}, 0);
+                clearTimeout(loadTooLongTimeout);
+                USER_INTERFACE.Loading.show(false);
+                // select first viewer as active if needed
+                VM.setActive(0);
+            })
+            .catch((e) => {
+                console.error("Open failed:", e);
+                clearTimeout(loadTooLongTimeout);
+                USER_INTERFACE.Loading.show(false);
+            });
     }
+
+    // /**
+    //  * Open desired configuration on the current viewer
+    //  * @param data
+    //  * @param background
+    //  * @param visualizations
+    //  * @param bgSpec
+    //  * @param vizSpec
+    //  */
+    // APPLICATION_CONTEXT.openViewerWith = function (
+    //     data = undefined,
+    //     background = undefined,
+    //     visualizations= undefined,
+    //     bgSpec = undefined,
+    //     vizSpec = undefined,
+    // ) {
+    //     USER_INTERFACE.Loading.show(true);
+    //     VIEWER.close();
+    //
+    //     const isSecureMode = APPLICATION_CONTEXT.secure;
+    //     let renderingWithWebGL = visualizations?.length > 0;
+    //     loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
+    //
+    //     const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+    //     config.data = data;
+    //     config.background = background;
+    //     config.visualizations = visualizations;
+    //
+    //     const toOpen = [];
+    //     const openedBaseImages = [];
+    //     let activeVis = null;
+    //     let openedSources = 0;
+    //     let successOpenedSources = 0;
+    //     const isModeStacked = APPLICATION_CONTEXT.getOption("stackedBackground");
+    //     const selectedIndex = isModeStacked || background.length < 1 ? -1 : APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
+    //     const handleFinishOpenImageEvent = success => {
+    //         openedSources--;
+    //         if (success) successOpenedSources++;
+    //         if (openedSources <= 0) handleSyntheticOpenEvent(successOpenedSources);
+    //     };
+    //     let imageOpener = (source, kind, imageIndex, lastBGIndex) => {
+    //         const item = VIEWER.world.getItemAt(imageIndex);
+    //         if (item && item.__origin === source) {
+    //             return;
+    //         }
+    //
+    //         openedSources++;
+    //         console.log("Opening image", source, kind, imageIndex, lastBGIndex);
+    //         window.VIEWER.addTiledImage({
+    //             tileSource: source.source || source, //todo dirty
+    //             index: imageIndex,
+    //             success: (event) => {
+    //                 event.item.__origin = source;
+    //                 event.item.__targetIndex = imageIndex;
+    //
+    //                 if (kind === "background") {
+    //                     let index = isModeStacked ? imageIndex : selectedIndex;
+    //                     event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.background[index] : undefined
+    //                 } else if (kind === "visualization") {
+    //                     event.item.getConfig = type => !type || type === kind ? APPLICATION_CONTEXT.config.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")] : undefined
+    //                 } else {
+    //                     event.item.getConfig = type => undefined;
+    //                 }
+    //                 handleFinishOpenImageEvent(true);
+    //             },
+    //             error: (e) => {
+    //                 VIEWER.addTiledImage({
+    //                     tileSource: {
+    //                         type: "_blank",
+    //                         error: e.message || $.t('error.slide.pending') + " " + $.t('error.slide.imageLoadFail') + ' ' + source
+    //                     },
+    //                     opacity: 0,
+    //                     index: imageIndex,
+    //                     success: (event) => {
+    //                         event.item.__targetIndex = imageIndex;
+    //                         event.item.getConfig = type => undefined;
+    //                         handleFinishOpenImageEvent(false);
+    //                     },
+    //                     error: (e) => {
+    //                         handleFinishOpenImageEvent(false);
+    //                     }
+    //                 });
+    //             }
+    //         });
+    //     };
+    //     const openAll = (shaders, numOfVisLayersAtTheEnd) => {
+    //         if (toOpen.length < 1) {
+    //             handleFinishOpenImageEvent(false);
+    //             return;
+    //         }
+    //
+    //         let i = 0;
+    //         let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
+    //
+    //         // First, configure external shaders
+    //         const renderOutput = {};
+    //         for (; i <= lastValidBgIndex; i++) {
+    //             const bgRef = openedBaseImages[i];
+    //             renderOutput[`bg_${i}`] = {type: "identity", tiledImages: [i], name: bgRef.name || data[bgRef.dataReference] };
+    //         }
+    //         Object.assign(renderOutput, shaders);
+    //         UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+    //         VIEWER.drawer.overrideConfigureAll(renderOutput);
+    //         console.log("Opening configuration.", renderOutput, "with data", toOpen);
+    //
+    //         // Then, attach to-open images
+    //         i = 0;
+    //         for (; i <= lastValidBgIndex; i++) imageOpener(toOpen[i], "background", i, lastValidBgIndex);
+    //         for (; i < toOpen.length; i++) imageOpener(toOpen[i], "visualization", i, lastValidBgIndex);
+    //     };
+    //
+    //     if (isModeStacked) {
+    //         for (let i = 0; i < background.length; i++) {
+    //             const bg = background[i];
+    //             if (isSecureMode) delete bg.protocol;
+    //             const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+    //             toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[bg.dataReference]));
+    //             openedBaseImages.push(bg);
+    //         }
+    //     } else if (selectedIndex >= 0) {
+    //         let selectedImage = background[selectedIndex];
+    //         if (isSecureMode) delete selectedImage.protocol;
+    //         const urlmaker = new Function("path,data", "return " + (selectedImage.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
+    //         toOpen.push(urlmaker(APPLICATION_CONTEXT.env.client.image_group_server, data[selectedImage.dataReference]));
+    //         openedBaseImages.push(selectedImage);
+    //     }
+    //
+    //     if (renderingWithWebGL) {
+    //         try {
+    //             UTILITIES.testRendering();
+    //         } catch (e) {
+    //             console.error(e);
+    //             USER_INTERFACE.Errors.show($.t('error.renderTitle'), `${$.t('error.renderDesc')} <br><code>${e}</code>`, true);
+    //         }
+    //
+    //         //prepare rendering can disable layers
+    //         APPLICATION_CONTEXT.prepareRendering();
+    //         let activeVisIndex = Number.parseInt(APPLICATION_CONTEXT.getOption("activeVisualizationIndex"));
+    //         if (!APPLICATION_CONTEXT.getOption("stackedBackground")) {
+    //             // binding background config overrides active visualization, only if not in stacked mode
+    //             const activeBackgroundSetup = config.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false)],
+    //                 defaultIndex = Number.parseInt(activeBackgroundSetup?.goalIndex);
+    //
+    //             if (defaultIndex >= 0 && defaultIndex < config.visualizations.length) {
+    //                 activeVisIndex = defaultIndex;
+    //                 APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeVisIndex);
+    //             }
+    //         }
+    //
+    //         activeVis = visualizations[activeVisIndex];
+    //         VIEWER.drawer.renderer.createUrlMaker(activeVis, isSecureMode);
+    //         const sourcesToOpen = {};
+    //         const lastBgIndex = toOpen.length;
+    //         let counter = toOpen.length;
+    //         for (let shaderId in activeVis.shaders) {
+    //
+    //             const shaderConfig = activeVis.shaders[shaderId];
+    //             shaderConfig.tiledImages = [];
+    //             const sources = shaderConfig.dataReferences.map(rId =>
+    //                 VIEWER.drawer.renderer.urlMaker(APPLICATION_CONTEXT.env.client.data_group_server, [data[rId]]));
+    //             shaderConfig.name = shaderConfig.name || data[rId] || shaderId;
+    //             for (let dataSource of sources) {
+    //                 // Find unique sources and map them to indexes
+    //                 let index = sourcesToOpen[dataSource];
+    //                 if (index === undefined) {
+    //                     sourcesToOpen[dataSource] = index = counter++;
+    //                     toOpen.push(dataSource);
+    //                 }
+    //                 shaderConfig.tiledImages.push(index);
+    //             }
+    //         }
+    //         openAll(activeVis.shaders, counter - lastBgIndex);
+    //         return;
+    //     }
+    //     openAll({}, 0);
+    // }
 
     initXopatScripts();
     function checkLocalState() {

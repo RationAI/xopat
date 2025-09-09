@@ -17,5 +17,5 @@
         "webGLContext.js",
         "webGLToOSDBridge.js"
     ],
-    "requires": ["colorMaps"]
+    "requires": []
 }

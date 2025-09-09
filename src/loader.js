@@ -1219,6 +1219,182 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
     };
 
+
+    // 2) Manager that tracks the active viewer
+    window.ViewerManager = class {
+        constructor(ENV, CONFIG) {
+            this.ENV = ENV;
+            this.CONFIG = CONFIG;
+            this.viewers = [];
+            this.active = null;
+
+            // layout container
+            this.layout = new UI.StretchGrid({ cols: 2 }); // e.g. 2 cols
+            this.layout.attachTo(document.getElementById("osd")); // attach once
+
+            // add initial viewer
+            this.add(0);
+            this.setActive(0);
+        }
+
+        _wire(v) {
+            const el = v.container;
+            el.tabIndex = 0;
+            const set = () => this.setActive(v);
+            el.addEventListener("pointerdown", set);
+            el.addEventListener("mouseenter", set);
+            el.addEventListener("focusin", set);
+            v.addHandler("canvas-enter", set);
+            v.addHandler("canvas-press", set);
+
+            v.addOnceHandler &&
+            v.addOnceHandler("destroy", () => {
+                if (this.active === v) {
+                    this.active = this.viewers.find((x) => x !== v) || null;
+                }
+                this.viewers = this.viewers.filter((x) => x !== v);
+            });
+        }
+
+        setActive(v) {
+            if (typeof v === "number") v = this.viewers[v];
+            if (this.active === v) return;
+            this.active = v;
+            // optional: add a CSS class to highlight active container
+            this.viewers.forEach((vw) =>
+                vw.container.classList.toggle("active", vw === this.active)
+            );
+        }
+
+        get() {
+            return this.active;
+        }
+
+        add(index) {
+            this.delete(index);
+
+            // make a unique cell inside the grid
+            const cellId = `osd-${index}`;
+            this.layout.attachCell(cellId);
+
+            const headers = $.extend(
+                {},
+                this.ENV.client.headers,
+                this.CONFIG.params.headers
+            );
+
+            const viewer = OpenSeadragon({
+                id: cellId, // mount into that grid cell
+                prefixUrl: this.ENV.openSeadragonPrefix + "images",
+                showNavigator: true,
+                maxZoomPixelRatio: 2,
+                zoomPerClick: 2,
+                zoomPerScroll: 1.7,
+                blendTime: 0,
+                // This is due to annotations (multipolygon brush) that are disabled during animations
+                // ease out behavior makes user think they can already start drawing and slows them down
+                animationTime: 0,
+                showNavigationControl: false,
+                loadTilesWithAjax: true,
+                drawer: 'flex-renderer',
+                drawerOptions: {
+                    'flex-renderer': {
+                        webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+                        // todo: support debug in some reasonable way
+                        // debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
+                        debugInfoContainer: 'panel-shaders',
+                        interactive: true,
+                        htmlHandler: (shaderLayer, shaderConfig) => {
+                            const container = document.getElementById("data-layer-options");
+
+                            // map the mediator list to [{type, name}]
+                            const availableShaders = OpenSeadragon
+                                .FlexRenderer
+                                .ShaderMediator
+                                .availableShaders()
+                                .map(s => ({type: s.type(), name: s.name()}));
+
+                            // map filters if you want editable rows (optional)
+                            const filters = {};
+                            for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
+                                if (shaderConfig.params.hasOwnProperty(key)) {
+                                    filters[key] = {
+                                        name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
+                                        value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
+                                    };
+                                }
+                            }
+
+                            const uiLayer = new UI.ShaderLayer({
+                                id: `${shaderLayer.id}-shader`,
+                                shaderLayer,
+                                shaderConfig: shaderConfig,
+                                availableFilters: filters,
+                                availableShaders,
+                                callbacks: {
+                                    onToggleVisible: (checked) => {
+                                        let shader = uiLayer.cfg;
+                                        if (shader) {
+                                            if (checked) {
+                                                shader.visible = true;
+                                                // todo change visual using this.something()
+                                                //self.parentNode.parentNode.classList.remove("shader-part-error");
+                                            } else {
+                                                shader.visible = false;
+                                                //self.parentNode.parentNode.classList.add("shader-part-error");
+                                            }
+                                            viewer.drawer.rebuild(0);
+                                        } else {
+                                            console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
+                                        }
+                                    },
+                                    onChangeType: (type) => UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
+                                    onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
+                                    onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
+                                    onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
+                                }
+                            });
+
+                            uiLayer.prependedTo(container);
+                        },
+                        htmlReset: () => {
+                            //$("#data-layer-options").html();
+                            document.getElementById("data-layer-options").innerHTML = "";
+                        }
+                    }
+                },
+                ajaxHeaders: headers,
+                splitHashDataForPost: true,
+                subPixelRoundingForTransparency:
+                    navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
+                        OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
+                        OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
+                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
+                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+            });
+            viewer.gestureSettingsMouse.clickToZoom = false;
+            new OpenSeadragon.Tools(viewer);
+
+            viewer.drawer.renderer.createUrlMaker = function (vis, isSecureMode) {
+                if (isSecureMode && vis) delete vis.protocol;
+                viewer.drawer.renderer.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
+                return viewer.drawer.renderer.urlMaker;
+            };
+
+            this.viewers[index] = viewer;
+            this._wire(viewer);
+        }
+
+        delete(index) {
+            const viewer = this.viewers[index];
+            if (!viewer) return;
+            viewer.destroy();
+            delete this.viewers[index];
+            // also remove the grid cell
+            this.layout.removeAt(index);
+        }
+    }
+
     return awaitPluginReady ? async function() {
         //Notify plugins OpenSeadragon is ready
         Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {

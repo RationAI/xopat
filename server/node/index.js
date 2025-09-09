@@ -234,7 +234,7 @@ ${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
 ${core.requireLib('render')}
-${core.requireUI()}  // TODO Jirka: do we need to keep this? visit /dev_setup page to find out
+${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
 ${core.requireModules(true)}`;

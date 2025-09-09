@@ -1,7 +1,6 @@
 # allow only build-in items in modules/plugins
 /modules/**
 !/modules/annotations
-!/modules/colormaps
 !/modules/empaia-wsi-tile-source
 !/modules/empation-api
 !/modules/fabricjs

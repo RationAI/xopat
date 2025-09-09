@@ -493,7 +493,10 @@ ${renders.join("")}
                 params: {},
                 cache: {},
             },
-            webglContext: {},
+            webglContext: {
+                supportedUseModes: ["show"],
+                includeGlobalCode: () => {},
+            },
             params: {},
             interactive: false,
             invalidate: () => {},

@@ -57,12 +57,6 @@ function initXopatLayers() {
             console.warn("Invalid default vis index. Using 0.");
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
-
-        VIEWER.drawer.renderer.createUrlMaker = function (vis, isSecureMode) {
-            if (isSecureMode && vis) delete vis.protocol;
-            VIEWER.drawer.renderer.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
-            return VIEWER.drawer.renderer.urlMaker;
-        };
     }
 
 

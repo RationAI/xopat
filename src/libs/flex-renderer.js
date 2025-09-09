@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-09-03
+//! Built on 2025-09-09
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -1029,6 +1029,415 @@
         }
     };
 
+})(OpenSeadragon);
+
+(function ($){
+    /**
+     * https://github.com/saikocat/colorbrewer
+     * Color specifications and designs developed by Cynthia Brewer (http://colorbrewer2.org/).
+     * This is a shim module of colorbrewer2 by Cythina Brewer for browserify.
+     *
+     * Some ColorSchemes are taken from Matlab
+     *
+     * TODO include our own color schemes [yellow + tyrkys  based]
+     */
+ $.FlexRenderer.ColorMaps = {
+        defaults: {
+            sequential: "Viridis",
+            singlehue: "Reds",
+            diverging: "RdBu",
+            cyclic: "TwilightShift",
+            qualitative: "Accent"
+        },
+        schemeGroups: {
+            sequential: ["Viridis", "Parula", "Winter", "Turbo", "Hot", "Inferno", "Magma", "Plasma", "BuGn", "BuPu", "PuBuGn", "RdPu", "YlGn", "YlGnBu", "YlOrRd"],
+            singlehue: ["Blues", "Greens", "Greys", "Purples", "Reds"],
+            diverging: ["BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "Spectral"],
+            cyclic: ["Twilight", "TwilightShift"],
+            qualitative: ["Accent", "Dark2", "Paired", "Pastel1", "Pastel2", "Set1", "Set2", "Set3", "Turbo"],
+        }, Viridis: {
+            2: ["#440154", "#fde725"],
+            3: ["#440154", "#21918c", "#fde725"],
+            4: ["#440154", "#31688e", "#35b779", "#fde725"],
+            5: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+            6: ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"],
+            7: ["#440154", "#443983", "#31688e", "#21918c", "#35b779", "#90d743", "#fde725"],
+            8: ["#440154", "#46327e", "#365c8d", "#277f8e", "#1fa187", "#4ac16d", "#a0da39", "#fde725"],
+        }, Parula: {
+            2: ["#12beb9", "#f9fb15"],
+            3: ["#3e26a8", "#12beb9", "#f9fb15"],
+            4: ["#3e26a8", "#2797eb", "#81cc59", "#f9fb15"],
+            5: ["#3e26a8", "#347afd", "#12beb9", "#c8c129", "#f9fb15"],
+            6: ["#3e26a8", "#4367fd", "#1caadf", "#48cb86", "#eaba30", "#f9fb15"],
+            7: ["#3e26a8", "#475bf9", "#2797eb", "#12beb9", "#81cc59", "#fcbb3e", "#f9fb15"],
+            8: ["#3e26a8", "#4852f4", "#2e87f7", "#12b1d6", "#37c897", "#abc739", "#fec338", "#f9fb15"],
+        }, Winter: {
+            2: ["#0080bf", "#00ff80"],
+            3: ["#0000ff", "#0080bf", "#00ff80"],
+            4: ["#0000ff", "#0055d5", "#00aaaa", "#00ff80"],
+            5: ["#0000ff", "#0040df", "#0080bf", "#00bf9f", "#00ff80"],
+            6: ["#0000ff", "#0033e6", "#0066cc", "#0099b3", "#00cc99", "#00ff80"],
+            7: ["#0000ff", "#002bea", "#0055d5", "#0080bf", "#00aaaa", "#00d595", "#00ff80"],
+            8: ["#0000ff", "#0024ed", "#0049db", "#006dc8", "#0092b6", "#00b6a4", "#00db92", "#00ff80"],
+        }, Turbo: {
+            2: ["#a3fd3c", "#7a0403"],
+            3: ["#30123b", "#a3fd3c", "#7a0403"],
+            4: ["#30123b", "#1ae4b6", "#faba39", "#7a0403"],
+            5: ["#30123b", "#29bbec", "#a3fd3c", "#fb8022", "#7a0403"],
+            6: ["#30123b", "#3e9bfe", "#46f884", "#e1dd37", "#f05b12", "#7a0403"],
+            7: ["#30123b", "#4686fa", "#1ae4b6", "#a3fd3c", "#faba39", "#e4460b", "#7a0403"],
+            8: ["#30123b", "#4777ef", "#1ccfd5", "#62fc6b", "#d1e935", "#fe9b2d", "#da3907", "#7a0403"],
+        }, Hot: {
+            2: ["#ff0000", "#ffff00"],
+            3: ["#ff0000", "#ffff00", "#ffffff"],
+            4: ["#ff0000", "#ffff00", "#ffff80", "#ffffff"],
+            5: ["#ff0000", "#ffff00", "#ffff55", "#ffffaa", "#ffffff"],
+            6: ["#800000", "#ff0000", "#ff8000", "#ffff00", "#ffff80", "#ffffff"],
+            7: ["#800000", "#ff0000", "#ff8000", "#ffff00", "#ffff55", "#ffffaa", "#ffffff"],
+            8: ["#550000", "#aa0000", "#ff0000", "#ff5500", "#ffaa00", "#ffff00", "#ffff80", "#ffffff"],
+        }, Inferno: {
+            2: ["#bc3754", "#fcffa4"],
+            3: ["#000004", "#bc3754", "#fcffa4"],
+            4: ["#000004", "#781c6d", "#ed6925", "#fcffa4"],
+            5: ["#000004", "#57106e", "#bc3754", "#f98e09", "#fcffa4"],
+            6: ["#000004", "#420a68", "#932667", "#dd513a", "#fca50a", "#fcffa4"],
+            7: ["#000004", "#320a5e", "#781c6d", "#bc3754", "#ed6925", "#fbb61a", "#fcffa4"],
+            8: ["#000004", "#280b53", "#65156e", "#9f2a63", "#d44842", "#f57d15", "#fac228", "#fcffa4"],
+            9: ["#000004", "#210c4a", "#57106e", "#8a226a", "#bc3754", "#e45a31", "#f98e09", "#f9cb35", "#fcffa4"],
+            10: ["#000004", "#1b0c41", "#4a0c6b", "#781c6d", "#a52c60", "#cf4446", "#ed6925", "#fb9b06", "#f7d13d", "#fcffa4"],
+            11: ["#000004", "#160b39", "#420a68", "#6a176e", "#932667", "#bc3754", "#dd513a", "#f37819", "#fca50a", "#f6d746", "#fcffa4"],
+            12: ["#000004", "#140b34", "#390963", "#5f136e", "#85216b", "#a92e5e", "#cb4149", "#e65d2f", "#f78410", "#fcae12", "#f5db4c", "#fcffa4"],
+        }, Magma: {
+            2: ["#b73779", "#fcfdbf"],
+            3: ["#000004", "#b73779", "#fcfdbf"],
+            4: ["#000004", "#721f81", "#f1605d", "#fcfdbf"],
+            5: ["#000004", "#51127c", "#b73779", "#fc8961", "#fcfdbf"],
+            6: ["#000004", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"],
+            7: ["#000004", "#2c115f", "#721f81", "#b73779", "#f1605d", "#feb078", "#fcfdbf"],
+            8: ["#000004", "#221150", "#5f187f", "#982d80", "#d3436e", "#f8765c", "#febb81", "#fcfdbf"],
+            9: ["#000004", "#1d1147", "#51127c", "#832681", "#b73779", "#e75263", "#fc8961", "#fec488", "#fcfdbf"],
+            10: ["#000004", "#180f3d", "#440f76", "#721f81", "#9e2f7f", "#cd4071", "#f1605d", "#fd9668", "#feca8d", "#fcfdbf"],
+            11: ["#000004", "#140e36", "#3b0f70", "#641a80", "#8c2981", "#b73779", "#de4968", "#f7705c", "#fe9f6d", "#fecf92", "#fcfdbf"],
+            12: ["#000004", "#120d31", "#331067", "#59157e", "#7e2482", "#a3307e", "#c83e73", "#e95462", "#fa7d5e", "#fea973", "#fed395", "#fcfdbf"],
+        }, Twilight: {
+            2: ["#2f1436", "#e2d9e2"], //does not make sense...
+            3: ["#e2d9e2", "#2f1436", "#e2d9e2"],
+            4: ["#e2d9e2", "#5e43a5", "#8e2c50", "#e2d9e2"],
+            5: ["#e2d9e2", "#6276ba", "#2f1436", "#b25652", "#e2d9e2"],
+            6: ["#e2d9e2", "#6d90c0", "#531e7c", "#64194b", "#c0755e", "#e2d9e2"],
+            7: ["#e2d9e2", "#7ba1c2", "#5e43a5", "#2f1436", "#8e2c50", "#c6896c", "#e2d9e2"],
+            8: ["#e2d9e2", "#89adc5", "#5f61b4", "#491564", "#501444", "#a54350", "#ca997c", "#e2d9e2"],
+            9: ["#e2d9e2", "#95b5c7", "#6276ba", "#592a8f", "#2f1436", "#741e4f", "#b25652", "#cca389", "#e2d9e2"],
+            10: ["#e2d9e2", "#9ebbc9", "#6785be", "#5e43a5", "#421257", "#471340", "#8e2c50", "#ba6657", "#ceac94", "#e2d9e2"],
+            11: ["#e2d9e2", "#a6bfca", "#6d90c0", "#5f58b0", "#531e7c", "#2f1436", "#64194b", "#9f3c50", "#c0755e", "#d0b39e", "#e2d9e2"],
+            12: ["#e2d9e2", "#adc3cd", "#759ac1", "#6068b6", "#5b3196", "#3e1150", "#41123d", "#7b2150", "#a94950", "#c48065", "#d2b7a5", "#e2d9e2"],
+        }, TwilightShift: {
+            2: ["#e2d9e2", "#301437"], //does not make sense...
+            3: ["#e2d9e2", "#301437", "#e2d9e2"],
+            4: ["#e2d9e2", "#8d2b50", "#5e45a6", "#e2d9e2"],
+            5: ["#e2d9e2", "#b25652", "#301437", "#6276ba", "#e2d9e2"],
+            6: ["#e2d9e2", "#c0745d", "#63184b", "#541e7e", "#6e91c0", "#e2d9e2"],
+            7: ["#e2d9e2", "#c6896c", "#8d2b50", "#301437", "#5e45a6", "#7ba1c2", "#e2d9e2"],
+            8: ["#e2d9e2", "#ca997c", "#a54350", "#501444", "#491564", "#5f61b4", "#89adc5", "#e2d9e2"],
+            9: ["#e2d9e2", "#cca389", "#b25652", "#741e4f", "#301437", "#592a8f", "#6276ba", "#95b5c7", "#e2d9e2"],
+            10: ["#e2d9e2", "#ceac94", "#ba6657", "#8d2b50", "#471340", "#421257", "#5e45a6", "#6785be", "#9ebbc9", "#e2d9e2"],
+            11: ["#e2d9e2", "#d0b29c", "#c0745d", "#9e3b50", "#63184b", "#301437", "#541e7e", "#5f59b1", "#6e91c0", "#a7c0cb", "#e2d9e2"],
+            12: ["#e2d9e2", "#d2b7a5", "#c48065", "#a94950", "#7b2150", "#41123d", "#3e1150", "#5b3196", "#6068b6", "#759ac1", "#adc3cd", "#e2d9e2"],
+        }, Plasma: {
+            2: ["#cc4778", "#f0f921"],
+            3: ["#0d0887", "#cc4778", "#f0f921"],
+            4: ["#0d0887", "#9c179e", "#ed7953", "#f0f921"],
+            5: ["#0d0887", "#7e03a8", "#cc4778", "#f89540", "#f0f921"],
+            6: ["#0d0887", "#6a00a8", "#b12a90", "#e16462", "#fca636", "#f0f921"],
+            7: ["#0d0887", "#5c01a6", "#9c179e", "#cc4778", "#ed7953", "#fdb42f", "#f0f921"],
+            8: ["#0d0887", "#5302a3", "#8b0aa5", "#b83289", "#db5c68", "#f48849", "#febd2a", "#f0f921"],
+            9: ["#0d0887", "#4c02a1", "#7e03a8", "#aa2395", "#cc4778", "#e66c5c", "#f89540", "#fdc527", "#f0f921"],
+            10: ["#0d0887", "#46039f", "#7201a8", "#9c179e", "#bd3786", "#d8576b", "#ed7953", "#fb9f3a", "#fdca26", "#f0f921"],
+            11: ["#0d0887", "#41049d", "#6a00a8", "#8f0da4", "#b12a90", "#cc4778", "#e16462", "#f2844b", "#fca636", "#fcce25", "#f0f921"],
+            12: ["#0d0887", "#3e049c", "#6300a7", "#8606a6", "#a62098", "#c03a83", "#d5546e", "#e76f5a", "#f68d45", "#fdae32", "#fcd225", "#f0f921"],
+        }, YlGn: {
+            2: ["#f7fcb9", "#31a354"],
+            3: ["#f7fcb9", "#addd8e", "#31a354"],
+            4: ["#ffffcc", "#c2e699", "#78c679", "#238443"],
+            5: ["#ffffcc", "#c2e699", "#78c679", "#31a354", "#006837"],
+            6: ["#ffffcc", "#d9f0a3", "#addd8e", "#78c679", "#31a354", "#006837"],
+            7: ["#ffffcc", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#238443", "#005a32"],
+            8: ["#ffffe5", "#f7fcb9", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#238443", "#005a32"],
+            9: ["#ffffe5", "#f7fcb9", "#d9f0a3", "#addd8e", "#78c679", "#41ab5d", "#238443", "#006837", "#004529"]
+        }, YlGnBu: {
+            2: ["#edf8b1", "#2c7fb8"],
+            3: ["#edf8b1", "#7fcdbb", "#2c7fb8"],
+            4: ["#ffffcc", "#a1dab4", "#41b6c4", "#225ea8"],
+            5: ["#ffffcc", "#a1dab4", "#41b6c4", "#2c7fb8", "#253494"],
+            6: ["#ffffcc", "#c7e9b4", "#7fcdbb", "#41b6c4", "#2c7fb8", "#253494"],
+            7: ["#ffffcc", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#0c2c84"],
+            8: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#0c2c84"],
+            9: ["#ffffd9", "#edf8b1", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8", "#253494", "#081d58"]
+        }, BuGn: {
+            2: ["#e5f5f9", "#2ca25f"],
+            3: ["#e5f5f9", "#99d8c9", "#2ca25f"],
+            4: ["#edf8fb", "#b2e2e2", "#66c2a4", "#238b45"],
+            5: ["#edf8fb", "#b2e2e2", "#66c2a4", "#2ca25f", "#006d2c"],
+            6: ["#edf8fb", "#ccece6", "#99d8c9", "#66c2a4", "#2ca25f", "#006d2c"],
+            7: ["#edf8fb", "#ccece6", "#99d8c9", "#66c2a4", "#41ae76", "#238b45", "#005824"],
+            8: ["#f7fcfd", "#e5f5f9", "#ccece6", "#99d8c9", "#66c2a4", "#41ae76", "#238b45", "#005824"],
+            9: ["#f7fcfd", "#e5f5f9", "#ccece6", "#99d8c9", "#66c2a4", "#41ae76", "#238b45", "#006d2c", "#00441b"]
+        }, PuBuGn: {
+            2: ["#ece2f0", "#1c9099"],
+            3: ["#ece2f0", "#a6bddb", "#1c9099"],
+            4: ["#f6eff7", "#bdc9e1", "#67a9cf", "#02818a"],
+            5: ["#f6eff7", "#bdc9e1", "#67a9cf", "#1c9099", "#016c59"],
+            6: ["#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf", "#1c9099", "#016c59"],
+            7: ["#f6eff7", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016450"],
+            8: ["#fff7fb", "#ece2f0", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016450"],
+            9: ["#fff7fb", "#ece2f0", "#d0d1e6", "#a6bddb", "#67a9cf", "#3690c0", "#02818a", "#016c59", "#014636"]
+        }, BuPu: {
+            2: ["#e0ecf4", "#8856a7"],
+            3: ["#e0ecf4", "#9ebcda", "#8856a7"],
+            4: ["#edf8fb", "#b3cde3", "#8c96c6", "#88419d"],
+            5: ["#edf8fb", "#b3cde3", "#8c96c6", "#8856a7", "#810f7c"],
+            6: ["#edf8fb", "#bfd3e6", "#9ebcda", "#8c96c6", "#8856a7", "#810f7c"],
+            7: ["#edf8fb", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#6e016b"],
+            8: ["#f7fcfd", "#e0ecf4", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#6e016b"],
+            9: ["#f7fcfd", "#e0ecf4", "#bfd3e6", "#9ebcda", "#8c96c6", "#8c6bb1", "#88419d", "#810f7c", "#4d004b"]
+        }, RdPu: {
+            2: ["#fde0dd", "#c51b8a"],
+            3: ["#fde0dd", "#fa9fb5", "#c51b8a"],
+            4: ["#feebe2", "#fbb4b9", "#f768a1", "#ae017e"],
+            5: ["#feebe2", "#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"],
+            6: ["#feebe2", "#fcc5c0", "#fa9fb5", "#f768a1", "#c51b8a", "#7a0177"],
+            7: ["#feebe2", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177"],
+            8: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177"],
+            9: ["#fff7f3", "#fde0dd", "#fcc5c0", "#fa9fb5", "#f768a1", "#dd3497", "#ae017e", "#7a0177", "#49006a"]
+        }, YlOrRd: {
+            2: ["#ffeda0", "#f03b20"],
+            3: ["#ffeda0", "#feb24c", "#f03b20"],
+            4: ["#ffffb2", "#fecc5c", "#fd8d3c", "#e31a1c"],
+            5: ["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"],
+            6: ["#ffffb2", "#fed976", "#feb24c", "#fd8d3c", "#f03b20", "#bd0026"],
+            7: ["#ffffb2", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#b10026"],
+            8: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#b10026"],
+            9: ["#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#bd0026", "#800026"]
+        }, Purples: {
+            2: ["#efedf5", "#756bb1"],
+            3: ["#efedf5", "#bcbddc", "#756bb1"],
+            4: ["#f2f0f7", "#cbc9e2", "#9e9ac8", "#6a51a3"],
+            5: ["#f2f0f7", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"],
+            6: ["#f2f0f7", "#dadaeb", "#bcbddc", "#9e9ac8", "#756bb1", "#54278f"],
+            7: ["#f2f0f7", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#4a1486"],
+            8: ["#fcfbfd", "#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#4a1486"],
+            9: ["#fcfbfd", "#efedf5", "#dadaeb", "#bcbddc", "#9e9ac8", "#807dba", "#6a51a3", "#54278f", "#3f007d"]
+        }, Blues: {
+            2: ["#deebf7", "#3182bd"],
+            3: ["#deebf7", "#9ecae1", "#3182bd"],
+            4: ["#eff3ff", "#bdd7e7", "#6baed6", "#2171b5"],
+            5: ["#eff3ff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"],
+            6: ["#eff3ff", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"],
+            7: ["#eff3ff", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"],
+            8: ["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"],
+            9: ["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"]
+        }, Greens: {
+            2: ["#e5f5e0", "#31a354"],
+            3: ["#e5f5e0", "#a1d99b", "#31a354"],
+            4: ["#edf8e9", "#bae4b3", "#74c476", "#238b45"],
+            5: ["#edf8e9", "#bae4b3", "#74c476", "#31a354", "#006d2c"],
+            6: ["#edf8e9", "#c7e9c0", "#a1d99b", "#74c476", "#31a354", "#006d2c"],
+            7: ["#edf8e9", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#005a32"],
+            8: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#005a32"],
+            9: ["#f7fcf5", "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"]
+        }, Reds: {
+            2: ["#fee0d2", "#de2d26"],
+            3: ["#fee0d2", "#fc9272", "#de2d26"],
+            4: ["#fee5d9", "#fcae91", "#fb6a4a", "#cb181d"],
+            5: ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"],
+            6: ["#fee5d9", "#fcbba1", "#fc9272", "#fb6a4a", "#de2d26", "#a50f15"],
+            7: ["#fee5d9", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#99000d"],
+            8: ["#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#99000d"],
+            9: ["#fff5f0", "#fee0d2", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#a50f15", "#67000d"]
+        }, Greys: {
+            2: ["#f0f0f0", "#636363"],
+            3: ["#f0f0f0", "#bdbdbd", "#636363"],
+            4: ["#f7f7f7", "#cccccc", "#969696", "#525252"],
+            5: ["#f7f7f7", "#cccccc", "#969696", "#636363", "#252525"],
+            6: ["#f7f7f7", "#d9d9d9", "#bdbdbd", "#969696", "#636363", "#252525"],
+            7: ["#f7f7f7", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525"],
+            8: ["#ffffff", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525"],
+            9: ["#ffffff", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525", "#000000"]
+        }, PuOr: {
+            2: ["#f1a340", "#998ec3"],
+            3: ["#f1a340", "#f7f7f7", "#998ec3"],
+            4: ["#e66101", "#fdb863", "#b2abd2", "#5e3c99"],
+            5: ["#e66101", "#fdb863", "#f7f7f7", "#b2abd2", "#5e3c99"],
+            6: ["#b35806", "#f1a340", "#fee0b6", "#d8daeb", "#998ec3", "#542788"],
+            7: ["#b35806", "#f1a340", "#fee0b6", "#f7f7f7", "#d8daeb", "#998ec3", "#542788"],
+            8: ["#b35806", "#e08214", "#fdb863", "#fee0b6", "#d8daeb", "#b2abd2", "#8073ac", "#542788"],
+            9: ["#b35806", "#e08214", "#fdb863", "#fee0b6", "#f7f7f7", "#d8daeb", "#b2abd2", "#8073ac", "#542788"],
+            10: ["#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6", "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"],
+            11: ["#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6", "#f7f7f7", "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"]
+        }, BrBG: {
+            2: ["#d8b365", "#5ab4ac"],
+            3: ["#d8b365", "#f5f5f5", "#5ab4ac"],
+            4: ["#a6611a", "#dfc27d", "#80cdc1", "#018571"],
+            5: ["#a6611a", "#dfc27d", "#f5f5f5", "#80cdc1", "#018571"],
+            6: ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
+            7: ["#8c510a", "#d8b365", "#f6e8c3", "#f5f5f5", "#c7eae5", "#5ab4ac", "#01665e"],
+            8: ["#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#c7eae5", "#80cdc1", "#35978f", "#01665e"],
+            9: ["#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#f5f5f5", "#c7eae5", "#80cdc1", "#35978f", "#01665e"],
+            10: ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"],
+            11: ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#f5f5f5", "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"]
+        }, PRGn: {
+            2: ["#af8dc3", "#7fbf7b"],
+            3: ["#af8dc3", "#f7f7f7", "#7fbf7b"],
+            4: ["#7b3294", "#c2a5cf", "#a6dba0", "#008837"],
+            5: ["#7b3294", "#c2a5cf", "#f7f7f7", "#a6dba0", "#008837"],
+            6: ["#762a83", "#af8dc3", "#e7d4e8", "#d9f0d3", "#7fbf7b", "#1b7837"],
+            7: ["#762a83", "#af8dc3", "#e7d4e8", "#f7f7f7", "#d9f0d3", "#7fbf7b", "#1b7837"],
+            8: ["#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837"],
+            9: ["#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#f7f7f7", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837"],
+            10: ["#40004b", "#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837", "#00441b"],
+            11: ["#40004b", "#762a83", "#9970ab", "#c2a5cf", "#e7d4e8", "#f7f7f7", "#d9f0d3", "#a6dba0", "#5aae61", "#1b7837", "#00441b"]
+        }, PiYG: {
+            2: ["#e9a3c9", "#a1d76a"],
+            3: ["#e9a3c9", "#f7f7f7", "#a1d76a"],
+            4: ["#d01c8b", "#f1b6da", "#b8e186", "#4dac26"],
+            5: ["#d01c8b", "#f1b6da", "#f7f7f7", "#b8e186", "#4dac26"],
+            6: ["#c51b7d", "#e9a3c9", "#fde0ef", "#e6f5d0", "#a1d76a", "#4d9221"],
+            7: ["#c51b7d", "#e9a3c9", "#fde0ef", "#f7f7f7", "#e6f5d0", "#a1d76a", "#4d9221"],
+            8: ["#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221"],
+            9: ["#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#f7f7f7", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221"],
+            10: ["#8e0152", "#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221", "#276419"],
+            11: ["#8e0152", "#c51b7d", "#de77ae", "#f1b6da", "#fde0ef", "#f7f7f7", "#e6f5d0", "#b8e186", "#7fbc41", "#4d9221", "#276419"]
+        }, RdBu: {
+            2: ["#ef8a62", "#67a9cf"],
+            3: ["#ef8a62", "#f7f7f7", "#67a9cf"],
+            4: ["#ca0020", "#f4a582", "#92c5de", "#0571b0"],
+            5: ["#ca0020", "#f4a582", "#f7f7f7", "#92c5de", "#0571b0"],
+            6: ["#b2182b", "#ef8a62", "#fddbc7", "#d1e5f0", "#67a9cf", "#2166ac"],
+            7: ["#b2182b", "#ef8a62", "#fddbc7", "#f7f7f7", "#d1e5f0", "#67a9cf", "#2166ac"],
+            8: ["#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac"],
+            9: ["#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#f7f7f7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac"],
+            10: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac", "#053061"],
+            11: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#f7f7f7", "#d1e5f0", "#92c5de", "#4393c3", "#2166ac", "#053061"]
+        }, RdGy: {
+            2: ["#ef8a62", "#999999"],
+            3: ["#ef8a62", "#ffffff", "#999999"],
+            4: ["#ca0020", "#f4a582", "#bababa", "#404040"],
+            5: ["#ca0020", "#f4a582", "#ffffff", "#bababa", "#404040"],
+            6: ["#b2182b", "#ef8a62", "#fddbc7", "#e0e0e0", "#999999", "#4d4d4d"],
+            7: ["#b2182b", "#ef8a62", "#fddbc7", "#ffffff", "#e0e0e0", "#999999", "#4d4d4d"],
+            8: ["#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#e0e0e0", "#bababa", "#878787", "#4d4d4d"],
+            9: ["#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#ffffff", "#e0e0e0", "#bababa", "#878787", "#4d4d4d"],
+            10: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#e0e0e0", "#bababa", "#878787", "#4d4d4d", "#1a1a1a"],
+            11: ["#67001f", "#b2182b", "#d6604d", "#f4a582", "#fddbc7", "#ffffff", "#e0e0e0", "#bababa", "#878787", "#4d4d4d", "#1a1a1a"]
+        }, RdYlBu: {
+            2: ["#fc8d59", "#91bfdb"],
+            3: ["#fc8d59", "#ffffbf", "#91bfdb"],
+            4: ["#d7191c", "#fdae61", "#abd9e9", "#2c7bb6"],
+            5: ["#d7191c", "#fdae61", "#ffffbf", "#abd9e9", "#2c7bb6"],
+            6: ["#d73027", "#fc8d59", "#fee090", "#e0f3f8", "#91bfdb", "#4575b4"],
+            7: ["#d73027", "#fc8d59", "#fee090", "#ffffbf", "#e0f3f8", "#91bfdb", "#4575b4"],
+            8: ["#d73027", "#f46d43", "#fdae61", "#fee090", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4"],
+            9: ["#d73027", "#f46d43", "#fdae61", "#fee090", "#ffffbf", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4"],
+            10: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee090", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"],
+            11: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee090", "#ffffbf", "#e0f3f8", "#abd9e9", "#74add1", "#4575b4", "#313695"]
+        }, Spectral: {
+            2: ["#fc8d59", "#99d594"],
+            3: ["#fc8d59", "#ffffbf", "#99d594"],
+            4: ["#d7191c", "#fdae61", "#abdda4", "#2b83ba"],
+            5: ["#d7191c", "#fdae61", "#ffffbf", "#abdda4", "#2b83ba"],
+            6: ["#d53e4f", "#fc8d59", "#fee08b", "#e6f598", "#99d594", "#3288bd"],
+            7: ["#d53e4f", "#fc8d59", "#fee08b", "#ffffbf", "#e6f598", "#99d594", "#3288bd"],
+            8: ["#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#e6f598", "#abdda4", "#66c2a5", "#3288bd"],
+            9: ["#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#e6f598", "#abdda4", "#66c2a5", "#3288bd"],
+            10: ["#9e0142", "#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#e6f598", "#abdda4", "#66c2a5", "#3288bd", "#5e4fa2"],
+            11: ["#9e0142", "#d53e4f", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#e6f598", "#abdda4", "#66c2a5", "#3288bd", "#5e4fa2"]
+        }, RdYlGn: {
+            2: ["#fc8d59", "#91cf60"],
+            3: ["#fc8d59", "#ffffbf", "#91cf60"],
+            4: ["#d7191c", "#fdae61", "#a6d96a", "#1a9641"],
+            5: ["#d7191c", "#fdae61", "#ffffbf", "#a6d96a", "#1a9641"],
+            6: ["#d73027", "#fc8d59", "#fee08b", "#d9ef8b", "#91cf60", "#1a9850"],
+            7: ["#d73027", "#fc8d59", "#fee08b", "#ffffbf", "#d9ef8b", "#91cf60", "#1a9850"],
+            8: ["#d73027", "#f46d43", "#fdae61", "#fee08b", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850"],
+            9: ["#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850"],
+            10: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"],
+            11: ["#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"]
+        }, Accent: {
+            2: ["#7fc97f", "#beaed4"],
+            3: ["#7fc97f", "#beaed4", "#fdc086"],
+            4: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99"],
+            5: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0"],
+            6: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f"],
+            7: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17"],
+            8: ["#7fc97f", "#beaed4", "#fdc086", "#ffff99", "#386cb0", "#f0027f", "#bf5b17", "#666666"]
+        }, Dark2: {
+            2: ["#1b9e77", "#d95f02"],
+            3: ["#1b9e77", "#d95f02", "#7570b3"],
+            4: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a"],
+            5: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e"],
+            6: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02"],
+            7: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d"],
+            8: ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"]
+        }, Paired: {
+            2: ["#a6cee3", "#1f78b4"],
+            3: ["#a6cee3", "#1f78b4", "#b2df8a"],
+            4: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c"],
+            5: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99"],
+            6: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c"],
+            7: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f"],
+            8: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00"],
+            9: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6"],
+            10: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a"],
+            11: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99"],
+            12: ["#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928"]
+        }, Pastel1: {
+            2: ["#fbb4ae", "#ccebc5"],
+            3: ["#fbb4ae", "#b3cde3", "#ccebc5"],
+            4: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4"],
+            5: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6"],
+            6: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc"],
+            7: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc", "#e5d8bd"],
+            8: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc", "#e5d8bd", "#fddaec"],
+            9: ["#fbb4ae", "#b3cde3", "#ccebc5", "#decbe4", "#fed9a6", "#ffffcc", "#e5d8bd", "#fddaec", "#f2f2f2"]
+        }, Pastel2: {
+            2: ["#b3e2cd", "#cbd5e8"],
+            3: ["#b3e2cd", "#fdcdac", "#cbd5e8"],
+            4: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4"],
+            5: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9"],
+            6: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9", "#fff2ae"],
+            7: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9", "#fff2ae", "#f1e2cc"],
+            8: ["#b3e2cd", "#fdcdac", "#cbd5e8", "#f4cae4", "#e6f5c9", "#fff2ae", "#f1e2cc", "#cccccc"]
+        }, Set1: {
+            2: ["#e41a1c", "#377eb8"],
+            3: ["#e41a1c", "#377eb8", "#4daf4a"],
+            4: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"],
+            5: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00"],
+            6: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33"],
+            7: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628"],
+            8: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628", "#f781bf"],
+            9: ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628", "#f781bf", "#999999"]
+        }, Set2: {
+            2: ["#66c2a5", "#fc8d62"],
+            3: ["#66c2a5", "#fc8d62", "#8da0cb"],
+            4: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3"],
+            5: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854"],
+            6: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f"],
+            7: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494"],
+            8: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3"]
+        }, Set3: {
+            2: ["#8dd3c7", "#ffffb3"],
+            3: ["#8dd3c7", "#ffffb3", "#bebada"],
+            4: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072"],
+            5: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3"],
+            6: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462"],
+            7: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69"],
+            8: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5"],
+            9: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#d9d9d9"],
+            10: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#d9d9d9", "#bc80bd"],
+            11: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#d9d9d9", "#bc80bd", "#ccebc5"],
+            12: ["#8dd3c7", "#ffffb3", "#bebada", "#fb8072", "#80b1d3", "#fdb462", "#b3de69", "#fccde5", "#d9d9d9", "#bc80bd", "#ccebc5", "#ffed6f"]
+        }
+    };
 })(OpenSeadragon);
 
 (function($) {
@@ -2094,17 +2503,17 @@ ${code}
 
         /**
          * Sets common properties needed to create the controls:
-         *  this.context @extends FlexRenderer.ShaderLayer - owner context
-         *  this.name - name of the parameter for this.context.[load/store]Property(...) call
+         *  this.owner @extends FlexRenderer.ShaderLayer - owner
+         *  this.name - name of the parameter for this.owner.[load/store]Property(...) call
          *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
-         *      created as ${uniq}${name}-${context.uid}
+         *      created as ${uniq}${name}-${owner.uid}
          *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
          *
          * If extended (class-based definition, see registerCass) children should define constructor as
          *
          * @example
-         *   constructor(context, name, webGLVariableName, params) {
-         *       super(context, name, webGLVariableName);
+         *   constructor(owner, name, webGLVariableName, params) {
+         *       super(owner, name, webGLVariableName);
          *       ...
          *       //possibly make use of params:
          *       this.params = this.getParams(params);
@@ -2243,7 +2652,7 @@ ${code}
 
         /**
          * JavaScript initialization
-         *  - read/store default properties here using this.context.[load/store]Property(...)
+         *  - read/store default properties here using this.owner.[load/store]Property(...)
          *  - work with own HTML elements already attached to the DOM
          *      - set change listeners, input values!
          */
@@ -2254,7 +2663,7 @@ ${code}
         /**
          * TODO: improve overall setter API
          * Allows to set the control value programatically.
-         * Does not trigger canvas re-rednreing, must be done manually (e.g. control.context.invalidate())
+         * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
          * @param encodedValue any value the given control can support, encoded
          *  (e.g. as the control acts on the GUI - for input number of
          *    values between 5 and 42, the value can be '6' or 6 or 6.15
@@ -2309,7 +2718,7 @@ ${code}
          * Sample the parameter using ratio as interpolation, must be one-liner expression so that GLSL code can write
          *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
          * NOTE: you can define your own global-scope functions to keep one-lined sampling,
-         * see this.context.includeGlobalCode(...)
+         * see this.owner.includeGlobalCode(...)
          * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active
          *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
          * @param {string} valueGlType GLSL type of the value
@@ -2502,7 +2911,7 @@ ${code}
      *     ...
      * }
      *
-     * The subclass constructor should get the context reference, the name
+     * The subclass constructor should get the owner reference, the name
      * of the input and the parametrization.
      *
      * Further parameters passed are dependent on the control type, see
@@ -2637,13 +3046,13 @@ ${code}
     };
 
     $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(context, name, webGLVariableName, params) {
-            super(context, name, webGLVariableName);
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
             this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                context, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
+                owner, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
             params.title = "";
             this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                context, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
+                owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
         }
 
         init() {
@@ -2651,17 +3060,17 @@ ${code}
             this._c2._params = this._c1._params;
             this._c1.init();
             this._c2.init();
-            this._c1.on("default", function(value, encoded, context) {
+            this._c1.on("default", function(value, encoded, owner) {
                 document.getElementById(_this._c2.id).value = encoded;
                 _this._c2.value = value;
-                _this.changed("default", value, encoded, context);
+                _this.changed("default", value, encoded, owner);
             }, true); //silently fail if registered
-            this._c2.on("default", function(value, encoded, context) {
+            this._c2.on("default", function(value, encoded, owner) {
                 document.getElementById(_this._c1.id).value = encoded;
                 _this._c1.value = value;
                 // Only C1 loads values to gpu, request change
                 _this._c1._needsLoad = true;
-                _this.changed("default", value, encoded, context);
+                _this.changed("default", value, encoded, owner);
             }, true); //silently fail if registered
         }
 
@@ -2709,6 +3118,782 @@ ${code}
         }
     };
     $.FlexRenderer.UIControls.registerClass("range_input", $.FlexRenderer.UIControls.SliderWithInput);
+})(OpenSeadragon);
+
+
+(function($) {
+    /**
+     * ColorMap Input
+     * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
+     */
+    $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.IControl {
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
+            this.prepare();
+        }
+
+        prepare() {
+            //Note that builtin colormap must support 2->this.MAX_SAMPLES color arrays
+            this.MAX_SAMPLES = 8;
+            this.GLOBAL_GLSL_KEY = 'colormap';
+
+            this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
+            if (this.params.continuous) {
+                this.cssGradient = this._continuousCssFromPallete;
+            } else {
+                this.cssGradient = this._discreteCssFromPallete;
+            }
+            this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
+        }
+
+        init() {
+            this.value = this.load(this.params.default);
+
+            //steps could have been set manually from the outside
+            if (!Array.isArray(this.steps)) {
+                this.setSteps();
+            }
+
+            if (!this.value || !$.FlexRenderer.ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
+                this.value = $.FlexRenderer.ColorMaps.defaults[this.params.mode];
+            }
+            this.colorPallete = $.FlexRenderer.ColorMaps[this.value][this.maxSteps];
+
+            if (this.params.interactive) {
+                const _this = this;
+                let updater = function(e) {
+                    let self = $(e.target),
+                        selected = self.val();
+                    _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
+                    _this._setPallete(_this.colorPallete);
+                    self.css("background", _this.cssGradient(_this.colorPallete));
+                    _this.value = selected;
+                    _this.store(selected);
+                    _this.changed("default", _this.pallete, _this.value, _this);
+                    _this.owner.invalidate();
+                };
+
+                this._setPallete(this.colorPallete);
+                let node = this.updateColormapUI();
+
+                let schemas = [];
+                for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
+                    schemas.push(`<option value="${pallete}">${pallete}</option>`);
+                }
+                node.html(schemas.join(""));
+                node.val(this.value);
+                node.on('change', updater);
+            } else {
+                this._setPallete(this.colorPallete);
+                this.updateColormapUI();
+                //be careful with what the DOM elements contains or not if not interactive...
+                let existsNode = document.getElementById(this.id);
+                if (existsNode) {
+                    existsNode.style.background = this.cssGradient(this.pallete);
+                }
+            }
+        }
+
+        _glslCode() {
+            return `
+#define COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} ${this.MAX_SAMPLES}
+vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}], in float steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1], in int max_steps, in bool discrete) {
+    for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
+        if (ratio <= steps[i]) {
+            if (discrete) return map[i-1];
+
+            float scale = (ratio - steps[i-1]) / (steps[i] - steps[i-1]) - 0.5;
+
+            if (scale < .0) {
+                if (i == 1) return map[0];
+                //scale should be positive, but we need to keep the right direction
+                return mix(map[i-1], map[i-2], -scale);
+            }
+
+            if (i == max_steps) return map[i-1];
+            return mix(map[i-1], map[i], scale);
+        } else if (i >= max_steps) {
+            return map[i-1];
+        }
+    }
+}`;
+        }
+
+        updateColormapUI() {
+            let node = $(`#${this.id}`);
+            node.css("background", this.cssGradient(this.colorPallete));
+            return node;
+        }
+
+        /**
+         * Setup the pallete density, the value is trimmed with a cap of MAX_SAMPLES
+         * @param {(number|number[])} steps - amount of sampling steps
+         *   number: input number of colors to use
+         *   array: put number of colors + 1 values, example: for three color pallete,
+         *      put 4 numbers: 2 separators and 2 bounds (min, max value)
+         * @param maximum max number of steps available, should not be greater than this.MAX_SAMPLES
+         *   unless you know you can modify that value
+         */
+        setSteps(steps, maximum = this.MAX_SAMPLES) {
+            this.steps = steps || this.params.steps;
+            if (!Array.isArray(this.steps)) {
+                if (this.steps < 2) {
+                    this.steps = 2;
+                }
+                if (this.steps > maximum) {
+                    this.steps = maximum;
+                }
+                this.maxSteps = this.steps;
+
+                this.steps++; //step generated must have one more value (separators for colors)
+                let step = 1.0 / this.maxSteps;
+                this.steps = new Array(maximum + 1);
+                this.steps.fill(-1);
+                this.steps[0] = 0;
+                for (let i = 1; i < this.maxSteps; i++) {
+                    this.steps[i] = this.steps[i - 1] + step;
+                }
+                this.steps[this.maxSteps] = 1.0;
+            } else {
+                this.steps = this.steps.filter(x => x >= 0);
+                this.steps.sort();
+                let max = this.steps[this.steps.length - 1];
+                let min = this.steps[0];
+                this.steps = this.steps.slice(0, maximum + 1);
+                this.maxSteps = this.steps.length - 1;
+                this.steps.forEach(x => (x - min) / (max - min));
+                for (let i = this.maxSteps + 1; i < maximum + 1; i++) {
+                    this.steps.push(-1);
+                }
+            }
+        }
+
+        _continuousCssFromPallete(pallete) {
+            let css = [`linear-gradient(90deg`];
+            for (let i = 0; i < this.maxSteps; i++) {
+                css.push(`, ${pallete[i]} ${Math.round((this.steps[i] + this.steps[i + 1]) * 50)}%`);
+            }
+            css.push(")");
+            return css.join("");
+        }
+
+        _discreteCssFromPallete(pallete) {
+            let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
+            for (let i = 1; i < this.maxSteps; i++) {
+                css.push(`, ${pallete[i - 1]} ${Math.round(this.steps[i] * 100)}%, ${pallete[i]} ${Math.round(this.steps[i] * 100)}%`);
+            }
+            css.push(")");
+            return css.join("");
+        }
+
+        _setPallete(newPallete) {
+            if (typeof newPallete[0] === "string") {
+                let temp = newPallete; //if this.pallete passed
+                this.pallete = [];
+                for (let color of temp) {
+                    this.pallete.push(...this.parser(color));
+                }
+            }
+            for (let i = this.pallete.length; i < 3 * (this.MAX_SAMPLES); i++) {
+                this.pallete.push(0);
+            }
+        }
+
+        glDrawing(program, gl) {
+            gl.uniform3fv(this.colormapGluint, Float32Array.from(this.pallete));
+            gl.uniform1fv(this.stepsGluint, Float32Array.from(this.steps));
+            gl.uniform1i(this.colormapSizeGluint, this.maxSteps);
+        }
+
+        glLoaded(program, gl) {
+            this.stepsGluint = gl.getUniformLocation(program, this.webGLVariableName + "_steps[0]");
+            this.colormapGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap[0]");
+            this.colormapSizeGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap_size");
+        }
+
+        toHtml(classes = "", css = "") {
+            if (!this.params.interactive) {
+                return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2"
+style="width: 60%;">${this.load(this.params.default)}</span></div>`;
+            }
+
+            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow"
+style="width: 60%;"></select></div>`;
+        }
+
+        define() {
+            return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}];
+uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1];
+uniform int ${this.webGLVariableName}_colormap_size;`;
+        }
+
+        get type() {
+            return "vec3";
+        }
+
+        sample(value = undefined, valueGlType = 'void') {
+            if (!value || valueGlType !== 'float') {
+                return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+            }
+            return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.webGLVariableName}_colormap_size, ${!this.params.continuous})`;
+        }
+
+        get supports() {
+            return {
+                steps: 3,
+                default: "YlOrRd",
+                mode: "sequential",  // todo provide 'set' of available values for documentation
+                interactive: true,
+                title: "Colormap",
+                continuous: false,
+            };
+        }
+
+        get supportsAll() {
+            return {
+                steps: [3, [0, 0.5, 1]]
+            };
+        }
+
+        get raw() {
+            return this.pallete;
+        }
+
+        get encoded() {
+            return this.value;
+        }
+    };
+    $.FlexRenderer.UIControls.registerClass("colormap", $.FlexRenderer.UIControls.ColorMap);
+
+
+    $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexRenderer.UIControls.ColorMap {
+        prepare() {
+            this.MAX_SAMPLES = 32;
+            this.GLOBAL_GLSL_KEY = 'custom_colormap';
+
+            this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
+            if (this.params.continuous) {
+                this.cssGradient = this._continuousCssFromPallete;
+            } else {
+                this.cssGradient = this._discreteCssFromPallete;
+            }
+            this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
+        }
+
+        init() {
+            this.value = this.load(this.params.default);
+
+            if (!Array.isArray(this.steps)) {
+                this.setSteps();
+            }
+            if (this.maxSteps < this.value.length) {
+                this.value = this.value.slice(0, this.maxSteps);
+            }
+
+            //super class compatibility in methods, keep updated
+            this.colorPallete = this.value;
+
+            if (this.params.interactive) {
+                const _this = this;
+                let updater = function(e) {
+                    let self = $(e.target),
+                        index = Number.parseInt(e.target.dataset.index, 10),
+                        selected = self.val();
+
+                    if (Number.isInteger(index)) {
+                        _this.colorPallete[index] = selected;
+                        _this._setPallete(_this.colorPallete);
+                        self.parent().css("background", _this.cssGradient(_this.colorPallete));
+                        _this.value = _this.colorPallete;
+                        _this.store(_this.colorPallete);
+                        _this.changed("default", _this.pallete, _this.value, _this);
+                        _this.owner.invalidate();
+                    }
+                };
+
+                this._setPallete(this.colorPallete);
+                let node = this.updateColormapUI();
+
+                const width = 1 / this.colorPallete.length * 100;
+                node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
+                node.val(this.value);
+                node.children().on('change', updater);
+            } else {
+                this._setPallete(this.colorPallete);
+                this.updateColormapUI();
+                //be careful with what the DOM elements contains or not if not interactive...
+                let existsNode = document.getElementById(this.id);
+                if (existsNode) {
+                    existsNode.style.background = this.cssGradient(this.pallete);
+                }
+            }
+        }
+
+        toHtml(classes = "", css = "") {
+            if (!this.params.interactive) {
+                return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block"
+style="width: 60%;">&emsp;</span></div>`;
+            }
+
+            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block"
+style="width: 60%;"></span></div>`;
+        }
+
+        get supports() {
+            return {
+                default: ["#000000", "#888888", "#ffffff"],
+                steps: 3,  // todo probably not necessary
+                mode: "sequential",  // todo not used
+                interactive: true,
+                title: "Colormap:",
+                continuous: false,
+            };
+        }
+
+        get supportsAll() {
+            return {
+                steps: [3, [0, 0.5, 1]]
+            };
+        }
+    });
+
+    /**
+     * Advanced slider that can define multiple points and interval masks
+     * | --- A - B -- C -- D ----- |
+     * will be sampled with mask float[5], the result is
+     * the percentage reached within this interval: e.g. if C <= ratio < D, then
+     * the result is  4/5 * mask[3]   (4-th interval out of 5 reached, multiplied by 4th mask)
+     * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
+     */
+    $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIControls.IControl {
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
+            this.MAX_SLIDERS = 12;
+
+            this.owner.includeGlobalCode('advanced_slider', `
+#define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS}
+float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN], in float mask[ADVANCED_SLIDER_LEN+1], in bool maskOnly, in float minValue) {
+    float bigger = .0, actualLength = .0, masked = minValue;
+    bool sampling = true;
+    for (int i = 0; i < ADVANCED_SLIDER_LEN; i++) {
+        if (breaks[i] < .0) {
+            if (sampling) masked = mask[i];
+            sampling = false;
+            break;
+        }
+
+        if (sampling) {
+            if (ratio <= breaks[i]) {
+                sampling = false;
+                masked = mask[i];
+            } else bigger++;
+        }
+        actualLength++;
+    }
+    if (sampling) masked = mask[ADVANCED_SLIDER_LEN];
+    if (maskOnly) return masked;
+    return masked * bigger / actualLength;
+}`);
+        }
+
+        init() {
+            this._updatePending = false;
+            //encoded values hold breaks values between min and max,
+            this.encodedValues = this.load(this.params.breaks, "breaks");
+            this.mask = this.load(this.params.mask, "mask");
+
+            this.value = this.encodedValues.map(this._normalize.bind(this));
+            this.value = this.value.slice(0, this.MAX_SLIDERS);
+            this.sampleSize = this.value.length;
+
+            this.mask = this.mask.slice(0, this.MAX_SLIDERS + 1);
+            let size = this.mask.length;
+            this.connects = this.value.map(_ => true);
+            this.connects.push(true); //intervals have +1 elems
+            for (let i = size; i < this.MAX_SLIDERS + 1; i++) {
+                this.mask.push(-1);
+            }
+
+            if (!this.params.step || this.params.step < 1) {
+                delete this.params.step;
+            }
+
+            let limit =  this.value.length < 2 ? undefined : this.params.max;
+
+            let format = this.params.max < 10 ? {
+                to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 1 }),
+                from: v => Number.parseFloat(v)
+            } : {
+                to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 0 }),
+                from: v => Number.parseFloat(v)
+            };
+
+            if (this.params.interactive) {
+                const _this = this;
+                let container = document.getElementById(this.id);
+                if (!window.noUiSlider) {
+                    throw new Error("noUiSlider not found: install noUiSlide library!");
+                }
+                window.noUiSlider.create(container, {
+                    range: {
+                        min: _this.params.min,
+                        max: _this.params.max
+                    },
+                    step: _this.params.step,
+                    start: _this.encodedValues,
+                    margin: _this.params.minGap,
+                    limit: limit,
+                    connect: _this.connects,
+                    direction: 'ltr',
+                    orientation: 'horizontal',
+                    behaviour: 'drag',
+                    tooltips: true,
+                    format: format,
+                    pips: $.extend({format: format}, this.params.pips)
+                });
+
+                if (this.params.pips) {
+                    let pips = container.querySelectorAll('.noUi-value');
+                    /* eslint-disable no-inner-declarations */
+                    function clickOnPip() {
+                        let idx = 0;
+                        /* eslint-disable no-invalid-this */
+                        let value = Number(this.getAttribute('data-value'));
+                        let encoded = container.noUiSlider.get();
+                        let values = encoded.map(v => Number.parseFloat(v));
+
+                        if (Array.isArray(values)) {
+                            let closest = Math.abs(values[0] - value);
+                            for (let i = 1; i < values.length; i++) {
+                                let d = Math.abs(values[i] - value);
+                                if (d < closest) {
+                                    idx = i;
+                                    closest = d;
+                                }
+                            }
+                            container.noUiSlider.setHandle(idx, value, false, false);
+                        } else { //just one
+                            container.noUiSlider.set(value);
+                        }
+                        value = _this._normalize(value);
+                        _this.value[idx] = value;
+
+                        _this.changed("breaks", _this.value, encoded, _this);
+                        _this.store(values, "breaks");
+                        _this.owner.invalidate();
+                    }
+
+                    for (let i = 0; i < pips.length; i++) {
+                        pips[i].addEventListener('click', clickOnPip);
+                    }
+                }
+
+                if (this.params.toggleMask) {
+                    this._originalMask = this.mask.map(x => x > 0 ? x : 1);
+                    let connects = container.querySelectorAll('.noUi-connect');
+                    for (let i = 0; i < connects.length; i++) {
+                        connects[i].addEventListener('mouseup', function(e) {
+                            let d = Math.abs(Date.now() - _this._timer);
+                            _this._timer = 0;
+                            if (d >= 180) {
+                                return;
+                            }
+
+                            let idx = Number.parseInt(this.dataset.index, 10);
+                            _this.mask[idx] = _this.mask[idx] > 0 ? 0 : _this._originalMask[idx];
+                            /* eslint-disable eqeqeq */
+                            this.style.background = (!_this.params.inverted && _this.mask[idx] > 0) ||
+                                (_this.params.inverted && _this.mask[idx] == 0) ?
+                                    "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                            _this.owner.invalidate();
+                            _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize - 1;
+                            _this.changed("mask", _this.mask, _this.mask, _this);
+                            _this.store(_this.mask, "mask");
+                        });
+
+                        connects[i].addEventListener('mousedown', function(e) {
+                            _this._timer = Date.now();
+                        });
+
+                        connects[i].style.cursor = "pointer";
+                    }
+                }
+
+                container.noUiSlider.on("change", function(strValues, handle, unencoded, tap, positions, noUiSlider) {
+                    _this.value[handle] = _this._normalize(unencoded[handle]);
+                    _this.encodedValues = strValues;
+                    if (_this._ignoreNextClick) {
+                        _this._ignoreNextClick = false;
+                    } else if (!_this._updatePending) {
+                        //can be called multiple times upon multiple handle updates, do once if possible
+                        _this._updatePending = true;
+                        setTimeout(_ => {
+                            //todo re-scale values or filter out -1ones
+                            _this.changed("breaks", _this.value, strValues, _this);
+                            _this.store(unencoded, "breaks");
+
+                            _this.owner.invalidate();
+                            _this._updatePending = false;
+                        }, 50);
+                    }
+                });
+
+                this._updateConnectStyles(container);
+            }
+
+            //do at last since value gets stretched by -1ones
+            for (let i =  this.sampleSize; i < this.MAX_SLIDERS; i++) {
+                this.value.push(-1);
+            }
+        }
+
+        _normalize(value) {
+            return (value - this.params.min) / (this.params.max - this.params.min);
+        }
+
+        _updateConnectStyles(container) {
+            if (!container) {
+                container = document.getElementById(this.id);
+            }
+            let pips = container.querySelectorAll('.noUi-connect');
+            for (let i = 0; i < pips.length; i++) {
+                /* eslint-disable eqeqeq */
+                pips[i].style.background = (!this.params.inverted && this.mask[i] > 0) ||
+                    (this.params.inverted && this.mask[i] == 0) ?
+                    "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                pips[i].dataset.index = (i).toString();
+            }
+        }
+
+        glDrawing(program, gl) {
+            gl.uniform1fv(this.breaksGluint, Float32Array.from(this.value));
+            gl.uniform1fv(this.maskGluint, Float32Array.from(this.mask));
+        }
+
+        glLoaded(program, gl) {
+            this.minGluint = gl.getUniformLocation(program, this.webGLVariableName + "_min");
+            gl.uniform1f(this.minGluint, this.params.min);
+            this.breaksGluint = gl.getUniformLocation(program, this.webGLVariableName + "_breaks[0]");
+            this.maskGluint = gl.getUniformLocation(program, this.webGLVariableName + "_mask[0]");
+        }
+
+        toHtml(classes = "", css = "") {
+            if (!this.params.interactive) {
+                return "";
+            }
+            return `<div style="${css}" class="${classes}"><span>${this.params.title}: </span><div id="${this.id}" style="height: 9px;
+margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
+        }
+
+        define() {
+            return `uniform float ${this.webGLVariableName}_min;
+uniform float ${this.webGLVariableName}_breaks[ADVANCED_SLIDER_LEN];
+uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
+        }
+
+        get type() {
+            return "float";
+        }
+
+        sample(value = undefined, valueGlType = 'void') {
+            // TODO: throwing & managing exception would be better, now we don't know what happened when this gets baked to GLSL
+            if (!value || valueGlType !== 'float') {
+                return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+            }
+            return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly}, ${this.webGLVariableName}_min)`;
+        }
+
+        get supports() {
+            return {
+                breaks: [0.2, 0.8],
+                mask: [1, 0, 1],
+                interactive: true,
+                inverted: true,
+                maskOnly: true,
+                toggleMask: true,
+                title: "Threshold",
+                min: 0,
+                max: 1,
+                minGap: 0.05,
+                step: null,
+                pips: {
+                    mode: 'positions',
+                    values: [0, 20, 40, 50, 60, 80, 90, 100],
+                    density: 4
+                }
+            };
+        }
+
+        get supportsAll() {
+            return {
+                step: [null, 0.1]
+            };
+        }
+
+        get raw() {
+            return this.value;
+        }
+
+        get encoded() {
+            return this.encodedValues;
+        }
+    };
+    $.FlexRenderer.UIControls.registerClass("advanced_slider", $.FlexRenderer.UIControls.AdvancedSlider);
+
+    /**
+     * Text area input
+     * @class WebGLModule.UIControls.TextArea
+     */
+    $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.IControl {
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
+        }
+
+        init() {
+            this.value = this.load(this.params.default);
+
+            if (this.params.interactive) {
+                const _this = this;
+                let updater = function(e) {
+                    let self = $(e.target);
+                    _this.value = self.val();
+                    _this.store(_this.value);
+                    _this.changed("default", _this.value, _this.value, _this);
+                };
+                let node = $(`#${this.id}`);
+                node.val(this.value);
+                node.on('change', updater);
+            } else {
+                let node = $(`#${this.id}`);
+                node.val(this.value);
+            }
+        }
+
+        glDrawing(program, gl) {
+            //do nothing
+        }
+
+        glLoaded(program, gl) {
+            //do nothing
+        }
+
+        toHtml(classes = "", css = "") {
+            let disabled = this.params.interactive ? "" : "disabled";
+            let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
+            return `<div class="${classes}">${title}<textarea id="${this.id}" class="form-control"
+style="width: 100%; display: block; resize: vertical; ${css}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
+        }
+
+        define() {
+            return "";
+        }
+
+        get type() {
+            return "text";
+        }
+
+        sample(value = undefined, valueGlType = 'void') {
+            return this.value;
+        }
+
+        get supports() {
+            return {
+                default: "",
+                placeholder: "",
+                interactive: true,
+                title: "Text"
+            };
+        }
+
+        get supportsAll() {
+            return {};
+        }
+
+        get raw() {
+            return this.value;
+        }
+
+        get encoded() {
+            return this.value;
+        }
+    };
+    $.FlexRenderer.UIControls.registerClass("text_area", $.FlexRenderer.UIControls.TextArea);
+
+    /**
+     * Button Input
+     * @class OpenSeadragon.FlexRenderer.UIControls.Button
+     */
+    $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.IControl {
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
+        }
+
+        init() {
+            this.value = this.load(this.params.default);
+
+            if (this.params.interactive) {
+                const _this = this;
+                let updater = function(e) {
+                    _this.value++;
+                    _this.store(_this.value);
+                    _this.changed("default", _this.value, _this.value, _this);
+                };
+                let node = $(`#${this.id}`);
+                node.html(this.params.title);
+                node.click(updater);
+            } else {
+                let node = $(`#${this.id}`);
+                node.html(this.params.title);
+            }
+        }
+
+        glDrawing(program, gl) {
+            //do nothing
+        }
+
+        glLoaded(program, gl) {
+            //do nothing
+        }
+
+        toHtml(classes = "", css = "") {
+            let disabled = this.params.interactive ? "" : "disabled";
+            css = `style="${css ? css : ""}float: right;"`;
+            return `<button id="${this.id}" ${css} class="${classes}" ${disabled}></button>`;
+        }
+
+        define() {
+            return "";
+        }
+
+        get type() {
+            return "action";
+        }
+
+        sample(value = undefined, valueGlType = 'void') {
+            return "";
+        }
+
+        get supports() {
+            return {
+                default: 0, //counts clicks
+                interactive: true,
+                title: "Button"
+            };
+        }
+
+        get supportsAll() {
+            return {};
+        }
+
+        get raw() {
+            return this.value;
+        }
+
+        get encoded() {
+            return this.value;
+        }
+    };
+    $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
 })(OpenSeadragon);
 
 (function($) {
@@ -6211,7 +7396,7 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-09-03
+//! Built on 2025-09-09
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -6384,7 +7569,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-09-03
+//! Built on 2025-09-09
 //! Git commit: --0f76ae9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
