@@ -4802,8 +4802,8 @@ details.collapse summary::-webkit-details-marker {
   right: 1rem;
 }
 
-.right-\[40px\] {
-  right: 40px;
+.right-\[30px\] {
+  right: 30px;
 }
 
 .start-1 {
@@ -5035,6 +5035,10 @@ details.collapse summary::-webkit-details-marker {
   width: auto;
 }
 
+.w-full {
+  width: 100%;
+}
+
 .max-w-sm {
   max-width: 24rem;
 }
@@ -5110,6 +5114,10 @@ details.collapse summary::-webkit-details-marker {
 
 .items-center {
   align-items: center;
+}
+
+.justify-end {
+  justify-content: flex-end;
 }
 
 .justify-center {
@@ -5192,12 +5200,20 @@ details.collapse summary::-webkit-details-marker {
   border-width: 0px;
 }
 
+.border-\[1px\] {
+  border-width: 1px;
+}
+
 .border-l-4 {
   border-left-width: 4px;
 }
 
 .border-dashed {
   border-style: dashed;
+}
+
+.border-\[var\(--color-border-secondary\)\] {
+  border-color: var(--color-border-secondary);
 }
 
 .bg-base {
@@ -5428,6 +5444,10 @@ details.collapse summary::-webkit-details-marker {
   font-variant-numeric: var(--tw-ordinal) var(--tw-slashed-zero) var(--tw-numeric-figure) var(--tw-numeric-spacing) var(--tw-numeric-fraction);
 }
 
+.text-\[var\(--color-text-primary\)\] {
+  color: var(--color-text-primary);
+}
+
 .underline {
   text-decoration-line: underline;
 }
@@ -5576,6 +5596,15 @@ details.collapse summary::-webkit-details-marker {
   --ctp-base: 48, 52, 70;
   --ctp-mantle: 41, 44, 60;
   --ctp-crust: 35, 38, 52;
+}
+
+.hover\:text-black:hover {
+  --tw-text-opacity: 1;
+  color: rgb(0 0 0 / var(--tw-text-opacity, 1));
+}
+
+.focus\:border-\[var\(--color-border-info\)\]:focus {
+  border-color: var(--color-border-info);
 }
 
 .focus\:outline-none:focus {
