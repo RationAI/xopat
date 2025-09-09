@@ -1113,71 +1113,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                const { div, span, h3 } = van.tags();
-                const titleHtmlIn = div();
-                titleHtmlIn.innerHTML = titleHtml;
-
-                const htmlIn = div();
-                htmlIn.innerHTML = html;
-
-                const hiddenHtmlIn = div();
-                hiddenHtmlIn.innerHTML = hiddenHtml;
-
-
-                let content =
-                    div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
-                        div(
-                            span({
-                                class: "material-icons inline-arrow plugins-pin btn-pointer",
-                                id: `${id}-pin`,
-                                onclick: function(){
-                                    toVisible = this.offsetParent.lastChild;
-                                    if (toVisible.classList.contains('force-visible')){
-                                        toVisible.classList.remove('force-visible');
-                                        this.classList.remove('opened');
-                                    } else{
-                                        toVisible.classList.add('force-visible');
-                                        this.classList.add('opened');
-                                    }
-                                },
-                                style: "padding: 0;" },
-                                "navigate_next",
-                            ),
-                            h3({
-                                class: "d-inline-block h3 btn-pointer",
-                                onclick: function(){
-                                    toVisible = this.previousElementSibling.offsetParent.lastChild;
-                                    if (toVisible.classList.contains('force-visible')){
-                                        toVisible.classList.remove('force-visible');
-                                        this.previousElementSibling.classList.remove('opened');
-                                    } else{
-                                        toVisible.classList.add('force-visible');
-                                        this.previousElementSibling.classList.add('opened');
-                                    }
-                                } },
-                                title,
-                            ),
-                            titleHtmlIn,
-                        ),
-                        div({ class: "inner-panel-visible" },
-                            htmlIn,
-                        ),
-                        div({ class: "inner-panel-hidden" },
-                            hiddenHtmlIn,
-                        ),
-                    )
-                this.menu.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
-
-                if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
-                    this.menu.tabs[id]._setFocus();
-                }
-                else{
-                    this.menu.tabs[id]._removeFocus();
-                }
-
-                if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
-                    this.menu.tabs[id].toggleHiden();
-                }
+                this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
             createShadersMenu: function () {
 //                 const innerHTML = `
