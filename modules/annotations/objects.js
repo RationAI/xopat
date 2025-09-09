@@ -367,7 +367,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             ),
             comments: this.renderIcon(
                 'comment',
-                (obj) => obj.comments?.length ?? 0,
+                (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
                 1,
             ),
         };
