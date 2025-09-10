@@ -92,7 +92,29 @@ module.exports = function(grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 return acc;
             }, uglification, true, true),
-        }
+        },
+        // Custom twinc task
+        twinc: {
+            inputCSS:   './src/assets/tailwind-spec.css',
+            configFile: './tailwind.config.js',
+            outFile:    './src/libs/tailwind.min.css',   // single output
+            cacheDir:   './.dev-cache',
+            watch: [
+                'ui/**/*.{html,js,mjs}',
+                'modules/**/*.{html,js,mjs}',
+                'plugins/**/*.{html,js}',
+                'src/**/*.{html,js}'
+            ],
+            ignore: [
+                'ui/index.js',
+                'src/libs/**',
+                '.dev-cache/**',
+                '**/*.min.js'
+            ],
+            minify: true,
+            debounceMs: 150,
+            // usePolling: true, interval: 250, // if needed on WSL/Docker/UNC
+        },
     });
 
     grunt.registerTask('default', []);
