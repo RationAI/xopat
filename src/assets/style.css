@@ -432,7 +432,7 @@ input.switch:checked + label span {
     font-feature-settings: 'liga';
 }
 /*Important: fixes the navigator viewport position*/
-div {box-sizing: initial !important;}
+div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !important;}
 /*div.openseadragon-container, div.openseadragon-canvas, #panel-navigator,  {box-sizing: initial !important;}*/
 
 /*.hover-dim:hover {opacity: 1}*/

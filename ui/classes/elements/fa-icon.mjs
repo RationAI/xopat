@@ -1,5 +1,5 @@
-import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
+import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
 
 const { i } = van.tags
 
@@ -38,8 +38,17 @@ class FAIcon extends BaseComponent {
         this.classMap["name"] = options && options["name"] || "";
     }
 
+    /**
+     * 
+     * @param {*} name name of the new icon from FontAwesome
+     * @description Changes the icon of the component
+     */
+    changeIcon(name) {
+        this.setClass("name", name);
+    }
+
     create() {
-        return i({ ...this.commonProperties, ...this.additionalProperties });
+        return i({ ...this.commonProperties, ...this.extraProperties });
     }
 
     static generateCode() {
@@ -48,7 +57,7 @@ class FAIcon extends BaseComponent {
 // but everything what you rewrite here will be reflected on the component in the workspace
 // after using ctrl + s
 
-import { default as ui } from "/ui/index.mjs";
+ui = globalThis.UI;
 
 window["workspaceItem"] = new ui.FAIcon({ name: "fa-gear" });
 

@@ -73,4 +73,13 @@ module.exports = function(grunt) {
         }
         return initialValue;
     }
+
+    grunt.util.reduceUI = function (accumulator, initialValue, parseMeta=true, log=false) {
+        item = "ui/index.js"
+        if (log) grunt.log.write(`UI found: ${item}`);
+        initialValue=accumulator(initialValue, item, item);
+        if (log) grunt.log.write("\n");  
+        
+        return initialValue;
+    };
 };
