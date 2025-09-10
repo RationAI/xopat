@@ -3,6 +3,7 @@ globalThis.VANCOMPONENTS = {};
 
 import van from "../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
 
+import { BaseComponent } from "./classes/baseComponent.mjs";
 import { Button } from "./classes/elements/buttons.mjs";
 import { FAIcon } from "./classes/elements/fa-icon.mjs";
 import { Join } from "./classes/elements/join.mjs";
@@ -28,6 +29,7 @@ import { SlideSwitcherMenu } from "./classes/components/slideSwitcherMenu.mjs";
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
 const UI = {
+    BaseComponent,
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
     Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip, StretchGrid,
     FloatingWindow, SlideSwitcherMenu

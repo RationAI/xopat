@@ -53,19 +53,6 @@ export class FloatingWindow extends BaseComponent {
         this._dragOffX = 0;
         this._dragOffY = 0;
 
-        // Header actions
-        this._btnClose = new Button({
-            size: Button.SIZE.TINY,
-            type: Button.TYPE.NONE,
-            onClick: () => this.close()
-        }, new FAIcon({ name: "fa-close" }));
-
-        this._btnPop = new Button({
-            size: Button.SIZE.TINY,
-            type: Button.TYPE.NONE,
-            onClick: () => this._toggleExternal()
-        }, new FAIcon({ name: "fa-up-right-from-square" }));
-
         this._header = new Div({
                 extraClasses: {
                     layout: "navbar min-h-0 h-9 bg-base-300/70 rounded-t-box px-2 cursor-move select-none",
@@ -76,13 +63,13 @@ export class FloatingWindow extends BaseComponent {
                 span({ class: "font-semibold truncate" }, this.title),
             ),
             div({ class: "ml-auto flex items-center gap-1" },
-                // btns: DaisyUI ghost, tiny, square
-                (this._btnPop = new Button({
-                    size: Button.SIZE.TINY,
-                    type: Button.TYPE.NONE,
-                    extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
-                    onClick: () => this._toggleExternal(),
-                }, new FAIcon({ name: "fa-up-right-from-square" }))).create(),
+                // btns: DaisyUI ghost, tiny, square TODO: external window not tested properly, not working
+                // (this._btnPop = new Button({
+                //     size: Button.SIZE.TINY,
+                //     type: Button.TYPE.NONE,
+                //     extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
+                //     onClick: () => this._toggleExternal(),
+                // }, new FAIcon({ name: "fa-up-right-from-square" }))).create(),
                 (this._btnClose = new Button({
                     size: Button.SIZE.TINY,
                     type: Button.TYPE.NONE,
@@ -205,6 +192,7 @@ export class FloatingWindow extends BaseComponent {
         const startH = this._h;
 
         const move = (ev) => {
+            ev.stopPropagation();
             const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
             const y = ev.touches ? ev.touches[0].clientY : ev.clientY;
             this._w = startW + (x - startX);

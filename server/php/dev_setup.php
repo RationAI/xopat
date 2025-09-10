@@ -19,12 +19,13 @@ $replacer = function($match) use ($i18n) {
     // When renderer becomes part of OSD, remove requireModules && requireOpenseadragon
     switch ($match[1]) {
         case "head":
+            require_openseadragon();
             require_lib("primer");
             require_lib("jquery");
-            require_ui();
+            require_lib("render");
+            require_ui();  // TODO Jirka: do we need this?
+            require_core("env");
             require_core("deps");
-            require_openseadragon();
-
             include_once(PHP_INCLUDES . "plugins.php");
             global $MODULES;
             $MODULES["webgl"]["loaded"] = true;

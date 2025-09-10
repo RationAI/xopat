@@ -81,14 +81,13 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
 
     switch ($match[1]) {
         case "head":
-            require_core("env");
-            require_libs();
             require_openseadragon();
+            require_libs();
             require_external();
-            require_ui();
             require_core("loader");
             require_core("deps");
             require_core("app");
+            require_core("env");
             break;
 
         case "app":

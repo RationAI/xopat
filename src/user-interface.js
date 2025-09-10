@@ -1160,13 +1160,32 @@ ${label}
 
         /**
          * Add custom HTML to the DOM selector
-         * @param {string} html to append
+         * @param {string|Node|BaseComponent} html to append
          * @param {string} pluginId owner plugin ID
          * @param {string} selector jquery selector where to append, default 'body'
          */
         addHtml: function(html, pluginId, selector="body") {
+            function materialize(htmlLike) {
+                if (htmlLike == null) return [];
+                if (typeof htmlLike === "string") return htmlLike;
+                if (htmlLike.jquery) return htmlLike;
+                if (Array.isArray(htmlLike)) return htmlLike.map(materialize);
+
+                // BaseComponent instance (your components have create() or render())
+                if (htmlLike instanceof UI.BaseComponent ||
+                    (htmlLike && typeof htmlLike === "object" && (htmlLike.create || htmlLike.render))) {
+                    return (htmlLike.render?.() ?? htmlLike.create?.() ?? htmlLike.el ?? htmlLike.element ?? htmlLike);
+                }
+
+                // DOM Node / DocumentFragment
+                if (htmlLike.nodeType || htmlLike instanceof Node) return htmlLike;
+
+                // Fallback: stringify
+                return String(htmlLike);
+            }
+
             try {
-                $(html).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                $(materialize(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

@@ -9,6 +9,7 @@ const PROJECT_PATH = "";
 
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
+const { loadUI } = require("../templates/javascript/vanUI");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
 const { ABSPATH } = require("./constants");
@@ -166,14 +167,13 @@ async function responseViewer(req, res) {
             switch (p1) {
             case "head":
                 return `
-${core.requireCore("env")}
-${core.requireLibs()}
 ${core.requireOpenseadragon()}
-${core.requireUI()}
+${core.requireLibs()}
 ${core.requireExternal()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
-${core.requireCore("app")}`;
+${core.requireCore("app")}
+${core.requireCore("env")}`;
 
             case "app":
                 return `
@@ -195,6 +195,9 @@ ${core.requireCore("app")}`;
 
             case "plugins":
                 return core.requirePlugins(core.CORE.client.production);
+
+            case "ui":
+                return core.requireUI(core.CORE.client.production);
 
             default:
                 //todo warn
@@ -227,8 +230,10 @@ async function responseDeveloperSetup(req, res) {
             switch (p1) {
                 case "head":
                     return `
+${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
+${core.requireLib('render')}
 ${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}

@@ -970,6 +970,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
         APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
+
+        USER_INTERFACE.addHtml(new UI.FloatingWindow({}, new UI.Div("HI")), "my-plugin-id");
     }
 
     /**
