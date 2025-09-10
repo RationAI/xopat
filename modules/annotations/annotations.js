@@ -931,16 +931,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
-	 * Set comments for annotation
-	 * @param {fabric.Object} annotation Any annotation
-	 * @param {AnnotationComment[]} comment Comments to set
-	 */
-	setComments(annotation, comments) {
-		annotation.comments = comments;
-		this.raiseEvent('annotation-set-comments', {object: annotation, comments});
-	}
-
-	/**
 	 * Add annotation to the canvas. Annotation will have NEW identity
 	 * (unlike helper annotation which is meant for visual purposes only).
 	 * If you wish to update annotation (type / geometry) but keep identity,

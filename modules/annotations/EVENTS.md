@@ -60,10 +60,6 @@ type AnnotationComment = {
 ##### annotation-delete-comment | ``{object: fabric.Object, commentId: string}``
 This event is fired when a comment is deleted, one by one.
 
-##### annotation-set-comments | ``{object: fabric.Object, comments: AnnotationComment[]}``
-This event is fired when all comments are set for an object.
-*For definition of `AnnotationComment` see `annotation-add-comment`*
-
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
 ##### preset-create | ``{preset: OSDAnnotations.Preset}``
