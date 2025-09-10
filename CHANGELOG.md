@@ -8,8 +8,13 @@ to the versions 1.x.x.
 **Features**: added a way to set preferred annotation preset IDs for the GUI. Support for
 annotation modes private and locked. Support for annotation comments. Implementation of ICC profiles.
 Guidelines for WASM usage.
+Annotation features: private / locked modes, comments support. Support for copy/move/delete
+on right click.
 
 **Bugfixes**: Fixed mjs module loading on servers.
+
+**V3 Pull**: We are slowly adding code from v3 development that does not 
+influence the v2 functionality, but allow using v3 features - UI and dev scripts.
 
 ### 2.2.2
 
