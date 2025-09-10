@@ -1,5 +1,5 @@
 import { Menu } from './menu.mjs';
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 const { div, h3, span } = van.tags
 
 /**

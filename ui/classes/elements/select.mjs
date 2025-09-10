@@ -1,5 +1,5 @@
 import { BaseComponent } from "../baseComponent.mjs";
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 
 const { select, option, div} = van.tags
 

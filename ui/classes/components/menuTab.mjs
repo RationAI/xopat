@@ -1,5 +1,5 @@
 import { BaseComponent } from "../baseComponent.mjs";
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";

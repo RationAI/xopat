@@ -2,7 +2,7 @@ import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 
 const { div, span } = van.tags;
 

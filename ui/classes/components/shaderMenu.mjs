@@ -1,5 +1,5 @@
 // ui/components/ShaderMenu.mjs
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import { FAIcon } from "../elements/fa-icon.mjs";
 

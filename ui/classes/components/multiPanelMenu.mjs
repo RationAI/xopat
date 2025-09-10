@@ -1,4 +1,4 @@
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 import { MenuTab } from "./menuTab.mjs";
 import { Join } from "../elements/join.mjs";
 import { Div } from "../elements/div.mjs";

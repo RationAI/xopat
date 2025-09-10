@@ -1,4 +1,4 @@
-import van from "../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../vanjs.mjs";
 const { span } = van.tags;
 
 const HtmlRenderer = (htmlString) => {

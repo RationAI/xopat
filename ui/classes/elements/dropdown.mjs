@@ -1,4 +1,4 @@
-import van from "../../../../../Desktop/Vis2/src/xopat/ui/vanjs.mjs";
+import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import { Button } from "./buttons.mjs";
 import { FAIcon } from "./fa-icon.mjs";
