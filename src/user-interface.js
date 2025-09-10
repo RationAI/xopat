@@ -479,10 +479,10 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     this._body.html("");
                 }
                 ((Array.isArray(optionsGetter) && optionsGetter) || optionsGetter()).forEach(this._with.bind(this));
-                
+
                 let top = mouseEvent.pageY + 5;
                 let left = mouseEvent.pageX - 15;
-                
+
                 if ((top + this._body.height()) > window.innerHeight) {
                     top = mouseEvent.pageY - this._body.height() - 5;
                 }
@@ -673,11 +673,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     "Appearance"),
                   themeSelect.create(),
                   this.createCheckbox(
-                    "toolbar-checkbox", 
+                    "toolbar-checkbox",
                     $.t('settings.toolBar'),
                     function () {
                         APPLICATION_CONTEXT.setOption('toolBar', this.checked);
-                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]'); 
+                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
                         toolbarDivs.forEach(div => div.classList.toggle('hidden'));
                     },
                     APPLICATION_CONTEXT.getOption('toolBar', true)),
@@ -696,13 +696,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   this.createCheckbox(
                     "statusbar-checkbox",
                     $.t('settings.statusBar'),
-                    function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')}, 
+                    function () {APPLICATION_CONTEXT.setOption('statusBar', this.checked);$('#viewer-status-bar').toggleClass('hidden')},
                     APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
                   div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Behaviour", ),
                   this.createCheckbox(
-                    "cookies-checkbox", 
+                    "cookies-checkbox",
                     $.t('settings.cookies'),
                     function () {APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('bypassCookies', false)),
@@ -710,12 +710,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                   div({ class: "boxed"},
                   span({ class: "f3-light header-sep" }, "Other", ),
                   this.createCheckbox(
-                    "debug-checkbox", 
+                    "debug-checkbox",
                     $.t('settings.debugMode'),
                     function () {APPLICATION_CONTEXT.setOption('debugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('debugMode', false)),
                   this.createCheckbox(
-                    "render-checkbox", 
+                    "render-checkbox",
                     $.t('settings.debugRender'),
                     function () {APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);$('#settings-notification').css('visibility', 'visible');},
                     APPLICATION_CONTEXT.getOption('webglDebugMode', false)),
@@ -1586,13 +1586,32 @@ ${label}
 
         /**
          * Add custom HTML to the DOM selector
-         * @param {string} html to append
+         * @param {string|Node|BaseComponent} html to append
          * @param {string} pluginId owner plugin ID
          * @param {string} selector jquery selector where to append, default 'body'
          */
-        addHtml: function (html, pluginId, selector = "body") {
+        addHtml: function(html, pluginId, selector="body") {
+            function materialize(htmlLike) {
+                if (htmlLike == null) return [];
+                if (typeof htmlLike === "string") return htmlLike;
+                if (htmlLike.jquery) return htmlLike;
+                if (Array.isArray(htmlLike)) return htmlLike.map(materialize);
+
+                // BaseComponent instance (your components have create() or render())
+                if (htmlLike instanceof UI.BaseComponent ||
+                    (htmlLike && typeof htmlLike === "object" && (htmlLike.create || htmlLike.render))) {
+                    return (htmlLike.render?.() ?? htmlLike.create?.() ?? htmlLike.el ?? htmlLike.element ?? htmlLike);
+                }
+
+                // DOM Node / DocumentFragment
+                if (htmlLike.nodeType || htmlLike instanceof Node) return htmlLike;
+
+                // Fallback: stringify
+                return String(htmlLike);
+            }
+
             try {
-                $(html).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                $(materialize(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

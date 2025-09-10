@@ -62,6 +62,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "private",
+        "comments",
     ];
 
     /**
@@ -287,7 +288,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(iconRenderer, index) {
+    renderIcon(iconRenderer, valueRenderer, index) {
         return new fabric.Control({
             x: 0.5,
             y: -0.5,
@@ -295,31 +296,62 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetY: 20 + 45 * index,
             cursorStyle: 'grab',
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = iconRenderer(fabricObject);
-                const size = 36;
-                const radius = size / 2;
+                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
+                const value = valueRenderer ? (
+                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
+                ) : null;
+                const showValue = value !== null && value !== undefined && value !== '';
+                
+                const iconSize = 36;
+                const padding = 8;
+                
+                let totalWidth = iconSize;
+                let textWidth = 0;
+                
+                if (showValue) {
+                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    textWidth = ctx.measureText(value).width;
+                    totalWidth = iconSize + padding + textWidth + padding;
+                }
+                
+                const height = iconSize;
+                const radius = height / 2;
+                
+                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
                 
                 ctx.save();
-                ctx.translate(left, top);
+                ctx.translate(leftAlignedX, top);
                 ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
                 
-                // bg
+                const halfWidth = totalWidth / 2;
+                
                 ctx.beginPath();
-                ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.closePath();
+                
                 ctx.fillStyle = 'white';
                 ctx.fill();
                 
-                // outline
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
                 
-                // icon
-                ctx.font = `${size * 0.8}px "Material Icons"`;
+                const iconX = -halfWidth + iconSize / 2;
+                ctx.font = `${iconSize * 0.8}px "Material Icons"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
-                ctx.fillText(icon, 0, 2);
+                ctx.fillText(icon, iconX, 3);
+                
+                if (showValue) {
+                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
+                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(value, textX, 1);
+                }
 
                 ctx.restore();
             },
@@ -330,7 +362,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
         ofObject.controls = {
             private: this.renderIcon(
                 (obj) => obj.private ? 'visibility_lock' : 'visibility',
-                0
+                undefined,
+                0,
+            ),
+            comments: this.renderIcon(
+                'comment',
+                (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+                1,
             ),
         };
     }
