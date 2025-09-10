@@ -6,12 +6,22 @@ module.exports = function(grunt) {
     // task to compile static server
     require("./server/static/build.grunt")(grunt);
     // utility tasks from separated files
-    grunt.registerTask('env', 'Generate Env Configuration Example.',
-        require('./server/utils/grunt/tasks/env')(grunt));
-    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file',
-        require('./server/utils/grunt/tasks/jsodc')(grunt));
-    grunt.registerTask("generate", "Generate a plugin or module",
-        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt));
+    grunt.registerTask('env',
+        'Generate Env Configuration Example.',
+        require('./server/utils/grunt/tasks/env')(grunt)
+    );
+    grunt.registerTask('jsdoc', '' +
+        'Generate JSDoc documentation using theme configuration file',
+        require('./server/utils/grunt/tasks/jsodc')(grunt)
+    );
+    grunt.registerTask("generate",
+        "Generate a plugin or module",
+        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt)
+    );
+    grunt.registerTask("twinc",
+        'Tailwind incremental build/watch by parts.',
+        require('./server/utils/grunt/tasks/css-and-ui-dev-tool')(grunt)
+    );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');
