@@ -376,48 +376,104 @@ OpenSeadragon.Tools = class {
         return bestLevel;
     }
 
-
-    link(child) {
-        this.constructor.link(child, this.viewer);
+    /**
+     * Link the viewer to context-sharing navigation link: all viewers of the same context
+     * will follow the same navigation path.
+     * @param context
+     */
+    link(context=0) {
+        this.constructor.link(this.viewer, context);
     }
-    static link(child, parent) {
-        if (child.__linkHandler) child.removeHandler(child.__linkHandler);
-        if (parent.__linkHandler) parent.removeHandler(parent.__linkHandler);
 
-        child.__linkHandler =  function (e) {
-            if (child.__synced) {
-                child.__synced = false;
+    /**
+     * Link the viewer to context-sharing navigation link: all viewers of the same context
+     * will follow the same navigation path.
+     * @param {OpenSeadragon.Viewer} self
+     * @param context
+     */
+    static link(self, context=0) {
+        let contextData = this._linkContexts[context];
+        if (!contextData) {
+            contextData = this._linkContexts[context] = { name: context, leading: null, subscribed: [] };
+        }
+
+        const handler = function() {
+            const leading = contextData.leading;
+            if (leading && leading !== self) {
                 return;
             }
-            parent.__synced = true;
-            OpenSeadragon.Tools.syncViewers(child, parent);
-        };
-        parent.__linkHandler = function (e) {
-            if (parent.__synced) {
-                parent.__synced = false;
-                return;
+            contextData.leading = self;
+            const leadViewport = self.viewport;
+
+            for (let v of contextData.subscribed) {
+                const vp = v.viewer.viewport;
+                // todo consider viewport update event and setting only: (might not respect rotation / flip)
+                //  otherViewport.fitBoundsWithConstraints(viewport.getBounds(), true);
+                vp.zoomTo(leadViewport.getZoom());
+                vp.panTo(leadViewport.getCenter());
+                vp.rotateTo(leadViewport.getRotation());
+                vp.setFlip(leadViewport.flipped);
             }
-            child.__synced = true;
-            OpenSeadragon.Tools.syncViewers(parent, child);
+            contextData.leading = null;
         };
 
-        child.addHandler('viewport-change', child.__linkHandler);
-        parent.addHandler('viewport-change', parent.__linkHandler);
+        self.__sync_handler = handler;
+        contextData.subscribed.push(self);
+        self.addHandler('zoom', handler);
+        self.addHandler('pan', handler);
+        self.addHandler('rotate', handler);
+        self.addHandler('flip', handler);
+    }
 
+    /**
+     * Unlink the viewer from context-sharing navigation link.
+     * @param context
+     */
+    unlink(context=0) {
+        this.constructor.unlink(this.viewer, context);
+    }
 
-        // child.__innerTracker = child.innerTracker;
-        // child.innerTracker = parent.innerTracker;
-        // child.__outerTracker = child.outerTracker;
-        // child.outerTracker = parent.outerTracker;
-        // let temp = new OpenSeadragon.LinkedViewport(child.viewport, parent.viewport);
-        // parent.viewport = new OpenSeadragon.LinkedViewport(parent.viewport, child.viewport);
-        // child.viewport = temp;
-        //
+    /**
+     * Unlink the viewer from context-sharing navigation link.
+     * @param {OpenSeadragon.Viewer} self
+     * @param context
+     */
+    static unlink(self, context=0) {
+        const contextData = this._linkContexts[context];
+        if (!contextData) return;
+        const index = contextData.subscribed.indexOf(self);
+        if (index < 0) return;
+        self.removeHandler('zoom', self.__sync_handler);
+        self.removeHandler('pan', self.__sync_handler);
+        self.removeHandler('rotate', self.__sync_handler);
+        self.removeHandler('flip', self.__sync_handler);
+        delete self.__sync_handler;
+        contextData.subscribed.splice(index, 1);
+    }
 
-        OpenSeadragon.Tools.syncViewers(child, parent);
-        // window.addEventListener('resize', function () {
-        //     OpenSeadragon.Tools.syncViewers(child, parent);
-        // });
+    /**
+     * Destroy the context-sharing navigation link for all viewers.
+     * @param context
+     */
+    static destroyLink(context=0) {
+        const contextData = this._linkContexts[context];
+        if (!contextData) return;
+        for (let v of contextData.subscribed) {
+            v.removeHandler('zoom', v.__sync_handler);
+            v.removeHandler('pan', v.__sync_handler);
+            v.removeHandler('rotate', v.__sync_handler);
+            v.removeHandler('flip', v.__sync_handler);
+            delete v.__sync_handler;
+        }
+        delete contextData.subscribed;
+        delete contextData.leading;
+        delete this._linkContexts[context];
+    }
+
+    static destroyLinks() {
+        for (let context in this._linkContexts) {
+            this.destroyLink(context);
+        }
     }
 
     syncViewers(viewer, otherViewer) {
@@ -431,208 +487,4 @@ OpenSeadragon.Tools = class {
     }
 };
 
-OpenSeadragon.LinkedViewport = class {
-    constructor(context, parentContext) {
-        this.p = parentContext; this.ch = context;
-    }
-
-    resetContentSize(contentSize) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.resetContentSize(contentSize);
-    }
-
-    getHomeZoom() { return this.ch.getHomeZoom(); }
-    getHomeBounds() { return this.ch.getHomeBounds(); }
-    getHomeBoundsNoRotate() { return this.ch.getHomeBoundsNoRotate(); }
-    getMinZoom() { return this.ch.getMinZoom(); }
-    getMaxZoom() { return this.ch.getMaxZoom(); }
-    getAspectRatio() { return this.ch.getAspectRatio(); }
-    getContainerSize() { return this.ch.getContainerSize(); }
-    getMargins() { return this.ch.getMargins(); }
-    setMargins(margins) { this.ch.setMargins(margins); }
-    getBounds(current) { return this.ch.getBounds(current); }
-    getBoundsNoRotate(current) { return this.ch.getBoundsNoRotate(current); }
-    getBoundsWithMargins(current) { return this.ch.getBoundsWithMargins(current); }
-    getBoundsNoRotateWithMargins(current) { return this.ch.getBoundsNoRotateWithMargins(current); }
-    getCenter(current) { return this.ch.getCenter(current); }
-    getZoom(current) { return this.ch.getZoom(current); }
-    getConstrainedBounds(current) { return this.ch.getConstrainedBounds(current); }
-    getRotation() { return this.ch.getRotation(); }
-
-    goHome(immediately) {
-        this.p.goHome(immediately);
-        return this.ch.goHome(immediately);
-    }
-
-    applyConstraints(immediately) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.applyConstraints(immediately);
-    }
-
-    ensureVisible(immediately) {
-        return this.applyConstraints(immediately);
-    }
-
-    fitBounds(bounds, immediately) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.fitBounds(bounds, immediately);
-    }
-
-    fitBoundsWithConstraints(bounds, immediately) {
-        //this.p.fitBoundsWithConstraints(bounds, immediately);
-        return this.ch.fitBoundsWithConstraints(bounds, immediately);
-    }
-
-    fitVertically(immediately) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.fitVertically(immediately);
-    }
-
-    fitHorizontally(immediately) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.fitHorizontally(immediately);
-    }
-
-    panBy( delta, immediately ) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.panBy(delta, immediately);
-    }
-
-    panTo( center, immediately ) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.panTo(center, immediately);
-    }
-
-    zoomBy(factor, refPoint, immediately) {
-        this.p.zoomBy(factor, refPoint, immediately);
-        return this.ch.zoomBy(factor, refPoint, immediately);
-    }
-
-    zoomTo(zoom, refPoint, immediately) {
-        this.p.zoomTo(zoom, refPoint, immediately);
-        return this.ch.zoomTo(zoom, refPoint, immediately);
-    }
-
-    setRotation(degrees) {
-        this.p.setRotation(degrees);
-        return this.ch.setRotation(degrees);
-    }
-
-    resize( newContainerSize, maintain ) {
-        OpenSeadragon.Tools._syncViewports(this.ch, this.p);
-        return this.ch.resize(newContainerSize, maintain);
-    }
-
-    update() {
-        this.p.update();
-        return this.ch.update();
-    }
-
-    deltaPixelsFromPointsNoRotate(deltaPoints, current) {
-        return this.ch.deltaPixelsFromPointsNoRotate(deltaPoints, current);
-    }
-
-    deltaPixelsFromPoints(deltaPoints, current) {
-        return this.ch.deltaPixelsFromPointsNoRotate(deltaPoints, current);
-    }
-
-    deltaPointsFromPixelsNoRotate(deltaPixels, current) {
-        return this.ch.deltaPixelsFromPointsNoRotate(deltaPixels, current);
-    }
-
-    deltaPointsFromPixels(deltaPixels, current) {
-        return this.ch.deltaPointsFromPixels(deltaPixels, current);
-    }
-
-    pixelFromPointNoRotate(point, current) {
-        return this.ch.pixelFromPointNoRotate(point, current);
-    }
-
-    pixelFromPoint(point, current) { return this.ch.pixelFromPoint(point, current); }
-
-    pointFromPixelNoRotate(pixel, current) {
-        return this.ch.pointFromPixelNoRotate(pixel, current);
-    }
-
-    pointFromPixel(pixel, current) {
-        return this.ch.pointFromPixel(pixel, current);
-    }
-
-    viewportToImageCoordinates(viewerX, viewerY) {
-        return this.ch.viewportToImageCoordinates(viewerX, viewerY);
-    }
-
-    imageToViewportCoordinates(imageX, imageY) {
-        return this.ch.imageToViewportCoordinates(imageX, imageY);
-    }
-
-    imageToViewportRectangle(imageX, imageY, pixelWidth, pixelHeight) {
-        return this.ch.imageToViewportRectangle(imageX, imageY, pixelWidth, pixelHeight);
-    }
-
-    viewportToImageRectangle(viewerX, viewerY, pointWidth, pointHeight) {
-        return this.ch.viewportToImageRectangle(viewerX, viewerY, pointWidth, pointHeight);
-    }
-
-    viewerElementToImageCoordinates( pixel ) {
-        return this.ch.viewerElementToImageCoordinates(pixel);
-    }
-
-    imageToViewerElementCoordinates( pixel ) {
-        return this.ch.imageToViewerElementCoordinates(pixel);
-    }
-
-    windowToImageCoordinates(pixel) {
-        return this.ch.windowToImageCoordinates(pixel);
-    }
-
-    imageToWindowCoordinates(pixel) {
-        return this.ch.imageToWindowCoordinates(pixel);
-    }
-
-    viewerElementToViewportCoordinates( pixel ) {
-        return this.ch.viewerElementToViewportCoordinates(pixel);
-    }
-
-    viewportToViewerElementCoordinates( point ) {
-        return this.ch.viewportToViewerElementCoordinates(point);
-    }
-
-    viewerElementToViewportRectangle(rectangle) {
-        return this.ch.viewerElementToViewportRectangle(rectangle);
-    }
-
-    viewportToViewerElementRectangle(rectangle) {
-        return this.ch.viewportToViewerElementRectangle(rectangle);
-    }
-
-    windowToViewportCoordinates(pixel) {
-        return this.ch.windowToViewportCoordinates(pixel);
-    }
-
-    viewportToWindowCoordinates(point) {
-        return this.ch.viewportToWindowCoordinates(point);
-    }
-
-    viewportToImageZoom(viewportZoom) {
-        return this.ch.viewportToImageZoom(viewportZoom);
-    }
-
-    imageToViewportZoom(imageZoom) {
-        return this.ch.imageToViewportZoom(imageZoom);
-    }
-
-    toggleFlip() {
-        this.p.toggleFlip();
-        return this.ch.toggleFlip();
-    }
-
-    getFlip() {
-        return this.ch.getFlip();
-    }
-
-    setFlip( state ) {
-        this.p.setFlip(state);
-        return this.ch.setFlip(state);
-    }
-};
+OpenSeadragon.Tools._linkContexts = {};

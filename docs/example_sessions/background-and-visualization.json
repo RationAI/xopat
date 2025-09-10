@@ -1,0 +1,59 @@
+{
+  "params": {
+    "customBlending": true,
+    "activeBackgroundIndex": [0, 1]
+  },
+  "data": ["tiff/slide.tif","tiff/data.tif"],
+  "background": [
+    {
+      "dataReference": 0,
+      "lossless": false,
+      "goalIndex": 1,
+      "name": "slide 1",
+      "microns": 0.6
+    },
+    {
+      "dataReference": 1,
+      "lossless": false,
+      "goalIndex": 0,
+      "name": "slide 2",
+      "microns": 0.6
+    },
+    {
+      "dataReference":0 ,
+      "lossless": false,
+      "goalIndex": 0,
+      "name": "slide 3"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "My visualization",
+      "lossless": true,
+      "shaders": {
+        "shader_id_1": {
+          "name": "Layer 1",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": { }
+        }
+      }
+    },
+    {
+      "name": "My Second GOal",
+      "lossless": true,
+      "shaders": {
+        "shader_id_1": {
+          "name": "Layer 1",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": { }
+        }
+      }
+    }
+  ]
+}

@@ -409,7 +409,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
 
-    window.viewerManager = new ViewerManager(ENV, CONFIG);
+    window.VIEWER_MANAGER = new ViewerManager(ENV, CONFIG);
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
@@ -420,7 +420,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @see {@link https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html}
      */
     Object.defineProperty(window, "VIEWER", {
-        get: window.viewerManager.get.bind(window.viewerManager)
+        get: window.VIEWER_MANAGER.get.bind(window.VIEWER_MANAGER)
     });
 
     /**
@@ -436,7 +436,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @memberOf VIEWER
      * @event warn-user
      */
-    viewerManager.broadcastHandler('warn-user', e => {
+    VIEWER_MANAGER.broadcastHandler('warn-user', e => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
     }, -Infinity);
@@ -453,16 +453,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @memberOf VIEWER
      * @event error-user
      */
-    viewerManager.broadcastHandler('error-user', e => {
+    VIEWER_MANAGER.broadcastHandler('error-user', e => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
-    viewerManager.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    viewerManager.broadcastHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+    VIEWER_MANAGER.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
+    VIEWER_MANAGER.broadcastHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
-    viewerManager.broadcastHandler('add-item-failed', e => {
+    VIEWER_MANAGER.broadcastHandler('add-item-failed', e => {
         if (notified) return;
         if (e.message && e.message.statusCode) {
             //todo check if the first background
@@ -544,10 +544,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             backgroundColor: "rgba(255, 255, 255, 0.5)",
             fontSize: "small",
             barThickness: 2,
-            destroy: !APPLICATION_CONTEXT.getOption("scaleBar", true, false), // TODO does not work right? it negates again in _init function
+            destroy: false,
             magnification: mag
         });
-        // TODO make in destroy???
         if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
             viewer.scalebar.setActive(false);
         }
@@ -852,9 +851,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
         }
 
-        if (!viewer.scalebar) {
-            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
-        }
+        UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
         viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
         const eventOpts = {};
@@ -923,7 +920,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // todo remove this feature?
             try {
                 if (window.opener && window.opener.VIEWER) {
-                    viewer.tools.link(window.opener.VIEWER);
+                    viewer.tools.link("external_window");
+                    window.opener.VIEWER.link("external_window");
                 }
             } catch (e) {
                 //pass opener access can throw exception - not available to us
@@ -1001,7 +999,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
              * @memberOf VIEWER
              * @event before-first-open
              */
-            await viewerManager.raiseEventAwaiting('before-first-open', {
+            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', {
                 data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
             }).catch(e =>
                 {
@@ -1104,7 +1102,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         })();
 
         // 2) Ensure we have a ViewerManager and correct number of viewers (>= 1)
-        const VM = viewerManager;
+        const VM = VIEWER_MANAGER;
 
         const desiredCount = Math.max(1, bgPlan.length);
         // Add missing viewers

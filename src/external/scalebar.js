@@ -274,7 +274,7 @@
                             const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
                             sliderContainer.noUiSlider.set(desiredZoom);
                         };
-                        VIEWER.addHandler('zoom', reflectUpdate);
+                        this.viewer.addHandler('zoom', reflectUpdate);
 
                         function closestValue (v) {
                             let d = Infinity, result = -1;
@@ -363,6 +363,10 @@
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
+                this.viewer.addHandler("destroy", () => {
+                    this._init({destroy: true});
+                    this.viewer.scalebar = null;
+                });
             } else {
                 this._active = false;
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);

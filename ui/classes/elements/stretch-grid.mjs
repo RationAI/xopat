@@ -25,19 +25,20 @@ class StretchGrid extends BaseComponent {
     }
 
     setItems(itemsOrCount) {
+        // remove old DOM first
+        const host = this._host();
+        if (host) while (host.firstChild) host.removeChild(host.firstChild);
+
         this.items = [];
-        const n = Array.isArray(itemsOrCount)
-            ? itemsOrCount.length
-            : (+itemsOrCount | 0);
+        const n = Array.isArray(itemsOrCount) ? itemsOrCount.length : (+itemsOrCount | 0);
         for (let i = 0; i < n; i++) {
-            const node = Array.isArray(itemsOrCount)
-                ? itemsOrCount[i]
-                : this._defaultItem(i);
+            const node = Array.isArray(itemsOrCount) ? itemsOrCount[i] : this._defaultItem(i);
             node.classList.add("stretch-grid__item");
             this.items.push(node);
+            if (host) host.appendChild(node);
         }
         this._layout();
-        this._children = this.items; // for BaseComponent render
+        this._children = this.items;
         this._renderedChildren = null;
     }
 
@@ -51,11 +52,19 @@ class StretchGrid extends BaseComponent {
     }
 
     removeAt(idx) {
-        if (!this.items[idx]) return;
+        const el = this.items[idx];
+        if (!el) return;
+
+        // update model
         this.items.splice(idx, 1);
-        this._layout();
+
+        // update DOM
+        const host = this._host();
+        if (host && el.parentNode === host) host.removeChild(el);
+
         this._children = this.items;
         this._renderedChildren = null;
+        this._layout();
     }
 
     setCols(n) {
@@ -81,16 +90,33 @@ class StretchGrid extends BaseComponent {
         return d;
     }
 
-    createCell(id) {
+    createCell(id, index = this.items.length) {
         const el = this._makeCell(id);
-        this.push(el);
+        this.insertAt(index, el);
         return el;
     }
 
-    attachCell(id) {
-        const self = document.getElementById(this.id);
-        if (!self) return;
-        self.appendChild(this.createCell(id));
+    insertAt(idx, node) {
+        const el = node || this._defaultItem(idx);
+        el.classList.add("stretch-grid__item");
+
+        // update model
+        this.items.splice(idx, 0, el);
+
+        // update DOM
+        const host = this._host();
+        if (host) host.insertBefore(el, host.children[idx] || null);
+
+        this._children = this.items;
+        this._renderedChildren = null;
+        this._layout();
+    }
+
+    _host() { return document.getElementById(this.id); }
+
+    attachCell(id, index = this.items.length) {
+        // createCell already inserts into DOM at index
+        return this.createCell(id, index);
     }
 
     _layout() {

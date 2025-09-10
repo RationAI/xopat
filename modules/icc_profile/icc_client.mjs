@@ -114,7 +114,7 @@ class ICCProfile extends window.XOpatModuleSingleton {
             })
             : null;
 
-        VIEWER.addHandler("before-first-open", this.init.bind(this));
+        VIEWER_MANAGER.addHandler("before-first-open", this.init.bind(this));
     }
 
     async init() {

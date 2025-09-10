@@ -231,8 +231,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             imagePreview: null,
         };
 
-        //todo correct VIEWER ref
-        VIEWER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
+        VIEWER_MANAGER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
             let blobUrl;
             if (!eventArgs.imagePreview) {
                 const previewUrlmaker = new Function("path,data", "return " +

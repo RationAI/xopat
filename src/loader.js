@@ -1273,11 +1273,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         add(index) {
-            this.delete(index);
+            if (this.viewers[index]) this.delete(index);
 
             // make a unique cell inside the grid
             const cellId = `osd-${index}`;
-            this.layout.attachCell(cellId);
+            this.layout.attachCell(cellId, index);
 
             const headers = $.extend(
                 {},
@@ -1382,7 +1382,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 }
             }
 
-            // todo move the initialization elsewhere... or restructure code a bit
+            // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', () => {
                 const DELAY = 90;
                 let last = 0;
@@ -1498,7 +1498,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 }
             };
 
-            this.viewers[index] = viewer;
+            this.viewers.splice(index, 0, viewer);
             this._wire(viewer);
         }
 
@@ -1532,9 +1532,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         delete(index) {
             const viewer = this.viewers[index];
             if (!viewer) return;
-            viewer.destroy();
-            delete this.viewers[index];
-            // also remove the grid cell
+
+            try { viewer.destroy(); } catch (_) {}
+
+            this.viewers.splice(index, 1);
             this.layout.removeAt(index);
         }
     }

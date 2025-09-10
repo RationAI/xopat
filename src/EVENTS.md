@@ -1,15 +1,25 @@
-# xOpat - Storage
+# xOpat - Event System
 
-Events in the system are either native OpenSeadragon events, 
-or events emitted directly by the viewer. OpenSeadragon events
-can occur on various objects within the library, the viewer always
-invokes its events on the `VIEWER` instance.
+Events are un UI system the most powerful feature: allows to react to events
+happening all over the place without weird dependencies. Note hover, 
+that using events without consideration might lead to unpredictable behaviour, 
+like explosion of events or looped calling.
 
-> In case you need more events, 
-> let us know. Events are being integrated to the viewer and many useful ones might be missing.
+## Core Events
+
+Events are of two basic types:
+ - global events, which are invoked on the `VIEWER_MANAGER` instance, such events 
+   - if you need to listen for all events on all viewers within the system, use `VIEWER_MANAGER.broadcastHandler(...)`.
+ - viewer-local events, which are invoked on the target viewer they belong to, usually
+OpenSeadragon events, or events extended by us.
+   >NOTE! Registering events on `VIEWER` instance is not recommended. This variable always
+    points to the current active (e.g. focused) viewer instance. This means you will register
+    the handler to some random viewer that was just active, and might not be the viewer you wanted
+    to react on.
 
 
-### Events in modules
+   
+## Events in modules
 Modules (and possibly plugins) can have their own event system - in that case, the `EVENTS.md` description
 should be provided. These events should be invoked on the parent instance of the 'module'.
 
@@ -37,13 +47,7 @@ Use ``preventDefault`` flag and check for its existence in the event handler to 
 ## Event List
 Events have their name (for which you register) and when invoked, a parameter is passed
 to the handler function that might contain a lot of useful data.
-### General Events
-
-#### `open` | e: {source: TileSource}
-Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
-It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
-initial load).
-
+### Global Events ``VIEWER_MANAGER``
 #### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
 Fired before the first open of the viewer happens. Apps can perform
 custom functionality just before the viewer gets initialized.
@@ -56,6 +60,21 @@ was not opened with a session spec. You can use this flag to monitor whether the
 was properly opened, or just shows cached session and possibly replace it with more relevant one.
 
 Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
+
+#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
+Fired when the UI wants to know what is a slide _preview url_, which can be constructed
+from ``server`` on which `image` slide identification lives. If `imagePreview`
+is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
+values using the ``image_group_preview`` configuration specification.
+
+### Viewer-Local Events: ``VIEWER/viewer``
+
+#### `open` | e: {source: TileSource}
+Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
+It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
+initial load).
+
+TODO validate events:
 
 #### `export-data` | e: `{}`
 Submit your serialized data to the export event. You should use the data storage instance you
@@ -104,8 +123,6 @@ and ignores OpenSeadragon key event.
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
 Fired when user releases a key. Similar as above.
 
-####
-
 ### OpenSeadragon: User Input Events
 These are listed just for the reference, for other input events see the OpenSeadragon documentation.
 Note that the interaction should be thoroughly tested with annotations plugin. You might also find the annotations API
@@ -119,14 +136,6 @@ fully re-usable for your purposes, **using custom annotation objects to perform 
 
 
 ### Rendering-Related Events
-
-TODO update
-
-#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
-Fired when the UI wants to know what is a slide _preview url_, which can be constructed
-from ``server`` on which `image` slide identification lives. If `imagePreview`
-is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
-values using the ``image_group_preview`` configuration specification.
 
 #### `tiled-image-problematic` | e: [OpenSeadragon[tile-load-failed]](https://openseadragon.github.io/docs/OpenSeadragon.Viewer.html#.event:tile-load-failed)
 Fired when the corresponding `TiledImage` fails to load multiple tiles within a certain time

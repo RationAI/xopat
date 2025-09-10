@@ -286,7 +286,7 @@ such as pre-defined color maps, (already mentioned) webgl processing, fabricJS c
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
 
 ### Available Third-party Code and UI
-- You should use new UI components, see [this](../ui/README.md)
+- You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
 
 You can use
  - [jQuery](https://jquery.com/), 

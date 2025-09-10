@@ -28,7 +28,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
         this.configuration.automaticSilentRenew = false;
         this.configuration.storeState = this.configuration.userStore = undefined;
 
-        VIEWER.addHandler('before-first-open', this.init.bind(this),
+        VIEWER_MANAGER.addHandler('before-first-open', this.init.bind(this),
             null, this.getStaticMeta('eventBeforeOpenPriority', 0));
     }
 

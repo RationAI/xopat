@@ -687,7 +687,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                       $.t('settings.scaleBar'),
                     function () {
                         APPLICATION_CONTEXT.setOption('scaleBar', this.checked);
-                        for (let viewer of viewerManager.viewers) {
+                        for (let viewer of VIEWER_MANAGER.viewers) {
                             viewer.scalebar.setActive(this.checked);
                         }
                     },
