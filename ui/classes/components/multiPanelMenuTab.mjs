@@ -31,6 +31,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.openDiv;
         this.pin;
         this.closeButton;
+        this.mainDiv;
         this.id = item.id;
     }
 
@@ -48,7 +49,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 0px;"},
+            extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
             onClick: (event) => {
                 this.togglePinned();
                 if (pinIcon.classMap["name"] === "fa-thumbtack") {
@@ -71,7 +72,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 35px;"},
+            extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 this.toggleHiden();
                 APPLICATION_CONTEXT.setOption(`${this.id}-hidden`, this.hidden);
@@ -83,7 +84,7 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 75px; padding-bottom: 35px;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px;" },
             onClick: () => {
                 this.focus();
             },
@@ -95,9 +96,10 @@ class MultiPanelMenuTab extends MenuTab {
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
             }, div({ style: "width: 360px;" }, ...content));
 
-        let c = new Div({ 
+        this.mainDiv = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
-            extraClasses: {display: "", flex: "flex flex-row", item: "ui-menu-item"}
+            extraClasses: {display: "", flex: "flex flex-row", item: "ui-menu-item", background: "bg-base-200"},
+            extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;" }
             }, this.openDiv, this.openButton);
 
         this.fullId = this.parent.id + "-c-" + item.id;
@@ -105,7 +107,7 @@ class MultiPanelMenuTab extends MenuTab {
             this.parent.pinnedTabs[this.id] = true;
             pinIcon.changeIcon("fa-thumbtack-slash");
         }
-        return [undefined, c];
+        return [undefined, this.mainDiv];
     }
 
     removeTab() {
@@ -128,12 +130,14 @@ class MultiPanelMenuTab extends MenuTab {
         this.focused = true;
 
         this.openDiv.setClass("display", "");
+        this.mainDiv.setClass("background", "bg-base-200");
     }
 
     _removeFocus() {
         this.focused = false;
 
         this.openDiv.setClass("display", "hidden");
+        this.mainDiv.setClass("background", "");
     }
 
     close() {
