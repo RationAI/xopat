@@ -31,7 +31,6 @@ class MultiPanelMenu extends Menu {
      */
     constructor(options = undefined, ...args) {
         super(options, ...args);
-        this.pinnedTabs = {};
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
     }
@@ -63,7 +62,6 @@ class MultiPanelMenu extends Menu {
         }
         const tab = new MultiPanelMenuTab(item,this);
         this.tabs[item.id] = tab;
-
 
         switch (this.design) {
             case "ICONONLY":

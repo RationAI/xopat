@@ -27,6 +27,9 @@ class MultiPanelMenuTab extends MenuTab {
     **/
     constructor(item, parent) {
         super(item, parent);
+        if (!parent.pinnedTabs) {
+            parent._pinnedTabs = {};
+        }
         this.openButton;
         this.openDiv;
         this.pin;
@@ -104,7 +107,7 @@ class MultiPanelMenuTab extends MenuTab {
 
         this.fullId = this.parent.id + "-c-" + item.id;
         if (APPLICATION_CONTEXT.getOption(`${this.id}-pinned`, false)){
-            this.parent.pinnedTabs[this.id] = true;
+            this.parent._pinnedTabs[this.id] = true;
             pinIcon.changeIcon("fa-thumbtack-slash");
         }
         return [undefined, this.mainDiv];
@@ -178,12 +181,12 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     togglePinned(){
-        if (this.parent.pinnedTabs[this.id]){
+        if (this.parent._pinnedTabs[this.id]){
             APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, false);
-            this.parent.pinnedTabs[this.id] = false;
+            this.parent._pinnedTabs[this.id] = false;
         } else{
             APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, true);
-            this.parent.pinnedTabs[this.id] = true;
+            this.parent._pinnedTabs[this.id] = true;
         }
     }
 
