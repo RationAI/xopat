@@ -18,6 +18,9 @@
     "docker-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
     "docker-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
 
+    "create-module": "grunt generate:module",
+    "create-plugin": "grunt generate:plugin",
+
     "dev-docs": "cd docs/readthedocs && mkdocs serve",
     "dev-ui": "grunt connect watch",
     "dev": "node server/utils/node/dev-mode.js",

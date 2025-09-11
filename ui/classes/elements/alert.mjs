@@ -2,7 +2,8 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 
-const { div, span, path, svg } = van.tags;
+const { div, span } = van.tags;
+const { svg, path } = van.tags("http://www.w3.org/2000/svg");
 
 const MODES = /** @type {const} */ (["neutral","info","success","warning","error"]);
 const isMode = v => MODES.includes(v);
@@ -168,7 +169,6 @@ export class Alert extends BaseComponent {
 }
 
 function iconSvg(mode, { soft = false, hidden = false } = {}) {
-    const {svg, path} = van.tags;            // ensure you use van.tags.* (not van.path)
     const size = "w-5 h-5 shrink-0";
     const color = soft ? (ICON_COLOR_SOFT[mode] || "text-base-content")
         : (ICON_COLOR_FILLED[mode] || "text-base-content");

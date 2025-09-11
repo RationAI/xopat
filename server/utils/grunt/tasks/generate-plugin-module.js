@@ -130,15 +130,15 @@ module.exports = function(grunt) {
 
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your plugin", x => x.trim(), "Name is required!");
-      name = name.replace(/[^a-zA-Z0-9]/g, "");
+      name = name.replace(/[^'"]/g, "");
 
       // ask for author and check
       let author = await askWithValidation("Enter the plugin author", x => x.trim(), "Author required!");
-      author = author.replace(/[^a-zA-Z0-9]/g, "");
+      author = author.replace(/[^'"]/g, "");
 
       // ask for description (optional)
       let description = await askWithValidation("Enter the plugin description", false);
-      description = description.replace(/[^a-zA-Z0-9]/g, "");
+      description = description.replace(/[^'"]/g, "");
 
       let modules = [];
       if (await askYesNo("Do you want to add modules?")) {
@@ -189,7 +189,7 @@ addPlugin('${pluginId}', class extends XOpatPlugin {
       // log success
       console.log(
           `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: plugin '${pluginId}' created.`
+          `\n✓ SUCCESS: plugin '${pluginId}' created. See the plugins/ folder.`
       );
     }
 
@@ -202,15 +202,15 @@ addPlugin('${pluginId}', class extends XOpatPlugin {
       const folderPath = path.join(basePath, moduleId);
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your module", x => x.trim(), "Name is required!");
-      name = name.replace(/[^a-zA-Z0-9]/g, "");
+      name = name.replace(/[^'"]/g, "");
 
       // ask for author and check
       let author = await askWithValidation("Enter the module author", x => x.trim(), "Author required!");
-      author = author.replace(/[^a-zA-Z0-9]/g, "");
+      author = author.replace(/[^'"]/g, "");
 
       // ask for description (optional)
       let description = await askWithValidation("Enter the module description", false);
-      description = description.replace(/[^a-zA-Z0-9]/g, "");
+      description = description.replace(/[^'"]/g, "");
 
       let requirements = [];
       if (await askYesNo("Do you want to add any required modules?")) {
@@ -262,7 +262,7 @@ class ${className} extends XOpatModuleSingleton {
       // log success
       console.log(
           `\x1b[38;2;43;199;121m`,
-          `\n✓ SUCCESS: module '${moduleId}' created.`
+          `\n✓ SUCCESS: module '${moduleId}' created. See the modules/ folder.`
       );
     }
 
@@ -277,7 +277,8 @@ class ${className} extends XOpatModuleSingleton {
         if (reducer((acc, value, folder) => acc && value.id !== x, true)) return x;
         return false;
       }, "ID is required! Id must not be taken by existing " + structureType);
-      id = id.replace(/[^a-zA-Z0-9]/g, "");
+      id = id.replace(/[^a-zA-Z0-9-]/g, "");
+      console.log("Will be using id", id);
 
       const message = isPlugin ?
           "Do you want to create a global class for your plugin?" :

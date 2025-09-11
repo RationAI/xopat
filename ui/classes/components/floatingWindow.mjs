@@ -1,9 +1,9 @@
 // ui/classes/components/floatingWindow.mjs
 import van from "../../vanjs.mjs";
-import { BaseComponent } from "../baseComponent.mjs";
-import { Div } from "../elements/div.mjs";
-import { Button } from "../elements/buttons.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
+import {BaseComponent} from "../baseComponent.mjs";
+import {Div} from "../elements/div.mjs";
+import {Button} from "../elements/buttons.mjs";
+import {FAIcon} from "../elements/fa-icon.mjs";
 
 const { div, span } = van.tags;
 
@@ -18,6 +18,8 @@ const { div, span } = van.tags;
  *  - startTop?: number (px)
  *  - onClose?: () => void
  *  - onPopout?: (childWindow: Window) => void
+ *  - external?: boolean (default false)
+ *  - customWindowHead?: [string]
  */
 export class FloatingWindow extends BaseComponent {
     constructor(options = undefined, ...bodyChildren) {
@@ -91,6 +93,10 @@ export class FloatingWindow extends BaseComponent {
             class: "absolute right-1 bottom-1 w-3 h-3 cursor-se-resize opacity-50 " +
                 "border-r-2 border-b-2 border-base-content/50"
         }) : null;
+
+        if (this.options.external) {
+            this._toggleExternal();
+        }
     }
 
     // ---------- public API ----------
@@ -223,14 +229,23 @@ export class FloatingWindow extends BaseComponent {
         // Pop out: open a child window (chromeless-ish)
         const features = `popup=yes,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes,width=${this._w},height=${this._h},left=${this._l},top=${this._t}`;
         const child = window.open("", `${this.id}-popup`, features);
-        if (!child) return;
+        if (!child) {
+            USER_INTERFACE.Dialogs.show($.t('messages.windowBlocked', {title: this.title}), 15000, this.MSG_WARN, {
+                buttons: {
+                    "Open": () => this._toggleExternal()
+                }
+            });
+            return;
+        }
 
         this._external = true;
         this._childWindow = child;
 
         // Basic doc + style mirror; you said you'll wire libs, so here's a placeholder:
         const currentTheme = document.documentElement.getAttribute("data-theme") || "light";
-        child.document.write(`
+        const doc = child.document;
+        doc.open();
+        doc.write(`
   <!doctype html>
   <html data-theme="${currentTheme}">
     <head>
@@ -239,7 +254,6 @@ export class FloatingWindow extends BaseComponent {
       <style>
         html,body{height:100%;margin:0}
         body{background:var(--b2);color:var(--bc);font-family:ui-sans-serif,system-ui;}
-        .fw-host{position:absolute;inset:0;display:flex;flex-direction:column}
       </style>
         <!--TODO dirty hardcoded path-->
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
@@ -259,40 +273,44 @@ export class FloatingWindow extends BaseComponent {
             $.i18n = window.opener.$.i18n;
             $.prototype.localize = () => {console.error("localize() not supported in child window!")};
         <\/script>
+        <!-- todo better system -->
+        ${this.options.customWindowHead?.join("") || ""}
     </head>
     <body>
-      <div id="fw-host" class="fw-host"></div>
+
     </body>
   </html>
 `);
-        child.document.close();
+        doc.close();
 
-        // Bridge: forward all "functionality traffic" to parent
-        this._installBridge(child);
+        child.addEventListener("load", () => {
+            // Bridge: forward all "functionality traffic" to parent
+            this._installBridge(child);
 
-        // Render the window content into the popup – but events/actions go through the bridge.
-        // We simply clone the body node; you can replace this with a proper re-mount if desired.
-        const host = child.document.getElementById("fw-host");
-        const placeholder = child.document.createElement("div");
-        host.appendChild(placeholder);
+            // Render the window content into the popup – but events/actions go through the bridge.
+            // We simply clone the body node; you can replace this with a proper re-mount if desired.
+            const host = child.document.body;
+            const placeholder = child.document.createElement("div");
+            host.appendChild(placeholder);
 
-        // We’ll send a request to parent to (re)render the content in the child.
-        // Parent listens and responds with DOM HTML. You can replace with your own hydration.
-        child.postMessage({ __fw: true, type: "request-render", id: this.id }, "*");
+            // We’ll send a request to parent to (re)render the content in the child.
+            // Parent listens and responds with DOM HTML. You can replace with your own hydration.
+            child.postMessage({ __fw: true, type: "request-render", id: this.id }, "*");
 
-        // Keep size/position in sync if user resizes/moves the popup window
-        const syncSize = () => {
-            try {
-                const w = child.innerWidth, h = child.innerHeight;
-                this._w = w; this._h = h;
-                this._persist();
-            } catch {}
-        };
-        child.addEventListener("resize", syncSize);
-        child.addEventListener("beforeunload", () => {
-            this._external = false;
-            this._childWindow = null;
-        });
+            // Keep size/position in sync if user resizes/moves the popup window
+            const syncSize = () => {
+                try {
+                    const h = child.innerHeight;
+                    this._w = child.innerWidth; this._h = h;
+                    this._persist();
+                } catch {}
+            };
+            child.addEventListener("resize", syncSize);
+            child.addEventListener("beforeunload", () => {
+                this._external = false;
+                this._childWindow = null;
+            });
+        }, { once: true });
     }
 
     _installBridge(child) {
@@ -317,23 +335,20 @@ export class FloatingWindow extends BaseComponent {
         };
         window.addEventListener("message", parentHandler);
 
-        // Child side bootstrapping
-        child.addEventListener("load", () => {
-            const childHandler = (ev) => {
-                const msg = ev.data;
-                if (!msg || !msg.__fw) return;
-                if (msg.type === "render-html" && msg.id === this.id) {
-                    const host = child.document.getElementById("fw-host");
-                    host.innerHTML = msg.html || "";
-                    // Attach a click/mutation listener that forwards interactions to parent as needed:
-                    host.addEventListener("click", (e) => {
-                        const data = { path: e.composedPath().map(n => n.id || n.className || n.nodeName) };
-                        child.opener?.postMessage({ __fw: true, type: "event", id: this.id, payload: { kind: "click", data } }, "*");
-                    }, { capture: true });
-                }
-            };
-            child.addEventListener("message", childHandler);
-        });
+        const childHandler = (ev) => {
+            const msg = ev.data;
+            if (!msg || !msg.__fw) return;
+            if (msg.type === "render-html" && msg.id === this.id) {
+                const host = child.document.getElementById("fw-host");
+                host.innerHTML = msg.html || "";
+                // Attach a click/mutation listener that forwards interactions to parent as needed:
+                host.addEventListener("click", (e) => {
+                    const data = { path: e.composedPath().map(n => n.id || n.className || n.nodeName) };
+                    child.opener?.postMessage({ __fw: true, type: "event", id: this.id, payload: { kind: "click", data } }, "*");
+                }, { capture: true });
+            }
+        };
+        child.addEventListener("message", childHandler);
     }
 
     create() {

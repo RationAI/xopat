@@ -200,7 +200,7 @@
 
         _init: function (options) {
             if (!options.destroy) {
-                this.id = options.viewer + "-scale-bar";
+                this.id = options.viewer.id + "-scale-bar";
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
