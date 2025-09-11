@@ -30,6 +30,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.openButton;
         this.openDiv;
         this.pin;
+        this.closeButton;
         this.id = item.id;
     }
 
@@ -41,7 +42,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.iconName = inIcon.options.name;
         this.title = inText;
 
-        const pinIcon = new FAIcon({id: this.parent.id + "-b-icon"+ item.id, name: "fa-thumbtack" });
+        const pinIcon = new FAIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "fa-thumbtack" });
         this.pin = new Button({
             id: this.parent.id + "-b-opened" + item.id,
             type: Button.TYPE.SECONDARY,
@@ -64,15 +65,29 @@ class MultiPanelMenuTab extends MenuTab {
             }
         }, pinIcon)
 
+        const crossIcon = new FAIcon({id: this.parent.id + "-b-icon-close-"+ item.id, name: "fa-xmark" });
+        this.closeButton = new Button({
+            id: this.parent.id + "-b-close" + item.id,
+            type: Button.TYPE.SECONDARY,
+            size: Button.SIZE.TINY,
+            orientation: Button.ORIENTATION.HORIZONTAL,
+            extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 35px;"},
+            onClick: (event) => {
+                this.toggleHiden();
+                APPLICATION_CONTEXT.setOption(`${this.id}-hidden`, this.hidden);
+                event.stopPropagation();
+            }
+        }, crossIcon)
+
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 35px; padding-bottom: 35px;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 75px; padding-bottom: 35px;" },
             onClick: () => {
                 this.focus();
             },
-            }, inIcon, span(inText), this.pin);
+            }, inIcon, span(inText), this.pin, this.closeButton);
 
         this.openDiv = new Div({ 
             id: this.parent.id + "-opendiv-" + item.id, 
