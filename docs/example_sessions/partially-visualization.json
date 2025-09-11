@@ -1,0 +1,45 @@
+{
+  "params": {
+    "customBlending": true,
+    "stackedBackground": true
+  },
+  "data": ["tiff/invalid1.tif","tiff/invalid2.tif", "tiff/data.tif"],
+  "visualizations": [
+    {
+      "name": "My visualization",
+      "lossless": true,
+      "shaders": {
+        "shader_id_1": {
+          "name": "Error Layer",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [1],
+          "params": { }
+        },
+        "shader_id_2": {
+          "name": "OK Layer",
+          "type": "heatmap",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [2],
+          "params": { }
+        }
+      }
+    },
+    {
+      "name": "My Second GOal",
+      "lossless": true,
+      "shaders": {
+        "shader_id_1": {
+          "name": "Error Layer",
+          "type": "sobel",
+          "visible": 1,
+          "fixed": false,
+          "dataReferences": [0],
+          "params": { }
+        }
+      }
+    }
+  ]
+}

@@ -113,14 +113,6 @@ button div {
     writing-mode: horizontal-tb;
 }
 
-#top-slide {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    top: 3px;
-    bottom: auto;
-}
-
 #overlay-content{
     position: absolute; 
     pointer-events: auto; 

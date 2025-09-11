@@ -29,8 +29,8 @@ class Menu extends BaseComponent {
      * @param {keyof typeof Menu.BUTTONSIDE} [options.buttonSide] - The side of the buttons
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
-    constructor(options, ...args) {
-        super(options,);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
 
         this.tabs = {};
         this.focused = undefined;
@@ -40,7 +40,7 @@ class Menu extends BaseComponent {
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
-        for (let i of args) {
+        for (let i of this._children) {
             // todo require ID
             if (i.class === Dropdown) {
                 this.addDropdown(i);
@@ -56,9 +56,8 @@ class Menu extends BaseComponent {
         this.classMap["rounded"] = Menu.ROUNDED.DISABLE;
         this.classMap["flex"] = "flex-col";
 
-        if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
-        }
+        this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
+        this._children = [];
     }
 
 

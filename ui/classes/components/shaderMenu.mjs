@@ -21,8 +21,8 @@ const { div, span, select, option, label, input, br, ul, li, a } = van.tags;
  *   cache-snapshot, global-opacity, data-layer-options, blending-equation
  */
 export class ShaderMenu extends BaseComponent {
-    constructor(opts = {}) {
-        super(opts);
+    constructor(opts = undefined) {
+        opts = super(opts).options;
         this.shaders = [];
         this.selectedShader = "";
         this.opacity = typeof opts.opacity === "number" ? opts.opacity : 1;

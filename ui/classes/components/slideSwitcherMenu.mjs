@@ -11,7 +11,7 @@ const { div, input, label, img, span, button } = van.tags;
  * SlideSwitcherMenu (compact, instant selection; embedded FloatingWindow)
  */
 export class SlideSwitcherMenu extends BaseComponent {
-    constructor(options = {}) {
+    constructor(options = undefined) {
         super(options);
         this._needsRefresh = true;
         this._suspendUpdates = false; // used to batch "Clear all"
@@ -68,18 +68,26 @@ export class SlideSwitcherMenu extends BaseComponent {
     close() { this._fw.close(); }
     opened() { return this._fw && this._fw.opened(); }
 
+    _openCurrentSelection() {
+        const chosen = Array.from(this.selected).sort((a,b)=>a-b);
+        this._openWith(chosen);
+
+        // Give the viewer manager a tick to (re)build, then refresh icons
+        setTimeout(() => this._refreshAllLinkIcons(), 0);
+    }
+
     refresh() {
         if (!this.opened()) { this._needsRefresh = true; return; }
-
-        // Data sources
         this.data = this.options.data ?? APPLICATION_CONTEXT.config.data ?? [];
         this.background = this.options.background ?? APPLICATION_CONTEXT.config.background ?? [];
 
-        // Re-render list
         const parent = this._listEl.parentNode;
         const newList = this._renderList(this.background);
         parent.replaceChild(newList, this._listEl);
         this._listEl = newList;
+
+        // After (re)render, sync link icons
+        this._refreshAllLinkIcons();
         this._needsRefresh = false;
     }
 
@@ -108,12 +116,6 @@ export class SlideSwitcherMenu extends BaseComponent {
             { deriveOverlayFromBackgroundGoals: true },
         );
         APPLICATION_CONTEXT.setOption?.("activeBackgroundIndex", Array.isArray(bgIndices) ? bgIndices : [bgIndices]);
-    }
-
-    _openCurrentSelection() {
-        // Called after any change; if empty, still trigger one update with [] so the app can clear.
-        const chosen = Array.from(this.selected).sort((a,b)=>a-b);
-        this._openWith(chosen);
     }
 
     _onCardClick(idx) {
@@ -217,7 +219,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             draggable: "false",
             onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
         });
-        const thumbWrap = div({ class: "relative h-20 overflow-hidden" },
+        const thumbWrap = div({ class: "relative h-20 overflow-hidden", onclick: () => this._onCardClick(idx) },
             div({ class: "absolute left-1 top-1 z-10  px-2 py-1 text-xs font-medium truncate" }, name),
             imageEl
         );
@@ -244,26 +246,40 @@ export class SlideSwitcherMenu extends BaseComponent {
             // (optional) revoke later if you attach onload; safe to omit here
         });
 
-        return div({
-                id: `${this.windowId}-card-${idx}`,
-                class: "slide-card bg-base-200 border border-base-300 transition " +
-                    (checked ? "ring ring-primary ring-offset-1 " : "") +
-                    "cursor-pointer flex flex-row",
-                onclick: () => this._onCardClick(idx),
-            },
-            div({
-                class: "relative bg-base-300 w-10",
-                style: "width: 80px"
-            }, input({
+        const viewer = this._getViewerForBg(idx);
+        const linked = this._isLinked(viewer);
+
+        const controls = div(
+            { class: "flex items-center gap-2 p-2" },
+            input({
                 id: checkboxId,
                 "data-idx": idx,
                 type: "checkbox",
-                class: "absolute left-1 top-1 z-10 checkbox checkbox-xs",
+                class: "checkbox checkbox-xs",
                 checked: checked,
                 onclick: (e) => e.stopPropagation(),
                 onchange: (e) => this._onCheck(idx, e.target.checked),
                 title: "Add/remove from view"
-            })),
+            }),
+            // link icon button
+            button({
+                id: `${this.windowId}-lnk-${idx}`,
+                class: "btn btn-ghost btn-xs",
+                disabled: !viewer,
+                title: viewer
+                    ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
+                    : "Not open",
+                onclick: (e) => this._onToggleLink(idx, e)
+            }, new FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
+        );
+
+        return div({
+                id: `${this.windowId}-card-${idx}`,
+                class: "slide-card bg-base-200 border border-base-300 transition " +
+                    (checked ? "ring ring-primary ring-offset-1 " : "") +
+                    "cursor-pointer flex flex-row"
+            },
+            controls,
             thumbWrap
         );
     }
@@ -280,6 +296,62 @@ export class SlideSwitcherMenu extends BaseComponent {
             class: "p-1 grid gap-1 overflow-auto flex-1 min-h-0",
             style: "grid-template-columns: repeat(auto-fill, minmax(240px, 90px));",
         }, ...items);
+    }
+
+    // --- Viewer plumbing (default context=0) ---
+    _getVM() {
+        return globalThis.VIEWER_MANAGER || APPLICATION_CONTEXT?._vm || null;
+    }
+    _getViewerForBg(idx) {
+        const vm = this._getVM();
+        if (!vm || !vm.viewers || !vm.viewers.length) return null;
+
+        const stacked = !!APPLICATION_CONTEXT.getOption("stackedBackground");
+        if (stacked) return vm.viewers[0] || null;
+
+        // map background index -> viewer index by current selection order
+        const order = Array.from(this.selected).sort((a,b)=>a-b);
+        const vIdx = order.indexOf(idx);
+        return vIdx >= 0 ? vm.viewers[vIdx] || null : null;
+    }
+    _isLinked(viewer) {
+        if (!viewer) return false;
+        return !!viewer.tools.isLinked();
+    }
+    _link(viewer)  {
+        if (!viewer) return;
+        return viewer.tools.link();
+    }
+    _unlink(viewer){
+        if (!viewer) return;
+        return viewer.tools.unlink();
+    }
+
+    _updateLinkIcon(idx) {
+        const btn = document.getElementById(`${this.windowId}-lnk-${idx}`);
+        if (!btn) return;
+        const viewer = this._getViewerForBg(idx);
+        const linked = this._isLinked(viewer);
+        btn.title = viewer
+            ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
+            : "Not open";
+        btn.disabled = !viewer;
+        btn.innerHTML = "";  // replace icon
+        btn.appendChild(new FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
+    }
+    _refreshAllLinkIcons() {
+        // Call this after list render, after selection changes, and after viewer open
+        const n = (this.background || []).length;
+        for (let i = 0; i < n; i++) this._updateLinkIcon(i);
+    }
+
+    _onToggleLink(idx, ev) {
+        ev?.stopPropagation?.();
+        const viewer = this._getViewerForBg(idx);
+        if (!viewer) return;
+        if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
+        // Update all cards that might share the same viewer (esp. stacked)
+        this._refreshAllLinkIcons();
     }
 
     // BaseComponent contract

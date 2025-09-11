@@ -50,20 +50,34 @@
     <!-- Template ui -->
     <template id="template-ui"></template>
 
-<!-- OSD viewer -->
-<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">
-    <div id="osd" style="pointer-events: auto;" class="absolute w-full h-full top-0 left-0"></div>
-    <div id='viewer-demo-advertising' style='display: none'>
-        <h1>xOpat - The WSI Viewer</h1>
-        <p>The viewer is missing the target data to view; this might happen, if</p>
-        <div id='viewer-demo-error-description'>
-            <!-- message space-->
-        </div>
-        <br><br>
-        <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>
-        <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">
-    </div>
-</div>
+    <script>
+        // todo make sure our globals dont get out of hand...
+        window.LAYOUT = new UI.MainLayout({
+            id: "viewer-container",
+            position: "right",
+            initialWidth: 360,
+            tabs: [
+                { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
+                { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
+            ]
+        });
+        // Attach once (replaces your static HTML wrapper)
+        window.LAYOUT.attachTo(document.body);
+    </script>
+<!--&lt;!&ndash; OSD viewer &ndash;&gt;-->
+<!--<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">-->
+<!--    <div id="osd" style="pointer-events: auto;" class="absolute w-full h-full top-0 left-0"></div>-->
+<!--    <div id='viewer-demo-advertising' style='display: none'>-->
+<!--        <h1>xOpat - The WSI Viewer</h1>-->
+<!--        <p>The viewer is missing the target data to view; this might happen, if</p>-->
+<!--        <div id='viewer-demo-error-description'>-->
+<!--            &lt;!&ndash; message space&ndash;&gt;-->
+<!--        </div>-->
+<!--        <br><br>-->
+<!--        <p class="text-small mx-6 text-center">xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable.</p>-->
+<!--        <img src="docs/assets/xopat-banner.png" style="width: 80%; display: block; margin: 0 auto;">-->
+<!--    </div>-->
+<!--</div>-->
 
 <!-- System messaging -->
 <div id="system-message" class="hidden system-container">
@@ -91,26 +105,26 @@
 </div>
 
 <!-- Main Panel -->
-<div id="top-side" class="flex-row w-full opaque-bg" style="display: flex; position: relative; align-items: flex-start; height: 45px; pointer-events: none;">
-    <div id="top-menus" class="flex flex-row w-full" style="justify-content: flex-end;">
-        <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
-        <div id = "top-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
-    </div>
-    <div id="top-side-left" class="flex flex-row" style="position: absolute; left: 0; top: 0; height: 100%; align-items: center; pointer-events: auto;">
-        <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
-        <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
-    </div>
-</div>
+<!--<div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 45px; pointer-events: none;">-->
+<!--    <div id="top-menus" class="flex flex-row w-full" style="justify-content: flex-end;">-->
+<!--        <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>-->
+<!--        <div id = "top-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>-->
+<!--    </div>-->
+<!--    <div id="top-side-left" class="flex flex-row" style="position: absolute; left: 0; top: 0; height: 100%; align-items: center; pointer-events: auto;">-->
+<!--        <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>-->
+<!--        <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>-->
+<!--    </div>-->
+<!--</div>-->
 
-<div id="fullscreen-menu" class="bg-base-100"></div>
+<!--<div id="fullscreen-menu" class="bg-base-100"></div>-->
 
-<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>
+<!--<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>-->
 
-<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
-    <div id="bottom-menu-left"></div>
-    <div id="bottom-menu-center"></div>
-    <div id="bottom-menu-right"></div>
-</div>
+<!--<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">-->
+<!--    <div id="bottom-menu-left"></div>-->
+<!--    <div id="bottom-menu-center"></div>-->
+<!--    <div id="bottom-menu-right"></div>-->
+<!--</div>-->
 <!-- Appended controls for other plugins -->
 
 

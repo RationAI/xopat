@@ -3,6 +3,7 @@ globalThis.VANCOMPONENTS = {};
 
 import van from "./vanjs.mjs";
 
+import { BaseComponent } from "./classes/baseComponent.mjs";
 import { Button } from "./classes/elements/buttons.mjs";
 import { FAIcon } from "./classes/elements/fa-icon.mjs";
 import { Join } from "./classes/elements/join.mjs";
@@ -21,16 +22,18 @@ import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { RawHtml } from "./classes/elements/rawHtml.mjs";
 import { ShaderMenu } from "./classes/components/shaderMenu.mjs";
 import { Alert } from "./classes/elements/alert.mjs";
-import { StretchGrid } from "./classes/elements/stretch-grid.mjs";
+import { StretchGrid } from "./classes/elements/stretchGrid.mjs";
 import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
 import { SlideSwitcherMenu } from "./classes/components/slideSwitcherMenu.mjs";
+import { MainLayout } from "./classes/components/mainLayout.mjs";
 
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
 const UI = {
+    BaseComponent,
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
     Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip, StretchGrid,
-    FloatingWindow, SlideSwitcherMenu
+    FloatingWindow, SlideSwitcherMenu, MainLayout
 };
 globalThis.UI = UI;
 

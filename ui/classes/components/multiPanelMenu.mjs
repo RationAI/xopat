@@ -29,28 +29,13 @@ class MultiPanelMenu extends Menu {
      * @param {*} options
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
-    constructor(options, ...args) {
-        super(options,);
-        this.tabs = {};
-        this.pinnedTabs={};
-
-        this.body = new ui.Div({ 
-            id: this.id + "-body", 
-            extraClasses: {height: "h-full", width: "w-full"}, 
-            });
-
-        for (let i of args) {
-            this.addTab(i);
-        }
-
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
+        this.pinnedTabs = {};
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
-
-        if (options) {
-            this._applyOptions(options);
-        }
+        this._applyOptions(options);
     }
-
 
     create() {
         this.body.attachTo(this);

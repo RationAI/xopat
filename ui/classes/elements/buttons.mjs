@@ -26,8 +26,8 @@ class Button extends BaseComponent {
      * @param {keyof typeof Button.OUTLINE} [options.outline] - The outline style of the button
      * @param {keyof typeof Button.TYPE} [options.type] - The button type
      */
-    constructor(options, ...args) {
-        super(options, ...args);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
         this.classMap["base"] = options["base"] || "btn";
         this.classMap["type"] = options["type"] || "btn-primary";
         this.classMap["size"] = "";

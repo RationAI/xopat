@@ -14,7 +14,6 @@ const { span } = van.tags
  * @description A internal tab component for the menu component
  * @example
  * const tab = new MenuTab({id: "s1", icon: settingsIcon, title: "Content1", body: "Settings1"}, menu);
- * todo extend base component!
  */
 class MenuTab extends BaseComponent {
     /**
@@ -22,7 +21,7 @@ class MenuTab extends BaseComponent {
      * @param {*} parent parent menu component
      */
     constructor(item, parent) {
-        super({},);
+        super(undefined);
         this.parent = parent;
         this.style = "ICONTITLE";
         this.styleOverride = item["styleOverride"] || false;

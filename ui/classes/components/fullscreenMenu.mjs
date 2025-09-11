@@ -38,8 +38,8 @@ class FullscreenMenu extends BaseComponent{
      * @param {*} options
      * @param  {...any} args - items to be added to the menu, needs to be UI.Div
     **/
-    constructor(options, ...args) {
-        super(options, );
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
         this.tabs = {};
 
         this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full", color: "bg-base-100"} });
@@ -49,9 +49,11 @@ class FullscreenMenu extends BaseComponent{
             onClick: () => this.unfocusAll(),
             extraClasses: {position: "absolute right-2"}
         }, new FAIcon({name: 'fa-close'}));
-        for (let i of args) {
+        for (let i of this._children) {
             this.addTab(i);
         }
+        // todo - better usage design? prevent using this directly...
+        this._children = [];
     }
 
     /**

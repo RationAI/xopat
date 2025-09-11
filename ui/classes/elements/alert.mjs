@@ -52,8 +52,8 @@ export class Alert extends BaseComponent {
      *  onClose?: () => void,
      * }} opts
      */
-    constructor(opts = {}) {
-        super(opts);
+    constructor(opts = undefined) {
+        opts = super(opts).options;
         this.mode = isMode(opts.mode) ? opts.mode : "neutral";
         this.title = opts.title ?? "";
         this.description = opts.description ?? "";

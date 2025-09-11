@@ -26,8 +26,8 @@ const { div, ul, li, a, span } = van.tags;
  */
 class Dropdown extends BaseComponent {
     // todo:  _children? use instead of items...
-    constructor(options, ..._children /* ignored */) {
-        super(options);
+    constructor(options = undefined, ..._children /* ignored */) {
+        options = super(options).options;
         // existing options kept
         this.title = options["title"] || "";
         this.icon = options["icon"] || "";

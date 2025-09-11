@@ -35,8 +35,8 @@ const { div, span, input, label, br } = van.tags;
  *      onClearCache()
  */
 export class ShaderLayer extends BaseComponent {
-    constructor(options) {
-        super(options);
+    constructor(options = undefined) {
+        options = super(options).options;
         this.cfg = options.shaderConfig;
         this.layer = options.shaderLayer;
         this.availableShaders = options.availableShaders || [];

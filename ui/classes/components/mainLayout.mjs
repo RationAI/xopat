@@ -1,0 +1,239 @@
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
+import { Div } from "../elements/div.mjs";
+import { TabsMenu } from "./tabsMenu.mjs";
+import { RawHtml } from "../elements/rawHtml.mjs";
+
+const { div, h1, p, br, img } = van.tags;
+
+/**
+ * ViewerShellWithDock
+ * - Wraps the viewer container and a configurable side dock
+ * - Dock can be LEFT/RIGHT, collapsible, resizable; on narrow screens moves BELOW
+ *
+ * API:
+ *   new MainLayout({
+ *     id: "viewer-shell",
+ *     position: "right" | "left",          // default "right"
+ *     initialWidth: 360,                    // px
+ *     minWidth: 220,
+ *     maxWidth: 640,
+ *     collapseBreakpointPx: 900,           // under this, dock jumps below (flex-col)
+ *     tabs: [
+ *       { id: "info", icon: "fa-circle-info", title: "Info", body: ["..."] },
+ *       { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["..."] }
+ *     ],
+ *     // Optional: supply your own TabsMenu instance instead of tabs array:
+ *     menu: new TabsMenu({...})
+ *   })
+ *
+ * Methods:
+ *   setPosition("left"|"right")
+ *   setWidth(px)
+ *   collapse()
+ *   expand()
+ *   toggle()
+ *   getViewerMount()  -> HTMLElement for OpenSeadragon { id: `${this.id}-osd` }
+ *   getDockBodyNode() -> HTMLElement (menu body DOM) to inject extra content if needed
+ */
+export class MainLayout extends BaseComponent {
+    constructor(options = undefined, ...children) {
+        options = super(options, ...children).options;
+
+        this.position = (options.position || "right").toLowerCase();
+        this.widthPx = options.initialWidth ?? 360;
+        this.minWidth = options.minWidth ?? 220;
+        this.maxWidth = options.maxWidth ?? 640;
+        this.collapseBreakpointPx = options.collapseBreakpointPx ?? 900;
+        this.collapsed = false;
+
+        this._tabsArr = [];
+        if (Array.isArray(options.tabs)) this._tabsArr.push(...options.tabs);
+        this._menu = options.menu || null;
+
+        this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
+        this._onResize = () => this._applyResponsiveLayout();
+        window.addEventListener("resize", this._onResize, { passive: true });
+    }
+
+    /** ---- dynamic tab API ---- */
+    addTab(tabDef) {
+        if (!this._menu) this._ensureMenu();
+        this._tabsArr.push(tabDef);
+        this._menu.add(tabDef);
+        this._updateDockVisibility();
+    }
+
+    removeTab(id) {
+        if (!this._menu) return;
+        const i = this._tabsArr.findIndex(t => t.id === id);
+        if (i >= 0) this._tabsArr.splice(i, 1);
+        this._menu.remove(id);
+        this._updateDockVisibility();
+    }
+
+    clearTabs() {
+        this._tabsArr.length = 0;
+        if (this._menu) this._menu.clear();
+        this._updateDockVisibility();
+    }
+
+    get tabCount() { return this._tabsArr.length; }
+
+    /** ---- helpers ---- */
+    getViewerMount() { return document.getElementById("osd"); }
+    getDockBodyNode() {
+        return this._menu ? document.getElementById(`${this._menu.id}-body`) : this._dockEl;
+    }
+
+    collapse() { this.collapsed = true; this._applyVisibility(); }
+    expand() { this.collapsed = false; this._applyVisibility(); }
+    toggle() { this.collapsed ? this.expand() : this.collapse(); }
+
+    /** ---- internals ---- */
+    _ensureMenu() {
+        if (!this._menu) {
+            const menu = new TabsMenu({ id: `${this.id}-menu` }, ...this._tabsArr);
+            this._menu = menu;
+            menu.attachTo(this._dockEl);
+        }
+    }
+
+    _updateDockVisibility() {
+        const hasTabs = this._tabsArr.length > 0;
+        if (!this._dockEl) return;
+        if (!hasTabs) {
+            this._dockEl.style.display = "none";
+            this._handleEl.style.display = "none";
+            this._viewerEl.style.flex = "1 1 100%";
+        } else {
+            this._dockEl.style.display = "";
+            this._handleEl.style.display = this.collapsed ? "none" : "";
+            this._viewerEl.style.flex = "1 1 auto";
+        }
+    }
+
+    _applyVisibility() {
+        if (!this._dockEl) return;
+        if (this.collapsed) {
+            this._dockEl.style.width = "0px";
+            this._handleEl.style.display = "none";
+        } else {
+            this._dockEl.style.width = `${this.widthPx}px`;
+            this._handleEl.style.display = "";
+        }
+    }
+
+    _applyResponsiveLayout() {
+        if (!this._shellEl) return;
+        const narrow = window.innerWidth < this.collapseBreakpointPx;
+
+        this._shellEl.classList.toggle("flex-col", narrow);
+        this._shellEl.classList.toggle("flex-row", !narrow);
+
+        if (narrow) {
+            this._viewerEl.style.order = "0";
+            this._dockEl.style.order = "1";
+            this._dockEl.style.width = "100%";
+            this._handleEl.style.display = "none";
+        } else {
+            this._viewerEl.style.order = this.position === "left" ? "1" : "0";
+            this._dockEl.style.order = this.position === "left" ? "0" : "2";
+            this._applyVisibility();
+        }
+    }
+
+    _wireResize() {
+        if (!this._handleEl) return;
+        let drag = false, startX = 0, startW = 0;
+
+        const onMove = e => {
+            if (!drag) return;
+            const dx = e.clientX - startX;
+            const newW = this.position === "left" ? startW + dx : startW - dx;
+            this.widthPx = Math.max(this.minWidth, Math.min(this.maxWidth, newW));
+            this._dockEl.style.width = `${this.widthPx}px`;
+            e.preventDefault();
+        };
+        const onUp = () => {
+            drag = false;
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+        };
+
+        this._handleEl.addEventListener("mousedown", e => {
+            if (this.collapsed) return;
+            drag = true;
+            startX = e.clientX;
+            startW = this._dockEl.getBoundingClientRect().width;
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+            e.preventDefault();
+        });
+    }
+
+    create() {
+        // --- viewer core (IDs unchanged) ---
+        const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });
+        const advert = div({ id:"viewer-demo-advertising", style:"display:none" },
+            h1("xOpat - The WSI Viewer"),
+            p("The viewer is missing the target data to view; this might happen, if"),
+            div({ id:"viewer-demo-error-description" }),
+            br(), br(),
+            p({ class:"text-small mx-6 text-center" },
+                "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
+            img({ src:"docs/assets/xopat-banner.png", style:"width:80%;display:block;margin:0 auto;" })
+        );
+
+        const viewerWrap = div({ class:"relative flex-1" }, osd, advert, new RawHtml(null, `
+<div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 45px; pointer-events: none;">
+    <div id="top-menus" class="flex flex-row w-full" style="justify-content: flex-end;">
+        <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
+        <div id = "top-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
+    </div>
+    <div id="top-side-left" class="flex flex-row" style="position: absolute; left: 0; top: 0; height: 100%; align-items: center; pointer-events: auto;">
+        <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
+        <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>
+    </div>
+</div>
+
+<div id="fullscreen-menu" class="bg-base-100"></div>
+
+<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>
+
+<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
+    <div id="bottom-menu-left"></div>
+    <div id="bottom-menu-center"></div>
+    <div id="bottom-menu-right"></div>
+</div>`).create());
+
+        // --- dock ---
+        const dock = new Div({
+            id:`${this.id}-dock`,
+            extraClasses:{ base:"bg-base-200 border-l border-base-300 shrink-0 overflow-hidden h-full" },
+            extraProperties:{ style:`width:${this.widthPx}px;` }
+        });
+        if (this._tabsArr.length) {
+            const menu = new TabsMenu({ id:`${this.id}-menu` }, ...this._tabsArr);
+            this._menu = menu;
+            menu.attachTo(dock);
+        }
+
+        const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 cursor-col-resize" });
+
+        this._dockEl = dock.create();
+        const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
+            this.position === "left" ? [dock.create(), handle, viewerWrap] : [viewerWrap, handle, this._dockEl]
+        );
+
+        this._shellEl = shell;
+        this._viewerEl = viewerWrap;
+        this._handleEl = handle;
+
+        this._wireResize();
+        this._applyResponsiveLayout();
+        this._updateDockVisibility();
+
+        return shell;
+    }
+}

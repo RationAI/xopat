@@ -24,8 +24,8 @@ class Checkbox extends BaseComponent {
      * @param {boolean} [options.checked] - The initial checked state of the checkbox
      * @param {Function} [options.onchange] - The function to call when the checkbox state changes
      */
-    constructor(options, ...args) {
-        super(options, ...args);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
         this.label = options["label"] || "";
         this.checked = options["checked"] || false;
         this.onchangeFunction = options["onchange"] || (() => {});

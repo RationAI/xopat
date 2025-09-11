@@ -254,6 +254,7 @@
                         values.reverse();
 
                         const updateZoom = (mag) => {
+                            if (sliderContainer.noUiSlider._prevented) return;
                             const image = this.viewer.world.getItemAt(0);
                             if (!image) {
                                 throw "Linked referenced image does not exist!";
@@ -270,9 +271,12 @@
                             const image = this.viewer.world.getItemAt(0);
                             if (!image) {
                                 console.error("Linked referenced image does not exist!");
+                            } else {
+                                sliderContainer.noUiSlider._prevented = true;
+                                const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
+                                sliderContainer.noUiSlider.set(desiredZoom);
+                                sliderContainer.noUiSlider._prevented = false;
                             }
-                            const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
-                            sliderContainer.noUiSlider.set(desiredZoom);
                         };
                         this.viewer.addHandler('zoom', reflectUpdate);
 

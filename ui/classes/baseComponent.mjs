@@ -20,23 +20,27 @@ class BaseComponent {
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...children) {
-        const extraClasses = options["extraClasses"];
-        this.classMap = typeof extraClasses === "object" ? extraClasses : {};
 
-        const extraProperties = options["extraProperties"];
-        this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
-        this.propertiesStateMap = {};
-        if (extraProperties){
-            for (let key in this.propertiesMap) {
-                this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
-            }
+        if (typeof options === "string" || options instanceof Node || options instanceof BaseComponent) {
+            children.unshift(options);
+            options = undefined;
         }
 
+        this.propertiesStateMap = {};
         this._children = children;
         this._renderedChildren = null;
         this.classState = van.state("");
 
         if (options) {
+            const extraClasses = options["extraClasses"];
+            this.classMap = typeof extraClasses === "object" ? extraClasses : {};
+            const extraProperties = options["extraProperties"];
+            this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
+            if (extraProperties){
+                for (let key in this.propertiesMap) {
+                    this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
+                }
+            }
             if (options.id) {
                 this.id = options.id;
                 delete options.id;
@@ -46,6 +50,8 @@ class BaseComponent {
             }
             this.options = options;
         } else {
+            this.propertiesMap = {};
+            this.classMap = {};
             this.options = {};
         }
     }

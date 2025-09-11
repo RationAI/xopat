@@ -20,8 +20,8 @@ const { div, span } = van.tags;
  *  - onPopout?: (childWindow: Window) => void
  */
 export class FloatingWindow extends BaseComponent {
-    constructor(options = {}, ...bodyChildren) {
-        super(options, ...bodyChildren);
+    constructor(options = undefined, ...bodyChildren) {
+        options = super(options, ...bodyChildren).options;
 
         // --- base CSS (similar to your other components’ style system) ---
         this.classMap.base = "card bg-base-200 shadow-xl border border-base-300";

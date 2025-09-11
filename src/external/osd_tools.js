@@ -399,14 +399,14 @@ OpenSeadragon.Tools = class {
 
         const handler = function() {
             const leading = contextData.leading;
-            if (leading && leading !== self) {
+            if (leading !== null) {
                 return;
             }
             contextData.leading = self;
             const leadViewport = self.viewport;
 
             for (let v of contextData.subscribed) {
-                const vp = v.viewer.viewport;
+                const vp = v.viewport;
                 // todo consider viewport update event and setting only: (might not respect rotation / flip)
                 //  otherViewport.fitBoundsWithConstraints(viewport.getBounds(), true);
                 vp.zoomTo(leadViewport.getZoom());
@@ -423,6 +423,10 @@ OpenSeadragon.Tools = class {
         self.addHandler('pan', handler);
         self.addHandler('rotate', handler);
         self.addHandler('flip', handler);
+    }
+
+    isLinked() {
+        return !!this.viewer.__sync_handler;
     }
 
     /**

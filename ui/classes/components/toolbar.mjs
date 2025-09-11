@@ -25,8 +25,9 @@ class Toolbar extends BaseComponent{
      * @param {*} options
      * @param {*} args
      */
-    constructor(options, ...args) {
-        super(options,);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
+        args = this._children;
 
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
@@ -45,6 +46,7 @@ class Toolbar extends BaseComponent{
         for (let i of args) {
             this.addToToolbar(i);
         }
+        this._children = [];
     }
 
     /**

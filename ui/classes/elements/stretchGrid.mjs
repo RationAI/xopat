@@ -8,8 +8,8 @@ const { div } = van.tags;
  * @description A grid component that stretches the last row to fill width
  */
 class StretchGrid extends BaseComponent {
-    constructor(options = {}, ...children) {
-        super(options, ...children);
+    constructor(options = undefined, ...children) {
+        options = super(options, ...children).options;
 
         this.cols = options.cols || 3;
         this.gap = options.gap || "12px";
@@ -136,7 +136,7 @@ class StretchGrid extends BaseComponent {
         const renderedCols = cols * m;
         // this._gridStyle = `grid-template-columns: repeat(${renderedCols}, 1fr); gap:${this.gap}; --aspect:${this.aspect};`;
         this._gridStyle =
-            `position:fixed; inset:0; display:grid;` +                // ⬅ full viewport
+            `inset:0; display:grid;` +                // ⬅ full viewport
             `grid-template-columns: repeat(${renderedCols}, 1fr);` +
             `gap:${this.gap}; --aspect:${this.aspect};`;
 
@@ -158,7 +158,7 @@ class StretchGrid extends BaseComponent {
         return div(
             {
                 id: this.id,
-                class: "stretch-grid " + (this.classState.val || ""),
+                class: "stretch-grid width-full height-full" + (this.classState.val || ""),
                 style: this._gridStyle,
                 ...this.extraProperties,
             },
