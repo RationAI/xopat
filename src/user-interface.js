@@ -1293,14 +1293,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     // left
                     if (newX < SNAP_DISTANCE) {
                         draggableBox.style["max-width"] = "100px";
-                        newY = viewportHeight / 2 - draggableBox.offsetHeight / 2; // Center vertically
                         newX = 0;
                     }
 
                     // bottom
                     else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
                         newY = viewportHeight - boxHeight;
-                        newX = viewportWidth / 2 - boxWidth / 2; // Center horizontally
                     }
 
                     // cannot be dragged out of viewport
