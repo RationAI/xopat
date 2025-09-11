@@ -27,7 +27,6 @@ class MultiPanelMenuTab extends MenuTab {
     **/
     constructor(item, parent) {
         super(item, parent);
-        this.closedButton;
         this.openButton;
         this.openDiv;
         this.pin;
@@ -41,15 +40,6 @@ class MultiPanelMenuTab extends MenuTab {
         //todo dirty?
         this.iconName = inIcon.options.name;
         this.title = inText;
-
-        this.closedButton = new Button({
-            id: this.parent.id + "-b-closed-" + item.id,
-            size: Button.SIZE.TINY,
-            extraProperties: { title: inText, style: "margin-top: 5px;" },
-            onClick: () => {
-                this.focus();
-            },
-            }, inIcon, span(inText));
 
         const pinIcon = new FAIcon({id: this.parent.id + "-b-icon"+ item.id, name: "fa-thumbtack" });
         this.pin = new Button({
@@ -88,12 +78,12 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200", radius: "rouded-tl-md rounded-bl-md"},
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
-            }, div({ style: "width: 360px;" }, ...content), this.openButton);
+            }, div({ style: "width: 360px;" }, ...content));
 
         let c = new Div({ 
             id: this.parent.id + "-c-" + item.id, 
-            extraClasses: {display: "", flex: "flex flex-col", item: "ui-menu-item"}
-            }, this.closedButton, this.openDiv);
+            extraClasses: {display: "", flex: "flex flex-row", item: "ui-menu-item"}
+            }, this.openDiv, this.openButton);
 
         this.fullId = this.parent.id + "-c-" + item.id;
         if (APPLICATION_CONTEXT.getOption(`${this.id}-pinned`, false)){
@@ -105,7 +95,6 @@ class MultiPanelMenuTab extends MenuTab {
 
     removeTab() {
         this.contentDiv.remove();
-        this.closedButton.remove();
         this.openButton.remove();
         this.openDiv.remove();
     }
@@ -124,14 +113,12 @@ class MultiPanelMenuTab extends MenuTab {
         this.focused = true;
 
         this.openDiv.setClass("display", "");
-        this.closedButton.setClass("display", "hidden");
     }
 
     _removeFocus() {
         this.focused = false;
 
         this.openDiv.setClass("display", "hidden");
-        this.closedButton.setClass("display", "");
     }
 
     close() {
@@ -148,7 +135,6 @@ class MultiPanelMenuTab extends MenuTab {
             return;
         }
         this.style = "TITLE";
-        this.closedButton.titleOnly();
         this.openButton.titleOnly();
     }
 
@@ -157,7 +143,6 @@ class MultiPanelMenuTab extends MenuTab {
             return;
         }
         this.style = "ICONTITLE";
-        this.closedButton.titleIcon();
         this.openButton.titleIcon();
     }
 
@@ -166,12 +151,10 @@ class MultiPanelMenuTab extends MenuTab {
             return;
         }
         this.style = "ICON";
-        this.closedButton.iconOnly();
         this.openButton.iconOnly();
     }
 
     iconRotate(){
-        this.closedButton.iconRotate();
         this.openButton.iconRotate();
     }
 
