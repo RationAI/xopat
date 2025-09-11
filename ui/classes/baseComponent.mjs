@@ -14,9 +14,22 @@ const HtmlRenderer = (htmlString) => {
 class BaseComponent {
 
     /**
+     * Generic Component constructor. If options are not provided (undefined or a child node is issued), children are
+     * handled by the base component. Inheriting component should use:
+     *  constructor(options, ...children) {
+     *      super(options, ...children);
+     *      options = this.options; //parsed, ensured to exist
+     *      children = this._children; // includes first arg if options not provided
+     *  }
      *
-     * @param {*} options - other options are defined in the constructor of the derived class
-     * @param  {...any} children
+     * OK is also:
+     *   constructor(someArg1, someARg2) {
+     *       super();  // must not sent arguments
+     *       // custom arg system for a specific component, does not follow the generic arg system
+     *   }
+     * @param {string|BaseComponent|Node|*} [options=undefined] - other options are defined in the constructor of the derived class,
+     *  or a child node (first of children).
+     * @param  {Array<string|BaseComponent|Node>} children - children.
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...children) {

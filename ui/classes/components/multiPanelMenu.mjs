@@ -30,11 +30,10 @@ class MultiPanelMenu extends Menu {
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
     constructor(options = undefined, ...args) {
-        options = super(options, ...args).options;
+        super(options, ...args);
         this.pinnedTabs = {};
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
-        this._applyOptions(options);
     }
 
     create() {
