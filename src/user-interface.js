@@ -850,8 +850,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         SlidesMenu: new UI.SlideSwitcherMenu(),
 
         /**
-         * Application TopRightMenu
-         * @namespace USER_INTERFACE.TopRightMenu
+         * Application TopFullscreenButton
+         * @namespace USER_INTERFACE.TopFullscreenButton
          */
         TopFullscreenButton:{
             context: $("#top-fullscreen"),
@@ -892,7 +892,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
         /**
-         * Application TopRightMenu
+         * Application TopUserMenu
          * @namespace USER_INTERFACE.TopUserMenu
          */
         TopUserMenu:{

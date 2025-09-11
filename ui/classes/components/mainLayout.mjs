@@ -199,7 +199,7 @@ export class MainLayout extends BaseComponent {
 
 <div id="fullscreen-menu" class="bg-base-100"></div>
 
-<div id="right-side-menu" class="flex-column ui-menu" style="position: fixed; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>
+<div id="right-side-menu" class="flex-column ui-menu" style="position: absolute; width: 400px; height: calc(100% - 45px); overflow-y: auto;"></div>
 
 <div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
     <div id="bottom-menu-left"></div>
