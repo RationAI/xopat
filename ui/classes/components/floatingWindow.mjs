@@ -135,10 +135,19 @@ export class FloatingWindow extends BaseComponent {
 
     // ---------- public API ----------
     focus() {
-        if (!this._rootEl) return;
-        this._rootEl.style.zIndex = String(Date.now());
-        this._rootEl.classList.add("ring-2","ring-primary","ring-offset-2","ring-offset-base-100");
-        setTimeout(() => this._rootEl?.classList.remove("ring-2","ring-primary","ring-offset-2","ring-offset-base-100"), 200);
+        if (this._external) {
+            if (!isWindowOpened(this._childWindow)) {
+                this._toggleExternal();
+            } else {
+                this._childWindow.focus();
+            }
+        } else {
+            if (!this._rootEl) return;
+            this._rootEl.style.zIndex = String(Date.now());
+            this._rootEl.classList.add("ring-2","ring-primary","ring-offset-2","ring-offset-base-100");
+            setTimeout(() => this._rootEl?.classList.remove("ring-2","ring-primary","ring-offset-2","ring-offset-base-100"), 200);
+
+        }
     }
 
     opened() {
@@ -152,7 +161,6 @@ export class FloatingWindow extends BaseComponent {
         if (this._external && !this._childWindow?.closed) {
             destroyWindow(this.id, this._childWindow);
         }
-        this._external = false;
         this._childWindow = null;
         this.options.onClose?.();
         this.remove();
@@ -253,11 +261,19 @@ export class FloatingWindow extends BaseComponent {
         window.addEventListener("touchend", end);
     };
 
-    _toggleExternal() {
+    _toggleExternal(switchState=false) {
         if (this._external) {
-            // Already external; try to focus
-            this._childWindow?.focus();
-            return;
+            // TODO: try to support going both directions
+            // if (switchState) {
+            //     this.close();
+            // }
+            // this._external = false;
+
+            if (isWindowOpened(this._childWindow)) {
+                // Already external; try to focus
+                this._childWindow?.focus();
+                return;
+            }
         }
 
         // Pop out: open a child window (chromeless-ish)
@@ -347,7 +363,6 @@ export class FloatingWindow extends BaseComponent {
             };
             child.addEventListener("resize", syncSize);
             child.addEventListener("beforeunload", () => {
-                this._external = false;
                 this._childWindow = null;
             });
         }, { once: true });
@@ -448,6 +463,7 @@ export class FloatingWindow extends BaseComponent {
         return root;
     }
 
+    // todo keep only close or remove
     remove() {
         try { this._rootEl?.__fw_cleanup?.(); } catch {}
         super.remove();

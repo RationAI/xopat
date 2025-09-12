@@ -269,7 +269,12 @@ addPlugin('questionaire', class extends XOpatPlugin {
 
     // ========== builder (no preview) ==========
     _openBuilderWindow() {
-        if (this._builderWin) return;
+        if (this._builderWin) {
+            if (!this._builderWin.opened()) {
+                this._builderWin.focus();
+            }
+            return;
+        }
 
         const head = `
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
