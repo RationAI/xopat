@@ -1,9 +1,19 @@
 /**
- * Common Error thrown in JSON requests with failures (via fetchJSON(...)
+ * Error thrown for HTTP failures in utility requests (e.g., via UTILITIES.fetchJSON).
  * The content is not guaranteed to be translated.
  * @class HTTPError
+ * @extends Error
+ * @property {string} message - Human-readable error message.
+ * @property {Response} [response] - The Fetch API Response object, if available.
+ * @property {string} [textData] - Raw response body text returned by the server.
+ * @property {number} statusCode - HTTP status code derived from the response (default 500).
  */
 window.HTTPError = class extends Error {
+    /**
+     * @param {string} message - Error message.
+     * @param {Response} [response] - Fetch Response associated with the error.
+     * @param {string} [textData] - Raw response text for diagnostics.
+     */
     constructor(message, response, textData) {
         super();
         this.message = message;
@@ -14,19 +24,27 @@ window.HTTPError = class extends Error {
 };
 
 /**
- * Init loading system in xOpat. Do not use in the viewer, use only if you
- * manually want to reuse plugins/modules elsewhere.
- * IMPORTANT
- * Use:                 const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, VERSION);
- * call when all ready: initPlugins();
- * @param PLUGINS
- * @param MODULES
- * @param PLUGINS_FOLDER
- * @param MODULES_FOLDER
- * @param POST_DATA can be empty object if no data is supposed to be loaded
- * @param version
- * @param awaitPluginReady if true, returned handler awaits plugins
- * @return {function} initializer function to call once ready
+ * Initialize the xOpat loading system. This sets up the runtime environment for
+ * loading modules and plugins and returns an initializer you call when the host
+ * application (e.g., the viewer) is ready.
+ *
+ * Notes:
+ * - Do not call this inside the viewer; use it if you want to reuse plugins/modules elsewhere.
+ * - Example usage:
+ *   const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
+ *   await initPlugins(); // if awaitPluginReady=true
+ *
+ * @param {Object.<string, {id:string, name?:string, directory?:string, includes?:string[], permaLoad?:boolean, instance?:any, loaded?:boolean, error?:any}>} PLUGINS
+ *        Registry object of plugins keyed by plugin id (from include.json).
+ * @param {Object.<string, {id:string, name?:string, directory?:string, includes?:string[], permaLoad?:boolean, instance?:any, loaded?:boolean, error?:any}>} MODULES
+ *        Registry object of modules keyed by module id (from include.json).
+ * @param {string} PLUGINS_FOLDER - Base URL or path where plugin folders reside (trailing slash optional).
+ * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
+ * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
+ * @param {string} version - Version string of the running build.
+ * @param {boolean} [awaitPluginReady=false] - If true, the returned initializer is async and awaits plugin readiness.
+ * @returns {(() => void) | (() => Promise<void>)} A function to be called once the host app is ready. When
+ *          awaitPluginReady=true it returns an async function that resolves when all plugins finish pluginReady().
  */
 function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version, awaitPluginReady=false) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
@@ -756,14 +774,19 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
-         * Root path - the modules folder
+         * Base URL/path to the modules folder.
+         * Useful for resolving module-relative assets.
+         * @type {string}
+         * @public
          */
         static ROOT = MODULES_FOLDER;
 
         /**
-         * The root of this module folder
-         * @return {string}
-         * @constructor
+         * Absolute root path/URL of this module's directory.
+         * Combines the global MODULES_FOLDER with this module's subdirectory.
+         * @returns {string}
+         * @public
+         * @memberof XOpatModule#
          */
         get MODULE_ROOT() {
             if (!MODULES[this.id]) {
@@ -835,7 +858,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
-         * Function called once a viewer is fully loaded
+         * Lifecycle hook called once a viewer is fully loaded and ready.
+         * Override in your plugin to perform async initialization.
+         * @returns {Promise<void>|void}
          */
         async pluginReady() {
         }
@@ -963,13 +988,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             return false;
         }
 
+        /**
+         * Base URL/path to the plugins folder.
+         * Useful for resolving plugin-relative assets.
+         * @type {string}
+         * @public
+         */
         static ROOT = PLUGINS_FOLDER;
 
-
         /**
-         * The root of this plugin folder
-         * @return {string}
-         * @constructor
+         * Absolute root path/URL of this plugin's directory.
+         * Combines the global PLUGINS_FOLDER with this plugin's subdirectory.
+         * @returns {string}
+         * @public
+         * @memberof XOpatPlugin#
          */
         get PLUGIN_ROOT() {
             if (!PLUGINS[this.id]) {
@@ -985,14 +1017,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     window.UTILITIES = /** @lends UTILITIES */ {
 
         /**
-         * Send requests - both request and response format JSON
-         * with POST, the viewer meta is automatically included
-         *  - makes the viewer flexible for integration within existing APIs
-         * @param url
-         * @param postData
-         * @param headers
-         * @throws HTTPError
-         * @return {Promise<string|any>}
+         * Send an HTTP request. If postData is provided, a POST request is made; otherwise GET.
+         * The response is returned as the Fetch API Response object.
+         * @param {string} url - Absolute or relative URL.
+         * @param {any} [postData=null] - Data to be JSON.stringified as the request body for POST.
+         * @param {Object<string,string>} [headers={}] - Additional request headers.
+         * @throws {HTTPError} When the response status is not 2xx.
+         * @returns {Promise<Response>} The fetch Response object.
          */
         fetch: async function(url, postData=null, headers={}) {
             let method = postData ? "POST" : "GET";
@@ -1019,14 +1050,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         },
 
         /**
-         * Send requests - both request and response format JSON
-         * with POST, the viewer meta is automatically included
-         *  - makes the viewer flexible for integration within existing APIs
-         * @param url
-         * @param postData
-         * @param headers
-         * @throws HTTPError
-         * @return {Promise<string|any>}
+         * Send a JSON request. Sets Content-Type: application/json and parses the JSON response body.
+         * @param {string} url - Absolute or relative URL.
+         * @param {any} [postData=null] - Data to be JSON.stringified as the request body for POST.
+         * @param {Object<string,string>} [headers=null] - Additional request headers (merged), Content-Type is enforced.
+         * @throws {HTTPError} When the response status is not 2xx or body is not valid JSON.
+         * @returns {Promise<any>} Parsed JSON value.
          */
         fetchJSON: async function(url, postData=null, headers=null) {
             headers = headers || {};
@@ -1221,7 +1250,28 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
 
     // 2) Manager that tracks the active viewer
+    /**
+     * Manages one or more OpenSeadragon viewers, keeps track of the active viewer,
+     * and provides utilities to broadcast event handlers to all viewers.
+     * The manager also owns the grid layout used to mount individual viewers.
+     *
+     * Exposed API is intended for application integration (e.g., via VIEWER_MANAGER in app.js).
+     *
+     * @class ViewerManager
+     * @extends OpenSeadragon.EventSource
+     * @property {object} ENV - Runtime environment object used for initializing viewers.
+     * @property {object} CONFIG - Application configuration used for initializing viewers.
+     * @property {OpenSeadragon.Viewer[]} viewers - Ordered list of instantiated viewer instances.
+     * @property {Record<string, Record<Function, any[]>>} broadcastEvents - Map of eventName to handlers+args registered for broadcasting.
+     * @property {OpenSeadragon.Viewer|null} active - Currently active viewer or null if none.
+     * @property {UI.StretchGrid} layout - Grid layout where viewers are mounted.
+     */
     window.ViewerManager = class extends OpenSeadragon.EventSource {
+        /**
+         * Create a ViewerManager.
+         * @param {object} ENV - Environment bag; must contain openSeadragonPrefix and other viewer-related settings.
+         * @param {object} CONFIG - Configuration bag; must contain params.headers etc. used to configure viewers.
+         */
         constructor(ENV, CONFIG) {
             super();
             this.ENV = ENV;
@@ -1239,6 +1289,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.setActive(0);
         }
 
+        /** @private */
         _wire(v) {
             const el = v.container;
             el.tabIndex = 0;
@@ -1258,6 +1309,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             });
         }
 
+        /**
+         * Set the active viewer.
+         * @param {number|OpenSeadragon.Viewer} v - Index into the viewers array or a viewer instance.
+         * @returns {void}
+         */
         setActive(v) {
             if (typeof v === "number") v = this.viewers[v];
             if (this.active === v) return;
@@ -1268,10 +1324,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             );
         }
 
+        /**
+         * Get the currently active viewer instance.
+         * @returns {OpenSeadragon.Viewer|null} Active viewer or null if none.
+         */
         get() {
             return this.active;
         }
 
+        /**
+         * Create or replace a viewer at the given index and mount it into the grid layout.
+         * Replaces existing viewer if present at that index.
+         * @param {number} index - Zero-based viewer slot index.
+         * @returns {void}
+         */
         add(index) {
             if (this.viewers[index]) this.delete(index);
 
@@ -1507,6 +1573,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @function
          * Registers event for each viewer
          */
+        /**
+         * Add an event handler for a given event to all current and future viewers.
+         * The handler is also remembered and applied to any viewer created later via add().
+         * @param {string} eventName - The OpenSeadragon event name.
+         * @param {Function} handler - Event handler function.
+         * @param {...any} args - Optional extra arguments passed to OpenSeadragon.addHandler.
+         * @returns {void}
+         */
         broadcastHandler(eventName, handler, ...args) {
             let eventList = this.broadcastEvents[eventName];
             if (!eventList) {
@@ -1519,6 +1593,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             }
         }
         
+        /**
+         * Remove a previously broadcasted handler from all viewers and future creations.
+         * If the handler was not registered, this is a no-op.
+         * @param {string} eventName - The OpenSeadragon event name.
+         * @param {Function} handler - The same handler function reference used in broadcastHandler.
+         * @returns {void}
+         */
         cancelBroadcast(eventName, handler) {
             let eventList = this.broadcastEvents[eventName];
             if (eventList) {
@@ -1529,6 +1610,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             }
         }
 
+        /**
+         * Destroy and remove the viewer at a given index and detach its grid cell.
+         * Does nothing if no viewer exists at the index.
+         * @param {number} index - Zero-based viewer slot index.
+         * @returns {void}
+         */
         delete(index) {
             const viewer = this.viewers[index];
             if (!viewer) return;
