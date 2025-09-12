@@ -4,16 +4,19 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this.enableEditor = opts.enableEditor ?? true;
         this.autoOpenBackground = opts.autoOpenBackground ?? true;
 
+        // NEW: lock editing when exporting (for now default true; flip later during real export)
+        this.isExported = opts.isExported ?? false;
+
         this.SCHEMA_KEY = `xopat_questionnaire_schema_${this.id}`;
         this.DRAFT_KEY  = `xopat_questionnaire_draft_${this.id}`;
 
         this.DEFAULT_SCHEMA = {
             display: "wizard",
             components: [
-                { type:"panel", key:"p1", title:"Page 1",
-                    components:[{ type:"textfield", key:"name", label:"Name", input:true, validate:{ required:true } }]},
-                { type:"panel", key:"p2", title:"Page 2",
-                    components:[{ type:"email", key:"email", label:"Email", input:true }]}
+                { type: "panel", key: "p1", title: "Page 1",
+                    components: [{ type:"textfield", key:"name", label:"Name", input:true, validate:{ required:true } }]},
+                { type: "panel", key: "p2", title: "Page 2",
+                    components: [{ type:"email", key:"email", label:"Email", input:true }]}
             ]
         };
 
@@ -21,16 +24,15 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this._formEl = null;
         this._schema = null;
 
-        this._builderWin = null;      // FloatingWindow instance
-        this._builderDom = null;      // window of the external builder
-        this._builderActivePage = 0;  // page highlighted in the builder
-        this._currentPage = 0;        // active page in runtime form
+        this._builderWin = null;
+        this._builderDom = null;
+        this._builderActivePage = 0;
+        this._currentPage = 0;
     }
 
-    // ================== lifecycle ==================
     pluginReady() {
-        const editBtnHtml = this.enableEditor
-            ? `<button id="q-edit-btn" class="btn btn-default" style="margin-bottom:12px">Edit form…</button>`
+        const editBtnHtml = (this.enableEditor && !this.isExported)
+            ? `<button id="q-edit-btn" class="btn btn-outline">Edit form…</button>`
             : ``;
 
         LAYOUT.addTab({
@@ -39,43 +41,34 @@ addPlugin('questionaire', class extends XOpatPlugin {
             icon: 'fa-question-circle',
             body: [
                 new UI.RawHtml(`
-      <style>
-        /* minimal styles if Tailwind isn't present */
-        .qx-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;}
-        .qx-title{font-weight:600;font-size:18px;margin:0 0 8px;}
-        .qx-actions{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
-        .qx-edit{border:1px solid #d1d5db;background:#f9fafb;border-radius:8px;padding:6px 10px;cursor:pointer}
-        .qx-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
-        .qx-tab{padding:6px 12px;border:1px solid #e5e7eb;border-radius:9999px;background:#f3f4f6;cursor:pointer}
-        .qx-tab.active{background:#2563eb;color:#fff;border-color:#1d4ed8}
-        .qx-progress{height:6px;background:#e5e7eb;border-radius:9999px;overflow:hidden}
-        .qx-progress > div{height:100%;background:#2563eb;width:0%}
-      </style>
+          <main class="mx-auto max-w-5xl p-0">
+            <div class="card bg-base-100 shadow-md">
+              <div class="card-body p-2">
+                <div class="flex items-center justify-between mb-3">
+                  <h1 class="card-title text-xl">Questionnaire</h1>
+                  <div class="flex items-center gap-2">
+                    ${this.isExported ? '<div class="badge badge-warning">Read-only</div>' : ''}
+                    ${editBtnHtml}
+                  </div>
+                </div>
 
-      <main class="max-w-4xl mx-auto">
-        <div class="qx-card">
-          <div class="qx-actions">
-            <h1 class="qx-title">Questionnaire</h1>
-            ${this.enableEditor ? '<button id="q-edit-btn" class="qx-edit">Edit form…</button>' : ''}
-          </div>
+                <!-- custom header (DaisyUI tabs + progress) -->
+                <div id="qn-header" class="space-y-3">
+                  <div id="qn-tabs" class="tabs tabs-boxed"></div>
+                  <div class="flex items-center gap-3">
+                    <span id="qn-counter" class="text-sm text-base-content/60">1 / 1</span>
+                    <progress id="qn-progress" class="progress progress-primary flex-1" value="0" max="100"></progress>
+                  </div>
+                </div>
 
-          <!-- custom header (page pills + progress) -->
-          <div id="qn-header">
-            <div class="qx-tabs" id="qn-tabs"></div>
-            <div style="display:flex;align-items:center;gap:8px;margin:6px 0 12px">
-              <span id="qn-counter" style="font-size:12px;color:#6b7280">1 / 1</span>
-              <div class="qx-progress" style="flex:1"><div id="qn-progress"></div></div>
+                <!-- runtime form -->
+                <div id="questionaire-form" class="mt-2"></div>
+              </div>
             </div>
-          </div>
-
-          <!-- runtime form here -->
-          <div id="questionaire-form"></div>
-        </div>
-      </main>
-    `)
+          </main>
+        `)
             ]
         });
-
 
         this._formEl = document.getElementById('questionaire-form');
 
@@ -84,7 +77,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
             const msg = e.data;
             if (!msg || typeof msg !== 'object') return;
 
-            // schema updated (editedPageIndex tells us if it’s the active page)
             if (msg.type === 'formio-schema-updated' && msg.schema) {
                 this._schema = this._ensurePerPageBg(msg.schema);
                 this._saveSchema(this._schema);
@@ -95,15 +87,13 @@ addPlugin('questionaire', class extends XOpatPlugin {
                 });
             }
 
-            // builder focused page i (user clicked a page row there)
             if (msg.type === 'formio-builder-activate' && Number.isInteger(msg.pageIndex)) {
                 this._builderActivePage = msg.pageIndex;
-                // move the viewer to that page’s background
                 this._applyBackgroundForPage(this._builderActivePage, this._schema);
             }
         });
 
-        if (this.enableEditor) {
+        if (this.enableEditor && !this.isExported) {
             const btn = document.getElementById('q-edit-btn');
             if (btn) btn.addEventListener('click', () => this._openBuilderWindow());
         }
@@ -115,26 +105,24 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this._renderForm(this._schema, draft, { restorePage: 0, applyBg: true });
     }
 
+    // ========== pretty header (DaisyUI) ==========
     _buildPrettyHeader(form) {
-        const header = document.getElementById('qn-header');
         const tabsEl = document.getElementById('qn-tabs');
         const panels = this._panelList(this._schema);
+        if (!tabsEl) return;
 
-        if (!header || !tabsEl) return;
         tabsEl.innerHTML = '';
-
         panels.forEach((p, i) => {
-            const btn = document.createElement('button');
-            btn.className = 'qx-tab' + (i === this._currentPage ? ' active' : '');
+            const btn = document.createElement('a');
+            btn.className = 'tab' + (i === this._currentPage ? ' tab-active' : '');
             btn.textContent = p.title || p.key || `Page ${i+1}`;
             btn.addEventListener('click', () => {
                 if (this._currentPage === i) return;
                 this._currentPage = i;
                 if (typeof form.setPage === 'function') form.setPage(i);
-                // update viewer + builder
                 this._applyBackgroundForPage(i, this._schema);
                 if (this._builderDom) {
-                    try { this._builderDom.postMessage({ type:'formio-set-page', pageIndex: i }, '*'); } catch {}
+                    try { this._builderDom.postMessage({ type: 'formio-set-page', pageIndex: i }, '*'); } catch {}
                 }
                 this._updateHeaderActive(i, panels.length);
             });
@@ -145,29 +133,27 @@ addPlugin('questionaire', class extends XOpatPlugin {
     }
 
     _updateHeaderActive(i, total) {
-        const tabs = [...document.querySelectorAll('#qn-tabs .qx-tab')];
-        tabs.forEach((b, k) => b.classList.toggle('active', k === i));
+        const tabs = [...document.querySelectorAll('#qn-tabs .tab')];
+        tabs.forEach((b, k) => b.classList.toggle('tab-active', k === i));
         const bar = document.getElementById('qn-progress');
         const counter = document.getElementById('qn-counter');
-        if (bar) bar.style.width = (total ? ((i + 1) / total) * 100 : 0) + '%';
+        if (bar) bar.value = total ? Math.round(((i + 1) / total) * 100) : 0;
         if (counter) counter.textContent = `${Math.min(i + 1, total)} / ${Math.max(total, 1)}`;
     }
 
-
-    // ================== runtime render ==================
+    // ========== runtime render ==========
     async _renderForm(schemaObj, preserveData, { restorePage = 0, applyBg = true } = {}) {
         if (this._formEl) this._formEl.innerHTML = '';
 
-        // hide Form.io’s breadcrumb (header) and keep your per-page backgrounds
         const cloned = JSON.parse(JSON.stringify(this._ensurePerPageBg(schemaObj)));
-        cloned.breadcrumb = 'none';              // <- important to remove the default header
+        cloned.breadcrumb = 'none';
         this._schema = cloned;
 
         try {
-            const form = await Formio.createForm(this._formEl, this._schema);
+            // NEW: pass readOnly flag (locks editing while "exported")
+            const form = await Formio.createForm(this._formEl, this._schema, { readOnly: this.isExported });
             this._form = form;
 
-            // restore data
             if (preserveData && Object.keys(preserveData).length) {
                 form.submission = { data: preserveData };
             } else {
@@ -180,10 +166,10 @@ addPlugin('questionaire', class extends XOpatPlugin {
             if (typeof form.setPage === 'function') { try { form.setPage(this._currentPage); } catch {} }
             if (applyBg) this._applyBackgroundForPage(this._currentPage, this._schema);
 
-            // Save draft every change
-            form.on('change', () => this._saveDraft(form.data));
+            // Save draft on change (only if editable)
+            if (!this.isExported) form.on('change', () => this._saveDraft(form.data));
 
-            // build the pretty header once the form exists
+            // header
             this._buildPrettyHeader(form);
 
             const syncBuilderTo = (i) => {
@@ -206,7 +192,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             });
 
-
             form.on('submit', ({ data }) => {
                 console.log('[questionnaire] submit:', data);
                 alert('Submitted! (see console)');
@@ -215,24 +200,22 @@ addPlugin('questionaire', class extends XOpatPlugin {
         } catch (err) {
             console.error('Form render failed:', err);
             this._formEl.insertAdjacentHTML('beforebegin',
-                `<pre style="color:#b91c1c;white-space:pre-wrap">${err?.stack || err}</pre>`);
+                `<pre class="text-error whitespace-pre-wrap">${err?.stack || err}</pre>`);
         }
     }
 
-    // ================== background logic ==================
+    // ========== background helpers ==========
     _panelList(schema) {
         return Array.isArray(schema?.components)
             ? schema.components.filter(c => c && c.type === 'panel')
             : [];
     }
-
     _activeBgDefault() {
         let idx = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
         if (Array.isArray(idx)) idx = idx[0];
         if (!Number.isInteger(idx)) idx = 0;
         return idx;
     }
-
     _ensurePerPageBg(schema) {
         if (!schema || !Array.isArray(schema.components)) return schema;
         let last = this._activeBgDefault();
@@ -250,14 +233,12 @@ addPlugin('questionaire', class extends XOpatPlugin {
         });
         return schema;
     }
-
     _resolveBgForPage(index, schema) {
         const panels = this._panelList(schema);
         const p = panels[index];
         const n = Number(p?.properties?.xBgSpec);
         return Number.isFinite(n) ? n : this._activeBgDefault();
     }
-
     _applyBackgroundForPage(index, schema) {
         if (!this.autoOpenBackground) return;
         try {
@@ -272,7 +253,7 @@ addPlugin('questionaire', class extends XOpatPlugin {
         }
     }
 
-    // ================== persistence ==================
+    // ========== persistence ==========
     _loadSchema() {
         try { return JSON.parse(localStorage.getItem(this.SCHEMA_KEY) || 'null'); } catch { return null; }
     }
@@ -286,7 +267,7 @@ addPlugin('questionaire', class extends XOpatPlugin {
         localStorage.setItem(this.DRAFT_KEY, JSON.stringify(data || {}));
     }
 
-    // ================== builder (no preview) ==================
+    // ========== builder (no preview) ==========
     _openBuilderWindow() {
         if (this._builderWin) return;
 
@@ -385,7 +366,7 @@ addPlugin('questionaire', class extends XOpatPlugin {
             const s = this._ensurePerPageBg(builder.schema);
             this._saveSchema(s);
             try { window.postMessage({ type: 'formio-schema-updated', schema: s, editedPageIndex }, '*'); } catch {}
-            renderPagesUI(s); // refresh left panel (active row, titles, selects)
+            renderPagesUI(s);
         };
 
         const activatePage = (i, s) => {
@@ -409,7 +390,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
                 title.textContent = p.title || p.key || `Page ${i+1}`;
                 title.addEventListener('click', () => activatePage(i, builder.schema));
 
-                // background select
                 const sel = win.document.createElement('select');
                 sel.className = 'form-control';
                 backgrounds.forEach((bg, idx) => {
@@ -425,10 +405,9 @@ addPlugin('questionaire', class extends XOpatPlugin {
                     const n = Number(sel.value);
                     p.properties = p.properties || {};
                     p.properties.xBgSpec = Number.isFinite(n) ? n : this._activeBgDefault();
-                    sync(i); // only update viewer if editing the active page (parent decides)
+                    sync(i);
                 });
 
-                // delete button
                 const del = win.document.createElement('button');
                 del.className = 'btn btn-danger';
                 del.textContent = 'Delete';
@@ -442,7 +421,7 @@ addPlugin('questionaire', class extends XOpatPlugin {
                         // adjust active page if needed
                         const count = panelList(s0).length;
                         if (this._builderActivePage >= count) this._builderActivePage = Math.max(0, count - 1);
-                        sync(null); // parent won't move viewer unless user activates a page explicitly
+                        sync(null);
                         renderPagesUI(s0);
                     }
                 });
@@ -457,10 +436,9 @@ addPlugin('questionaire', class extends XOpatPlugin {
 
         // initial UI
         renderPagesUI(builder.schema);
-        // default active is current parent page if any:
         activatePage(this._builderActivePage, builder.schema);
 
-        // add page — inherits previous page’s xBgSpec
+        // add page (inherits previous background)
         win.document.getElementById('addPageBtn').onclick = () => {
             const s = builder.schema;
             const panels = panelList(s);
@@ -476,13 +454,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
             sync(panels.length);
         };
 
-        // export / reset
-        // win.document.getElementById('exportBtn').onclick = () => {
-        //     const blob = new Blob([JSON.stringify(this._ensurePerPageBg(builder.schema), null, 2)], { type: "application/json" });
-        //     const url = URL.createObjectURL(blob);
-        //     const a = Object.assign(win.document.createElement("a"), { href: url, download: "form-schema.json" });
-        //     a.click(); URL.revokeObjectURL(url);
-        // };
         win.document.getElementById('resetBtn').onclick = () => {
             builder.setForm(this._ensurePerPageBg(this.DEFAULT_SCHEMA));
             this._builderActivePage = 0;
@@ -490,11 +461,10 @@ addPlugin('questionaire', class extends XOpatPlugin {
             sync(0);
         };
 
-        // keep in sync with normal builder edits too
         builder.on('saveComponent', () => sync(null));
         builder.on('deleteComponent', () => sync(null));
 
-        // messages FROM parent → builder (set page)
+        // parent → builder (sync page)
         win.addEventListener('message', (e) => {
             const m = e.data;
             if (m && m.type === 'formio-set-page' && Number.isInteger(m.pageIndex)) {
