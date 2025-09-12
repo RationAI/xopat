@@ -1,213 +1,237 @@
 addPlugin('questionaire', class extends XOpatPlugin {
-    constructor(id) { 
-        super(id); 
-    }
+    constructor(id, opts = {}) {
+        super(id);
+        this.enableEditor = opts.enableEditor ?? true;
 
-    pluginReady() {
-        LAYOUT.addTab({
-            id: 'questionaire',
-            title: 'Questionaire',
-            icon: 'fa-question-circle',
-            body: [
-                new UI.RawHtml(`<main class="max-w-3xl mx-auto">
-    <h1 class="text-2xl font-semibold mb-4">Questionnaire</h1>
-    <div id="questionaire-form"></div>
-  </main>`)
-            ]
-        });
+        // shared storage keys
+        this.SCHEMA_KEY = `xopat_questionnaire_schema_${this.id}`;
+        this.DRAFT_KEY  = `xopat_questionnaire_draft_${this.id}`;
 
-        // 1) Put your JSON here (or fetch it)
-        const schema = /* paste your JSON */ {
-            // Example wizard skeleton; replace with your real schema
+        // default starter schema (wizard, 2 pages)
+        this.DEFAULT_SCHEMA = {
             display: "wizard",
             components: [
-                { type:"panel", key:"p1", title:"Page 1", components:[{ type:"textfield", key:"name", label:"Name", input:true, validate:{required:true} }]},
-                { type:"panel", key:"p2", title:"Page 2", components:[{ type:"email", key:"email", label:"Email", input:true }]}
+                { type:"panel", key:"p1", title:"Page 1",
+                    components:[{ type:"textfield", key:"name", label:"Name", input:true, validate:{ required:true } }] },
+                { type:"panel", key:"p2", title:"Page 2",
+                    components:[{ type:"email", key:"email", label:"Email", input:true }] }
             ]
         };
 
-        (async () => {
-            const el = document.getElementById("questionaire-form");
+        this._form = null;
+        this._formEl = null;
+        this._schema = null;
+        this._builderWin = null; // UI.FloatingWindow instance
+    }
 
-            // Optional if you added Font Awesome above
-            // Formio.icons = 'fontawesome';
+    pluginReady() {
+        // --- TAB UI ---
+        const editBtnHtml = this.enableEditor
+            ? `<button id="q-edit-btn" class="btn btn-default" style="margin-bottom:12px">Edit form…</button>`
+            : ``;
 
-            // 2) Render the form
-            const form = await Formio.createForm(el, schema);
-
-            // 4) Handle submit
-            form.on("submit", ({ data }) => {
-                console.log("answers:", data);
-                alert("Submitted! Check the console for payload.");
-                // fetch("/api/submit", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(data) });
-            });
-
-            // 5) Optional: draft save/restore (local)
-            const DRAFT_KEY = "questionnaire_draft";
-            const saved = localStorage.getItem(DRAFT_KEY);
-            if (saved) form.submission = { data: JSON.parse(saved) };
-            form.on("change", () => localStorage.setItem(DRAFT_KEY, JSON.stringify(form.data)));
-        })().catch(err => {
-            console.error(err);
+        LAYOUT.addTab({
+            id: 'questionaire',
+            title: 'Questionnaire',
+            icon: 'fa-question-circle',
+            body: [
+                new UI.RawHtml(`
+          <main class="max-w-3xl mx-auto">
+            <h1 class="text-2xl font-semibold mb-2">Questionnaire</h1>
+            ${editBtnHtml}
+            <div id="questionaire-form"></div>
+          </main>
+        `)
+            ]
         });
 
-        new UI.FloatingWindow({
-            id: "questionaire-creator",
-            title: "Questionaire Creator",
-            width: 600,
-            height: 400,
-            position: {
-                x: 100,
-                y: 100
-            },
-            externalProps: {
-                headTags:  [
-                    `
-                    <!-- ... -->
-    <!-- SurveyJS Form Library resources -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
-  <script src="${this.PLUGIN_ROOT}/formio.min.js"></script>
-<link rel="stylesheet" href="${this.PLUGIN_ROOT}/formio.min.css"/>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
-    #responses table { width: 100%; border-collapse: collapse; }
-    #responses th, #responses td { border: 1px solid #ddd; padding: 6px; font-size: 12px; }
-  </style>
-    <!-- ... -->
-`
-                    ],
-                    withTailwind: false,
-                    onRender: (win) => {
-                        const SCHEMA_KEY = "formio_demo_schema";
-                        const RESPONSES_KEY = "formio_demo_responses";
+        this._formEl = document.getElementById('questionaire-form');
 
-                        const builderEl = win.document.getElementById("builder");
-                        const previewEl = win.document.getElementById("preview");
+        // Listen for schema updates coming from the builder window
+        window.addEventListener('message', (e) => {
+            const msg = e.data;
+            if (!msg || typeof msg !== 'object') return;
+            if (msg.type === 'formio-schema-updated' && msg.schema) {
+                this._saveSchema(msg.schema);
+                // Re-render while preserving current data
+                const keepData = (this._form && this._form.data) ? { ...this._form.data } : null;
+                this._renderForm(msg.schema, keepData);
+            }
+        });
 
-                        const savedSchema = win.localStorage.getItem(SCHEMA_KEY);
-                        const initialSchema = savedSchema ? JSON.parse(savedSchema) : {
-                            display: "wizard",
-                            components: [
-                                { type: "panel", key: "page1", title: "Page 1", components: [] },
-                                { type: "panel", key: "page2", title: "Page 2", components: [] }
-                            ]
-                        };
+        // Also react to storage updates (e.g., user edits in another tab)
+        window.addEventListener('storage', (e) => {
+            if (e.key === this.SCHEMA_KEY && e.newValue) {
+                try {
+                    const newSchema = JSON.parse(e.newValue);
+                    const keepData = (this._form && this._form.data) ? { ...this._form.data } : null;
+                    this._renderForm(newSchema, keepData);
+                } catch {}
+            }
+        });
 
-                        // 1) Builder
-                        win.Formio.builder(builderEl, initialSchema, { builder: { premium: false } }).then((builder) => {
-                            const sync = () => {
-                                const schema = builder.schema;
-                                win.localStorage.setItem(SCHEMA_KEY, JSON.stringify(schema));
-                                renderPreview(schema);
-                            };
-                            builder.on("saveComponent", sync);
-                            builder.on("deleteComponent", sync);
-                            renderPreview(builder.schema);
+        // Wire Edit button
+        if (this.enableEditor) {
+            const btn = document.getElementById('q-edit-btn');
+            if (btn) btn.addEventListener('click', () => this._openBuilderWindow());
+        }
 
-                            // Buttons
-                            win.document.getElementById("saveSchemaBtn").onclick = () => {
-                                const blob = new Blob([JSON.stringify(builder.schema, null, 2)], { type: "application/json" });
-                                const url = URL.createObjectURL(blob);
-                                const a = Object.assign(win.document.createElement("a"), { href: url, download: "form-schema.json" });
-                                a.click(); URL.revokeObjectURL(url);
-                            };
-                            win.document.getElementById("clearSchemaBtn").onclick = () => {
-                                win.localStorage.removeItem(SCHEMA_KEY);
-                                location.reload();
-                            };
-                        });
+        // Load schema & render
+        this._schema = this._loadSchema() || this.DEFAULT_SCHEMA;
+        // Try to restore draft answers on first render
+        const draft = this._loadDraft();
+        this._renderForm(this._schema, draft);
+    }
 
-                        // 2) Runtime
-                        async function renderPreview(schema) {
-                            previewEl.innerHTML = "";
-                            const form = await win.Formio.createForm(previewEl, schema);
+    // -------- Rendering & persistence --------
 
-                            // Example: compute a simple score client-side (optional)
-                            // form.on("change", () => { /* derive score from form.data here */ });
+    async _renderForm(schemaObj, preserveData /* object|null */) {
+        // Clear previous instance
+        if (this._formEl) this._formEl.innerHTML = '';
 
-                            form.on("submit", ({ data }) => {
-                                const rows = JSON.parse(win.localStorage.getItem(RESPONSES_KEY) || "[]");
-                                rows.push({ _submittedAt: new Date().toISOString(), ...data });
-                                win.localStorage.setItem(RESPONSES_KEY, JSON.stringify(rows));
-                                renderResponses();
-                                alert("Saved locally ✅");
-                            });
-                        }
+        // Create fresh form
+        try {
+            const form = await Formio.createForm(this._formEl, schemaObj);
+            this._form = form;
 
-                        // 3) Responses table + CSV export (all in browser)
-                        function renderResponses() {
-                            const rows = JSON.parse(win.localStorage.getItem(RESPONSES_KEY) || "[]");
-                            if (!rows.length) { win.document.getElementById("responsesTable").innerHTML = "<em>No responses yet.</em>"; return; }
+            // Restore preserved data (keys not present in the new schema are ignored by Form.io)
+            if (preserveData && Object.keys(preserveData).length) {
+                form.submission = { data: preserveData };
+            } else {
+                // Or restore draft if present
+                const draft = this._loadDraft();
+                if (draft) form.submission = { data: draft };
+            }
 
-                            const headers = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
-                            const th = headers.map(h => `<th>${h}</th>`).join("");
-                            const tr = rows.map(r => `<tr>${headers.map(h => `<td>${escapeHtml(valueToText(r[h]))}</td>`).join("")}</tr>`).join("");
-                            win.document.getElementById("responsesTable").innerHTML = `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
-                        }
-                        renderResponses();
+            // Save draft on change
+            form.on('change', () => {
+                this._saveDraft(form.data);
+            });
 
-                        win.document.getElementById("exportCsvBtn").onclick = () => {
-                            const rows = JSON.parse(win.localStorage.getItem(RESPONSES_KEY) || "[]");
-                            if (!rows.length) return alert("Nothing to export yet.");
-                            const headers = Array.from(new Set(rows.flatMap(Object.keys)));
-                            const csv = [headers.join(","), ...rows.map(r => headers.map(h => csvCell(r[h])).join(","))].join("\n");
-                            const blob = new Blob([csv], { type: "text/csv" });
-                            const url = URL.createObjectURL(blob);
-                            const a = Object.assign(win.document.createElement("a"), { href: url, download: "responses.csv" });
-                            a.click(); URL.revokeObjectURL(url);
-                        };
+            // Submit handler – replace with your API if needed
+            form.on('submit', ({ data }) => {
+                console.log('[questionnaire] submit:', data);
+                alert('Submitted! (see console)');
+            });
 
-                        win.document.getElementById("clearResponsesBtn").onclick = () => {
-                            win.localStorage.removeItem(RESPONSES_KEY);
-                            renderResponses();
-                        };
+            // UX: scroll to top on page nav (wizards)
+            form.on('nextPage', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+            form.on('prevPage', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+        } catch (err) {
+            console.error('Form render failed:', err);
+            this._formEl.insertAdjacentHTML('beforebegin',
+                `<pre style="color:#b91c1c;white-space:pre-wrap">${err?.stack || err}</pre>`);
+        }
+    }
 
-                        // Helpers
-                        function valueToText(v) {
-                            if (v == null) return "";
-                            if (Array.isArray(v)) return v.join("; ");
-                            if (typeof v === "object") return JSON.stringify(v);
-                            return String(v);
-                        }
-                        function csvCell(v) {
-                            const s = valueToText(v).replace(/"/g, '""');
-                            return `"${s}"`;
-                        }
-                        function escapeHtml(s) {
-                            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-                        }
-                    }
-                },
-                external: true,
-            },
-            `
+    _loadSchema() {
+        try { return JSON.parse(localStorage.getItem(this.SCHEMA_KEY) || 'null'); } catch { return null; }
+    }
+    _saveSchema(schemaObj) {
+        this._schema = schemaObj;
+        localStorage.setItem(this.SCHEMA_KEY, JSON.stringify(schemaObj));
+    }
+    _loadDraft() {
+        try { return JSON.parse(localStorage.getItem(this.DRAFT_KEY) || 'null'); } catch { return null; }
+    }
+    _saveDraft(data) {
+        localStorage.setItem(this.DRAFT_KEY, JSON.stringify(data || {}));
+    }
+
+    // -------- Builder window (only if enableEditor=true) --------
+
+    _openBuilderWindow() {
+        if (this._builderWin) return; // prevent duplicates
+
+        const head = `
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@3.4.1/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="${this.PLUGIN_ROOT}/formio.full.min.css">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .panel { border:1px solid #ddd; border-radius:8px; padding:12px; background:#fff; }
+  #builder, #preview { height:70vh; overflow:auto; }
+</style>
+<script src="${this.PLUGIN_ROOT}/formio.full.min.js"></script>
+    `.trim();
+
+        const html = `
 <div class="grid">
-    <div class="panel">
-      <h3>Builder</h3>
-      <div id="builder" style="height: 70vh; overflow:auto;"></div>
-      <div style="margin-top:8px; display:flex; gap:8px;">
-        <button id="saveSchemaBtn">Export schema (JSON)</button>
-        <button id="clearSchemaBtn">Clear schema</button>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h3>Preview (runtime)</h3>
-      <div id="preview" style="height: 70vh; overflow:auto;"></div>
+  <div class="panel">
+    <h3>Builder</h3>
+    <div id="builder"></div>
+    <div style="margin-top:8px; display:flex; gap:8px;">
+      <button id="saveSchemaBtn">Export schema (JSON)</button>
+      <button id="clearSchemaBtn">Reset to default</button>
     </div>
   </div>
-
-  <div class="panel" id="responses" style="margin-top:16px;">
-    <h3>Responses (stored locally)</h3>
-    <div style="display:flex; gap:8px; margin-bottom:8px;">
-      <button id="exportCsvBtn">Export CSV</button>
-      <button id="clearResponsesBtn">Clear responses</button>
-    </div>
-    <div id="responsesTable"></div>
+  <div class="panel">
+    <h3>Preview</h3>
+    <div id="preview"></div>
   </div>
+</div>
+    `.trim();
 
- `);
+        this._builderWin = new UI.FloatingWindow({
+            id: "questionaire-creator",
+            title: "Questionnaire Builder",
+            width: 980,
+            height: 720,
+            position: { x: 100, y: 90 },
+            externalProps: {
+                headTags: [ head ],
+                withTailwind: false,
+                onRender: (win) => this._initBuilderWindow(win)
+            },
+            external: true
+        }, html);
+    }
+
+    async _initBuilderWindow(win) {
+        const SCHEMA = this._loadSchema() || this.DEFAULT_SCHEMA;
+        const builderEl = win.document.getElementById('builder');
+        const previewEl = win.document.getElementById('preview');
+
+        // Build
+        const builder = await win.Formio.builder(builderEl, SCHEMA, { builder: { premium: false } });
+
+        const renderPreview = async (schema) => {
+            previewEl.innerHTML = '';
+            const f = await win.Formio.createForm(previewEl, schema);
+            // use parent draft for preview, if any
+            try {
+                const draft = this._loadDraft();
+                if (draft) f.submission = { data: draft };
+            } catch {}
+        };
+
+        const sync = () => {
+            const schema = builder.schema;
+            // persist
+            this._saveSchema(schema);
+            // update preview inside the builder
+            renderPreview(schema);
+            // notify parent (main plugin) to re-render and preserve answers
+            try { window.postMessage({ type: 'formio-schema-updated', schema }, '*'); } catch {}
+        };
+
+        builder.on('saveComponent', sync);
+        builder.on('deleteComponent', sync);
+
+        // initial preview
+        renderPreview(builder.schema);
+
+        // Buttons
+        win.document.getElementById('saveSchemaBtn').onclick = () => {
+            const blob = new Blob([JSON.stringify(builder.schema, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = Object.assign(win.document.createElement("a"), { href: url, download: "form-schema.json" });
+            a.click(); URL.revokeObjectURL(url);
+        };
+        win.document.getElementById('clearSchemaBtn').onclick = () => {
+            // reset to default skeleton
+            builder.setForm(this.DEFAULT_SCHEMA);
+            sync();
+        };
     }
 });

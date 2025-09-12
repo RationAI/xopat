@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "description": "",
   "includes": [
-    "formio.min.js",
+    "formio.full.min.js",
     "questionaire.js"
   ],
   "modules": [],
