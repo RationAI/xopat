@@ -24,7 +24,6 @@ class TabsMenu extends BaseComponent {
             this.addTab(i);
         }
         this._children = [];
-
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
 
@@ -49,6 +48,10 @@ class TabsMenu extends BaseComponent {
 
         const tab = this._createTab(item);
         this.tabs[item.id] = tab;
+
+        if (!this.focused) {
+            this.focus(item.id);
+        }
 
         tab.headerButton.attachTo(this.header);
         if (tab.contentDiv) {
@@ -112,7 +115,7 @@ class TabsMenu extends BaseComponent {
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused= undefined;
+        this.focused = undefined;
     }
 
 }

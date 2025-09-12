@@ -7,6 +7,36 @@ import {FAIcon} from "../elements/fa-icon.mjs";
 
 const { div, span } = van.tags;
 
+const registeredWindows = {};
+globalThis.window.addEventListener("beforeunload", () => {
+    if (registeredWindows) {
+        for (const key in registeredWindows) {
+            const ctx = registeredWindows[key];
+            destroyWindow(key, ctx);
+        }
+    }
+});
+
+function destroyWindow(key, win) {
+    if (isWindowOpened(win)) {
+        win.document.body.innerHTML = "";
+        win.close();
+        delete registeredWindows[key];
+    }
+}
+
+function isWindowOpened(win) {
+    return win && !win.closed && win.opener && win.self;
+}
+
+function registerWindow(key, win) {
+    const existing = registeredWindows[key];
+    if (existing) {
+        destroyWindow(key, existing);
+    }
+    registeredWindows[key] = win;
+}
+
 /**
  * Options:
  *  - id?: string
@@ -19,7 +49,11 @@ const { div, span } = van.tags;
  *  - onClose?: () => void
  *  - onPopout?: (childWindow: Window) => void
  *  - external?: boolean (default false)
- *  - customWindowHead?: [string]
+ *  - externalProps?: {
+ *      - headTags?: string[]
+ *      - onRender?: (childWindow: Window) => void
+ *      - withTailwind?: boolean (default true)
+ *  }
  */
 export class FloatingWindow extends BaseComponent {
     constructor(options = undefined, ...bodyChildren) {
@@ -109,14 +143,14 @@ export class FloatingWindow extends BaseComponent {
 
     opened() {
         if (this._external) {
-            return this._childWindow?.closed;
+            return isWindowOpened(this._childWindow);
         }
         return !!document.getElementById(this.id);
     }
 
     close() {
         if (this._external && !this._childWindow?.closed) {
-            this._childWindow.close();
+            destroyWindow(this.id, this._childWindow);
         }
         this._external = false;
         this._childWindow = null;
@@ -241,6 +275,12 @@ export class FloatingWindow extends BaseComponent {
         this._external = true;
         this._childWindow = child;
 
+        let internal_css = "";
+        if (this.options?.externalProps.withTailwind) {
+            internal_css = `<link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
+        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">`;
+        }
+
         // Basic doc + style mirror; you said you'll wire libs, so here's a placeholder:
         const currentTheme = document.documentElement.getAttribute("data-theme") || "light";
         const doc = child.document;
@@ -256,8 +296,7 @@ export class FloatingWindow extends BaseComponent {
         body{background:var(--b2);color:var(--bc);font-family:ui-sans-serif,system-ui;}
       </style>
         <!--TODO dirty hardcoded path-->
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">
+        ${internal_css}
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
@@ -274,7 +313,7 @@ export class FloatingWindow extends BaseComponent {
             $.prototype.localize = () => {console.error("localize() not supported in child window!")};
         <\/script>
         <!-- todo better system -->
-        ${this.options.customWindowHead?.join("") || ""}
+        ${this.options.externalProps?.headTags?.join("") || ""}
     </head>
     <body>
 
@@ -282,6 +321,7 @@ export class FloatingWindow extends BaseComponent {
   </html>
 `);
         doc.close();
+        registerWindow(this.id, child);
 
         child.addEventListener("load", () => {
             // Bridge: forward all "functionality traffic" to parent
@@ -295,7 +335,7 @@ export class FloatingWindow extends BaseComponent {
 
             // We’ll send a request to parent to (re)render the content in the child.
             // Parent listens and responds with DOM HTML. You can replace with your own hydration.
-            child.postMessage({ __fw: true, type: "request-render", id: this.id }, "*");
+            child.opener.postMessage({ __fw: true, type: "request-render", id: this.id }, "*");
 
             // Keep size/position in sync if user resizes/moves the popup window
             const syncSize = () => {
@@ -323,7 +363,7 @@ export class FloatingWindow extends BaseComponent {
             if (msg.type === "request-render" && msg.id === this.id) {
                 // Minimal render: dump current innerHTML of our content into the child
                 // (You can replace with your proper renderer that reuses libs from parent)
-                const html = (this._bodyEl?.innerHTML ?? "");
+                const html = (this._bodyEl?.innerHTML || this._content.create().innerHTML || "");
                 child.postMessage({ __fw: true, type: "render-html", id: this.id, html }, "*");
             }
 
@@ -339,13 +379,14 @@ export class FloatingWindow extends BaseComponent {
             const msg = ev.data;
             if (!msg || !msg.__fw) return;
             if (msg.type === "render-html" && msg.id === this.id) {
-                const host = child.document.getElementById("fw-host");
+                const host = child.document.body;
                 host.innerHTML = msg.html || "";
                 // Attach a click/mutation listener that forwards interactions to parent as needed:
                 host.addEventListener("click", (e) => {
                     const data = { path: e.composedPath().map(n => n.id || n.className || n.nodeName) };
                     child.opener?.postMessage({ __fw: true, type: "event", id: this.id, payload: { kind: "click", data } }, "*");
                 }, { capture: true });
+                this.options.externalProps?.onRender?.(child);
             }
         };
         child.addEventListener("message", childHandler);

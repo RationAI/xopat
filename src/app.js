@@ -488,7 +488,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             notified = true;
         } else {
-            console.error('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
+            // Error is thrown by OSD
+            console.info('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
         }
     });
 
@@ -801,6 +802,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         handleSyntheticEventFinishWithValidData(viewer, 0, 1);
     }
 
+    let initialized = false;
     function handleSyntheticEventFinishWithValidData(viewer, referenceImage, layerPosition) {
         //Todo once rewritten, treat always low level item as the reference layer (index == 0)
 
@@ -899,16 +901,22 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
         }
 
+        if (!initialized) {
+            initialized = true;
+            runLoader();
+        }
+
         if (!viewer.__initialized) {
             viewer.__initialized = true;
-            runLoader();
 
+            // todo consider viewport per background
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
                 viewer.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
                 viewer.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
+            // todo needs to trigger valid navigator ID
             if (window.innerHeight < 630 || window.innerWidth < 900) {
                 if (window.innerWidth >= 900) {
                     $('#navigator-pin').click();
@@ -1181,11 +1189,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                             index,
                             success: event => {
                                 event.item.__targetIndex = index;
-                                resolve(false)
+                                event.item.getConfig = () => undefined;
+                                resolve(false);
                             },
                             error: event => {
-                                event.item.__targetIndex = index;
-                                resolve(false)
+                                // event.item is not set, only event.source
+                                resolve(false);
                             }
                         });
                     }

@@ -39,6 +39,9 @@
                 const stack = new Error().stack;
                 defaultWarn.apply(window.console, [...args, stack]);
             };
+
+            window.addEventListener('error', e => console.error('window error:', e.error || e.message));
+            window.addEventListener('unhandledrejection', e => console.error('unhandledrejection:', e.reason));
         })();
     </script>
 

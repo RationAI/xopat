@@ -7,36 +7,45 @@ import { RawHtml } from "../elements/rawHtml.mjs";
 const { div, h1, p, br, img } = van.tags;
 
 /**
- * ViewerShellWithDock
- * - Wraps the viewer container and a configurable side dock
- * - Dock can be LEFT/RIGHT, collapsible, resizable; on narrow screens moves BELOW
+ * MainLayout
+ * Wraps the viewer container and a configurable side dock. The dock can be placed on
+ * the left or right, be collapsed/expanded, resized via a drag handle, and will
+ * responsively move below the viewer on narrow screens.
  *
- * API:
- *   new MainLayout({
- *     id: "viewer-shell",
- *     position: "right" | "left",          // default "right"
- *     initialWidth: 360,                    // px
- *     minWidth: 220,
- *     maxWidth: 640,
- *     collapseBreakpointPx: 900,           // under this, dock jumps below (flex-col)
- *     tabs: [
- *       { id: "info", icon: "fa-circle-info", title: "Info", body: ["..."] },
- *       { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["..."] }
- *     ],
- *     // Optional: supply your own TabsMenu instance instead of tabs array:
- *     menu: new TabsMenu({...})
- *   })
+ * Usage:
+ *   new MainLayout(options)
  *
- * Methods:
- *   setPosition("left"|"right")
- *   setWidth(px)
- *   collapse()
- *   expand()
- *   toggle()
- *   getViewerMount()  -> HTMLElement for OpenSeadragon { id: `${this.id}-osd` }
- *   getDockBodyNode() -> HTMLElement (menu body DOM) to inject extra content if needed
+ * Notes:
+ * - If you provide an array of tabs via options.tabs, a TabsMenu is created automatically.
+ * - Alternatively, you can pass an existing TabsMenu instance via options.menu.
+ * - On narrow screens (window.innerWidth < collapseBreakpointPx), the dock is placed below.
+ */
+
+/**
+ * @typedef {Object} MainLayoutTab
+ * @property {string} id - Unique tab identifier.
+ * @property {string} [icon] - Icon class name, e.g., "fa-circle-info".
+ * @property {string} [title] - Human-readable title.
+ * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
+ */
+
+/**
+ * @typedef {Object} MainLayoutOptions
+ * @property {string} [id] - Root element id for the layout container.
+ * @property {('left'|'right')} [position="right"] - Side where the dock appears on wide screens.
+ * @property {number} [initialWidth=360] - Initial dock width in pixels.
+ * @property {number} [minWidth=220] - Minimum dock width in pixels.
+ * @property {number} [maxWidth=640] - Maximum dock width in pixels.
+ * @property {number} [collapseBreakpointPx=900] - Viewport width (px) below which dock moves below viewer.
+ * @property {MainLayoutTab[]} [tabs] - Initial array of tab definitions.
+ * @property {TabsMenu} [menu] - Optional pre-built TabsMenu to attach instead of creating from tabs.
  */
 export class MainLayout extends BaseComponent {
+    /**
+     * Create a MainLayout component.
+     * @param {MainLayoutOptions} [options] - Layout configuration and initial tabs/menu.
+     * @param {Array<BaseComponent|HTMLElement|string>} children - Additional child nodes/components.
+     */
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
 
@@ -57,13 +66,23 @@ export class MainLayout extends BaseComponent {
     }
 
     /** ---- dynamic tab API ---- */
-    addTab(tabDef) {
+    /**
+     * Add a tab to the dock menu (creates the menu if missing).
+     * @param {MainLayoutTab} mainLayoutTab - Tab definition to add.
+     * @returns {void}
+     */
+    addTab(mainLayoutTab) {
         if (!this._menu) this._ensureMenu();
-        this._tabsArr.push(tabDef);
-        this._menu.add(tabDef);
+        this._tabsArr.push(mainLayoutTab);
+        this._menu.addTab(mainLayoutTab);
         this._updateDockVisibility();
     }
 
+    /**
+     * Remove a tab from the dock by its id.
+     * @param {string} id - The tab id to remove.
+     * @returns {void}
+     */
     removeTab(id) {
         if (!this._menu) return;
         const i = this._tabsArr.findIndex(t => t.id === id);
@@ -72,25 +91,46 @@ export class MainLayout extends BaseComponent {
         this._updateDockVisibility();
     }
 
+    /**
+     * Remove all tabs from the dock menu.
+     * @returns {void}
+     */
     clearTabs() {
         this._tabsArr.length = 0;
         if (this._menu) this._menu.clear();
         this._updateDockVisibility();
     }
 
+    /**
+     * Current number of tabs in the dock.
+     * @type {number}
+     */
     get tabCount() { return this._tabsArr.length; }
 
     /** ---- helpers ---- */
+    /**
+     * Returns the DOM element where the OpenSeadragon viewer should mount.
+     * @returns {HTMLElement|null}
+     */
     getViewerMount() { return document.getElementById("osd"); }
+    /**
+     * Returns the dock body container element (menu body) for injecting external content.
+     * If no menu exists yet, returns the dock element itself.
+     * @returns {HTMLElement|null}
+     */
     getDockBodyNode() {
         return this._menu ? document.getElementById(`${this._menu.id}-body`) : this._dockEl;
     }
 
+    /** Collapse the dock. */
     collapse() { this.collapsed = true; this._applyVisibility(); }
+    /** Expand the dock. */
     expand() { this.collapsed = false; this._applyVisibility(); }
+    /** Toggle the dock collapsed/expanded state. */
     toggle() { this.collapsed ? this.expand() : this.collapse(); }
 
     /** ---- internals ---- */
+    /** @private */
     _ensureMenu() {
         if (!this._menu) {
             const menu = new TabsMenu({ id: `${this.id}-menu` }, ...this._tabsArr);
@@ -99,6 +139,7 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    /** @private */
     _updateDockVisibility() {
         const hasTabs = this._tabsArr.length > 0;
         if (!this._dockEl) return;
@@ -113,6 +154,7 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    /** @private */
     _applyVisibility() {
         if (!this._dockEl) return;
         if (this.collapsed) {
@@ -124,6 +166,7 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    /** @private */
     _applyResponsiveLayout() {
         if (!this._shellEl) return;
         const narrow = window.innerWidth < this.collapseBreakpointPx;
@@ -143,6 +186,7 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    /** @private */
     _wireResize() {
         if (!this._handleEl) return;
         let drag = false, startX = 0, startW = 0;
@@ -172,6 +216,11 @@ export class MainLayout extends BaseComponent {
         });
     }
 
+    /**
+     * Create and return the root layout element. This builds the viewer area,
+     * top/bottom menus containers, and the side dock with resizable handle.
+     * @returns {HTMLElement} Root element to attach to the DOM.
+     */
     create() {
         // --- viewer core (IDs unchanged) ---
         const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });

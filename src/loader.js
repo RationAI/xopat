@@ -1490,7 +1490,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 if (enable) {
                     const explain = document.getElementById('viewer-demo-error-description');
                     explain.innerHTML = explainErrorHtml || $.t('error.defaultDemoHtml');
-                    this.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
+                    viewer.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
                     overlay.style.display = 'block';
                 } else {
                     this.removeOverlay(overlay);

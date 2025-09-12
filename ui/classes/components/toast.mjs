@@ -104,7 +104,7 @@ export class Toast extends BaseComponent {
                 button(
                     {
                         class: "Toast-dismissButton",
-                        onclick: () => window.Dialogs._hideImpl(false),
+                        onclick: () => this.hide(),
                     },
                     svg(
                         { width: 12, height: 16, viewBox: "0 0 12 16", class: "octicon octicon-x", "aria-hidden": "true" },
