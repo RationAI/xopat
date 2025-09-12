@@ -1,3 +1,10 @@
+/**
+ * Initialize xOpat viewer page-level scripts and wire global UTILITIES helpers.
+ * Sets up keyboard focus forwarding to OpenSeadragon, error handling, and
+ * exposes various helper functions on window.UTILITIES.
+ * This function must be called after VIEWER and APPLICATION_CONTEXT are initialized.
+ * @returns {void}
+ */
 function initXopatScripts() {
     $.extend($.scrollTo.defaults, {axis: 'y'});
 
@@ -202,16 +209,17 @@ function initXopatScripts() {
     // }
 
     /**
-     * Get the date as ISO string
-     * @return {string}
+     * Get the date as ISO string (DD/MM/YYYY by default).
+     * @param {string} [separator="/"] - Separator between date parts.
+     * @returns {string}
      */
     window.UTILITIES.todayISO = function(separator="/") {
         return new Date().toJSON().slice(0,10).split('-').reverse().join(separator);
     };
 
     /**
-     * Get current date as reversed ISO year first
-     * @param separator
+     * Get the current date in ISO order (YYYY/MM/DD by default).
+     * @param {string} [separator="/"] - Separator between date parts.
      * @returns {string}
      */
     window.UTILITIES.todayISOReversed = function(separator="/") {
@@ -219,23 +227,25 @@ function initXopatScripts() {
     };
 
     /**
-     * Safely evaluate boolean parameter from JSON config, e.g. undefined | "false" | "True" | 0 | 1 | false
-     * string values are treated as true except for 'false' literals and empty string
-     * @param {any} value to evaluate
-     * @param {boolean} defaultValue true or false
-     * @return {*|boolean}
+     * Safely coerce various JSON-like values into a boolean.
+     * Treats strings as true unless they equal "false" (case-insensitive) or are empty.
+     * Numbers are coerced by JavaScript truthiness, undefined falls back to defaultValue.
+     * @param {any} value - Value to evaluate.
+     * @param {boolean} [defaultValue=false] - Default used when value is undefined.
+     * @returns {boolean}
      */
     window.UTILITIES.isJSONBoolean = function(value, defaultValue) {
         return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
     };
 
     /**
-     * Convert given function to throttled function, that will be fired only once each delay ms.
-     * Usage: const logicImplementationOfTheFunction = ...;
-     * const calledInstanceOfTheFunction = UTILITIES.makeThrottled(logicImplementationOfTheFunction, 60);
-     * @param {function} callback
-     * @param {number} delay  throttling in ms
-     * @return {function} wrapper
+     * Convert a function into a throttled version that executes at most once per delay ms.
+     * Usage:
+     *   const throttled = UTILITIES.makeThrottled(fn, 60);
+     *   throttled.finish(); // flush pending call immediately
+     * @param {Function} callback - Function to throttle.
+     * @param {number} delay - Throttling interval in milliseconds.
+     * @returns {Function} Throttled function with an extra method finish():void to flush the last pending call.
      */
     window.UTILITIES.makeThrottled = function (callback, delay) {
         let lastCallTime = 0;
@@ -279,9 +289,9 @@ function initXopatScripts() {
     }
 
     /**
-     * Sleep in miliseconds
-     * @param {number} ms
-     * @return {Promise<void>}
+     * Sleep for a given number of milliseconds.
+     * @param {number} [ms] - Milliseconds to wait.
+     * @returns {Promise<void>}
      */
     window.UTILITIES.sleep = async function(ms=undefined) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -294,7 +304,10 @@ function initXopatScripts() {
     window.UTILITIES.updateTheme = USER_INTERFACE.Tools.changeTheme;
 
     /**
-     * Create the viewer configuration serialized
+     * Create a serialized viewer configuration JSON string for export or sharing.
+     * @param {boolean} [withCookies=false] - Include cookies in the params.
+     * @param {boolean} [staticPreview=false] - Produce a static preview configuration.
+     * @returns {string} JSON string representing the current application configuration.
      */
     window.UTILITIES.serializeAppConfig = function(withCookies=false, staticPreview = false) {
         //TODO consider bypassCache etc...
@@ -317,11 +330,11 @@ function initXopatScripts() {
     };
 
     /**
-     * Get the viewer form+script html that automatically redirects to the viewer
-     * @param customAttributes
-     * @param includedPluginsList
-     * @param withCookies
-     * @return {Promise<string>}
+     * Get an auto-submitting HTML form+script that redirects to the viewer with current session data.
+     * @param {string} [customAttributes=""] - Extra raw HTML attributes or inputs to include in the form.
+     * @param {string[]|undefined} [includedPluginsList] - Plugin IDs to include; defaults to current active set.
+     * @param {boolean} [withCookies=false] - Include cookies in export payload.
+     * @returns {Promise<string>} HTML snippet to embed or open.
      */
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
@@ -385,9 +398,10 @@ form.submit();
     }
 
     /**
-     * Copy content to the user clipboard
-     * @param {string} content
-     * @param {boolean} alert
+     * Copy content to the user clipboard.
+     * @param {string} content - String to copy.
+     * @param {boolean} [alert=true] - Show a toast notification after copy.
+     * @returns {void}
      */
     window.UTILITIES.copyToClipboard = function(content, alert=true) {
         let $temp = $("<input>");
@@ -399,7 +413,8 @@ form.submit();
     };
 
     /**
-     * Exports only the viewer direct link (without data) as a URL to the user clipboard
+     * Export only the viewer direct link (without data) to the clipboard.
+     * @returns {void}
      */
     window.UTILITIES.copyUrlToClipboard = function() {
         let baseUrl = APPLICATION_CONTEXT.getOption("redirectUrl", "");
@@ -411,7 +426,8 @@ form.submit();
     };
 
     /**
-     * Creates the viewport screenshot.
+     * Create a screenshot of the current viewer viewport and open it in a new tab.
+     * @returns {void}
      */
     window.UTILITIES.makeScreenshot = function() {
         // todo OSD v5.0 ensure we can copy the canvas among drawers
@@ -436,8 +452,9 @@ form.submit();
     };
 
     /**
-     * Export the viewer as a HTML file that, when opened, loads the session
-     * @return {Promise<void>}
+     * Export the current viewer session as a self-contained HTML file.
+     * When opened, it automatically loads the saved session.
+     * @returns {Promise<void>}
      */
     window.UTILITIES.export = async function() {
 
@@ -476,8 +493,9 @@ ${await UTILITIES.getForm()}
     window.UTILITIES.setDirty = () => APPLICATION_CONTEXT.__cache.dirty = true;
 
     /**
-     * Refresh current page with all plugins and their data if export API used
-     * @param includedPluginsList of ID's of plugins to include, inludes current active if not specified
+     * Refresh the page and reload the viewer, optionally limiting which plugins are included.
+     * @param {string[]|undefined} [includedPluginsList] - IDs of plugins to include; current active if omitted.
+     * @returns {Promise<void>}
      */
     window.UTILITIES.refreshPage = async function(includedPluginsList=undefined) {
         if (APPLICATION_CONTEXT.__cache.dirty) {
@@ -497,9 +515,10 @@ ${await UTILITIES.getForm()}
     };
 
     /**
-     * Download string as file
-     * @param {string} filename filename
-     * @param {string} content file content
+     * Download a string as a file via a temporary link element.
+     * @param {string} filename - Target file name.
+     * @param {string} content - File content.
+     * @returns {void}
      */
     window.UTILITIES.downloadAsFile = function(filename, content) {
         let data = new Blob([content], { type: 'text/plain' });
@@ -512,11 +531,11 @@ ${await UTILITIES.getForm()}
     };
 
     /**
-     * File input text data loader
-     * @param onUploaded function to handle the result
-     * @param accept file types to accept, e.g. "image/png, image/jpeg"
-     *  see https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
-     * @param mode {("text"|"bytes")} in what mode to read the data; text results in string, bytes in array buffer
+     * Open a file picker and read the selected file, then call the provided callback with the result.
+     * @param {(result: string|ArrayBuffer) => void} onUploaded - Callback invoked with file contents or rejected error.
+     * @param {string} [accept=".json"] - Accept attribute (e.g., "image/png, image/jpeg").
+     *   See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
+     * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
      * @returns {Promise<void>}
      */
     window.UTILITIES.uploadFile = async function(onUploaded, accept=".json", mode="text") {
@@ -531,10 +550,10 @@ ${await UTILITIES.getForm()}
     }
 
     /**
-     * File input text data loader handler, meant to be attached to input[type=file] onchange event
-     * @param e event fired on an input (single) type file submit,
-     * @param mode {("text"|"bytes"|"url")} in what mode to read the data; text results in string, bytes in array buffer, url in the file path.
-     * @returns {Promise<void>}
+     * Handle an input[type=file] change event and read the selected file.
+     * @param {Event} e - Change event from a file input.
+     * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
+     * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
      */
     window.UTILITIES.readFileUploadEvent = function(e, mode="text") {
         return new Promise((resolve, reject) => {
@@ -549,6 +568,11 @@ ${await UTILITIES.getForm()}
     };
 
     //TODO: make this a normal standard UI api (open / focus / inline)
+    /**
+     * Open or focus a simple debugging window rendered via Dialogs.
+     * @param {string} [html=""] - Optional HTML content to insert.
+     * @returns {Window|null} Window object of the debugging modal, or null if failed.
+     */
     window.UTILITIES.openDebuggingWindow = function (html = '') {
         let ctx = Dialogs.getModalContext('__xopat__debug__window__');
         if (ctx) {
