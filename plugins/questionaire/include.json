@@ -1,0 +1,13 @@
+{
+  "id": "questionaire",
+  "name": "",
+  "author": "",
+  "version": "1.0.0",
+  "description": "",
+  "includes": [
+    "formio.min.js",
+    "questionaire.js"
+  ],
+  "modules": [],
+  "permaLoad": true
+}

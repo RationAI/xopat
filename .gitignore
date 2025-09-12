@@ -27,6 +27,7 @@
 !/plugins/hotkeys
 !/plugins/navigation-tracker
 !/plugins/profiler
+!/plugins/questionaire
 !/plugins/recorder
 !/plugins/simple-integration
 !/plugins/user-session
