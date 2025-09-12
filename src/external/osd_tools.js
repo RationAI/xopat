@@ -21,9 +21,11 @@ OpenSeadragon.Tools = class {
      * @param context EventSource instance
      * @param eventName name of the event to invoke
      * @param eventArgs event args object
+     * @deprecated
      * @return {Promise<void>} promise resolved once event finishes
      */
     async raiseAwaitEvent(context, eventName, eventArgs = undefined) {
+        console.warn("This event is deprecated.");
         let events = context.events[ eventName ];
         if ( !events || !events.length ) {
             return null;

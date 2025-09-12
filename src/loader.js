@@ -52,6 +52,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     //dummy translation function in case of no translation available
     $.t = $.t || (x => x);
 
+    /**
+     * @type {XOpatElement[]}
+     */
+    let REGISTERED_ELEMENTS = [];
+    /**
+     * @type {XOpatPlugin[]}
+     */
     let REGISTERED_PLUGINS = [];
     let LOADING_PLUGIN = false;
 
@@ -103,10 +110,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             /**
              * @property {string} id plugin id
              * @property {string} message
-             * @memberOf VIEWER
+             * @memberof VIEWER_MANAGER
              * @event plugin-failed
              */
-            window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
+            VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
                 message: $.t('messages.pluginLoadFailedNamed', {plugin: id}),
             });
@@ -122,10 +129,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             /**
              * @property {string} id plugin id
              * @property {string} message
-             * @memberOf VIEWER
+             * @memberof VIEWER_MANAGER
              * @event plugin-failed
              */
-            window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
+            VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
                 message: $.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}),
             });
@@ -423,6 +430,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.__uid = `${executionContextName}.${id}`;
             this.__xoContext = executionContextName;
             this[CACHE_TOKEN] = new XOpatStorage.Cache({id: this.__uid});
+            REGISTERED_ELEMENTS.push(this);
         }
 
         /**
@@ -500,7 +508,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @property {string} originId
              * @event error-user
              * @event error-system
-             * @memberOf VIEWER
+             * @memberof OpenSeadragon.Viewer
              */
 
             /**
@@ -509,7 +517,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @property {string} originId
              * @event error-user
              * @event error-system
-             * @memberOf XOpatElement
+             * @memberof XOpatElement
              */
             (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'error-user' : 'error-system',
                 $.extend(e, {originType: this.xoContext, originId: this.id}));
@@ -534,7 +542,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @property {string} originId
              * @event warn-user
              * @event warn-system
-             * @memberOf VIEWER
+             * @memberof OpenSeadragon.Viewer
              */
 
             /**
@@ -543,7 +551,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @property {string} originId
              * @event warn-user
              * @event warn-system
-             * @memberOf XOpatElement
+             * @memberof XOpatElement
              */
             (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
                 $.extend(e,
@@ -551,31 +559,47 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
-         * Initialize IO in the Element - enables use of export/import functions
+         * Initialize IO in the Element - enables use of export/import functions. Can be initialized
+         * multiple times for multiple individual items (exportKey should differ!)
          * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
-         * @param {string?} [options.exportKey=""] optional export key for the globally exported
-         *   data through exportData
+         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
+         * @param {boolean} [options.inViewerContext=true] if true, the POST IO depends on the viewer context and
+         *    runs IO wrt. viewer lifecycle
          * @return {PostDataStore} data store reference, or false if import failed
          */
         async initPostIO(options = {}) {
-            let store = this[STORE_TOKEN];
-            if (store) return store;
+            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
+                return;
+            }
 
             options.id = this.uid;
             options.xoType = this.__xoContext;
-            const dataStore = this[STORE_TOKEN] = new PostDataStore(options);
+            let store = this[STORE_TOKEN];
+            if (!store) {
+                this[STORE_TOKEN] = store = new PostDataStore(options);
+            }
+
+            const vanillaExportKey = (options.exportKey || "").replace("::", "");
 
             try {
-                const exportKey = options.exportKey || "";
-                VIEWER.addHandler('export-data', async (e) => {
-                    const data = await this.exportData();
+                const exportKey = options.inViewerContext ? vanillaExportKey + "::" : vanillaExportKey;
+                VIEWER_MANAGER.addHandler('export-data', async (e) => {
+                    const data = await this.exportData(vanillaExportKey);
                     if (data) {
-                        await dataStore.set(exportKey, data);
+                        await store.set(vanillaExportKey, data);
+                    }
+
+                    for (let v of VIEWER_MANAGER.viewers) {
+                        const contextID = findViewerUniqueId(v);
+                        const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
+                        if (data) {
+                            await store.set(vanillaExportKey + "::" + contextID, viewerData);
+                        }
                     }
                 });
 
-                const data = await dataStore.get(exportKey);
-                if (data !== undefined) await this.importData(data);
+                const data = await store.get(exportKey);
+                if (data !== undefined) await this.importData(exportKey, data);
 
             } catch (e) {
                 console.error('IO Failure:', this.constructor.name, e);
@@ -585,7 +609,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
                 });
             }
-            return dataStore;
+            return store;
         }
 
         /**
@@ -594,16 +618,35 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          *   `await dataStore.set(options.exportKey || "", await this.exportData());`
          * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
          * upon the event 'export-data', or simply nest objects to fit a single output
+         * @param key {string} the data contextual ID it was exported with, default empty string
          * @return {Promise<any>}
          */
-        async exportData() {}
+        async exportData(key) {}
+        /**
+         * Works the same way as @exportData, but for the viewer context.
+         * @param viewer {OpenSeadragon.Viewer} the target viewer
+         * @param key {string} the data contextual ID it was exported with, default empty string
+         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
+         * @return {Promise<any>}
+         */
+        async exportViewerData(viewer, key, viewerTargetID) {
+            return {};
+        }
         /**
          * Called automatically within this.initPostIO if data available
          *  note: parseImportData return value decides if data is parsed data or passed as raw string
-         * @param data {(string|*)} data
+         * @param key {string} the data contextual ID it was exported with, default empty string
+         * @param data {any} data
          */
-        async importData(data) {}
-
+        async importData(key, data) {}
+        /**
+         * Works the same way as @importData, but for the viewer context.
+         * @param viewer {OpenSeadragon.Viewer} the target viewer
+         * @param key {string} the data contextual ID it was exported with, default empty string
+         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
+         * @param data {any} data
+         */
+        async importViewerData(viewer, key, viewerTargetID, data) {}
         /**
          * TODO: this does not wait once module is fully loaded!
          * @param moduleId
@@ -617,7 +660,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 callback(targetModule);
                 return true;
             }
-            VIEWER.addHandler('module-singleton-created', e => {
+            VIEWER_MANAGER.addHandler('module-singleton-created', e => {
                 if (e.id === moduleId) callback(e.module);
             });
             return false;
@@ -636,7 +679,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.getHandler = events.getHandler.bind(events);
             this.numberOfHandlers = events.numberOfHandlers.bind(events);
             this.raiseEvent = events.raiseEvent.bind(events);
+            // todo remove this
             this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
+            this.raiseEventAwaiting = events.raiseEventAwaiting.bind(events);
             this.removeAllHandlers = events.removeAllHandlers.bind(events);
             this.removeHandler = events.removeHandler.bind(events);
             this.__errorBindingOnViewer = errorBindingOnViewer;
@@ -704,11 +749,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          */
         raiseEvent () {}
         /**
-         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseAwaitEvent.
+         * Trigger an event, optionally passing additional information.
+         * Awaits async handlers.
+         * Note: noop if registerAsEventSource() not called.
+         * @deprecated
+         */
+        raiseAwaitEvent() {}
+        /**
+         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEventAwaiting.
          * Awaits async handlers.
          * Note: noop if registerAsEventSource() not called.
          */
-        raiseAwaitEvent() {}
+        raiseEventAwaiting() {}
         /**
          * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
          * Note: noop if registerAsEventSource() not called.
@@ -747,6 +799,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         constructor(id) {
             super(id, "module");
+            this.__o = {};
         }
 
         /**
@@ -771,6 +824,48 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             const value = MODULES[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
             return value;
+        }
+
+        /**
+         * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
+         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
+         * @param optionKey
+         * @param defaultValue
+         * @return {*}
+         */
+        getOption(optionKey, defaultValue, cache=true) {
+            //options are stored only for plugins, so we store them at the lowest level
+            let value = cache ? this.cache.get(key, null) : null;
+            if (value === null) {
+                value = this.__o[optionKey];
+            }
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
+            return value;
+        }
+
+        /**
+         * Store the module online configuration parameters/options - but note that unlike
+         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
+         * @param {string} key
+         * @param {*} value
+         * @param {boolean} cache
+         */
+        setOption(key, value, cache=true) {
+            if (cache) this.setCacheOption(key, value);
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
+            APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
+        }
+
+        /**
+         * Ability to cache a value locally into the browser,
+         * the value can be retrieved using this.getOption(...)
+         * @param {string} key
+         * @param value
+         */
+        setCacheOption(key, value) {
+            this.cache.set(key, value);
         }
 
         /**
@@ -836,7 +931,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             MODULES[id].instance = this;
 
             // Await event necessary to fire after instantiation, do in async context
-            setTimeout(() => VIEWER.tools.raiseAwaitEvent(VIEWER, 'module-singleton-created', {
+            /**
+             * Module singleton was instantiated
+             * @property {string} id module id
+             * @property {XOpatModuleSingleton} module
+             * @memberof VIEWER_MANAGER
+             * @event module-singleton-created
+             */
+            setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
                 id: id,
                 module: this
             }).catch(/*no-op*/));
@@ -890,13 +992,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         /**
          * Store the plugin online configuration parameters/options
-         * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache
+         * @memberof XOpatPlugin
          */
         setOption(key, value, cache=true) {
-            if (cache) this.setLocalOption(key, value);
+            if (cache) this.setCacheOption(key, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
@@ -909,6 +1011,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param {string} key
          * @param {*} defaultValue
          * @param {boolean} cache
+         * @memberof XOpatPlugin
          * @return {*}
          */
         getOption(key, defaultValue=undefined, cache=true) {
@@ -933,11 +1036,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Ability to cache a value locally into the browser,
          * the value can be retrieved using this.getOption(...)
-         * todo rename to setCacheOption
-         * @param key
+         * @param {string} key
          * @param value
          */
-        setLocalOption(key, value) {
+        setCacheOption(key, value) {
             this.cache.set(key, value);
         }
 
@@ -982,7 +1084,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 callback(targetPlugin);
                 return true;
             }
-            VIEWER.addHandler('plugin-loaded', e => {
+            VIEWER_MANAGER.addHandler('plugin-loaded', e => {
                 if (e.id === pluginId) callback(e.plugin);
             });
             return false;
@@ -1107,10 +1209,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 /**
                  * Module loaded event. Fired only with dynamic loading.
                  * @property {string} id module id
-                 * @memberOf VIEWER
+                 * @memberof VIEWER_MANAGER
                  * @event module-loaded
                  */
-                window.VIEWER && ids.forEach(id => VIEWER.raiseEvent('module-loaded', {id: id}));
+                ids.forEach(id => VIEWER_MANAGER.raiseEvent('module-loaded', {id: id}));
                 onload && onload();
             });
         },
@@ -1132,10 +1234,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 /**
                  * Before a request to plugin loading is processed at runtime.
                  * @property {string} id plugin id
-                 * @memberOf VIEWER
+                 * @memberof VIEWER_MANAGER
                  * @event before-plugin-load
                  */
-                VIEWER.raiseEvent('before-plugin-load', {id: id});
+                VIEWER_MANAGER.raiseEvent('before-plugin-load', {id: id});
             }
 
             let successLoaded = function() {
@@ -1164,10 +1266,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                             /**
                              * @property {string} id plugin id
                              * @property {string} message
-                             * @memberOf VIEWER
+                             * @memberof VIEWER_MANAGER
                              * @event plugin-failed
                              */
-                            window.VIEWER && VIEWER.raiseEvent('plugin-failed', {
+                            VIEWER_MANAGER.raiseEvent('plugin-failed', {
                                 id: plugin.id,
                                 message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}),
                             });
@@ -1179,10 +1281,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         /**
                          * Plugin was loaded dynamically at runtime.
                          * @property {string} id plugin id
-                         * @memberOf VIEWER
+                         * @memberof VIEWER_MANAGER
                          * @event plugin-loaded
                          */
-                        VIEWER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
+                        VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
                         onload();
                     }).catch(e => {
                         console.error(e);
@@ -1240,14 +1342,71 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              *
              * @property {function} setSerializedData callback to call,
              *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
-             * @memberOf VIEWER
+             * @memberof VIEWER_MANAGER
              * @event export-data
              */
-            await VIEWER.tools.raiseAwaitEvent(VIEWER, 'export-data');
+            await VIEWER_MANAGER.raiseEventAwaiting('export-data');
             return {app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA};
         }
     };
 
+    /**
+     * Focusing all key press events and forwarding to OSD
+     * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
+     */
+    let focusOnViewer = true;
+    function getIsViewerFocused() {
+        // TODO TEST!!!
+        const focusedElement = document.activeElement;
+        const focusTyping = focusedElement.tagName === 'INPUT' ||
+            focusedElement.tagName === 'TEXTAREA' ||
+            focusedElement.isContentEditable;
+        return focusTyping ? null : focusOnViewer;
+    }
+    /**
+     * Allows changing focus state artificially
+     * @param {boolean} focused
+     */
+    UTILITIES.setIsCanvasFocused = function(focused) {
+        focusOnViewer = focused;
+    };
+    document.addEventListener('keydown', function(e) {
+        e.focusCanvas = getIsViewerFocused();
+        /**
+         * @property {KeyboardEvent} e
+         * @property {Viewer} e.focusCanvas the viewer this event belongs to
+         * @memberof Viewer_MANAGER
+         * @event keydown
+         */
+        VIEWER_MANAGER.raiseEvent('key-down', e);
+    });
+    document.addEventListener('keyup', function(e) {
+        e.focusCanvas = getIsViewerFocused();
+        /**
+         * @property {KeyboardEvent} e
+         * @property {Viewer} e.focusCanvas the viewer this event belongs to
+         * @memberof Viewer_MANAGER
+         * @event key-up
+         */
+        VIEWER_MANAGER.raiseEvent('key-up', e);
+    });
+    //consider global mouseup/down events. or maybe not - clicking is
+    // contextual and is enough to implement listeners on elements (unlike key hits)...
+    // document.addEventListener('mouseup', function(e) {
+    //     e.focusCanvas = focusOnViewer;
+    //     VIEWER.raiseEvent('mouse-up', e);
+    // });
+
+    // todo this means if we have session with visualization only, no post IO works
+    function findViewerUniqueId(viewer) {
+        for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
+            const item = viewer.world.getItemAt(itemIndex);
+            const config = item?.getConfig("background");
+            if (config) {
+                return config.id;
+            }
+        }
+    }
 
     // 2) Manager that tracks the active viewer
     /**
@@ -1293,6 +1452,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         _wire(v) {
             const el = v.container;
             el.tabIndex = 0;
+
+            //todo maybe rely on OSD events. Also, prevent changing the focus when a mouse is dragged and exits the area
             const set = () => this.setActive(v);
             el.addEventListener("pointerdown", set);
             el.addEventListener("mouseenter", set);
@@ -1449,91 +1610,224 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             }
 
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
-            viewer.addHandler('open', () => {
-                const DELAY = 90;
-                let last = 0;
-                new OpenSeadragon.MouseTracker({
-                    userData: 'pixelTracker',
-                    element: "viewer-container",
-                    moveHandler: function (e) {
-                        // if we are the main active viewer
-                        if (VIEWER === viewer) {
-                            const now = Date.now();
-                            if (now - last < DELAY) return;
-                            last = now;
-                            const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
-                            if (!image) return;
-                            const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
-                            const position = image.windowToImageCoordinates(screen);
+            viewer.addHandler('open', e => {
+                if (e.firstLoad) {
+                    const DELAY = 90;
+                    let last = 0;
+                    new OpenSeadragon.MouseTracker({
+                        userData: 'pixelTracker',
+                        element: "viewer-container",
+                        moveHandler: function (e) {
+                            // if we are the main active viewer
+                            if (VIEWER === viewer) {
+                                const now = Date.now();
+                                if (now - last < DELAY) return;
+                                last = now;
+                                const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
+                                if (!image) return;
+                                const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+                                const position = image.windowToImageCoordinates(screen);
 
-                            let result = [`${Math.round(position.x)}, ${Math.round(position.y)} px`];
-                            //bit hacky, will improve once we refactor openseadragon rendering
-                            const hasBg = APPLICATION_CONTEXT.config.background.length > 0;
-                            let tidx = 0;
+                                let result = [`${Math.round(position.x)}, ${Math.round(position.y)} px`];
+                                const hasBg = APPLICATION_CONTEXT.config.background.length > 0;
+                                let tidx = 0;
 
-                            const viewport = VIEWER.viewport.windowToViewportCoordinates(screen);
-                            if (hasBg) {
-                                const pixel = getPixelData(screen, viewport, tidx);
-                                if (pixel) {
-                                    result.push(`tissue: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
-                                } else {
-                                    result.push(`tissue: -`)
+                                const viewport = VIEWER.viewport.windowToViewportCoordinates(screen);
+                                if (hasBg) {
+                                    const pixel = getPixelData(screen, viewport, tidx);
+                                    if (pixel) {
+                                        result.push(`tissue: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
+                                    } else {
+                                        result.push(`tissue: -`)
+                                    }
+                                    tidx++;
                                 }
-                                tidx++;
-                            }
 
-                            // TODO return overlay
-                            // if (vis) {
-                            //     const pixel = getPixelData(screen, viewport, tidx);
-                            //     if (pixel) {
-                            //         result.push(`overlay: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
-                            //     } else {
-                            //         result.push(`overlay: -`)
-                            //     }
-                            // }
-                            USER_INTERFACE.Status.show(result.join("<br>"));
-                        }
-                    }
-                });
-
-                /**
-                 * @param screen
-                 * @param viewportPosition
-                 * @param {number|OpenSeadragon.TiledImage} tiledImage
-                 */
-                function getPixelData(screen, viewportPosition, tiledImage) {
-                    function changeTile() {
-                        let tiles = tiledImage.lastDrawn;
-                        //todo verify tiles order, need to ensure we prioritize higher resolution!!!
-                        for (let i = 0; i < tiles.length; i++) {
-                            if (tiles[i].bounds.containsPoint(viewportPosition)) {
-                                return tiles[i];
+                                // TODO return overlay info logging
+                                // if (vis) {
+                                //     const pixel = getPixelData(screen, viewport, tidx);
+                                //     if (pixel) {
+                                //         result.push(`overlay: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
+                                //     } else {
+                                //         result.push(`overlay: -`)
+                                //     }
+                                // }
+                                USER_INTERFACE.Status.show(result.join("<br>"));
                             }
                         }
-                        return undefined;
-                    }
+                    });
 
-                    if (Number.isInteger(tiledImage)) {
-                        tiledImage = VIEWER.world.getItemAt(tiledImage);
-                        if (!tiledImage) {
-                            //some error since we are missing the tiled image
+                    /**
+                     * @param screen
+                     * @param viewportPosition
+                     * @param {number|OpenSeadragon.TiledImage} tiledImage
+                     */
+                    function getPixelData(screen, viewportPosition, tiledImage) {
+                        function changeTile() {
+                            let tiles = tiledImage.lastDrawn;
+                            //todo verify tiles order, need to ensure we prioritize higher resolution!!!
+                            for (let i = 0; i < tiles.length; i++) {
+                                if (tiles[i].bounds.containsPoint(viewportPosition)) {
+                                    return tiles[i];
+                                }
+                            }
                             return undefined;
                         }
+
+                        if (Number.isInteger(tiledImage)) {
+                            tiledImage = viewer.world.getItemAt(tiledImage);
+                            if (!tiledImage) {
+                                //some error since we are missing the tiled image
+                                return undefined;
+                            }
+                        }
+                        let tile;
+                        tile = changeTile();
+                        if (!tile) return undefined;
+
+                        // get position on a current tile
+                        let x = screen.x - tile.position.x;
+                        let y = screen.y - tile.position.y;
+
+                        //todo: reads canvas context out of the result, not the original data
+                        let canvasCtx = tile.getCanvasContext();
+                        let relative_x = Math.round((x / tile.size.x) * canvasCtx.canvas.width);
+                        let relative_y = Math.round((y / tile.size.y) * canvasCtx.canvas.height);
+                        return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
                     }
-                    let tile;
-                    tile = changeTile();
-                    if (!tile) return undefined;
-
-                    // get position on a current tile
-                    let x = screen.x - tile.position.x;
-                    let y = screen.y - tile.position.y;
-
-                    //todo: reads canvas context out of the result, not the original data
-                    let canvasCtx = tile.getCanvasContext();
-                    let relative_x = Math.round((x / tile.size.x) * canvasCtx.canvas.width);
-                    let relative_y = Math.round((y / tile.size.y) * canvasCtx.canvas.height);
-                    return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
                 }
+
+                // Every load event, update data
+                (async function() {
+                    // Find all imports that fit to the target viewer and import to the plugin
+                    const contextID = findViewerUniqueId(viewer);
+
+                    for (let element of REGISTERED_ELEMENTS) {
+                        if (typeof element.getOption === "function" && element.getOption('ignorePostIO', false)) {
+                            return;
+                        }
+
+                        const store = element[STORE_TOKEN];
+                        if (!store) continue;
+
+                        for (let key of store.keys()) {
+                            const keyParts = key.split("::");
+                            if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
+                            const data = await store?.get(key);
+                            try {
+                                if (data !== undefined) await element.importViewerData(viewer, key, contextID, data);
+                            } catch (e) {
+                                console.error('IO Failure:', element.constructor.name, e);
+                                element.error({
+                                    error: e, code: "W_IO_INIT_ERROR",
+                                    message: $.t('error.pluginImportFail',
+                                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                                });
+                            }
+                        }
+                    }
+                })();
+            });
+
+            viewer.addHandler('canvas-enter', function (e) {
+                focusOnViewer = e.eventSource;
+            });
+            viewer.addHandler('canvas-exit', function (e) {
+                focusOnViewer = null;
+            });
+            viewer.addHandler('canvas-key', function(e) {
+                focusOnViewer = e.eventSource;
+                e.preventDefaultAction = true;
+            });
+            
+            /**
+             * Made with love by @fitri
+             * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
+             *
+             * Shader re-compilation and re-ordering logics
+             * Modified by Jiří
+             */
+            function enableDragSort(listId) {
+                UIComponents.Actions.draggable(listId, item => {
+                    const id = item.dataset.id;
+                    window.DropDown.bind(item, () => {
+                        const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
+                        const clipSelected = currentMask === "clip";
+                        const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
+
+                        return [{
+                            title: $.t('main.shaders.defaultBlending'),
+                        }, {
+                            title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
+                            action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                            selected: maskEnabled
+                        }, {
+                            title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
+                            icon: "payments",
+                            styles: "padding-right: 5px;",
+                            action: (selected) => {
+                                const node = document.getElementById(`${id}-mode-toggle`);
+                                const newMode = selected ? "blend" : "clip";
+                                node.dataset.mode = newMode;
+                                if (!maskEnabled) {
+                                    UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                                } else {
+                                    UTILITIES.changeModeOfLayer(id, newMode, false);
+                                }
+                            },
+                            selected: clipSelected
+                        }];
+                    });
+                }, undefined, e => {
+                    const listItems = Array.prototype.map.call(e.target.parentNode.children, child => child.dataset.id);
+                    listItems.reverse();
+                    // todo no change on the navigator...
+                    viewer.drawer.renderer.setShaderLayerOrder(listItems);
+                    viewer.drawer.rebuild();
+                })
+            }
+
+            viewer.drawer.renderer.addHandler('html-controls-created', e => {
+                enableDragSort("data-layer-options");
+
+                let layers = viewer.drawer.renderer.getAllShaders();
+                for (let key in layers) {
+                    if (!layers.hasOwnProperty(key)) continue;
+
+                    const shader = layers[key];
+
+                    for (let source of shader.getConfig().tiledImages) {
+                        const tiledImage = viewer.world.getItemAt(source);
+
+                        if (typeof tiledImage?.source.getMetadata !== 'function') {
+                            console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
+                                'The visualization is unable to inspect problems with data sources.', tiledImage);
+                            continue;
+                        }
+
+                        const message = tiledImage.source.getMetadata();
+                        if (message.error) {
+                            // todo once we have ShaderMenu per viewer, use its api instead of fishing IDs
+                            let node = $(`#${key}-shader-part`);
+                            const alert = new UI.Alert({
+                                mode: "warning",
+                                title: $.t('main.shaders.faulty'),
+                                description: `<code>${message.error}</code>`,
+                                compact: true
+                            });
+                            alert.prependedTo(node);
+                            break;
+                        }
+                    }
+                }
+
+                /**
+                 * Fired when visualization goal is set up and run, but before first rendering occurs.
+                 * @property visualization visualization configuration used
+                 * @memberof OpenSeadragon.Viewer
+                 * @event visualization-used
+                 */
+                viewer.raiseEvent('visualization-used', e);
             });
             
             viewer.gestureSettingsMouse.clickToZoom = false;

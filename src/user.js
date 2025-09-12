@@ -70,7 +70,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
                 }
             });
         });
-        await VIEWER.tools.raiseAwaitEvent(this, 'secret-needs-update', {type: type});
+        await VIEWER.raiseEventAwaiting('secret-needs-update', {type: type});
         return awaitToken;
     }
 

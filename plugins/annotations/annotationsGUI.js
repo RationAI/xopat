@@ -359,7 +359,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
-		this.setLocalOption('defaultIOFormat', format);
+		this.setCacheOption('defaultIOFormat', format);
 		$("#annotation-convertor-options").html(
 			Object.values(convertor.options).map(option => UIComponents.Elements[option.type]?.(option)).join("<br>")
 		);
@@ -2029,7 +2029,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	async saveDefault() {
 		this.needsSave = false;
-		await this.raiseAwaitEvent('save-annotations', {
+		await this.raiseEventAwaiting('save-annotations', {
 			getData: this.getExportData.bind(this),
 			setNeedsDownload: (needsDownload) => {
 				this.needsSave = needsDownload;

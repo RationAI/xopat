@@ -266,6 +266,15 @@ class SyncAPIProxy extends APIProxy {
         key = this.validateKey(key);
         this.__storage.removeItem(key);
     }
+
+    /**
+     * Get a list of keys
+     * @return {string[]}
+     */
+    keys() {
+        const store = this.__storage;
+        return Array.from(Array(store.length()).keys()).map(i => store.key(i));
+    }
 }
 
 /**
@@ -318,6 +327,15 @@ class AsyncAPIProxy extends APIProxy {
     async delete(key) {
         key = this.validateKey(key);
         await this.__storage.removeItem(key);
+    }
+
+    /**
+     * Get a list of keys
+     * @return {Promise<Awaited<string>[]>}
+     */
+    async keys() {
+        const store = this.__storage;
+        return Promise.all(Array.from(Array(store.length()).keys()).map(async i => await store.key(i)));
     }
 }
 

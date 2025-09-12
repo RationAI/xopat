@@ -39,15 +39,11 @@ should be provided. These events should be invoked on the parent instance of the
  - thoroughly test any user interaction with annotations plugin, rely on events
 
 ### Event API extension
-Available is ``VIEWER.tools.raiseAwaitEvent(context, ...)`` that works the same as `context.raiseEvent()`
-except that it waits for asynchronous calls to finish. Async functions are not awaited for by default.
 
-Use ``preventDefault`` flag and check for its existence in the event handler to support aborting certain events.
-
-## Event List
+# Event List
 Events have their name (for which you register) and when invoked, a parameter is passed
 to the handler function that might contain a lot of useful data.
-### Global Events ``VIEWER_MANAGER``
+## Global Events ``VIEWER_MANAGER``
 #### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
 Fired before the first open of the viewer happens. Apps can perform
 custom functionality just before the viewer gets initialized.
@@ -67,30 +63,6 @@ from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
 values using the ``image_group_preview`` configuration specification.
 
-### Viewer-Local Events: ``VIEWER/viewer``
-
-#### `open` | e: {source: TileSource}
-Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
-It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
-initial load).
-
-TODO validate events:
-
-#### `export-data` | e: `{}`
-Submit your serialized data to the export event. You should use the data storage instance you
-retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
-
-#### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
-User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
-a different notification is being shown). Parameters should be strictly kept:
-- originType: `"module"`, `"plugin"` or other type of the source
-- originId: unique code component id, e.g. a plugin id
-- code: unique error identifier
-- message: a brief description of the case
-- trace: optional data or context object, e.g. an error object from an exception caught
-#### `error-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
-Same as above, an error event. 
-
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
@@ -108,25 +80,47 @@ access to functionality, therefore a handler for singletons is available.
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 
-#### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
-Fired when a viewport screenshot is requested.
-
-### User Input Events
-
-#### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
+#### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user presses a key. The event object is extended by one property that tells us whether the
 main canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
 and ignores OpenSeadragon key event.
 
-//todo override openseadragon hotkeys and trigger them ourselves, disable R rotation
-
-#### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: boolean}`
+#### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user releases a key. Similar as above.
 
-### OpenSeadragon: User Input Events
+#### `export-data` | e: `{}`
+Submit your serialized data to the export event. Direct use is not advised. You should use the data storage instance you
+retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
+Note that this can be both viewer independent and viewer-contextualized export, see the docs on initPostIO.
+
+## OpenSeadragon: User Input Events
 These are listed just for the reference, for other input events see the OpenSeadragon documentation.
 Note that the interaction should be thoroughly tested with annotations plugin. You might also find the annotations API
 fully re-usable for your purposes, **using custom annotation objects to perform tasks**.
+
+### Viewer-Local Events: ``VIEWER/viewer``
+
+#### `open` | e: {source: TileSource}
+Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
+It works just like the OSD event, but it also tells you how many times the viewer canvas has been reloaded (0th is the
+initial load). Has extra argument `firstLoad` which is true for the first load of the particular viewer instance.
+Called every time the viewer is reloaded.
+
+#### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
+User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
+a different notification is being shown). Parameters should be strictly kept:
+- originType: `"module"`, `"plugin"` or other type of the source
+- originId: unique code component id, e.g. a plugin id
+- code: unique error identifier
+- message: a brief description of the case
+- trace: optional data or context object, e.g. an error object from an exception caught
+#### `error-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
+Same as above, an error event.
+
+#### `screenshot` | e: `{context2D: RenderingContext2D, width: number, height: number}
+Fired when a viewport screenshot is requested.
+
+### User Input Events
 
 #### `canvas-press`
 #### `canvas-release`

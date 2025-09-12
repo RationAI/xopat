@@ -490,8 +490,13 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                 })
             }
         });
-
-        VIEWER.addHandler('module-loaded', e => {
+        /**
+         * Module loaded event. Fired only with dynamic loading.
+         * @property {string} id module id
+         * @memberOf VIEWER_MANAGER
+         * @event module-loaded
+         */
+        VIEWER_MANAGER.addHandler('module-loaded', e => {
             if (e.id === "annotations") {
                 _this._handleInitAnnotationsModule();
             }

@@ -23,67 +23,10 @@ function initXopatScripts() {
         staticDisclaimer.style.display = "grid";
     }
 
-    /**
-     * Focusing all key press events and forwarding to OSD
-     * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
-     */
-    let focusOnViewer = true;
-    VIEWER.addHandler('canvas-enter', function() {
-        focusOnViewer = true;
-    });
-    VIEWER.addHandler('canvas-exit', function() {
-        focusOnViewer = false;
-    });
-    VIEWER.addHandler('canvas-key', function(e) {
-        focusOnViewer = true;
-        e.preventDefaultAction = true;
-    });
-    function getIsViewerFocused() {
-        // TODO TEST!!!
-        const focusedElement = document.activeElement;
-        const focusTyping = focusedElement.tagName === 'INPUT' ||
-            focusedElement.tagName === 'TEXTAREA' ||
-            focusedElement.isContentEditable;
-        return focusOnViewer && !focusTyping;
-    }
-    /**
-     * Allows changing focus state artificially
-     * @param {boolean} focused
-     */
-    UTILITIES.setIsCanvasFocused = function(focused) {
-        focusOnViewer = focused;
-    };
-    document.addEventListener('keydown', function(e) {
-        e.focusCanvas = getIsViewerFocused();
-        /**
-         * @property {KeyboardEvent} e
-         * @property {boolean} e.focusCanvas
-         * @memberOf VIEWER
-         * @event keydown
-         */
-        VIEWER.raiseEvent('key-down', e);
-    });
-    document.addEventListener('keyup', function(e) {
-        e.focusCanvas = getIsViewerFocused();
-        /**
-         * @property {KeyboardEvent} e
-         * @property {boolean} e.focusCanvas
-         * @memberOf VIEWER
-         * @event key-up
-         */
-        VIEWER.raiseEvent('key-up', e);
-    });
-    //consider global mouseup/down events. or maybe not - clicking is
-    // contextual and is enough to implement listeners on elements (unlike key hits)...
-    // document.addEventListener('mouseup', function(e) {
-    //     e.focusCanvas = focusOnViewer;
-    //     VIEWER.raiseEvent('mouse-up', e);
-    // });
-
     let failCount = new WeakMap();
-    VIEWER.addHandler('tile-load-failed', function(e) {
+    VIEWER_MANAGER.broadcastHandler('tile-load-failed', function(e) {
         if (e.message === "Image load aborted") return;
-        let index = VIEWER.world.getIndexOfItem(e.tiledImage);
+        let index = e.eventSource.world.getIndexOfItem(e.tiledImage);
         let failed = failCount[index];
         if (!failed || failed != e.tiledImage) {
             failCount[index] = e.tiledImage;
@@ -107,17 +50,17 @@ function initXopatScripts() {
                  * @memberOf VIEWER
                  * @event tiled-image-problematic
                  */
-                VIEWER.raiseEvent('tiled-image-problematic', e);
+                e.eventSource.raiseEvent('tiled-image-problematic', e);
             }
         }
         e.tiledImage._failedDate = e.time;
     });
 
-    let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
-    /**
-     * From https://github.com/openseadragon/openseadragon/issues/1690
-     * brings better zooming behaviour
-     */
+    // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
+    // /**
+    //  * From https://github.com/openseadragon/openseadragon/issues/1690
+    //  * brings better zooming behaviour
+    //  */
     // window.VIEWER.addHandler("canvas-scroll", function(e) {
     //     if (Math.abs(e.originalEvent.deltaY) < 100) {
     //         // touchpad has lesser values, do not change scroll behavior for touchpads

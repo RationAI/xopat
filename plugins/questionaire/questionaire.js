@@ -1,11 +1,11 @@
 addPlugin('questionaire', class extends XOpatPlugin {
-    constructor(id, opts = {}) {
+    constructor(id) {
         super(id);
-        this.enableEditor = opts.enableEditor ?? true;
-        this.autoOpenBackground = opts.autoOpenBackground ?? true;
+        this.enableEditor = this.getOption('enableEditor', true);
+        this.autoOpenBackground = this.getOption('autoOpenBackground', true);
 
         // NEW: lock editing when exporting (for now default true; flip later during real export)
-        this.isExported = opts.isExported ?? false;
+        this.isExported = this.getOption('isExported', false);
 
         this.SCHEMA_KEY = `xopat_questionnaire_schema_${this.id}`;
         this.DRAFT_KEY  = `xopat_questionnaire_draft_${this.id}`;
@@ -28,6 +28,21 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this._builderDom = null;
         this._builderActivePage = 0;
         this._currentPage = 0;
+
+        this.initPostIO({
+            exportKey: "scheme",
+            inViewerContext: false
+        });
+    }
+
+
+    async exportData(key) {
+        return this._savedSchema ? JSON.stringify(this._savedSchema) : undefined;
+    }
+
+    async importData(key, data) {
+        // no need to test key RN, we have just single export registered
+        this._savedSchema = JSON.parse(data);
     }
 
     pluginReady() {
@@ -255,10 +270,10 @@ addPlugin('questionaire', class extends XOpatPlugin {
 
     // ========== persistence ==========
     _loadSchema() {
-        try { return JSON.parse(localStorage.getItem(this.SCHEMA_KEY) || 'null'); } catch { return null; }
+        return this._savedSchema;
     }
     _saveSchema(schemaObj) {
-        localStorage.setItem(this.SCHEMA_KEY, JSON.stringify(schemaObj));
+        this._savedSchema = schemaObj;
     }
     _loadDraft() {
         try { return JSON.parse(localStorage.getItem(this.DRAFT_KEY) || 'null'); } catch { return null; }

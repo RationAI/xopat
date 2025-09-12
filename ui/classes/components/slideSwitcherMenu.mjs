@@ -211,7 +211,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         const checkboxId = `${this.windowId}-chk-${idx}`;
         const checked = this.selected.has(idx);
 
-        const imageEl = img({
+        let imageEl = img({
             id: `${this.windowId}-thumb-${idx}`,
             // absolute so the translate is deterministic; rotate into a horizontal row
             class: "block h-auto w-full rotate-90 select-none shrink-0 w-full",
@@ -233,17 +233,30 @@ export class SlideSwitcherMenu extends BaseComponent {
             imagePreview: null,
         };
 
+        /**
+         * Image Preview Url was requested
+         * @property {string} server oneliner configuration
+         * @property {usesCustomProtocol} boolean true if protocol is overridden on the background config level
+         * @property {Image|string|null} imagePreview if set, the image source is used from this value, must be an image url or object
+         * @memberOf VIEWER_MANAGER
+         * @event get-preview-url
+         */
         VIEWER_MANAGER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
-            let blobUrl;
             if (!eventArgs.imagePreview) {
                 const previewUrlmaker = new Function("path,data", "return " +
                     (bg.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
                 eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
-            } else if (typeof eventArgs.imagePreview !== "string") {
-                blobUrl = eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
+            } else if (eventArgs.imagePreview instanceof Image) {
+                imageEl = eventArgs.imagePreview;
+                imageEl.classList.add("block", "h-auto", "w-full", "rotate-90", "select-none", "shrink-0", "w-full");
+                imageEl.setAttribute("draggable", "false")
+                imageEl.id = `${this.windowId}-thumb-${idx}`;
+                return; // image element handled
+            } else if (typeof eventArgs.imagePreview !== "string" && (!eventArgs.imagePreview instanceof Image)) {
+                eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
+                imageEl.onload = imageEl.onerror = () => URL.revokeObjectURL(eventArgs.imagePreview);
             }
             imageEl.src = eventArgs.imagePreview;
-            // (optional) revoke later if you attach onload; safe to omit here
         });
 
         const viewer = this._getViewerForBg(idx);

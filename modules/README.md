@@ -38,6 +38,11 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
 
+##### Built-in options
+Unlike plugins, module options are usually built-in centered, or used to cache values - vales
+are actually not stored anywhere, unless the cache itself is being persisted by overriding xOpat storage API.
+- `ignorePostIO` - see below the default IO lifecycle
+
 #### Basic DO's
 The integration to the global scope, application etc. is left to the module itself.
 You should not pollute the global scope (`window`...) and follow the following:
@@ -150,32 +155,6 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 >guaranteed your locales had been loaded if you did so at the module inclusion time.
 
 
-### IO Handling with global modules
-``bindIO`` method is available that explicitly enables IO within a module. The module should have
-explicit impact on the viewer and load data only when requested, so leave this method call to the
-code using your module if possible.
-todo docs
-The example below shows how to implement IO within a module with proper function overrides.
-````js
-async exportData() {
-    return await this.export(); //our internal function returns a string promise
-}
-
-async importData(data) {
-    await this.import(data); //our import function expects data as a serialized string
-}
-````
-As you might've noticed, there are no options to export _multiple items_ - and it is intended.
-The module should export (for simplicity) all its data in one serialized object, e.g. annotations would
-export something like:
-````
-{
-  "version": 1.2.0
-  "objects": [...]
-  "presets": [...]
-}
-````
-
 ## Dynamic Loading
 As workers and js modules (recommended usage), the viewer does not offer advanced tools for
 loading these scripts dynamically. You need to use **relative** file names and instantiate
@@ -198,20 +177,49 @@ Also, **do not store reference** to any tiled images or sources you do not contr
 Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
 all measures should be done.
 
-## Gotchas
+# Gotchas
 Check plugin's README in case you did not. The available API is described there to greater detail.
 
-#### Default IO
-A plugin or a module can export data either with custom logics based on events, or by built-in
-export system. This system is handy since it will automatically integrate file-like IO behavior
-within your application via HTTP POST.
+## IO Handling
+Plugins are free to implement their own IO handling. If you are writing a plugin that connects e.g. annotations
+to some database, you can use (and the authors of the target plugin you want to save data from) rich event system
+to react upon the data item lifecycle.
 
-All you need to do is to override ``exportData`` and `importData` methods in the element root class
-and call ``this.initPostIO()`` at the startup. If you want to have a custom logics with the IO initialization,
+In case you are writing a plugin (or module) that has no given service it should save data to, you
+should:
+- provide a way to export data via lifecycle of the data item(s) through events
+- register to the default POST IO system the xOpat offers.
+
+This way, one can use static file export to share their data with others, or
+turn on some storage logics for the data. In that case, the data source plugin or module can be disabled
+to load the POST IO data using ``ignorePostIO`` option (works only if the target interface implements `getOption()`).
+
+### Default POST IO
+
+> **IMPORTANT**: The IO distinguishes between global and viewer-local data. You can have two viewers open
+> at the same time and you need to deliver different data to each of them? Use the viewer local export.
+
+All you need to do is to override ``exportData`` and `importData` methods (for global)
+or ``exportViewerData`` and ``importViewerData`` methods (for viewer-local)
+in the element root class
+and call ``this.initPostIO()`` at the startup. You can call the initialization repeatedly
+for different keys.
+
+````js
+constructor(id) {
+    super(id);
+    this.initPostIO({
+        exportKey: "", // unique data-context key, default empty string
+        inViewerContext: false  // or true, in that case `exportViewerData` and `importViewerData` will be used
+    });
+}
+````
+
+If you want to have a custom logics with the IO initialization,
 you can override the initialization like this:
 ````js
-async initPostIO() {
-    const postStore = await super.initPostIO();
+async initPostIO(opts) {
+    const postStore = await super.initPostIO(opts);
     if (postStore) {
         //... do something
         // e.g. read key 'key'

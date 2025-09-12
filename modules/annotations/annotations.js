@@ -103,11 +103,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/******************* EXPORT, IMPORT **********************/
-	async exportData() {
+	async exportData(key) {
 		return await this.export();
 	}
 
-	async importData(data) {
+	async importData(key, data) {
 		const options = {inheritSession: true};
 		if (typeof data === "object" && data.format) {
 			options.format = data.format;

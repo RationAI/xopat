@@ -10,6 +10,7 @@
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?string} name custom tissue name, default the tissue path
  * @property {?number} goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+ * @property {?string} id unique ID for the background, created automatically from data path if not defined
  */
 /**
  * @typedef VisualizationItem
@@ -458,7 +459,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
     VIEWER_MANAGER.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    VIEWER_MANAGER.broadcastHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+    VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
@@ -768,6 +769,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 index: 0,
                 replace: false,
                 success: (event) => {
+                    /**
+                     * @this {OpenSeadragon.TiledImage}
+                     * @function getConfig
+                     * @param {string} [type=undefined]
+                     * @memberof OpenSeadragon.TiledImage
+                     * @returns {BackgroundItem|VisualizationItem|undefined}
+                     */
                     event.item.getConfig = type => undefined;
                     //TODO: USER_INTERFACE.toggleDemoPage(true);
                     handleSyntheticEventFinishWithValidData(viewer, 0, 1);
@@ -908,6 +916,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         if (!viewer.__initialized) {
             viewer.__initialized = true;
+            eventOpts.firstLoad = true;
 
             // todo consider viewport per background
             let focus = APPLICATION_CONTEXT.getOption("viewport");
@@ -945,13 +954,17 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             //         );
             //     }, 2000);
             // }
+        } else {
+            eventOpts.firstLoad = false;
         }
         //todo INHERITS OpenSeadragon todo comment - check for API changes in open event in future
         eventOpts.source = viewer.world.getItemAt(0)?.source;
+        eventOpts.firstLoad = true;
         /**
          * Manual OpenSeadragon open event firing, see OpenSeadragon.Viewer#open
          * It is guaranteed to be called upon app start.
          * @memberOf VIEWER
+         * @param {boolean} firstLoad true if this is the first load event for that viewer
          * @event open
          */
         viewer.raiseEvent('open', eventOpts);
@@ -1004,7 +1017,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             /**
              * First loading of the viewer from a clean state.
-             * @memberOf VIEWER
+             * @memberOf VIEWER_MANAGER
              * @event before-first-open
              */
             await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', {
@@ -1161,14 +1174,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         // Attach contextual config getters for this item
                         if (kind === "background") {
                             const bgIdx = ctx.bgIndexForItem(index);
-                            event.item.getConfig = (type) =>
+                            /**
+                             * @this {OpenSeadragon.TiledImage}
+                             * @function getConfig
+                             * @param {string} [type=undefined]
+                             * @memberof OpenSeadragon.TiledImage
+                             * @returns {BackgroundItem|VisualizationItem|undefined}
+                             */
+                            event.item.getConfig = type =>
                                 !type || type === "background" ? cfg.background[bgIdx] : undefined;
                         } else if (kind === "visualization") {
                             const vIdx = ctx.vizIndexForItem(index);
-                            event.item.getConfig = (type) =>
+                            event.item.getConfig = type =>
                                 !type || type === "visualization" ? cfg.visualizations[vIdx] : undefined;
                         } else {
-                            event.item.getConfig = () => undefined;
+                            event.item.getConfig = type => undefined;
                         }
                         resolve(true);
                     },
@@ -1189,7 +1209,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                             index,
                             success: event => {
                                 event.item.__targetIndex = index;
-                                event.item.getConfig = () => undefined;
+                                /**
+                                 * @this {OpenSeadragon.TiledImage}
+                                 * @function getConfig
+                                 * @param {string} [type=undefined]
+                                 * @memberof OpenSeadragon.TiledImage
+                                 * @returns {BackgroundItem|VisualizationItem|undefined}
+                                 */
+                                event.item.getConfig = type => undefined;
                                 resolve(false);
                             },
                             error: event => {
@@ -1214,20 +1241,24 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 for (const bgi of entry.bgIndices) {
                     const bg = bgs[bgi];
                     if (!bg) continue;
-                    const bgCopy = {...bg};
-                    if (isSecureMode) delete bgCopy.protocol;
-                    toOpen.push(bgUrlFromEntry(bgCopy));
-                    openedBase.push(bgCopy);
+                    if (!bg.id) {
+                        bg.id = data[bg.dataReference].replace("/|\\: ", "-");
+                    }
+                    if (isSecureMode) delete bg.protocol;
+                    toOpen.push(bgUrlFromEntry(bg));
+                    openedBase.push(bg);
                 }
             } else {
                 const bgi = entry.bgIndices[0];
                 if (Number.isInteger(bgi)) {
                     const bg = bgs[bgi];
                     if (bg) {
-                        const bgCopy = {...bg};
-                        if (isSecureMode) delete bgCopy.protocol;
-                        toOpen.push(bgUrlFromEntry(bgCopy));
-                        openedBase.push(bgCopy);
+                        if (!bg.id) {
+                            bg.id = data[bg.dataReference].replace("/|\\: ", "-");
+                        }
+                        if (isSecureMode) delete bg.protocol;
+                        toOpen.push(bgUrlFromEntry(bg));
+                        openedBase.push(bg);
                     }
                 }
             }

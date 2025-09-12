@@ -139,6 +139,7 @@ We will use [R] for required and [O] for optional parameters.
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
+    - [O]`id` - unique ID for the background, created automatically from data path if not defined
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
     - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)

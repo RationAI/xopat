@@ -227,11 +227,11 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         return serialize ? JSON.stringify(this._steps) : [...this._steps];
     }
 
-    async exportData() {
+    async exportData(key) {
         return this.exportJSON();
     }
 
-    async importData(data) {
+    async importData(key, data) {
         this.importJSON(data);
     }
 

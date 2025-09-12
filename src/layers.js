@@ -43,7 +43,6 @@ function initXopatLayers() {
 
     const namedCookieCache = parseStore('_layers.namedCache');
     const orderedCookieCache = parseStore('_layers.orderedCache');
-    let initialized = false;
 
     /**
      * Initialize Visualization (data group) from APPLICATION_CONTEXT.config setup
@@ -58,67 +57,6 @@ function initXopatLayers() {
             APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
         }
     }
-
-
-    /**
-     * Made with love by @fitri
-     * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
-     *
-     * Shader re-compilation and re-ordering logics
-     * Modified by Jiří
-     */
-    function enableDragSort(listId) {
-        UIComponents.Actions.draggable(listId, item => {
-            const id = item.dataset.id;
-            window.DropDown.bind(item, () => {
-                const currentMask = VIEWER.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
-                const clipSelected = currentMask === "clip";
-                const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
-
-                return [{
-                    title: $.t('main.shaders.defaultBlending'),
-                }, {
-                    title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
-                    selected: maskEnabled
-                }, {
-                    title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                    icon: "payments",
-                    styles: "padding-right: 5px;",
-                    action: (selected) => {
-                        const node = document.getElementById(`${id}-mode-toggle`);
-                        const newMode = selected ? "blend" : "clip";
-                        node.dataset.mode = newMode;
-                        if (!maskEnabled) {
-                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
-                        } else {
-                            UTILITIES.changeModeOfLayer(id, newMode, false);
-                        }
-                    },
-                    selected: clipSelected
-                }];
-            });
-        }, undefined, e => {
-            const listItems = Array.prototype.map.call(e.target.parentNode.children, child => child.dataset.id);
-            listItems.reverse();
-            // todo no change on the navigator...
-            VIEWER.drawer.renderer.setShaderLayerOrder(listItems);
-            VIEWER.drawer.rebuild();
-        })
-    }
-
-    VIEWER.drawer.renderer.addHandler('html-controls-created', e => {
-        enableDragSort("data-layer-options");
-        UTILITIES.updateUIForMissingSources();
-
-        /**
-         * Fired when visualization goal is set up and run, but before first rendering occurs.
-         * @property visualization visualization configuration used
-         * @memberOf VIEWER
-         * @event visualization-used
-         */
-        VIEWER.raiseEvent('visualization-used', e);
-    });
 
     /*---------------------------------------------------------*/
     /*------------ JS utilities and enhancements --------------*/
@@ -286,46 +224,12 @@ function initXopatLayers() {
     };
 
     /**
-     * @private
-     */
-    UTILITIES.updateUIForMissingSources = function () {
-        let layers = VIEWER.drawer.renderer.getAllShaders();
-        for (let key in layers) {
-            if (!layers.hasOwnProperty(key)) continue;
-
-            const shader = layers[key];
-
-            for (let source of shader.getConfig().tiledImages) {
-                const tiledImage = VIEWER.world.getItemAt(source);
-
-                if (typeof tiledImage?.source.getMetadata !== 'function') {
-                    console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
-                        'The visualization is unable to inspect problems with data sources.', tiledImage);
-                    continue;
-                }
-
-                const message = tiledImage.source.getMetadata();
-                if (message.error) {
-                    let node = $(`#${key}-shader-part`);
-                    const alert = new UI.Alert({
-                        mode: "warning",
-                        title: $.t('main.shaders.faulty'),
-                        description: `<code>${message.error}</code>`,
-                        compact: true
-                    });
-                    alert.prependedTo(node);
-                    break;
-                }
-            }
-        }
-    };
-
-    /**
      * Test for rendering capabilities
      * Throws error on failure
      * // todo implement
      */
     UTILITIES.testRendering = function (pixelErrThreshold = 10) {
+        console.error("Not implemented!");
         // //test 4X4 with heatmap shader
         // const webglModuleTest = new WebGLModule({
         //     webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),

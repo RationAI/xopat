@@ -38,6 +38,9 @@ Inside a plugin, at least this file must exist (otherwise the directory is not t
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
 
+##### Built-in options
+  - `ignorePostIO` - see below the default IO lifecycle
+
 ##### Custom keys
 A developer can provide custom parameters to `include.json` and retrieve them later in the code.
 A deployment maintainer then uses ENV setup (see `/env/README.md`) to override necessary values.
@@ -173,24 +176,77 @@ This (global) function will register the plugin and initialize it. It will make 
 >
 
 
-### IO Handling
-``bindIO`` method is available that explicitly enables IO support. You probably want to
-call (somewhere in the initialization phase, usually in `pluginReady()`) function `initPostIO`
-on itself as well as any other module that does not call it explicitly.
+## IO Handling
+Plugins are free to implement their own IO handling. If you are writing a plugin that connects e.g. annotations
+to some database, you can use (and the authors of the target plugin you want to save data from) rich event system
+to react upon the data item lifecycle.
+
+In case you are writing a plugin (or module) that has no given service it should save data to, you
+should:
+ - provide a way to export data via lifecycle of the data item(s) through events
+ - register to the default POST IO system the xOpat offers.
+
+This way, one can use static file export to share their data with others, or 
+turn on some storage logics for the data. In that case, the data source plugin or module can be disabled
+to load the POST IO data using ``ignorePostIO`` option (works only if the target interface implements `getOption()`).
+
+### Default POST IO
+
+> **IMPORTANT**: The IO distinguishes between global and viewer-local data. You can have two viewers open
+> at the same time and you need to deliver different data to each of them? Use the viewer local export.
+
+All you need to do is to override ``exportData`` and `importData` methods (for global)
+or ``exportViewerData`` and ``importViewerData`` methods (for viewer-local)
+in the element root class
+and call ``this.initPostIO()`` at the startup. You can call the initialization repeatedly
+for different keys.
+
+````js
+constructor(id) {
+    super(id);
+    this.initPostIO({
+        exportKey: "", // unique data-context key, default empty string
+        inViewerContext: false  // or true, in that case `exportViewerData` and `importViewerData` will be used
+    });
+}
+````
+
+If you want to have a custom logics with the IO initialization,
+you can override the initialization like this:
+````js
+async initPostIO(opts) {
+    const postStore = await super.initPostIO(opts);
+    if (postStore) {
+        //... do something
+        // e.g. read key 'key'
+        const data = await postStore.get('key');
+    }
+    return postStore;
+}
+````
+This might come in handy if you for example want to do additional IO initialization logics.
+
 
 > **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
 > ``plugin[<plugin_id>.key] = value;``. Nested keys are up to the plugin to manage for itself,
 > e.g. ``plugin[<plugin_id>.parentKey.subKey] = value;``.
 
-TODO docs
 The example below shows how to implement IO within with proper function overrides.
 ````js
-async exportData() {
-    return await this.export(); //our internal function returns a string promise
+async exportData(key) {
+    return await this.export(key); //our internal function returns a string promise
 }
 
-async importData(data) {
-    await this.import(data); //our import function expects data as a serialized string
+async importData(key, data) {
+    await this.import(key, data); //our import function expects data as a serialized string
+}
+
+async exportViewerData(viewer, key, viewerContextID) {
+    // somehow handle the export of data meant for a target viewer
+}
+
+async importViewerData(viewer, key, viewerContextID, data) {
+    // somehow handle the import of data meant for a target viewer
 }
 ````
 
