@@ -829,13 +829,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
          * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
-         * @param optionKey
-         * @param defaultValue
+         * @param {string} optionKey
+         * @param {*} defaultValue
+         * @param {boolean} cache
+         * @memberof XOpatModule
          * @return {*}
          */
         getOption(optionKey, defaultValue, cache=true) {
             //options are stored only for plugins, so we store them at the lowest level
-            let value = cache ? this.cache.get(key, null) : null;
+            let value = cache ? this.cache.get(optionKey, null) : null;
             if (value === null) {
                 value = this.__o[optionKey];
             }
@@ -1710,7 +1712,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         const store = element[STORE_TOKEN];
                         if (!store) continue;
 
-                        for (let key of store.keys()) {
+                        for (let key of await store.keys()) {
                             const keyParts = key.split("::");
                             if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
                             const data = await store?.get(key);

@@ -8,6 +8,13 @@ const HtmlRenderer = (htmlString) => {
 };
 
 /**
+ * @typedef {Object} BaseUIOptions
+ * @property {string} [id] - The id of the component
+ * @property {Object} [extraClasses] - Extra classes to be added to the component
+ * @property {Object} [extraProperties] - Extra properties to be added to the component
+ */
+
+/**
  * @class BaseComponent
  * @description The base class for all components
  */
@@ -27,7 +34,7 @@ class BaseComponent {
      *       super();  // must not sent arguments
      *       // custom arg system for a specific component, does not follow the generic arg system
      *   }
-     * @param {string|BaseComponent|Node|*} [options=undefined] - other options are defined in the constructor of the derived class,
+     * @param {BaseUIOptions|string|BaseComponent|Node} [options=undefined] - other options are defined in the constructor of the derived class,
      *  or a child node (first of children).
      * @param  {Array<string|BaseComponent|Node>} children - children.
      * @param {string} [options.id] - The id of the component
@@ -51,7 +58,12 @@ class BaseComponent {
             this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
             if (extraProperties){
                 for (let key in this.propertiesMap) {
-                    this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
+                    const value = this.propertiesMap[key];
+                    if (typeof value !== "string") {
+                        console.warn("Extra property setter set without extra definition in the component constructor!");
+                    } else {
+                        this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
+                    }
                 }
             }
             if (options.id) {

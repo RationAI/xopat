@@ -229,7 +229,7 @@ function initXopatLayers() {
      * // todo implement
      */
     UTILITIES.testRendering = function (pixelErrThreshold = 10) {
-        console.error("Not implemented!");
+        console.warn("Not implemented!");
         // //test 4X4 with heatmap shader
         // const webglModuleTest = new WebGLModule({
         //     webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),

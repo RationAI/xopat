@@ -273,7 +273,7 @@ class SyncAPIProxy extends APIProxy {
      */
     keys() {
         const store = this.__storage;
-        return Array.from(Array(store.length()).keys()).map(i => store.key(i));
+        return Array.from(Array(store.length).keys()).map(i => store.key(i));
     }
 }
 
@@ -335,7 +335,7 @@ class AsyncAPIProxy extends APIProxy {
      */
     async keys() {
         const store = this.__storage;
-        return Promise.all(Array.from(Array(store.length()).keys()).map(async i => await store.key(i)));
+        return Promise.all(Array.from(Array(store.length).keys()).map(async i => await store.key(i)));
     }
 }
 

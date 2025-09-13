@@ -91,7 +91,6 @@ class Toolbar extends BaseComponent{
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
-
         const b = new Button({
             id: this.id + "-b-" + item.id,
             base: "tab",
@@ -104,9 +103,9 @@ class Toolbar extends BaseComponent{
         }, inIcon, span(inText));
 
         let c = undefined;
-        if (content){
+        if (content) {
             c = new Div({ id: this.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
-        };
+        }
 
         return {headerButton: b, contentDiv: c};
 

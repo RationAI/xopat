@@ -1185,10 +1185,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} ownerPluginId
              * @param {string} toolsMenuId unique menu id
              * @param {string} title
-             * @param {string} html
-             * @param {string} icon
+             * @param {string|BaseComponent|Node} html
+             * @param {string} [icon=fa-wrench]
              */
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "") {
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench") {
                 const menu = new UI.Toolbar({
                     id: `toolbar-${ownerPluginId}`},
                     {
@@ -1196,14 +1196,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     icon: icon,
                     title: title,
                     body: [html],
-                    })
+                });
                 menu.attachTo($("#bottom-menu-center"));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
                 this.stayOnScreen(`toolbar-${ownerPluginId}`);
 
                 if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
-                };
+                }
 
                 // snapping  to left side if set in cookies
                 if (APPLICATION_CONTEXT.getOption(`toolbar-${ownerPluginId}-PositionLeft`) == 0){

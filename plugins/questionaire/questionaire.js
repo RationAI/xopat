@@ -35,7 +35,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
         });
     }
 
-
     async exportData(key) {
         return this._savedSchema ? JSON.stringify(this._savedSchema) : undefined;
     }
@@ -117,7 +116,8 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this._schema = this._ensurePerPageBg(this._loadSchema() || this.DEFAULT_SCHEMA);
         this._saveSchema(this._schema);
         const draft = this._loadDraft();
-        this._renderForm(this._schema, draft, { restorePage: 0, applyBg: true });
+        // todo first page is not consistent but applyBG fires the reloading twice -> make sure we hook before viewer loaded and adjust the active state
+        this._renderForm(this._schema, draft, { restorePage: 0, applyBg: false });
     }
 
     // ========== pretty header (DaisyUI) ==========

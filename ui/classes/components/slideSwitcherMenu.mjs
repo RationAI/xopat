@@ -252,7 +252,7 @@ export class SlideSwitcherMenu extends BaseComponent {
                 imageEl.setAttribute("draggable", "false")
                 imageEl.id = `${this.windowId}-thumb-${idx}`;
                 return; // image element handled
-            } else if (typeof eventArgs.imagePreview !== "string" && (!eventArgs.imagePreview instanceof Image)) {
+            } else if (typeof eventArgs.imagePreview !== "string" && !(eventArgs.imagePreview instanceof Image)) {
                 eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
                 imageEl.onload = imageEl.onerror = () => URL.revokeObjectURL(eventArgs.imagePreview);
             }

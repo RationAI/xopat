@@ -10,7 +10,6 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this._steps = [];
         this._currentStep = null;
         this.initPostIO(); //todo consider delegation to plugins that use snapshots
-        this._deprecated_IO_API();
         this._utils = VIEWER.tools;
 
         this._captureVisualization = false;
@@ -337,18 +336,6 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
             index: this.viewer.bridge.currentVisualizationIndex(),
             cache: shadersCache,
             order: [...vis.order]
-        }
-    }
-
-    _deprecated_IO_API() {
-        let importedJson = this.POSTStore.get("snapshot-keyframes");
-        if (importedJson) {
-            try {
-                this.importJSON(JSON.parse(importedJson));
-            } catch (e) {
-                console.warn(e);
-                Dialogs.show("Failed to load keyframes: try to load them manually if you have (or extract from the exported file).", 20000, Dialogs.MSG_ERR);
-            }
         }
     }
 

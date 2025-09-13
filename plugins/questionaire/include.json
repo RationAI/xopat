@@ -8,6 +8,5 @@
     "formio.full.min.js",
     "questionaire.js"
   ],
-  "modules": [],
-  "permaLoad": true
+  "modules": []
 }
