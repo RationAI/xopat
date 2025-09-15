@@ -63,7 +63,7 @@ class MultiPanelMenu extends Menu {
         const tab = new MultiPanelMenuTab(item,this);
         this.tabs[item.id] = tab;
 
-        switch (this.design) {
+        switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
                 break;

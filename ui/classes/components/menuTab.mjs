@@ -25,7 +25,7 @@ class MenuTab extends BaseComponent {
         this.parent = parent;
         this.style = "ICONTITLE";
         this.styleOverride = item["styleOverride"] || false;
-        this.focused = false;
+        this._focused = false;
         this.hidden = false;
         this.id = item.id;
 
@@ -84,7 +84,7 @@ class MenuTab extends BaseComponent {
             }
         };
 
-        if (this.focused) {
+        if (this._focused) {
             APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
             this._removeFocus();
         } else {
@@ -99,7 +99,7 @@ class MenuTab extends BaseComponent {
     }
 
     _setFocus() {
-        this.focused = true;
+        this._focused = true;
         this.headerButton.setClass("type", "btn-secondary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "");
@@ -107,7 +107,7 @@ class MenuTab extends BaseComponent {
     }
 
     _removeFocus() {
-        this.focused = false;
+        this._focused = false;
         this.headerButton.setClass("type", "btn-primary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");

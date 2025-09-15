@@ -121,7 +121,7 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     focus() {
-        if (this.focused) {
+        if (this._focused) {
             APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
             this._removeFocus();
         } else {
@@ -131,7 +131,7 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     _setFocus() {
-        this.focused = true;
+        this._focused = true;
 
         this.openDiv.setClass("display", "");
         this.mainDiv.setClass("background", "bg-base-200");
@@ -140,7 +140,7 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     _removeFocus() {
-        this.focused = false;
+        this._focused = false;
 
         this.openDiv.setClass("display", "hidden");
         this.mainDiv.setClass("background", "");

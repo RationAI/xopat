@@ -98,10 +98,10 @@ class Button extends BaseComponent {
         const nodes = this.children;
         for (let n of nodes){
             if (n.nodeName === "I"){
-                if(this.orientation==="b-vertical-right"){
+                if(this._orientation==="b-vertical-right"){
                     n.classList.add("rotate-90");
                 
-                } else if(this.orientation==="b-vertical-left"){
+                } else if(this._orientation==="b-vertical-left"){
                     n.classList.add("-rotate-90");
                 }
             }

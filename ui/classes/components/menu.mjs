@@ -33,9 +33,9 @@ class Menu extends BaseComponent {
         options = super(options, ...args).options;
 
         this.tabs = {};
-        this.focused = undefined;
-        this.orientation = "TOP";
-        this.design = "TITLEICON";
+        this._focused = undefined;
+        this._orientation = "TOP";
+        this._design = "TITLEICON";
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
@@ -117,7 +117,7 @@ class Menu extends BaseComponent {
 
 
         tab.headerButton.setClass("join", "join-item");
-        switch (this.design) {
+        switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
                 break;
@@ -148,7 +148,7 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
-        switch (this.design) {
+        switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
                 break;
@@ -175,7 +175,7 @@ class Menu extends BaseComponent {
     focus(id) {
         if (id in this.tabs) {
             this.tabs[id].focus();
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -185,7 +185,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab.focus();
         }
-        this.focused = "all";
+        this._focused = "all";
     }
 
     /**
@@ -195,7 +195,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab.unfocus();
         }
-        this.focused= undefined;
+        this._focused= undefined;
     }
 
     /**
@@ -327,25 +327,25 @@ window["workspaceItem"].deleteTab("s3");
 Menu.ORIENTATION = {
     TOP: function () {
         this.setClass("flex", "flex-col");
-        this.orientation = "TOP";
+        this._orientation = "TOP";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
         for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
-        this.orientation = "BOTTOM";
+        this._orientation = "BOTTOM";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
         for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
-        this.orientation = "LEFT";
+        this._orientation = "LEFT";
         this.header.set(ui.Join.STYLE.VERTICAL);
         for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
-        this.orientation = "RIGHT";
+        this._orientation = "RIGHT";
         this.header.set(ui.Join.STYLE.VERTICAL);
         for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
     }
@@ -358,15 +358,15 @@ Menu.BUTTONSIDE = {
 
 Menu.DESIGN = {
     ICONONLY: function () {
-        this.design = "ICONONLY";
+        this._design = "ICONONLY";
         for (let t of Object.values(this.tabs)) { t.iconOnly(); t.iconRotate(); }
     },
     TITLEONLY: function () {
-        this.design = "TITLEONLY";
+        this._design = "TITLEONLY";
         for (let t of Object.values(this.tabs)) { t.titleOnly(); t.iconRotate(); }
     },
     TITLEICON: function () {
-        this.design = "TITLEICON";
+        this._design = "TITLEICON";
         for (let t of Object.values(this.tabs)) { t.titleIcon(); t.iconRotate(); }
     }
 }

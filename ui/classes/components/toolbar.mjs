@@ -31,10 +31,10 @@ class Toolbar extends BaseComponent{
 
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
-        this.design = options.design || "TITLEICON";
+        this._design = options.design || "TITLEICON";
 
         this.tabs = {};
-        this.focused = undefined;
+        this._focused = undefined;
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
@@ -135,7 +135,7 @@ class Toolbar extends BaseComponent{
             if (this.tabs[id].contentDiv) {
                 this.tabs[id].contentDiv.setClass("display", "");
             }
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -151,7 +151,7 @@ class Toolbar extends BaseComponent{
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused= undefined;
+        this._focused= undefined;
     }
 
 }
