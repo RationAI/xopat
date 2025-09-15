@@ -48,13 +48,14 @@ class Menu extends BaseComponent {
             }
             this.addTab(i);
         }
-
+        
         this.classMap["base"] = "flex gap-1 h-full";
-        this.classMap["orientation"] = Menu.ORIENTATION.TOP;
-        this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
-        this.classMap["design"] = Menu.DESIGN.TITLEICON;
-        this.classMap["rounded"] = Menu.ROUNDED.DISABLE;
         this.classMap["flex"] = "flex-col";
+
+        this.options["orientation"] = Menu.ORIENTATION.TOP;
+        this.options["buttonSide"] = Menu.BUTTONSIDE.LEFT;
+        this.options["design"] = Menu.DESIGN.TITLEICON;
+        this.options["rounded"] = Menu.ROUNDED.DISABLE;
 
         this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
         this._children = [];
