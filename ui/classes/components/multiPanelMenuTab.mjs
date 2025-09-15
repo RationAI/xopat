@@ -87,7 +87,7 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px; pointer-events: auto;" },
             onClick: () => {
                 this.focus();
             },
@@ -134,6 +134,7 @@ class MultiPanelMenuTab extends MenuTab {
 
         this.openDiv.setClass("display", "");
         this.mainDiv.setClass("background", "bg-base-200");
+        this.mainDiv.setClass("pointer-events", "pointer-events-auto");
     }
 
     _removeFocus() {
@@ -141,6 +142,7 @@ class MultiPanelMenuTab extends MenuTab {
 
         this.openDiv.setClass("display", "hidden");
         this.mainDiv.setClass("background", "");
+        this.mainDiv.setClass("pointer-events", "pointer-events-none");
     }
 
     close() {
