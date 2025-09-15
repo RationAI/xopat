@@ -48,10 +48,11 @@ class MultiPanelMenuTab extends MenuTab {
 
         const pinIcon = new FAIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "fa-thumbtack" });
         this.pin = new Button({
-            id: this.parent.id + "-b-opened" + item.id,
+            id: this.parent.id + "-b-pin-" + item.id,
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
+            extraClasses: { display: "display-none" },
             extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
             onClick: (event) => {
                 this.togglePinned();
@@ -87,7 +88,7 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px; pointer-events: auto;" },
             onClick: () => {
                 this.focus();
             },
@@ -120,7 +121,7 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     focus() {
-        if (this.focused) {
+        if (this._focused) {
             APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
             this._removeFocus();
         } else {
@@ -130,17 +131,21 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     _setFocus() {
-        this.focused = true;
+        this._focused = true;
 
         this.openDiv.setClass("display", "");
         this.mainDiv.setClass("background", "bg-base-200");
+        this.mainDiv.setClass("pointer-events", "pointer-events-auto");
+        this.pin.setClass("display", "");
     }
 
     _removeFocus() {
-        this.focused = false;
+        this._focused = false;
 
         this.openDiv.setClass("display", "hidden");
         this.mainDiv.setClass("background", "");
+        this.mainDiv.setClass("pointer-events", "pointer-events-none");
+        this.pin.setClass("display","display-none");
     }
 
     close() {

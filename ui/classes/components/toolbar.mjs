@@ -33,13 +33,13 @@ class Toolbar extends BaseComponent {
 
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
-        this.design = options.design || "TITLEICON";
+        this._design = options.design || "TITLEICON";
         if (options.horizontalOnly) {
             this.classMap["min-width"] = "min-w-max";
         }
 
         this.tabs = {};
-        this.focused = undefined;
+        this._focused = undefined;
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed", events: "pointer-events-auto" }});
@@ -123,7 +123,7 @@ class Toolbar extends BaseComponent {
                     display: ${this.display};
                     z-index: 1000;`},
             div({class: "handle badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", style: "width: min(180px, 90%);"},
-                i({class: "fa-solid fa-grip-horizontal"}), i({class: "fa-solid fa-grip-horizontal"})),
+                i({class: "fa-solid fa-grip-horizontal"})),
             this.body.create()
         );
     }
@@ -140,7 +140,7 @@ class Toolbar extends BaseComponent {
             if (this.tabs[id].contentDiv) {
                 this.tabs[id].contentDiv.setClass("display", "");
             }
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -156,7 +156,7 @@ class Toolbar extends BaseComponent {
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused = undefined;
+        this._focused = undefined;
     }
 }
 

@@ -207,3 +207,11 @@ button div {
 .opaque-bg {
     background-color: rgba(0, 0, 0, 0.406);
 }
+
+.pointer-events-auto {
+    pointer-events: auto;
+}
+
+.pointer-events-none {
+    pointer-events: none;
+}

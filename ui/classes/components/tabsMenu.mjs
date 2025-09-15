@@ -7,14 +7,14 @@ import { Menu } from "./menu.mjs";
 
 const { div, span } = van.tags
 
-class TabsMenu extends BaseComponent {
+class TabsMenu extends Menu {
 
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
 
         this.tabs = {};
-        this.focused = undefined;
-        this.design = options.design || Menu.DESIGN.TITLEICON;
+        this._focused = undefined;
+        this._design = options.design || Menu.DESIGN.TITLEICON;
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
@@ -49,7 +49,7 @@ class TabsMenu extends BaseComponent {
         const tab = this._createTab(item);
         this.tabs[item.id] = tab;
 
-        if (!this.focused) {
+        if (!this._focused) {
             this.focus(item.id);
         }
 
@@ -99,7 +99,7 @@ class TabsMenu extends BaseComponent {
             if (this.tabs[id].contentDiv) {
                 this.tabs[id].contentDiv.setClass("display", "");
             }
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -115,7 +115,7 @@ class TabsMenu extends BaseComponent {
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused = undefined;
+        this._focused = undefined;
     }
 
 }
