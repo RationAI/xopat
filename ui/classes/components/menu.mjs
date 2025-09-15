@@ -233,15 +233,7 @@ class Menu extends BaseComponent {
         }
     }
 
-    appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-        const titleHtmlIn = div();
-        titleHtmlIn.innerHTML = titleHtml;
-
-        const htmlIn = div();
-        htmlIn.innerHTML = html;
-
-        const hiddenHtmlIn = div();
-        hiddenHtmlIn.innerHTML = hiddenHtml;
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
 
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
@@ -256,13 +248,13 @@ class Menu extends BaseComponent {
                         class: "d-inline-block h3 btn-pointer",},
                         title,
                     ),
-                    titleHtmlIn,
+                    this.toNode(titleItem),
                 ),
                 div({ class: "inner-panel-visible" },
-                    htmlIn,
+                    this.toNode(item),
                 ),
                 div({ class: "inner-panel-hidden" },
-                    hiddenHtmlIn,
+                    this.toNode(hiddenItem),
                 ),
             );  
 

@@ -4,7 +4,7 @@ import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import van from "../../vanjs.mjs";
 
-const { div, span } = van.tags;
+const { div, span, i } = van.tags;
 
 /**
  * @class Toolbar
@@ -19,10 +19,12 @@ const { div, span } = van.tags;
  *      body: [span("Content for Tab 1")]
  * });
  */
-class Toolbar extends BaseComponent{
+class Toolbar extends BaseComponent {
     /**
      * 
-     * @param {*} options
+     * @param {BaseUIOptions} options
+     * @param {string} options.design
+     * @param {boolean} options.horizontalOnly
      * @param {*} args
      */
     constructor(options = undefined, ...args) {
@@ -32,13 +34,16 @@ class Toolbar extends BaseComponent{
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
         this.design = options.design || "TITLEICON";
+        if (options.horizontalOnly) {
+            this.classMap["min-width"] = "min-w-max";
+        }
 
         this.tabs = {};
         this.focused = undefined;
 
         // TODO why is there join-horizontal???
-        this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
-        this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed", margin: "m-0" } });
+        this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed", events: "pointer-events-auto" }});
+        this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed", margin: "m-0", events: "pointer-events-auto" } });
 
         if (args.length === 0){
             this.display = "none";
@@ -77,7 +82,6 @@ class Toolbar extends BaseComponent{
         } else{
             this.header.setClass("display", "");
         }
-
     }
 
     /**
@@ -112,14 +116,15 @@ class Toolbar extends BaseComponent{
     }
 
     create() {
-        return div({id: `${this.id}`, class: "draggable boxed", 
-                    style: `position: fixed; 
-                            left: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionLeft`, 50)}px; 
-                            top: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionTop`, 50)}px; 
-                            display: ${this.display};
-                            z-index: 1000;`},
-                    div({class: "handle"}, "----"),
-                    this.body.create()
+        return div({id: `${this.id}`, class: "draggable flex flex-column bg-transparent pointer-events-none",
+            style: `position: fixed; 
+                    left: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionLeft`, 50)}px; 
+                    top: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionTop`, 50)}px; 
+                    display: ${this.display};
+                    z-index: 1000;`},
+            div({class: "handle badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", style: "width: min(180px, 90%);"},
+                i({class: "fa-solid fa-grip-horizontal"}), i({class: "fa-solid fa-grip-horizontal"})),
+            this.body.create()
         );
     }
 
@@ -151,9 +156,8 @@ class Toolbar extends BaseComponent{
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused= undefined;
+        this.focused = undefined;
     }
-
 }
 
 export { Toolbar };

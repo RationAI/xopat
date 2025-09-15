@@ -173,10 +173,7 @@ button div {
 }
 
 .draggable {
-
-    background-color: var(--fallback-b2,oklch(var(--b3)/var(--tw-bg-opacity)));
     border-radius: var(--rounded-btn, 0.5rem);;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     cursor: grab; 
 
     position: absolute; 

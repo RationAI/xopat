@@ -143,24 +143,6 @@ class Dropdown extends BaseComponent {
 
     /* ---------------- rendering ---------------- */
 
-    _toNode(v) {
-        if (v == null) return document.createTextNode("");
-        if (v instanceof Node) return v;
-        if (v instanceof BaseComponent) return v.create?.() ?? document.createTextNode("");
-        if (typeof v === "string") {
-            const s = v.trim();
-            if (s.startsWith("<")) {
-                const wrap = document.createElement("div");
-                wrap.innerHTML = s;
-                const frag = document.createDocumentFragment();
-                Array.from(wrap.childNodes).forEach(n => frag.appendChild(n));
-                return frag;
-            }
-            return span(s);
-        }
-        return span(String(v));
-    }
-
     _renderIcon(icon) {
         return new FAIcon({name: icon}).create();
     }
@@ -191,8 +173,8 @@ class Dropdown extends BaseComponent {
 
         // Row body (label + optional sub)
         const labelBlock = div({ class: "flex-1 min-w-0" },
-            typeof item.label === "string" ? span({ class: "truncate" }, item.label) : this._toNode(item.label),
-            item.sub ? div({ class: "text-xs opacity-60 truncate" }, this._toNode(item.sub)) : null
+            typeof item.label === "string" ? span({ class: "truncate" }, item.label) : this.toNode(item.label),
+            item.sub ? div({ class: "text-xs opacity-60 truncate" }, this.toNode(item.sub)) : null
         );
 
         return li(

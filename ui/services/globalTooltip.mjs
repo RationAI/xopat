@@ -1,16 +1,8 @@
 // ui/services/globalTooltip.mjs
 import van from "../vanjs.mjs";
+import {BaseComponent} from "../classes/baseComponent.mjs";
 
 const { div } = van.tags;
-
-// Helpers
-const isHtml = v => typeof v === "string" && v.trim().startsWith("<");
-const setContent = (host, v) => {
-    host.innerHTML = "";
-    if (v == null) return;
-    if (isHtml(v)) host.innerHTML = v;
-    else host.append(v instanceof Node ? v : document.createTextNode(String(v)));
-};
 
 // Placement + math
 function computePosition(anchorRect, tipRect, placement, gap = 8) {
@@ -125,7 +117,7 @@ class GlobalTooltip {
         const { content, placement = "bottom", offset = 8, interactive = true } = options;
         this.current = { el, options: { placement, offset, interactive } };
 
-        setContent(this.host, content);
+        this.host.replaceChildren(BaseComponent.toNode(content));
         this.surface.style.display = "block";
         this.surface.classList.remove("opacity-0", "scale-95");
         this.surface.classList.add("opacity-100", "scale-100");
@@ -192,7 +184,7 @@ class GlobalTooltip {
     unbind(el) { this._unbind(el); if (this.current?.el === el) this.hide(); }
     update(el, { content } = {}) {
         if (this.current?.el === el && content !== undefined) {
-            setContent(this.host, content);
+            this.host.replaceChildren(BaseComponent.toNode(content));
             this.reposition();
         }
     }

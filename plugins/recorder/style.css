@@ -6,19 +6,19 @@
     padding-right: 5px;
 }
 
-.timeline-point input {
-    width: 50px;
-    height: 27px;
-}
+/*.timeline-point input {*/
+/*    width: 50px;*/
+/*    height: 27px;*/
+/*}*/
 
-.timeline-path input {
-    background: transparent;
-    border: none;
-    width: 25px;
-    text-align: right;
-    padding-right: 0;
-    padding-left: 4px;
-}
+/*.timeline-path input {*/
+/*    background: transparent;*/
+/*    border: none;*/
+/*    width: 25px;*/
+/*    text-align: right;*/
+/*    padding-right: 0;*/
+/*    padding-left: 4px;*/
+/*}*/
 
 .selected .timeline-point {
     background: var(--color-bg-danger-inverse);

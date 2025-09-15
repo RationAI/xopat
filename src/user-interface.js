@@ -610,6 +610,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         // TODO make new component for main-panel -> add methods from user-interface RightSideMenu
         // `<div id="${id}" -> id MENU, on components we will access through API
+        // `<div id="${id}" -> id MENU, on components we will access through API
         // class="inner-panel ${pluginId}-plugin-root -> must be for every top level component of some plugin
         // firstly we add plugin div and in it there will be our UI component hiearchy
         // advanced menu shoudl be equiallent to our Menu, submenu -> creates menu in menu
@@ -649,8 +650,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     ),
                   );
 
-                theme = APPLICATION_CONTEXT.getOption("theme");
-                themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
+                let theme = APPLICATION_CONTEXT.getOption("theme");
+                let themePretty = theme === "auto" ? "Automatic" : theme === "light" ? "Light Theme" : "Dark Theme";
 
                 const themeSelect = new UI.Select(
                     { id: "theme-select", onchange: function () {USER_INTERFACE.Tools.changeTheme(this.value)}, title: $.t('settings.theme.title') },
@@ -713,9 +714,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('webglDebugMode', false)),
                   ),
                 );
-                result = new UI.Div({ id: "settings-menu" }, settings, notification, logo);
-
-                return result;
+                return new UI.Div({id: "settings-menu"}, settings, notification, logo);
             },
             createCheckbox: function (id, text, onchangeFunction, checked) {
                 const cb = new UI.Checkbox({
@@ -766,7 +765,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 if (pluginCount < 1) {
-                    emptyPlugin = {
+                    let emptyPlugin = {
                         id: "_undefined_",
                         name: $.t('plugins.noPluginsAvailable'),
                         description: $.t('plugins.noPluginsDetails'),
@@ -1042,7 +1041,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         RightSideMenu: {
             context: $("#right-side-menu"),
-            menu: "",
+            menu: undefined,
 
             init: function () {
                 const { div } = van.tags;
@@ -1082,8 +1081,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
             },
             CreateSlideTop: function () {
-                const { input } = van.tags;
-
                 const text = new UI.Div(
                     {id: "tissue-title-content",
                     class: "",
@@ -1112,9 +1109,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     extraProperties: { title: $.t('main.bar.copy'), style: "width: 30px" },
                 }, new UI.FAIcon({ name: "fa-copy" }),);
 
-
-                const menu = new UI.Join({style: UI.Join.STYLE.HORIZONTAL, id: "tissue-title-header", extraClasses: {width: "w-full"}}, checkbox, text, copyButton);
-                return menu;
+                return new UI.Join({
+                    style: UI.Join.STYLE.HORIZONTAL,
+                    id: "tissue-title-header",
+                    extraClasses: {width: "w-full"}
+                }, checkbox, text, copyButton);
             },
 
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
@@ -1185,18 +1184,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} ownerPluginId
              * @param {string} toolsMenuId unique menu id
              * @param {string} title
-             * @param {string|BaseComponent|Node} html
+             * @param {UIElement} html
              * @param {string} [icon=fa-wrench]
+             * @param {boolean} forceHorizontal
              */
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench") {
-                const menu = new UI.Toolbar({
-                    id: `toolbar-${ownerPluginId}`},
+            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
+                const menu = new UI.Toolbar(
+                    {id: `toolbar-${ownerPluginId}`},
                     {
-                    id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
-                    icon: icon,
-                    title: title,
-                    body: [html],
-                });
+                        id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
+                        icon: icon,
+                        title: title,
+                        body: [html],
+                    }
+                );
                 menu.attachTo($("#bottom-menu-center"));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
                 this.stayOnScreen(`toolbar-${ownerPluginId}`);
@@ -1581,27 +1582,8 @@ ${label}
          * @param {string} selector jquery selector where to append, default 'body'
          */
         addHtml: function(html, pluginId, selector="body") {
-            function materialize(htmlLike) {
-                if (htmlLike == null) return [];
-                if (typeof htmlLike === "string") return htmlLike;
-                if (htmlLike.jquery) return htmlLike;
-                if (Array.isArray(htmlLike)) return htmlLike.map(materialize);
-
-                // BaseComponent instance (your components have create() or render())
-                if (htmlLike instanceof UI.BaseComponent ||
-                    (htmlLike && typeof htmlLike === "object" && (htmlLike.create || htmlLike.render))) {
-                    return (htmlLike.render?.() ?? htmlLike.create?.() ?? htmlLike.el ?? htmlLike.element ?? htmlLike);
-                }
-
-                // DOM Node / DocumentFragment
-                if (htmlLike.nodeType || htmlLike instanceof Node) return htmlLike;
-
-                // Fallback: stringify
-                return String(htmlLike);
-            }
-
             try {
-                $(materialize(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                $(UI.BaseComponent.parseDomLikeItem(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

@@ -1,17 +1,25 @@
 import van from "../vanjs.mjs";
-const { span } = van.tags;
+const { span, div } = van.tags;
 
-const HtmlRenderer = (htmlString) => {
-    const container = van.tags.div(); // Create a container div
-    container.innerHTML = htmlString; // Set innerHTML to render safely
-    return container;
+const HtmlRenderer = v => {
+    const s = v.trim();
+    if (s.startsWith("<")) {
+        const wrap = div();
+        wrap.innerHTML = s;
+        return wrap;
+    }
+    return span(s);
 };
 
 /**
  * @typedef {Object} BaseUIOptions
  * @property {string} [id] - The id of the component
- * @property {Object} [extraClasses] - Extra classes to be added to the component
+ * @property {Object|string} [extraClasses] - Extra classes to be added to the component
  * @property {Object} [extraProperties] - Extra properties to be added to the component
+ */
+
+/**
+ * @typedef {Node|BaseComponent|string} UIElement
  */
 
 /**
@@ -34,9 +42,9 @@ class BaseComponent {
      *       super();  // must not sent arguments
      *       // custom arg system for a specific component, does not follow the generic arg system
      *   }
-     * @param {BaseUIOptions|string|BaseComponent|Node} [options=undefined] - other options are defined in the constructor of the derived class,
+     * @param {BaseUIOptions|UIElement} [options=undefined] - other options are defined in the constructor of the derived class,
      *  or a child node (first of children).
-     * @param  {Array<string|BaseComponent|Node>} children - children.
+     * @param  {Array<UIElement>} children - children.
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...children) {
@@ -53,7 +61,13 @@ class BaseComponent {
 
         if (options) {
             const extraClasses = options["extraClasses"];
-            this.classMap = typeof extraClasses === "object" ? extraClasses : {};
+            const clsType = typeof extraClasses;
+            if (clsType === "string") {
+                this.classMap = { ...extraClasses.split(" ") };
+            } else {
+                this.classMap = typeof extraClasses === "object" ? extraClasses : {};
+            }
+            this.classState.val = Object.values(this.classMap).join("")
             const extraProperties = options["extraProperties"];
             this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
             if (extraProperties){
@@ -174,21 +188,7 @@ class BaseComponent {
      */
     get children() {
         if (this._renderedChildren) return this._renderedChildren;
-        this._renderedChildren = (this._children || []).map(child => {
-            if (child instanceof BaseComponent) {
-                child.refreshClassState();
-                child.refreshPropertiesState();
-                return child.create();
-            }
-            if (child instanceof Element) {
-                return child;
-            }
-            if (typeof child === "string") {
-                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : span(child);
-            }
-            console.warn(`Invalid child component provided - ${typeof child}:`, child);
-            return undefined;
-        }).filter(Boolean);
+        this._renderedChildren = (this._children || []).map(this.toNode).filter(Boolean);
         return this._renderedChildren;
     }
 
@@ -202,7 +202,7 @@ class BaseComponent {
                 id: this.id,
                 class: this.classState
             };
-        };
+        }
 
         return {
             class: this.classState
@@ -238,10 +238,90 @@ class BaseComponent {
 
     /**
      * @description Create the component
-     * it needs to be overridden by the derived class
+     * it needs to be overridden by the derived class.
      */
     create() {
         throw new Error("Component must override create method");
+    }
+
+    /**
+     * Prepare Element to be insertable into DOM
+     * @param {UIElement} item
+     * @param {boolean} reinit if true, BaseComponent's init methods are called before creation
+     * @return Node
+     */
+    toNode(item, reinit = true) {
+        if (item === undefined) return undefined;
+        if (item instanceof BaseComponent) {
+            if (reinit) {
+                item.refreshClassState();
+                item.refreshPropertiesState();
+            }
+            return item.create();
+        }
+        if (item instanceof Node) {
+            return item;
+        }
+        if (typeof item === "string") {
+            return item.trimStart().startsWith("<") ? HtmlRenderer(item) : span(item);
+        }
+        console.warn(`Invalid child component provided - ${typeof item}:`, item);
+        return undefined;
+    }
+
+    /**
+     * Prepare Element to be insertable into DOM - available also as a static method
+     * @param {UIElement} item
+     * @param {boolean} reinit if true, BaseComponent's init methods are called before creation
+     * @return Node
+     */
+    static toNode(item, reinit = true) {
+        if (item === undefined) return undefined;
+        if (item instanceof BaseComponent) {
+            if (reinit) {
+                item.refreshClassState();
+                item.refreshPropertiesState();
+            }
+            return item.create();
+        }
+        if (item instanceof Node) {
+            return item;
+        }
+        if (typeof item === "string") {
+            return item.trimStart().startsWith("<") ? HtmlRenderer(item) : span(item);
+        }
+        console.warn(`Invalid child component provided - ${typeof item}:`, item);
+        return undefined;
+    }
+
+    /**
+     * Safely Parse Any argument to Dom-attachable object - available also as a static method.
+     * @param {*} item
+     * @param {boolean} reinit if true, BaseComponent's init methods are called before creation
+     * @return Node|Node[]|string|string[]
+     */
+    static parseDomLikeItem(item, reinit = true) {
+        if (item == null) return [];
+        if (typeof item === "string") return item;
+        if (item.jquery) return item;
+        if (Array.isArray(item)) return item.map(this.parseDomLikeItem);
+
+        // BaseComponent instance (your components have create() or render())
+        if (item instanceof UI.BaseComponent ||
+            (item && typeof item === "object" && item.create)) {
+            if (reinit) {
+                item.refreshClassState();
+                item.refreshPropertiesState();
+            }
+            return item.create();
+        }
+
+        // DOM Node / DocumentFragment
+        if (item.nodeType || item instanceof Node) return item;
+
+        // Fallback: stringify
+        console.warn(`Component ${typeof item} probably not parseable: stringified.`, item);
+        return String(item);
     }
 
     /**

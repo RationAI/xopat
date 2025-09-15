@@ -27,6 +27,7 @@ import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
 import { SlideSwitcherMenu } from "./classes/components/slideSwitcherMenu.mjs";
 import { MainLayout } from "./classes/components/mainLayout.mjs";
 import { Toast } from "./classes/components/toast.mjs"
+import { Input } from "./classes/elements/input.mjs";
 
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
@@ -34,7 +35,7 @@ const UI = {
     BaseComponent,
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
     Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip, StretchGrid,
-    FloatingWindow, SlideSwitcherMenu, MainLayout, Toast
+    FloatingWindow, SlideSwitcherMenu, MainLayout, Toast, Input
 };
 globalThis.UI = UI;
 

@@ -627,6 +627,7 @@ input.selectable-image-row-context:checked + div {
     height: 100% !important;
 }
 a {cursor: pointer;}
+input {background-color: inherit;}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
 ::-webkit-scrollbar {background: transparent;margin: 25px 0 25px 0;width: 14px;height: 14px;}

@@ -57,6 +57,13 @@ was properly opened, or just shows cached session and possibly replace it with m
 
 Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
 
+#### `viewer-create` | e: `{id: string, index: Number, viewer: OpenSeadragon.Viewer}
+New viewer is added at position ``index`` in the screen.
+
+#### `viewer-destory` | e: `{id: string, index: Number, viewer: OpenSeadragon.Viewer}
+Existing viewer is removed at position ``index`` in the screen. Existing viewers shrink
+so that the index is occupied if ``viewers.length > index``.
+
 #### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
 Fired when the UI wants to know what is a slide _preview url_, which can be constructed
 from ``server`` on which `image` slide identification lives. If `imagePreview`

@@ -647,6 +647,29 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param data {any} data
          */
         async importViewerData(viewer, key, viewerTargetID, data) {}
+
+        /**
+         * Get context of viewer that is suitable for storing viewer-related data.
+         * @param id
+         * @return {{}|undefined}
+         */
+        getViewerContext(id) {
+            const viewer = VIEWER_MANAGER.getViewer(id);
+            if (!viewer) {
+                console.warn("No viewer with id " + id);
+                return undefined;
+            }
+            let store = viewer[STORE_TOKEN];
+            if (!store) {
+                viewer[STORE_TOKEN] = store = {};
+            }
+            let elementStore = store[this.uid];
+            if (!elementStore) {
+                store[this.uid] = elementStore = {};
+            }
+            return elementStore;
+        }
+
         /**
          * TODO: this does not wait once module is fully loaded!
          * @param moduleId
@@ -1496,6 +1519,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
+         * Get viewer by ID
+         * @param id
+         * @return OpenSeadragon.Viewer
+         */
+        getViewer(id) {
+            return this.viewers.find(v => v.id === id);
+        }
+
+        /**
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          * @param {number} index - Zero-based viewer slot index.
@@ -1697,6 +1729,16 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         let relative_y = Math.round((y / tile.size.y) * canvasCtx.canvas.height);
                         return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
                     }
+
+                    /**
+                     * Raised when a new viewer comes into the play. Index is the index-position on the screen.
+                     * @param {OpenSeadragon.Viewer} viewer
+                     * @param {string} id
+                     * @param {Number} index
+                     * @event viewer-create
+                     * @memberof VIEWER_MANAGER
+                     */
+                    this.raiseEvent('viewer-create', {viewer, id: cellId, index });
                 }
 
                 // Every load event, update data
@@ -1916,10 +1958,31 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             const viewer = this.viewers[index];
             if (!viewer) return;
 
-            try { viewer.destroy(); } catch (_) {}
+            /**
+             * Raised when an existing viewer is removed from the grid layout. Called before the viewer
+             * is actually removed along with all its data.
+             * @param {OpenSeadragon.Viewer} viewer
+             * @param {string} id
+             * @param {Number} index
+             * @event viewer-destroy
+             * @memberof VIEWER_MANAGER
+             */
+            this.raiseEvent('viewer-destroy', {viewer, id: viewer.id, index });
 
-            this.viewers.splice(index, 1);
-            this.layout.removeAt(index);
+            try {
+                viewer.destroy();
+                this.viewers.splice(index, 1);
+                this.layout.removeAt(index);
+
+                // explicitly clean store
+                for (let key in viewer[STORE_TOKEN]) {
+                    const store = viewer[STORE_TOKEN][key];
+                    for (let pKey in store) {
+                        delete store[pKey];
+                    }
+                    delete viewer[STORE_TOKEN][key];
+                }
+            } catch (_) {}
         }
     }
 

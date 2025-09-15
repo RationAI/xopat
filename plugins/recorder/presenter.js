@@ -1,4 +1,4 @@
-class Presenter extends XOpatPlugin {
+addPlugin("recorder", class extends XOpatPlugin {
     constructor(id) {
         super(id);
         this._toolsMenuId = "presenter-tools-menu";
@@ -7,63 +7,218 @@ class Presenter extends XOpatPlugin {
         this.playOnEnter = this.getOption('playEnterDelay', -1);
         this._delay = true;
         this._annotationRefs = {}; //consider WeakMap
+        this._captureParams = {
+            delay: 2,
+            duration: 1.4,
+            transition: 6.5
+        };
     }
 
+    // ===== BaseComponent helpers (VanJS-powered) =====
+    // Right side header (Hide / Import / Export)
+    _RightHeaderComponent() {
+        const _this = this;
+        class RightHeader extends UI.BaseComponent {
+            create() {
+                const {span, input} = van.tags;
+                const fileInput = input({
+                    type: "file",
+                    class: "hidden w-0 h-0",
+                    onchange: e => { _this.importFromFile(e); e.target.value = ""; }
+                });
+
+                const hideBtn = span(
+                    {class: "float-right btn-pointer", onclick: () => {
+                            if (!confirm("You cannot show the recorder again - only by re-loading the page. Continue?")) return;
+                            const node = document.getElementById("auto-recorder");
+                            if (node) node.style.display = "none";
+                        }},
+                    "Hide ", span({class: "material-icons"}, "hide_source")
+                );
+
+                const importBtn = span(
+                    {class: "float-right", title: "Import Recording", onclick: () => fileInput.click()},
+                    span({class: "material-icons btn-pointer"}, "file_upload")
+                );
+
+                const exportBtn = span(
+                    {class: "float-right", title: "Export Recording", onclick: () => _this.export()},
+                    span({class: "material-icons btn-pointer"}, "file_download")
+                );
+
+                return span(hideBtn, importBtn, fileInput, exportBtn);
+            }
+        }
+        return new RightHeader();
+    }
+
+    // Right side controls (record / play / stop / etc)
+    _RightControlsComponent() {
+        const _this = this;
+
+        class RightControls extends UI.BaseComponent {
+            create() {
+                const {button, span, div} = van.tags;
+                const mk = (id, title, icon, onclick, extra="") =>
+                    button(
+                        { id, onclick, class: `btn btn-ghost btn-square btn-sm ${extra}`, title },
+                        span({class:"material-icons"}, icon)
+                    );
+
+                return div(
+                    {class:"flex gap-2"},
+                    span(
+                        {class:"material-icons timeline-play-small btn-pointer", onclick: () => _this.addRecord()},
+                        "radio_button_checked"
+                    ),
+                    mk("presenter-play-icon",  "Play", "play_arrow",  () => _this.snapshots.play(), "text-success"),
+                    mk("presenter-stop-icon",  "Stop", "stop",   () => _this.snapshots.stop()),
+                    mk("presenter-replay-icon", "Replay","replay", () => _this.fourthButton()),
+                    mk("presenter-delete-icon", "Delete","delete",  () => _this.fifthButton(), "text-warning")
+                );
+            }
+        }
+        return new RightControls();
+    }
+
+    // Right side body (checkboxes + annotation actions)
+    _RightBodyComponent() {
+        const _this = this;
+        class RightBody extends UI.BaseComponent {
+            create() {
+                const {div, h5, span} = van.tags;
+
+                const chkVisuals = new UI.Checkbox({
+                    label: "Capture visuals",
+                    checked: !!_this.snapshots.capturesVisualization,
+                    onChange(checked) {
+                        _this.snapshots.capturesVisualization = !!checked && checked !== "false";
+                    },
+                    class: "checkbox-primary"
+                });
+
+                const chkViewport = new UI.Checkbox({
+                    label: "Capture viewport",
+                    checked: !!_this.snapshots.capturesViewport,
+                    onChange(checked) {
+                        _this.snapshots.capturesViewport = !!checked && checked !== "false";
+                    },
+                    class: "checkbox-primary"
+                });
+
+                // Buttons here remain native (see note); styled with DaisyUI.
+                const captureBtn = van.tags.button(
+                    {class:"btn btn-sm btn-outline", id:"snapshot-capture-annotation", onclick: () => _this.captureAnnotation()},
+                    "Capture"
+                );
+                const releaseBtn = van.tags.button(
+                    {class:"btn btn-sm btn-outline", id:"snapshot-capture-annotation", onclick: () => _this.releaseAnnotation()},
+                    "Release"
+                );
+
+                return div(
+                    {class:"mt-2"},
+                    // checkboxes row
+                    div({class:"flex items-center gap-6"},
+                        chkVisuals.create(),
+                        chkViewport.create()
+                    ),
+                    // annotations controls
+                    div({class:"mt-4 flex items-center gap-3"},
+                        h5({class:"inline-block font-semibold"}, "Annotations in keyframes"),
+                        span({class:"opacity-50"}, "•"),
+                        captureBtn,
+                        releaseBtn
+                    )
+                );
+            }
+        }
+        return new RightBody();
+    }
+
+    // Tools timeline panel (inputs + timeline track)
+    _TimelineComponent() {
+        const _this = this;
+        class TimelinePanel extends UI.BaseComponent {
+            create() {
+                const {div} = van.tags;
+
+                const controls = div(
+                    {class:"inline-block timeline-path flex flex-row"},
+                    _this._RightControlsComponent().create(),
+                    div(
+                        {class: "flex flex-row mr-4 ml-3"},
+                        new UI.Input({
+                            legend: "Delay",
+                            suffix: "s",
+                            onChange: (value) => _this.setValue('delay', parseFloat(value)),
+                            id: "point-delay",
+                            size: UI.Input.SIZE.SMALL,
+                            extraProperties: {
+                                type:"number", min:"0", value:_this._captureParams["delay"], step:"0.1", title:"Frame Delay",style: "width: 3rem;"
+                            },
+                            extraClasses: "mr-1",
+                        }).create(),
+                        new UI.Input({
+                            legend: "Duration",
+                            suffix: "s",
+                            onChange: (value) => _this.setValue('duration', parseFloat(value)),
+                            id: "point-duration",
+                            size: UI.Input.SIZE.SMALL,
+                            extraProperties: {
+                                type:"number", min:"0", value:_this._captureParams["duration"], step:"0.1", title:"Animation Duration",style: "width: 3rem; margin-right: 0.5rem;"
+                            }
+                        }).create(),
+                        // Transition
+                        new UI.Input({
+                            legend: "Linear / Ease",
+                            onChange: (value) => _this.setValue('transition', parseFloat(value)),
+                            id: "point-spring",
+                            size: UI.Input.SIZE.SMALL,
+                            extraProperties: {
+                                type:"range", min:"1", value:_this._captureParams["transition"], step:"0.2", max:"10", style: "width: 3rem;"
+                            }
+                        }).create()
+                    ),
+                );
+
+                const track = div({
+                    id:"playback-timeline",
+                    class:"inline-block align-top relative flex-1 px-3 bg-base-200 rounded-sm w-full",
+                    style:"white-space:nowrap; overflow-x:auto; overflow-y:hidden; height:48px; min-width:100px;",
+                });
+
+                return div({class:"flex items-start flex-column"}, track, controls);
+            }
+        }
+        return new TimelinePanel();
+    }
+
+    // ===== Lifecycle =====
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
 
-        USER_INTERFACE.RightSideMenu.appendExtended("Recorder", `<span style='float:right;' class="btn-pointer" onclick="if (!confirm('You cannot show the recorder again - only by re-loading the page. Continue?')) return; $('#auto-recorder').css('display', 'none');">Hide <span class="material-icons">hide_source</span></span>
-<span onclick="this.nextElementSibling.click();" title="Import Recording" style="float: right;"><span class="material-icons btn-pointer">file_upload</span></span>
-<input type='file' style="visibility:hidden; width: 0; height: 0;" onchange="${this.THIS}.importFromFile(event);$(this).val('');" />
-<span onclick="${this.THIS}.export();" title="Export Recording" style="float: right;"><span class="material-icons btn-pointer">file_download</span></span>`, `
-<button class='btn btn-pointer' id='presenter-record-icon' onclick="${this.THIS}.addRecord();"><span class="material-icons timeline-play">radio_button_checked</span></button>
-<button class='btn btn-pointer' id='presenter-play-icon' onclick="${this.THIS}.snapshots.play();"><span class="material-icons">play_arrow</span></button>
-<button class='btn btn-pointer' id='presenter-stop-icon' onclick="${this.THIS}.snapshots.stop();"><span class="material-icons">stop</span></button>
-<button class='btn btn-pointer' id='presenter-replay-icon' onclick="${this.THIS}.fourthButton();"><span class="material-icons">replay</span></button>
-<button class='btn btn-pointer' id='presenter-delete-icon' onclick="${this.THIS}.fifthButton();"><span class="material-icons">delete</span></button>`, `
-<br>
-${UIComponents.Elements.checkBox({
-    label: "Capture visuals",
-    onchange: this.THIS + ".snapshots.capturesVisualization = this.checked && this.checked !== 'false';",
-    default: this.snapshots.capturesVisualization
-})}&emsp;
-${UIComponents.Elements.checkBox({
-    label: "Capture viewport",
-    onchange: this.THIS + ".snapshots.capturesViewport = this.checked && this.checked !== 'false';",
-    default: this.snapshots.capturesViewport
-})}
-<br><br>
-<h5 class="d-inline-block">Annotations in keyframes</h5>&emsp;
-<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.THIS}.captureAnnotation()">Capture</button>
-<button class="btn btn-sm" id="snapshot-capture-annotation" onclick="${this.THIS}.releaseAnnotation()">Release</button>
-`, "auto-recorder", this.id);
-
-        USER_INTERFACE.Tools.setMenu(this.id, this._toolsMenuId, "Timeline",
-            `<div class="d-flex">
-<span class="material-icons timeline-play-small btn-pointer" onclick="${this.THIS}.addRecord();">radio_button_checked</span>
-<div class='d-inline-block timeline-path'>
-<div class="d-inline-block"><span style="font-size: xx-small">Delay</span><br>
-<input class='form-control input-sm' id="point-delay" type='number' min='0' value='2' step="0.1" title='Delay' onchange="${this.THIS}.setValue('delay', parseFloat($(this).val()));"> s</div><div class='timeline-point' style='cursor:pointer' '>
-</div><div class="d-inline-block"><span style="font-size: xx-small">Duration</span><br>
-<input class='form-control input-sm' id="point-duration" type='number' min='0' value='1.4' step='0.1' title='Animation Duration' onchange="${this.THIS}.setValue('duration', parseFloat($(this).val()));"> s<br>
-</div>&emsp;<div class="d-inline-block"><span style="font-size: xx-small">Linear / Ease</span><br>
-<input class='form-control input-sm' id="point-spring" type='range' min='1' value='6.5' step='0.2' max="10" style="width: 40px;" title='Fade in out' onchange="${this.THIS}.setValue('transition', parseFloat($(this).val()));"> 
-</div></div>
-<div id='playback-timeline' style="white-space: nowrap; overflow-x: auto; overflow-y: hidden; height: 48px" class="d-inline-block v-align-top position-relative flex-1 ml-3"></div>
-
-
-</div>`, 'play_circle');
-
-        const _this = this;
-        this.setDraggable = UIComponents.Actions.draggable("playback-timeline",
+        // Right menu (pass BaseComponent instances)
+        USER_INTERFACE.RightSideMenu.appendExtended(
+            "Recorder",
+            this._RightHeaderComponent(),
+            this._RightBodyComponent(),
             undefined,
-            e => !_this.isPlaying,
-            e => {
-                const listItems = e.target.parentNode.children;
-                _this.snapshots.sortWithIdList(Array.prototype.map.call(listItems, child => child.dataset.id));
-                _this.selectPoint(e.target);
-            }
+            "auto-recorder",
+            this.id
         );
+
+        // Tools menu (pass BaseComponent instance)
+        USER_INTERFACE.Tools.setMenu(
+            this.id,
+            this._toolsMenuId,
+            "Timeline",
+            this._TimelineComponent(),
+            "play_circle"
+        );
+
+        // Enable sortable timeline (vanilla HTML5 DnD)
+        this._initSortableTimeline("playback-timeline");
 
         this._handleInitIO();
         this._initEvents();
@@ -76,6 +231,65 @@ ${UIComponents.Elements.checkBox({
         }
     }
 
+    // ===== DnD reordering for timeline =====
+    _initSortableTimeline(containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        let dragSrcId = null;
+
+        container.addEventListener("dragstart", (e) => {
+            const el = e.target.closest("[data-id]");
+            if (!el) return;
+            if (this.isPlaying) { e.preventDefault(); return; }
+            dragSrcId = el.dataset.id;
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", dragSrcId);
+            el.classList.add("dragging");
+        });
+
+        container.addEventListener("dragend", (e) => {
+            const el = e.target.closest("[data-id]");
+            if (el) el.classList.remove("dragging");
+            dragSrcId = null;
+        });
+
+        container.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            const after = this._getDragAfterElement(container, e.clientX);
+            const dragging = container.querySelector(".dragging");
+            if (!dragging) return;
+            if (after == null) {
+                container.appendChild(dragging);
+            } else {
+                container.insertBefore(dragging, after);
+            }
+        });
+
+        container.addEventListener("drop", (e) => {
+            e.preventDefault();
+            const newOrder = Array.from(container.children).map((n) => n.dataset.id);
+            this.snapshots.sortWithIdList(newOrder);
+            const el = container.querySelector(`[data-id="${dragSrcId}"]`);
+            if (el) this.selectPoint(el);
+        });
+    }
+
+    _getDragAfterElement(container, x) {
+        const els = [...container.querySelectorAll("[data-id]:not(.dragging)")];
+        return els.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = x - box.left - box.width / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset, element: child };
+            } else {
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element || null;
+    }
+
+    // ===== Original logic unchanged below =====
+
     captureAnnotation() {
         const engine = this.annotations;
         if (!engine) {
@@ -84,10 +298,8 @@ ${UIComponents.Elements.checkBox({
             const annotation = engine.canvas.getActiveObject();
             if (annotation) {
                 let sid = this.snapshots.currentStep.id;
-                //todo listener remove prevent removal of binded annotations? or remove them...
-
-                this._recordAnnotationRef(annotation, sid); //note which annotations
-                this._recordAnnotationSid(annotation, sid); //keep record on annotations too
+                this._recordAnnotationRef(annotation, sid);
+                this._recordAnnotationSid(annotation, sid);
                 Dialogs.show('Animated with step ' + sid, 1000, Dialogs.MSG_INFO);
             } else {
                 Dialogs.show('Select an annotation to animate.', 3000, Dialogs.MSG_WARN);
@@ -118,9 +330,9 @@ ${UIComponents.Elements.checkBox({
 
     addRecord() {
         this.snapshots.create(
-            parseFloat($("#point-delay").val()),
-            parseFloat($("#point-duration").val()),
-            parseFloat($("#point-spring").val()),
+            this._captureParams["delay"],
+            this._captureParams["duration"],
+            this._captureParams["transition"],
             this.snapshots.currentStepIndex+1
         );
     }
@@ -131,6 +343,8 @@ ${UIComponents.Elements.checkBox({
     }
 
     setValue(key, value) {
+        this._captureParams[key] = value;
+
         if (this.snapshots.snapshotCount < 1) return;
 
         let index = this.snapshots.currentStepIndex;
@@ -176,7 +390,6 @@ ${UIComponents.Elements.checkBox({
         let result = {};
         for (let sid in this._annotationRefs) {
             let data = this._annotationRefs[sid].map(o => o.toObject('presenterSids'));
-            //todo does not work with groups --> exported prop names differ!!!
             result[sid] = module.trimExportJSON(data, 'presenterSids');
         }
         return serialize ? JSON.stringify(result) : result;
@@ -210,7 +423,6 @@ ${UIComponents.Elements.checkBox({
             data = JSON.parse(data);
             _this.snapshots.importJSON(data?.snapshots || []);
             if (!_this.importAnnotations(data?.annotations)) {
-                //will not handle message - no data loaded
                 Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
             }
         }).catch(e => {
@@ -241,22 +453,24 @@ ${UIComponents.Elements.checkBox({
         }
 
         const height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
-                Math.log(VIEWER.viewport.getMaxZoom()) * 18 + 14),
+                Math.log(VIEWER.viewport.getMaxZoom() + 1) * 18 + 14),
             parent = $("#playback-timeline"),
             html = `<span id="step-timeline-${step.id}" data-id="${step.id}"
-onclick="${this.THIS}.selectPoint(this);" style="background: ${color}; border-color: ${color};
+style="background: ${color}; border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; height: ${height}px; 
-margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
+margin-left: ${this._convertValue('delay', step.delay)};"
+draggable="true"></span>`;
 
         if (parent[0].childElementCount > atIndex) {
             parent.children().eq(atIndex).before(html);
         } else {
-            //appends as last
             parent.append(html);
         }
         if (withNav) this.snapshots.goToIndex(atIndex);
-        this.setDraggable(document.getElementById(`step-timeline-${step.id}`));
+        // no external draggable helper; HTML5 DnD handlers are bound on the container
+        document.getElementById(`step-timeline-${step.id}`)
+            ?.addEventListener("click", e => this.selectPoint(e.currentTarget));
     }
 
     _convertValue(key, value) {
@@ -265,19 +479,19 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
 
     _getValueFor(key, value) {
         switch (key) {
-        case 'delay': return value * 2;
-        case 'duration': return value * 4 + 6;
-        case 'transition':
-        default: return value;
+            case 'delay': return value * 2;
+            case 'duration': return value * 4 + 6;
+            case 'transition':
+            default: return value;
         }
     }
 
     _getStyleFor(key) {
         switch (key) {
-        case 'delay': return "margin-left";
-        case 'duration': return "width";
-        case 'transition': return "border-bottom-left-radius";
-        default: return value;
+            case 'delay': return "margin-left";
+            case 'duration': return "width";
+            case 'transition': return "border-bottom-left-radius";
+            default: return value;
         }
     }
 
@@ -328,12 +542,10 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
     };
 
     _handleInitAnnotationsModule() {
-        //todo had to enable the module from the beginning since we dont know if annnotations are present :/
-        //todo remove all if module logics
         if (window.OSDAnnotations && !this.annotations) {
             this.annotations = OSDAnnotations.instance();
             this.annotations.forceExportsProp = "presenterSids";
-            this.annotations?.initPostIO(); //enable IO export so we can work with annotations if any
+            this.annotations?.initPostIO();
             this._bindAnnotations();
 
             const _this = this;
@@ -357,13 +569,11 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
     async _importAnnotations(content) {
         try {
             const _this = this;
-            //todo imports annotations twice if exported together with the annotations plugin -> made invisible, still show in the list, they get exported in the module etc...
             let data = typeof content === "string" ? JSON.parse(content) : content;
             for (let sid in data) {
                 let step = data[sid];
-                if (step[0]?.presenterSids) break; //no need for manual re-attaching, already present in the data
+                if (step[0]?.presenterSids) break;
 
-                //note what if annotations were already there? probably not an issue - the user initiated the load himself
                 step.forEach(o => {
                     let sids = o.presenterSids || [];
                     if (!sids.includes(sid)) {
@@ -441,7 +651,6 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                     }, 200);
                 }
 
-                //todo forced updates not working
                 let updates = false;
                 if (e.prevStep) {
                     let annotations = _this._annotationRefs[e.prevStep.id];
@@ -490,12 +699,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                 })
             }
         });
-        /**
-         * Module loaded event. Fired only with dynamic loading.
-         * @property {string} id module id
-         * @memberOf VIEWER_MANAGER
-         * @event module-loaded
-         */
+
         VIEWER_MANAGER.addHandler('module-loaded', e => {
             if (e.id === "annotations") {
                 _this._handleInitAnnotationsModule();
@@ -504,15 +708,11 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
 
         VIEWER.addHandler('key-down', (e) => {
             if (!e.focusCanvas) return;
-            //if (e.ctrlKey) {
             if (e.code === "KeyN") {
                 _this.snapshots.goToIndex(_this.snapshots.currentStepIndex + 1);
             } else if (e.code === "KeyS") {
                 _this.snapshots.goToIndex(0);
             }
-            //}
         });
     }
-}
-
-addPlugin("recorder", Presenter);
+});
