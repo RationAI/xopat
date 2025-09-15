@@ -48,10 +48,11 @@ class MultiPanelMenuTab extends MenuTab {
 
         const pinIcon = new FAIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "fa-thumbtack" });
         this.pin = new Button({
-            id: this.parent.id + "-b-opened" + item.id,
+            id: this.parent.id + "-b-pin-" + item.id,
             type: Button.TYPE.SECONDARY,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
+            extraClasses: { display: "display-none" },
             extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
             onClick: (event) => {
                 this.togglePinned();
@@ -135,6 +136,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.openDiv.setClass("display", "");
         this.mainDiv.setClass("background", "bg-base-200");
         this.mainDiv.setClass("pointer-events", "pointer-events-auto");
+        this.pin.setClass("display", "");
     }
 
     _removeFocus() {
@@ -143,6 +145,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.openDiv.setClass("display", "hidden");
         this.mainDiv.setClass("background", "");
         this.mainDiv.setClass("pointer-events", "pointer-events-none");
+        this.pin.setClass("display","display-none");
     }
 
     close() {
