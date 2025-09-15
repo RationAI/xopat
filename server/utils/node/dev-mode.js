@@ -8,5 +8,10 @@ function run(name, cmd, args) {
     p.stderr.on("data", log);
 }
 
-run("WATCH", "npm", ["run", "watch-ui"]);
+if (process.env.WATCH_PATTERN) {
+    run("WATCH", "grunt", ["twinc"])
+} else {
+    run("WATCH", "npm", ["run", "watch-ui"]);
+}
+
 run("SERVER", "node", ["index.js"]);
