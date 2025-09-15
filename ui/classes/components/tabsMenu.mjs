@@ -7,7 +7,7 @@ import { Menu } from "./menu.mjs";
 
 const { div, span } = van.tags
 
-class TabsMenu extends BaseComponent {
+class TabsMenu extends Menu {
 
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
