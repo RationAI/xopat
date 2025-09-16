@@ -9,14 +9,14 @@
 
 <body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
 
-<div class="Layout"  style="max-width: 1260px;padding: 25px 60px;margin: 0 auto;">
-  <div class="Layout-main ">
-  <h1 class="f00-light">Developer visualization setup</h1>
+<div class="max-w-[1260px] mx-auto px-[60px] py-[25px]">
+  <div>
+  <h1 class="text-4xl font-light">Developer visualization setup</h1>
 <br><br>
 
       <br>
         <!--TODO ALLOW TABS, configure with a valid data examples with different use-cases, store in session/local storage-->
-          <textarea rows="40" class="form-control m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
+          <textarea rows="40" class="textarea textarea-bordered m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
           try {
               JSON.parse($(this).val());
           } catch (e) {
@@ -58,7 +58,6 @@
       <div id="documentation"></div>
       </div>
   </div>
-</div>
 
 <template id="template-form-init"></template>
 
@@ -75,7 +74,7 @@
         $("#form-submit-container").html(
             `    <form method="POST" target="_blank" action="${formInit.location}" id="custom-request">
         <input type="hidden" name="visualization" id="custom-visualization" value=''>
-        <button class="btn pointer" type="submit" value="${formInit.lang.ready}">${formInit.lang.ready}</button>
+        <button class="btn" type="submit" value="${formInit.lang.ready}">${formInit.lang.ready}</button>
     &emsp;
     </form>`
         );

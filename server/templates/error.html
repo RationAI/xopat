@@ -20,10 +20,10 @@
 
 <!-- System messaging -->
 <div id="system-message" class="hidden system-container">
-    <div id="system-message-warn" class="f00-light text-center color-text-primary"><span class="material-icons f0-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<template id="template-text-title"></template></div>
-    <div id="system-message-title" class="f2-light text-center clearfix color-text-primary mb-3"></div>
+    <div id="system-message-warn" class="text-4xl font-light text-center"><span class="material-icons text-3xl font-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<template id="template-text-title"></template></div>
+    <div id="system-message-title" class="text-3xl font-light text-center mb-3"></div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><template id="template-text-details"></template></button>
-    <div id="system-message-details" class="px-4 py-4 border radius-3 overflow-y-scroll color-text-primary" style="display: none;max-height: 50vh;"></div>
+    <div id="system-message-details" class="px-4 py-4 border rounded-md overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
 
     <template id="template-custom"></template>
 </div>

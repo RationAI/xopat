@@ -375,7 +375,7 @@ try {
                 if (!options.id) throw "Row must be uniquely identifiable - missing options.id!";
                 let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
                 if (icon && !icon.includes('<')) {
-                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+                    icon = `<img src="${icon}" class="block m-2 rounded-md" style="height: 40px;">`;
                 }
                 //else HTML code - leave as is
 
@@ -386,9 +386,9 @@ try {
 
                 return `<div id="${options.id}" class="image-row-container" ${style}>
 <div>
-<div class="width-full d-flex image-row">
+<div class="w-full flex image-row">
 ${icon}
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
+<div class="flex flex-col" style="flex-grow: 1;"><div class="text-lg font-semibold">${options.title}</div><div class="text-sm opacity-70">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div></div>`;
             };
@@ -437,7 +437,7 @@ ${contentAction}
                 let input = this.options.multiselect ? "checkbox" : "radio";
                 let icon = options.icon || (options.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
                 if (icon && !icon.includes('<')) {
-                    icon = `<img src="${icon}" class="d-block m-2 rounded-2" style="height: 40px;">`;
+                    icon = `<img src="${icon}" class="block m-2 rounded-md" style="height: 40px;">`;
                 }
                 //else HTML code - leave as is
 
@@ -449,9 +449,9 @@ ${contentAction}
 
                 return `<div id="${options.id}" class="selectable-image-row-container" ${style}>
 <input type="${input}" name="${this.options.id}" ${selected} class="hidden selectable-image-row-context" value="${options.value}">
-<div class="width-full d-flex selectable-image-row rounded-2 pointer" onclick="$(this.previousElementSibling).click();">
+<div class="w-full flex selectable-image-row rounded-md cursor-pointer" onclick="$(this.previousElementSibling).click();">
 ${icon}
-<div class="d-flex flex-column" style="flex-grow: 1;"><div class="f3-light">${options.title}</div><div class="text-small color-text-secondary">${details}</div></div>
+<div class="flex flex-col" style="flex-grow: 1;"><div class="text-lg font-semibold">${options.title}</div><div class="text-sm opacity-70">${details}</div></div>
 ${contentAction}
 </div>${customContent}</div>`;
             }

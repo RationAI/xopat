@@ -358,16 +358,16 @@ window.addEventListener("beforeunload", (e) => {
 style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             let limits = isModal ? "style='width: 100%; height: 100vh;'" : "style='max-width:80vw; max-height: 80vh'";
-            let diaClasses = isModal ? "" : "Box Box--overlay";
+            let diaClasses = isModal ? "" : "card bg-base-100 shadow-xl";
 
             return `<div id="${parentId}" data-dialog="true" ${positionStrategy}>
-<details-dialog class="${diaClasses} d-flex flex-column" ${limits}>
-    <div id="window-header" class="Box-header noselect d-flex flex-row" id="${parentId}-header">
-      <h3 class="Box-title position-relative flex-1">${title}</h3>
+<details-dialog class="${diaClasses} flex flex-col" ${limits}>
+    <div id="window-header" class="card-title noselect flex flex-row" id="${parentId}-header">
+      <h3 class="text-lg font-semibold position-relative flex-1">${title}</h3>
       ${close}
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
-      <div class="Box-body pr-2" style="padding-bottom: 5px; min-height: 100%">
+      <div class="card-body pr-2" style="padding-bottom: 5px; min-height: 100%">
 	  ${content}
 	  </div>
     </div>
@@ -377,7 +377,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
         },
 
         _getCloseButton: function(id) {
-            return `<button class="Box-btn-octicon btn-octicon position-relative" type="button"
+            return `<button class="btn btn-ghost btn-xs" type="button"
 aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
 <svg class="octicon octicon-x" viewBox="0 0 12 16" version="1.1" width="12" height="16" aria-hidden="true">
 <path fill-rule="evenodd" d="M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77
@@ -410,7 +410,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          */
         init: function() {
             document.addEventListener("click", this._toggle.bind(this, undefined, undefined));
-            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="dropdown-menu dropdown-menu-se"></ul>`);
+            $("body").append(`<ul id="drop-down-menu" oncontextmenu="return false;" style="display:none;width: auto; max-width: 300px;" class="menu menu-sm bg-base-100 rounded-box shadow"></ul>`);
 
             this._body = $("#drop-down-menu");
         },
@@ -799,14 +799,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         class: "height-full position-relative",
                         style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);"
                     },
-                    div({class: "d-flex flex-column-reverse"},
+                    div({class: "flex flex-col-reverse"},
                         button({
                             onclick: function () {
                                 USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()
                             }, class: "btn"
                         }, "Load with selected"),
                     ),
-                    span({class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
+                    span({class: "text-xl font-semibold header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
                     div({id: "plug-list-content-inner", class: "boxed"},
                         div({id: "plug-list-content-inner-content"}, ...pluginDivs),
                     ),
@@ -818,7 +818,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             createPluginDiv: function (plugin, pluginCount) {
                 const { div, img, button, input } = van.tags;
 
-                let errMessage = plugin.error ? div({ class: "p-1 rounded-2 error-container" }, `${plugin.error}`) : "";
+                let errMessage = plugin.error ? div({ class: "p-1 rounded-md error-container" }, `${plugin.error}`) : "";
                 let problematic = div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" },`${errMessage}`);
 
                 let actionPart;
@@ -838,17 +838,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 let icon = plugin.icon || (plugin.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
                 if (icon && !icon.includes('<')) {
-                    icon = img({ src: `${icon}`, class: "d-block m-2 rounded-2", style: "height: 40px;" });
+                    icon = img({ src: `${icon}`, class: "block m-2 rounded-md", style: "height: 40px;" });
                 }
 
-                let text = div({ class: "d-flex flex-column", style: "flex-grow: 1;" },
-                                div({ class: "f3-light" }, plugin.name),
-                                div({ class: "text-small color-text-secondary" }, plugin.description),
+                let text = div({ class: "flex flex-col", style: "flex-grow: 1;" },
+                                                              div({ class: "text-lg font-semibold" }, plugin.name),
+                                div({ class: "text-sm opacity-70" }, plugin.description),
                               );
 
                 const plugin_div = div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
                     input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
-                    div({ class: "width-full d-flex selectable-image-row rounded-2 pointer", onclick: function () {$(this.previousElementSibling).click()} },
+                    div({ class: "w-full flex selectable-image-row rounded-md cursor-pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
                         text,
                         actionPart,
@@ -1052,7 +1052,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         extraClasses: { bg: "bg-transparent" }
                     },);
 
-                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "d-flex flex-column" }, InsideMenu);
+                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "flex flex-col" }, InsideMenu);
 
                     USER_INTERFACE.FullscreenMenu.menu.addTab(d);
                 }
@@ -1083,7 +1083,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const { div } = van.tags;
 
                 const viewer = div();
-                viewer.innerHTML =`<div id="openseadragon-view" class="d-flex flex-column" style="height: 360px; width: 360px;">
+                viewer.innerHTML =`<div id="openseadragon-view" class="flex flex-col" style="height: 360px; width: 360px;">
                                         <div id="panel-navigator" style=" height: 360px; width: 360px;"></div>
                                     </div>`;
 
