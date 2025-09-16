@@ -423,6 +423,8 @@ addPlugin("recorder", class extends XOpatPlugin {
         UTILITIES.readFileUploadEvent(e).then(data => {
             data = JSON.parse(data);
             _this.snapshots.importJSON(data?.snapshots || []);
+
+            // todo test annotations, also weird condition
             if (!_this.importAnnotations(data?.annotations)) {
                 Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
             }
@@ -445,6 +447,10 @@ addPlugin("recorder", class extends XOpatPlugin {
         $("#point-spring").val(step.transition);
     }
 
+    _resetAllUISteps() {
+
+    }
+
     _addUIStepFrom(viewerId, step, withNav=true, atIndex=undefined) {
         let color = "#000";
         if (this.snapshots.stepCapturesVisualization(step)) {
@@ -453,8 +459,14 @@ addPlugin("recorder", class extends XOpatPlugin {
             color = "#00d0ff";
         }
 
+        const viewer = VIEWER_MANAGER.getViewer(viewerId);
+        if (!viewer) {
+            console.error("Viewer not found: ", viewerId);
+            return;
+        }
+
         const height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
-                Math.log(VIEWER.viewport.getMaxZoom() + 1) * 18 + 14),
+                Math.log(viewer.viewport.getMaxZoom() + 1) * 18 + 14),
             parent = $(this.track),
             html = `<span id="step-timeline-${step.id}" data-id="${step.id}" data-group="${viewerId}"
 style="background: ${color}; border-color: ${color};
@@ -537,8 +549,8 @@ draggable="true"></span>`;
     }
 
     _timelineId(viewerId=undefined, hash=true) {
-        if (hash) return `#${viewerId || VIEWER.id}-playback-timeline`;
-        return `${viewerId || VIEWER.id}-playback-timeline`;
+        if (hash) return `#${viewerId || VIEWER.uniqueId}-playback-timeline`;
+        return `${viewerId || VIEWER.uniqueId}-playback-timeline`;
     }
 
     _arrRemove(array, item) {
@@ -709,7 +721,16 @@ draggable="true"></span>`;
         });
 
         VIEWER_MANAGER.addHandler('viewer-create', e => {
-           this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
+            this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
+        });
+
+        VIEWER_MANAGER.addHandler('viewer-destroy', e => {
+            this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
+
+        });
+
+        VIEWER_MANAGER.addHandler('viewer-reset', e => {
+
         });
 
         // todo use integrate with singletons module instead

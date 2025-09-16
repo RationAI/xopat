@@ -37,9 +37,9 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
      */
     static viewerInstance(viewer) {
         const instance = super.instance();
-        const context = instance.getViewerContext(viewer.id);
+        const context = instance.getViewerContext(viewer.uniqueId);
         if (!context.facade) {
-            context.facade = new SnapshotsFacade(instance, viewer.id);
+            context.facade = new SnapshotsFacade(instance, viewer.uniqueId);
         }
         return context.facade;
     }
@@ -140,10 +140,9 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         return this._jumpAt(st.idx);
     }
 
-    _setCapturesVisualization(viewerId, value) {
-        const v = this._viewer(viewerId);
+    _setCapturesVisualization(value) {
         const st = this._snapshotsState;
-        st.captureVisualization = !!value && v.hasOwnProperty("bridge");
+        st.captureVisualization = !!value;
     }
     _setCapturesViewport(value) { this._snapshotsState.captureViewport = !!value; }
     _setCapturesScreen(value)   { this._snapshotsState.captureScreen   = !!value; }
@@ -188,21 +187,30 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         });
     }
 
+    _isValidStep(index) {
+        const step = this._snapshotsState.steps[index];
+        return step && VIEWER_MANAGER.getViewer(step.viewerId);
+    }
+
     // ---------- internals ----------
     _playStep(index, jumps=false) {
         const st = this._snapshotsState;
         while (st.steps.length > index && !st.steps[index]) index++;
-        if (st.steps.length <= index) { st.currentStep = null; this._stop(); return; }
+        if (st.steps.length <= index) {
+            st.currentStep = null;
+            this._stop();
+            return;
+        }
 
         let withDelay = 1, prevIdx = -1;
         if (jumps) {
             if (st.currentStep) { st.currentStep.cancel(); st.currentStep = null; }
             withDelay = 0;
-            prevIdx = st.idx - 1;
+            prevIdx = st.idx > 0 ? st.idx - 1 : 0;
         } else {
             prevIdx = index > 0 ? index - 1 : 0;
-            while (prevIdx > 0 && !st.steps[prevIdx]) prevIdx--;
         }
+        while (prevIdx > 0 && !this._isValidStep(prevIdx)) prevIdx--;
 
         const previousDuration = prevIdx >= 0 && st.steps[prevIdx] ? st.steps[prevIdx].duration * 1000 : 0;
         st.currentStep = this._setDelayed(withDelay * (st.steps[index].delay * 1000 + previousDuration), index);
@@ -253,6 +261,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         const step = st.steps[index];
         if (!step || st.steps.length <= index) return;
         const v = this._viewer(step.viewerId);
+        if (!v) return;
 
         const capturesViewport = step.point && !isNaN(step.zoomLevel);
         if (step.visualization) this._setVisualization(v, step, capturesViewport ? step.duration : 0);
@@ -350,7 +359,7 @@ class SnapshotsFacade {
     stop()               { this._p._stop(); }
     goToIndex(i)         { return this._p._goToIndex(i); }
 
-    set capturesVisualization(v) { this._p._setCapturesVisualization(this._vid, v); }
+    set capturesVisualization(v) { this._p._setCapturesVisualization(v); }
     set capturesViewport(v)      { this._p._setCapturesViewport(v); }
     set capturesScreen(v)        { this._p._setCapturesScreen(v); }
 
