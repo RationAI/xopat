@@ -211,20 +211,25 @@ export class SlideSwitcherMenu extends BaseComponent {
         const checkboxId = `${this.windowId}-chk-${idx}`;
         const checked = this.selected.has(idx);
 
-        let imageEl = img({
-            id: `${this.windowId}-thumb-${idx}`,
-            // absolute so the translate is deterministic; rotate into a horizontal row
-            class: "block h-auto w-full rotate-90 select-none shrink-0 w-full",
-            alt: name,
-            draggable: "false",
-            onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
-        });
-        const thumbWrap = div({ class: "relative h-20 overflow-hidden", onclick: () => this._onCardClick(idx) },
-            div({ class: "absolute left-1 top-1 z-10  px-2 py-1 text-xs font-medium truncate" }, name),
-            imageEl
+        // wrapper: aspect-ratio container instead of fixed h-20 + rotate-90
+        const thumbWrap = div({
+                class: "relative overflow-hidden cursor-pointer",
+                style: "aspect-ratio: 4/3;", // TODO: compute from bg.width/bg.height if available
+                onclick: () => this._onCardClick(idx)
+            },
+            div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-black/60 text-white rounded" }, name),
+            div({ class: "absolute inset-0 grid place-items-center" },
+                img({
+                    id: `${this.windowId}-thumb-${idx}`,
+                    class: "max-w-[86%] max-h-[86%] object-contain select-none pointer-events-none",
+                    alt: name,
+                    draggable: "false",
+                    onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
+                })
+            )
         );
 
-        // request preview url (kept from your current logic)
+        // --- Preview URL fetch (unchanged) ---
         const imagePath = this.data[bg.dataReference];
         const eventArgs = {
             server: APPLICATION_CONTEXT.env.client.image_group_server,
@@ -232,38 +237,29 @@ export class SlideSwitcherMenu extends BaseComponent {
             image: imagePath,
             imagePreview: null,
         };
-
-        /**
-         * Image Preview Url was requested
-         * @property {string} server oneliner configuration
-         * @property {usesCustomProtocol} boolean true if protocol is overridden on the background config level
-         * @property {Image|string|null} imagePreview if set, the image source is used from this value, must be an image url or object
-         * @memberOf VIEWER_MANAGER
-         * @event get-preview-url
-         */
-        VIEWER_MANAGER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
+        VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs).then(() => {
             if (!eventArgs.imagePreview) {
                 const previewUrlmaker = new Function("path,data", "return " +
                     (bg.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
                 eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
             } else if (eventArgs.imagePreview instanceof Image) {
-                imageEl = eventArgs.imagePreview;
-                imageEl.classList.add("block", "h-auto", "w-full", "rotate-90", "select-none", "shrink-0", "w-full");
-                imageEl.setAttribute("draggable", "false")
+                const imageEl = eventArgs.imagePreview;
+                imageEl.classList.add("max-w-[86%]", "max-h-[86%]", "object-contain", "select-none");
                 imageEl.id = `${this.windowId}-thumb-${idx}`;
-                return; // image element handled
+                return;
             } else if (typeof eventArgs.imagePreview !== "string" && !(eventArgs.imagePreview instanceof Image)) {
                 eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
                 imageEl.onload = imageEl.onerror = () => URL.revokeObjectURL(eventArgs.imagePreview);
             }
-            imageEl.src = eventArgs.imagePreview;
+            const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
+            if (imageEl) imageEl.src = eventArgs.imagePreview;
         });
 
+        // --- Existing viewer/link controls ---
         const viewer = this._getViewerForBg(idx);
         const linked = this._isLinked(viewer);
 
-        const controls = div(
-            { class: "flex items-center gap-2 p-2" },
+        const controls = div({ class: "flex items-center gap-2 p-2" },
             input({
                 id: checkboxId,
                 "data-idx": idx,
@@ -274,7 +270,6 @@ export class SlideSwitcherMenu extends BaseComponent {
                 onchange: (e) => this._onCheck(idx, e.target.checked),
                 title: "Add/remove from view"
             }),
-            // link icon button
             button({
                 id: `${this.windowId}-lnk-${idx}`,
                 class: "btn btn-ghost btn-xs",
@@ -286,14 +281,24 @@ export class SlideSwitcherMenu extends BaseComponent {
             }, new FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
         );
 
+        // --- New action buttons (lock, visibility, center, fit, remove) ---
+        const actionBar = div({
+                class: "absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-gradient-to-t from-black/60 to-transparent flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition"
+            },
+            button({ class: "btn btn-ghost btn-xs", onclick: () => VIEWER_MANAGER.centerSlide?.(idx) }, "Center"),
+            button({ class: "btn btn-ghost btn-xs", onclick: () => VIEWER_MANAGER.fitSlide?.(idx) }, "Fit"),
+            button({ class: "btn btn-ghost btn-xs", onclick: () => VIEWER_MANAGER.removeSlide?.(idx) }, "Remove"),
+        );
+
         return div({
                 id: `${this.windowId}-card-${idx}`,
-                class: "slide-card bg-base-200 border border-base-300 transition " +
+                class: "slide-card group bg-base-200 border border-base-300 transition " +
                     (checked ? "ring ring-primary ring-offset-1 " : "") +
-                    "cursor-pointer flex flex-row"
+                    "flex flex-col relative"
             },
             controls,
-            thumbWrap
+            thumbWrap,
+            actionBar
         );
     }
 

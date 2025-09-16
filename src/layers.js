@@ -46,16 +46,12 @@ function initXopatLayers() {
 
     /**
      * Initialize Visualization (data group) from APPLICATION_CONTEXT.config setup
+     * todo consider moving this to app.js, doing earlier
      * @return {*}
      */
     window.APPLICATION_CONTEXT.prepareRendering = function () {
         const visualizations = APPLICATION_CONTEXT.config.visualizations;
         parseVisualization(visualizations);
-
-        if (APPLICATION_CONTEXT.getOption("activeVisualizationIndex") > visualizations.length) {
-            console.warn("Invalid default vis index. Using 0.");
-            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", 0);
-        }
     }
 
     /*---------------------------------------------------------*/

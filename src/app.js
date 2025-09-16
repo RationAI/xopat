@@ -1153,25 +1153,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             VM.delete(i);
         }
 
-        // Helper: clean a viewer fully
-        const resetViewer = (v) => {
-            try {
-                // Clear all items
-                if (v.world) {
-                    const count = v.world.getItemCount();
-                    for (let i = count - 1; i >= 0; i--) {
-                        const it = v.world.getItemAt(i);
-                        try {
-                            v.world.removeItem(it);
-                        } catch (_) {
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn("Viewer reset failed:", e);
-            }
-        };
-
         // Helper: build a tileSource URL for a background entry
         const bgUrlFromEntry = (bgEntry) => {
             const proto = bgEntry.protocol || env.client.image_group_protocol;
@@ -1182,6 +1163,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         // Helper: open one tile into a viewer with bookkeeping
         const openTile = (viewer, source, kind, index, ctx) => {
+            console.log("Opening tile", kind, index, ctx);
             return new Promise((resolve) => {
                 viewer.addTiledImage({
                     tileSource: source.source || source,
@@ -1247,8 +1229,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         };
 
         // Helper: configure shaders/rendering for a viewer + open its images
-        const openIntoViewer = async (viewer, entry, viewerIndex) => {
-            resetViewer(viewer);
+        const openIntoViewer = async (entry, viewerIndex) => {
+            VM.resetViewer(viewerIndex);
+            const viewer = VM.viewers[viewerIndex];
 
             const toOpen = [];
             const openedBase = [];
@@ -1259,8 +1242,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     const bg = bgs[bgi];
                     if (!bg) continue;
                     if (!bg.id) {
-                        bg.id = data[bg.dataReference].replace("/|\\: ", "-");
+                        bg.id = UTILITIES.generateID(data[bg.dataReference]);
+                    } else {
+                        bg.id = UTILITIES.sanitizeID(bg.id);
                     }
+
                     if (isSecureMode) delete bg.protocol;
                     toOpen.push(bgUrlFromEntry(bg));
                     openedBase.push(bg);
@@ -1271,7 +1257,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     const bg = bgs[bgi];
                     if (bg) {
                         if (!bg.id) {
-                            bg.id = data[bg.dataReference].replace("/|\\: ", "-");
+                            bg.id = UTILITIES.generateID(data[bg.dataReference]);
+                        } else {
+                            bg.id = UTILITIES.sanitizeID(bg.id);
                         }
                         if (isSecureMode) delete bg.protocol;
                         toOpen.push(bgUrlFromEntry(bg));
@@ -1317,8 +1305,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
                 APPLICATION_CONTEXT.prepareRendering();
 
-                const vIdx = visIndexForThis;
-                const activeV = vis[vIdx];
+                const activeV = vis[visIndexForThis];
                 if (viewer.drawer && viewer.drawer.renderer && viewer.drawer.renderer.createUrlMaker) {
                     viewer.drawer.renderer.createUrlMaker(activeV, isSecureMode);
                 }
@@ -1405,7 +1392,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         };
 
         // 3) Drive all viewers according to plan
-        const tasks = bgPlan.map((entry, i) => openIntoViewer(VM.viewers[i], entry, i));
+        const tasks = bgPlan.map((entry, i) => openIntoViewer(entry, i));
 
         // Show a gentle “loading too long” message if it drags on
         const loadTooLongTimeout = setTimeout(

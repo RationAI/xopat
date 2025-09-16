@@ -1423,20 +1423,37 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
     // todo this means if we have session with visualization only, no post IO works
     function findViewerUniqueId(viewer) {
+        const result = viewer.__cachedUUID;
+        if (result) return result;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item = viewer.world.getItemAt(itemIndex);
             const config = item?.getConfig("background");
             if (config) {
+                viewer.__cachedUUID = config.id;
                 return config.id;
             }
         }
     }
+
+    /**
+     * @property {string} uniqueId
+     * @memberof OpenSeadragon.Viewer
+     */
+    Object.defineProperty(OpenSeadragon.Viewer.prototype, "uniqueId", {
+        get: function() {
+            return findViewerUniqueId(this);
+        }
+    });
 
     // 2) Manager that tracks the active viewer
     /**
      * Manages one or more OpenSeadragon viewers, keeps track of the active viewer,
      * and provides utilities to broadcast event handlers to all viewers.
      * The manager also owns the grid layout used to mount individual viewers.
+     *
+     * WARNING: Viewer `viewer.id` is not unique, it is just a string that is used to identify the viewer.
+     * To reference an unique data session within the viewer, use viewer.uniqueId!
+     * Viewer.id is not used publicly in the ViewerManager API at all.
      *
      * Exposed API is intended for application integration (e.g., via VIEWER_MANAGER in app.js).
      *
@@ -1496,11 +1513,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         /**
          * Set the active viewer.
-         * @param {number|OpenSeadragon.Viewer} v - Index into the viewers array or a viewer instance.
+         * @param {number|string|OpenSeadragon.Viewer} v - Index into the viewers array, unique ID, or a viewer instance.
          * @returns {void}
          */
         setActive(v) {
             if (typeof v === "number") v = this.viewers[v];
+            if (typeof v === "string") v = this.getViewer(v);
             if (this.active === v) return;
             this.active = v;
             // optional: add a CSS class to highlight active container
@@ -1519,20 +1537,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         /**
          * Get viewer by ID
-         * @param id
+         * @param uniqueId
          * @return OpenSeadragon.Viewer
          */
-        getViewer(id) {
-            return this.viewers.find(v => v.id === id);
+        getViewer(uniqueId) {
+            return this.viewers.find(v => v.uniqueId === uniqueId);
         }
 
         /**
          *
-         * @param id
+         * @param uniqueId
          * @return number
          */
-        getViewerIndex(id) {
-            return this.viewers.findIndex(v => v.id === id);
+        getViewerIndex(uniqueId) {
+            return this.viewers.findIndex(v => v.uniqueId === uniqueId);
         }
 
         /**
@@ -1743,12 +1761,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         /**
                          * Raised when a new viewer comes into the play. Index is the index-position on the screen.
                          * @param {OpenSeadragon.Viewer} viewer
-                         * @param {string} id
+                         * @param {string} uniqueId
                          * @param {Number} index
                          * @event viewer-create
                          * @memberof VIEWER_MANAGER
                          */
-                        this.raiseEvent('viewer-create', {viewer, id: cellId, index });
+                        this.raiseEvent('viewer-create', {viewer, uniqueId: viewer.uniqueId, index });
                     }
                 }
 
@@ -1776,7 +1794,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                                 element.error({
                                     error: e, code: "W_IO_INIT_ERROR",
                                     message: $.t('error.pluginImportFail',
-                                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                                        {plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
                                 });
                             }
                         }
@@ -1973,14 +1991,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * Raised when an existing viewer is removed from the grid layout. Called before the viewer
              * is actually removed along with all its data.
              * @param {OpenSeadragon.Viewer} viewer
-             * @param {string} id
+             * @param {string} uniqueId
              * @param {Number} index
              * @event viewer-destroy
              * @memberof VIEWER_MANAGER
              */
-            this.raiseEvent('viewer-destroy', {viewer, id: viewer.id, index });
+            this.raiseEvent('viewer-destroy', {viewer, uniqueId: viewer.uniqueId, index });
 
             try {
+                delete viewer.__cachedUUID;
                 viewer.destroy();
                 this.viewers.splice(index, 1);
                 this.layout.removeAt(index);
@@ -1996,6 +2015,43 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 }
             } catch (_) {}
         }
+
+        /**
+         * Reset viewer at index to be able to accept new data.
+         * @param index
+         */
+        resetViewer(index) {
+            const viewer = this.viewers[index];
+            if (!viewer) return;
+
+            try {
+                // Clear all items
+                delete viewer.__cachedUUID;
+                if (viewer.world && viewer.world.getItemCount() > 0) {
+                    const count = viewer.world.getItemCount();
+                    for (let i = count - 1; i >= 0; i--) {
+                        const it = viewer.world.getItemAt(i);
+                        try {
+                            viewer.world.removeItem(it);
+                        } catch (_) {
+                        }
+                    }
+                    /**
+                     * Raised when an existing viewer is removed from the grid layout. Called before the viewer
+                     * is actually removed along with all its data.
+                     * @param {OpenSeadragon.Viewer} viewer
+                     * @param {string} uniqueId
+                     * @param {Number} index
+                     * @event viewer-destroy
+                     * @memberof VIEWER_MANAGER
+                     */
+                    this.raiseEvent('viewer-reset', {viewer: v, uniqueId: v.uniqueId, index });
+                } // else no need to call reset, not opened
+            } catch (e) {
+                console.warn("Viewer reset failed - will recreate. Cause:", e);
+                this.add(index); //recreate force
+            }
+        };
     }
 
     function callDeployedViewerInitialized() {
@@ -2005,12 +2061,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 /**
                  * Raised when a new viewer comes into the play. Index is the index-position on the screen.
                  * @param {OpenSeadragon.Viewer} viewer
-                 * @param {string} id
+                 * @param {string} uniqueId
                  * @param {Number} index
                  * @event viewer-create
                  * @memberof VIEWER_MANAGER
                  */
-                VIEWER_MANAGER.raiseEvent('viewer-create', {v, id: v.id, index: i });
+                VIEWER_MANAGER.raiseEvent('viewer-create', {v, uniqueId: v.uniqueId, index: i });
             }
         }
     }

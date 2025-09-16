@@ -61,10 +61,14 @@ to the respective elements: data / background / visualization arrays.
 Spec objects define what are active indexes to open. They are sometimes undefined - in that case,
 the initialization parses this information from the session information.
 
-#### `viewer-create` | e: `{id: string, index: Number, viewer: OpenSeadragon.Viewer}
+#### `viewer-create` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
 New viewer is added at position ``index`` in the screen.
 
-#### `viewer-destory` | e: `{id: string, index: Number, viewer: OpenSeadragon.Viewer}
+#### `viewer-reset` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
+Existing viewer data has been reset, the uniqueId value will change. This event fires with the
+old value. New value can be retrieved once the viewer is reloaded.
+
+#### `viewer-destory` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
 Existing viewer is removed at position ``index`` in the screen. Existing viewers shrink
 so that the index is occupied if ``viewers.length > index``.
 

@@ -499,6 +499,64 @@ ${await UTILITIES.getForm()}
         });
     };
 
+    const _alphabet = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
+    const _alphaset = new Set(_alphabet.split(''));
+
+    /**
+     * Generate an ID from string.
+     * @param {string} input
+     * @param {number} [size=12] output ID size
+     * @return {string} ID of size length
+     */
+    window.UTILITIES.generateID = function(
+        input,
+        size= 12
+    ) {
+        if (!Number.isFinite(size) || size <= 0) return '';
+        input = String(input);
+        const alphLen = _alphabet.length;
+        const mask = (2 << (31 - Math.clz32((alphLen - 1) | 1))) - 1;
+        let h = 0x811c9dc5;
+        for (let i = 0; i < input.length; i++) {
+            h ^= input.charCodeAt(i);
+            h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+        }
+        function rand32() {
+            h ^= h << 13; h >>>= 0;
+            h ^= h >>> 17; h >>>= 0;
+            h ^= h << 5;  h >>>= 0;
+            return h >>> 0;
+        }
+        let id = '';
+        while (id.length < size) {
+            let r = rand32();
+            // consume 4 bytes per iteration
+            for (let k = 0; k < 4 && id.length < size; k++) {
+                const b = r & 0xff; r >>>= 8;
+                const idx = b & mask;
+                if (idx < alphLen) id += _alphabet[idx];
+            }
+        }
+        return id.slice(0, size);
+    };
+
+    /**
+     * Sanitize an ID from string.
+     * @param input
+     * @return {string}
+     */
+    window.UTILITIES.sanitizeID = function (
+        input,
+    ) {
+        if (input == null) return '';
+        const s = String(input);
+        let out = [];
+        for (const ch of s) {
+            out.push(_alphaset.has(ch) ? ch : '_');
+        }
+        return out.join('');
+    };
+
     //TODO: make this a normal standard UI api (open / focus / inline)
     /**
      * Open or focus a simple debugging window rendered via Dialogs.

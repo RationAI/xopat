@@ -29,10 +29,6 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         };
     }
 
-    _viewer(viewerId) {
-        return VIEWER_MANAGER.getViewer(viewerId) || VIEWER;
-    }
-
     async exportData(key) {
         return JSON.stringify(this._snapshotsState.steps);
     }
@@ -44,9 +40,9 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     // ---------- Core ops (viewer-scoped) ----------
     create(viewerId, delay=0, duration=0.5, transition=1.6, atIndex=undefined) {
         const st = this._snapshotsState;
-        const v = this._viewer(viewerId);
         if (st.playing) return;
 
+        const v = VIEWER_MANAGER.getViewer(viewerId) || VIEWER;
         const view = v.viewport;
         const utils = v.tools;
 
@@ -75,6 +71,14 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         st.idx = st.steps.length ? st.idx % st.steps.length : 0;
 
         this.raiseEvent("remove", { viewerId: step.viewerId, index, step });
+    }
+
+    getSteps() {
+        return this._snapshotsState.steps.filter(s => this._isValidStep(s));
+    }
+
+    getStep(index) {
+        return this._snapshotsState.steps[index];
     }
 
     snapshotCount() { return this._snapshotsState.steps.length; }
@@ -172,8 +176,8 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         });
     }
 
-    _isValidStep(index) {
-        const step = this._snapshotsState.steps[index];
+    _isValidStep(indexOrStep) {
+        const step = typeof indexOrStep === "object" ? indexOrStep : this._snapshotsState.steps[indexOrStep];
         return step && VIEWER_MANAGER.getViewer(step.viewerId);
     }
 
@@ -231,6 +235,8 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     }
 
     _add(step, index=undefined) {
+        if (!this._isValidStep(step)) return;
+
         const st = this._snapshotsState;
         if (typeof index === "number" && index >= 0 && index < st.steps.length) {
             st.steps.splice(index, 0, step);
@@ -245,7 +251,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         const st = this._snapshotsState;
         const step = st.steps[index];
         if (!step || st.steps.length <= index) return;
-        const v = this._viewer(step.viewerId);
+        const v = VIEWER_MANAGER.getViewer(step.viewerId);
         if (!v) return;
 
         const capturesViewport = step.point && !isNaN(step.zoomLevel);

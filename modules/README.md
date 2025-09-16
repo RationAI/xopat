@@ -58,6 +58,10 @@ You should not pollute the global scope (`window`...) and follow the following:
     - if you need to add HTML to DOM, think rather about splitting your implementation to the module (logics) and
     a plugin (UI)
  - do not add HTML to DOM directly (unless you operate a new window instance), use ``window.USER_INTERFACE`` API instead
+If your entity works with a viewer instance, the xOpat viewer can have multiple viewers open at the same time.
+ Make sure you know viewer lifecycle from events of the VIEWER_MANAGER and that you use ``viewer.uiqueId`` to
+ reference the viewer. There is also ``viewer.id`` which is suitable to use only if you care about the viewer
+ position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
 > respect the ``APPLICATION_CONTEXT.secure`` flag parameter

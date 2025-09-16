@@ -73,8 +73,8 @@ addPlugin("recorder", class extends XOpatPlugin {
                     ),
                     mk("presenter-play-icon",  "Play", "play_arrow",  () => _this.snapshots.play(), "text-success"),
                     mk("presenter-stop-icon",  "Stop", "stop",   () => _this.snapshots.stop()),
-                    mk("presenter-replay-icon", "Replay","replay", () => _this.fourthButton()),
-                    mk("presenter-delete-icon", "Delete","delete",  () => _this.fifthButton(), "text-warning")
+                    mk("presenter-replay-icon", "Replay","replay", () => _this.replayOrPrevButton()),
+                    mk("presenter-delete-icon", "Delete","delete",  () => _this.deleteOrNextButton(), "text-warning")
                 );
             }
         }
@@ -219,7 +219,7 @@ addPlugin("recorder", class extends XOpatPlugin {
 
         // Enable sortable timeline (vanilla HTML5 DnD)
         this._initSortableTimeline();
-        this._handleInitIO();
+        this._handleInitAnnotationsModule();
         this._initEvents();
 
         if (Number.isInteger(this.playOnEnter) && this.playOnEnter >= 0) {
@@ -348,14 +348,14 @@ addPlugin("recorder", class extends XOpatPlugin {
 
         let index = this.snapshots.currentStepIndex;
 
-        let node = this.track.children[index];
+        let node = this._findUIStep(index);
         if (node) {
             this.snapshots.currentStep[key] = value;
             node.style[this._getStyleFor(key)] = this._convertValue(key, value);
         }
     }
 
-    fourthButton() {
+    replayOrPrevButton() {
         if (this.isPlaying) {
             this.snapshots.previous();
         } else {
@@ -363,7 +363,7 @@ addPlugin("recorder", class extends XOpatPlugin {
         }
     }
 
-    fifthButton() {
+    deleteOrNextButton() {
         if (this.isPlaying) {
             this.snapshots.next();
         } else {
@@ -372,8 +372,8 @@ addPlugin("recorder", class extends XOpatPlugin {
     }
 
     removeHighlightedRecord() {
-        let index = this.snapshots.currentStepIndex;
-        let child = this.track.children[index];
+        let index = this.snapshots.currentStepIndex();
+        let child = this._findUIStep(index);
         if (child) {
             this.snapshots.remove(index);
             $(child).remove();
@@ -438,7 +438,7 @@ addPlugin("recorder", class extends XOpatPlugin {
         if (this._oldHighlight) {
             this._oldHighlight.classList.remove("border-red-700");
         }
-        this._oldHighlight = this.track.children[index];
+        this._oldHighlight = this._findUIStep(index);
         this._oldHighlight.classList.add("border-red-700");
         $("#point-delay").val(step.delay);
         $("#point-duration").val(step.duration);
@@ -446,7 +446,8 @@ addPlugin("recorder", class extends XOpatPlugin {
     }
 
     _resetAllUISteps() {
-
+        this.track.innerHTML = "";
+        this.snapshots.getSteps().forEach(s => this._addUIStepFrom(s.viewerId, s, false));
     }
 
     _addUIStepFrom(viewerId, step, withNav=true, atIndex=undefined) {
@@ -482,6 +483,13 @@ draggable="true"></span>`;
         // no external draggable helper; HTML5 DnD handlers are bound on the container
         document.getElementById(`step-timeline-${step.id}`)
             ?.addEventListener("click", e => this.selectPoint(e.currentTarget));
+    }
+
+    _findUIStep(index) {
+        const step = this.snapshots.getStep(index);
+        if (step) {
+            return this.track.querySelectorAll(`[data-id="${step.id}"]`)[0];
+        }
     }
 
     _convertValue(key, value) {
@@ -534,21 +542,6 @@ draggable="true"></span>`;
     _bindAnnotations() {
         const update = this._recordAnnotationRef.bind(this);
         this.annotations.canvas.forEachObject(o => (o.presenterSids || []).forEach(sid => update(o, sid)));
-    }
-
-    _handleInitIO() {
-        this._handleInitAnnotationsModule();
-        let step = this.snapshots.currentStep;
-        if (step) {
-            const _this = this;
-            this.snapshots._steps.forEach(s => _this._addUIStepFrom(s.viewerId, s, false));
-            this._highlight(step, this.snapshots.currentStepIndex);
-        }
-    }
-
-    _timelineId(viewerId=undefined, hash=true) {
-        if (hash) return `#${viewerId || VIEWER.uniqueId}-playback-timeline`;
-        return `${viewerId || VIEWER.uniqueId}-playback-timeline`;
     }
 
     _arrRemove(array, item) {
@@ -695,7 +688,7 @@ draggable="true"></span>`;
                 _this._delay = false;
                 _this._duration = e.step.duration + 2.5;
                 _this._referenceStamp = Date.now();
-                _this._absoluteOffset = _this.track.children[e.index].getBoundingClientRect().left
+                _this._absoluteOffset = _this._findUIStep(e.index).getBoundingClientRect().left
                     - _this.track.getBoundingClientRect().left - 7;
             }
         });
@@ -720,15 +713,16 @@ draggable="true"></span>`;
 
         VIEWER_MANAGER.addHandler('viewer-create', e => {
             this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
+            this._resetAllUISteps();
         });
 
         VIEWER_MANAGER.addHandler('viewer-destroy', e => {
             this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
-
+            this._resetAllUISteps();
         });
 
         VIEWER_MANAGER.addHandler('viewer-reset', e => {
-
+            this._resetAllUISteps();
         });
 
         // todo use integrate with singletons module instead
