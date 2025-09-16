@@ -194,12 +194,9 @@ addPlugin("recorder", class extends XOpatPlugin {
         return new TimelinePanel();
     }
 
-    get snapshots() {
-        return OpenSeadragon.Snapshots.viewerInstance(VIEWER);
-    }
-
     // ===== Lifecycle =====
     pluginReady() {
+        this.snapshots = OpenSeadragon.Snapshots.instance();
         // Right menu (pass BaseComponent instances)
         USER_INTERFACE.RightSideMenu.appendExtended(
             "Recorder",
@@ -330,6 +327,7 @@ addPlugin("recorder", class extends XOpatPlugin {
 
     addRecord() {
         this.snapshots.create(
+            VIEWER.uniqueId,
             this._captureParams["delay"],
             this._captureParams["duration"],
             this._captureParams["transition"],

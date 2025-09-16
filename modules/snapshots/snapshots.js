@@ -29,21 +29,6 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         };
     }
 
-    // ---------- Public: per-viewer facade (kept) ----------
-    /**
-     * Back-compat entry: returns a facade bound to the given viewer.
-     * Facade instance is stored in the viewer's context (auto-cleaned with viewer).
-     * @param {OpenSeadragon.Viewer} viewer
-     */
-    static viewerInstance(viewer) {
-        const instance = super.instance();
-        const context = instance.getViewerContext(viewer.uniqueId);
-        if (!context.facade) {
-            context.facade = new SnapshotsFacade(instance, viewer.uniqueId);
-        }
-        return context.facade;
-    }
-
     _viewer(viewerId) {
         return VIEWER_MANAGER.getViewer(viewerId) || VIEWER;
     }
@@ -57,7 +42,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     }
 
     // ---------- Core ops (viewer-scoped) ----------
-    _create(viewerId, delay=0, duration=0.5, transition=1.6, atIndex=undefined) {
+    create(viewerId, delay=0, duration=0.5, transition=1.6, atIndex=undefined) {
         const st = this._snapshotsState;
         const v = this._viewer(viewerId);
         if (st.playing) return;
@@ -80,7 +65,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this._add(step, atIndex);
     }
 
-    _remove(index=undefined) {
+    remove(index=undefined) {
         const st = this._snapshotsState;
         if (st.playing) return;
         index = index ?? st.idx;
@@ -92,40 +77,40 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this.raiseEvent("remove", { viewerId: step.viewerId, index, step });
     }
 
-    _snapshotCount() { return this._snapshotsState.steps.length; }
-    _currentStep()   { const st = this._snapshotsState; return st.steps[st.idx]; }
-    _currentIndex()  { return this._snapshotsState.idx; }
-    _isPlaying()     { return this._snapshotsState.playing; }
+    snapshotCount() { return this._snapshotsState.steps.length; }
+    currentStep()   { const st = this._snapshotsState; return st.steps[st.idx]; }
+    currentStepIndex()  { return this._snapshotsState.idx; }
+    isPlaying()     { return this._snapshotsState.playing; }
 
-    _play() {
+    play() {
         const st = this._snapshotsState;
         if (st.playing) return;
         if (st.idx >= st.steps.length) st.idx = Math.max(0, st.steps.length - 1);
         this.raiseEvent("play");
-        this._playStep(st.idx);
+        this.playStep(st.idx);
         st.playing = true;
     }
 
-    _previous() {
+    previous() {
         const st = this._snapshotsState;
-        if (st.playing) this._playStep(st.idx - 2, true);
-        else this._goToIndex(st.idx - 1);
+        if (st.playing) this.playStep(st.idx - 2, true);
+        else this.goToIndex(st.idx - 1);
     }
 
-    _next() {
+    next() {
         const st = this._snapshotsState;
-        if (st.playing) this._playStep(st.idx, true);
-        else this._goToIndex( st.idx + 1);
+        if (st.playing) this.playStep(st.idx, true);
+        else this.goToIndex( st.idx + 1);
     }
 
-    _playFromIndex(index) {
+    playFromIndex(index) {
         const st = this._snapshotsState;
         if (st.playing) return;
         st.idx = index;
-        this._play();
+        this.play();
     }
 
-    _stop() {
+    stop() {
         const st = this._snapshotsState;
         if (!st.playing) return;
         if (st.currentStep) { st.currentStep.cancel(); st.currentStep = null; }
@@ -133,25 +118,25 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         this.raiseEvent("stop");
     }
 
-    _goToIndex(atIndex) {
+    goToIndex(atIndex) {
         const st = this._snapshotsState;
         if (st.playing || !st.steps.length) return;
         st.idx = ((atIndex % st.steps.length) + st.steps.length) % st.steps.length;
         return this._jumpAt(st.idx);
     }
 
-    _setCapturesVisualization(value) {
+    capturesVisualization(value) {
         const st = this._snapshotsState;
         st.captureVisualization = !!value;
     }
-    _setCapturesViewport(value) { this._snapshotsState.captureViewport = !!value; }
-    _setCapturesScreen(value)   { this._snapshotsState.captureScreen   = !!value; }
+    capturesViewport(value) { this._snapshotsState.captureViewport = !!value; }
+    capturesScreen(value)   { this._snapshotsState.captureScreen   = !!value; }
 
-    _getCapturesVisualization() { return !!this._snapshotsState.captureVisualization; }
-    _getCapturesViewport()      { return !!this._snapshotsState.captureViewport; }
-    _getCapturesScreen()        { return !!this._snapshotsState.captureScreen; }
+    capturesVisualization() { return !!this._snapshotsState.captureVisualization; }
+    capturesViewport()      { return !!this._snapshotsState.captureViewport; }
+    capturesScreen()        { return !!this._snapshotsState.captureScreen; }
 
-    _exportJSON(serialize=true) {
+    exportJSON(serialize=true) {
         const st = this._snapshotsState;
         return serialize ? JSON.stringify(st.steps) : [...st.steps];
     }
@@ -176,7 +161,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     stepCapturesVisualization(step) { return step.visualization && step.visualization.cache; }
     stepCapturesViewport(step)      { return step.point && step.zoomLevel; }
 
-    _sortWithIdList(ids, removeMissing=false) {
+    sortWithIdList(ids, removeMissing=false) {
         const st = this._snapshotsState;
         if (removeMissing) st.steps = st.steps.filter(s => ids.includes(s.id));
         st.steps.sort((a, b) => {
@@ -193,12 +178,12 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     }
 
     // ---------- internals ----------
-    _playStep(index, jumps=false) {
+    playStep(index, jumps=false) {
         const st = this._snapshotsState;
         while (st.steps.length > index && !st.steps[index]) index++;
         if (st.steps.length <= index) {
             st.currentStep = null;
-            this._stop();
+            this.stop();
             return;
         }
 
@@ -218,7 +203,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         st.currentStep.promise.then(atIndex => {
             this._jumpAt(atIndex, prevIdx);
             st.idx = atIndex + 1;
-            this._playStep(st.idx);
+            this.playStep(st.idx);
         });
     }
 
@@ -326,55 +311,3 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
         return true;
     }
 };
-
-
-// ---------- Per-viewer facade (unchanged public surface) ----------
-class SnapshotsFacade {
-    constructor(parent, viewerId) {
-        this._p = parent;
-        this._vid = viewerId;
-        this._handlers = {}; // name -> Set(func)
-    }
-
-    addHandler(name, fn) {
-        this._p.addHandler(name, fn);
-    }
-    removeHandler(name, fn) {
-        this._p.removeHandler(name, fn);
-    }
-
-    // public API (delegation)
-    create(d=0, dur=0.5, t=1.6, at=undefined) { this._p._create(this._vid, d, dur, t, at); }
-    remove(index=undefined) { this._p._remove(index); }
-
-    get snapshotCount() { return this._p._snapshotCount(); }
-    get currentStep()    { return this._p._currentStep(); }
-    get currentStepIndex(){ return this._p._currentIndex(); }
-    get playing()        { return this._p._isPlaying(); }
-
-    play()               { this._p._play(); }
-    previous()           { this._p._previous(); }
-    next()               { this._p._next(); }
-    playFromIndex(i)     { this._p._playFromIndex(i); }
-    stop()               { this._p._stop(); }
-    goToIndex(i)         { return this._p._goToIndex(i); }
-
-    set capturesVisualization(v) { this._p._setCapturesVisualization(v); }
-    set capturesViewport(v)      { this._p._setCapturesViewport(v); }
-    set capturesScreen(v)        { this._p._setCapturesScreen(v); }
-
-    get capturesVisualization()  { return this._p._getCapturesVisualization(); }
-    get capturesViewport()       { return this._p._getCapturesViewport(); }
-    get capturesScreen()         { return this._p._getCapturesScreen(); }
-
-    exportJSON(serialize=true)   { return this._p._exportJSON(serialize); }
-    async exportData(key="")     { return this.exportJSON(); }
-
-    importJSON(json)             { this._p._importJSON(json); }
-    async importData(_key="", data){ this.importJSON(data); }
-
-    stepCapturesVisualization(step){ return this._p.stepCapturesVisualization(step); }
-    stepCapturesViewport(step)     { return this._p.stepCapturesViewport(step); }
-
-    sortWithIdList(ids, removeMissing=false) { this._p._sortWithIdList(ids, removeMissing); }
-}
