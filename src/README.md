@@ -1,67 +1,26 @@
 # XOpat - OpenSeadragon-based histology data visualizer
 
-The visualization is fully flexible. It, in fact, consists of two main logical groups. The first, **image** groups, 
-is rendered AS-IS. It is meant for tissue scan to be shown. The second, **data** groups is rendered using our WebGL 
-extension. 
-
 In minimum, two components are necessary to run the viewer: a backend service, an image server able to handle image requests;
-and a front-end viewer. However, the usual scenario is:
- - an image server listens for tile query requests, some of which are image array requests, that have to be handled somehow
-    - you can re-define how response data of the query gets interpreted inside `modules/webgl/dataLoader.js`, i.e. how your data
-    gets transformed to a canvas object of appropriate tile size
-    - or not handled at all, and use only one layer per data group visualization (still can re-use up to 4 channels of data)
- - a viewer listens for POST request configuration and renders the visualization along with necessary modules and plugins loaded
- - an external system (such as xopat browser) knows how to configure the viewer and how to open desired visualizations though UI interface
-
-Such scenario can be found in our ready-to-use docker system.
-
-#### DYI - Backend
-You can either set up your own capable image server or use 
-our server (https://github.com/xkacenga/iipsrv) which is fully compatible. More detailed description
-on the process and requirements will be documented later (you can get in touch with us). 
-The good news is that all tile-serving servers should be to some extent compatible.
-
-Plugins require their own API so also check documentation (README) of each plugin.
-
-##### Plugins API
-Each plugin can perform custom tasks that might depend on some service. After you manage to successfully run
-the viewer and some plugin feature does not work properly, please check the plugin README to learn what is needed
-to fix the issue.
-
-Example:
-
-Annotations plugin uses an external server as annotations database. By default, this functionality is handled by our
-image server together with image queries. In case you change the image server URL or the server implementation itself, you must
- - check that the annotation server you use can handle annotation queries, this can be done both by implementing the database interface we
- use, or by adjustiung the `plugins/annotations/dataLoader.js` file that maps between the plugin internal objects structure and REST API calls
- - check that the plugin knows how to connect to the server, i.e. setting up a correct URL in the `include.json` file
-
-#### DYI - Frontend
-0. Add and build OpenSeadragon - requires `npm` and `grunt` (``cd xopat && git clone https://github.com/RationAI/openseadragon.git && cd openseadragon && npm install && grunt build``), details [here](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
-1. Place the application to a folder from which PHP (**VERSION > 7.1**) can serve files (e.g. create WampServer configuration for localhost).
-2. Change **config.php** configuration, most importantly the protocol used, correct paths and default URL(s) to image server(s).
-3. Use the visualization by sending the `JSON` configuration via `HTTP POST` to the `index.php` (you will most likely want to have 
-a script that is able to provide the user with a link, for reference see how `redirect.php` works).
+and a front-end viewer. A crucial integration logics is described in the [integration document](../INTEGRATION.md), and
+basic startup guidelines are at https://xopat.readthedocs.io.
 
 ## Configuration
-Supported configuration for `index.php` - the visualization itself, can be passed both in `POST` and `GET` requests.
-The name of the argument is **`visualization`**, a JSON structure that sets up everything.
+Supported configuration for the visualization itself, can be passed both in `POST` and `GET` requests.
 
 > There are at least four ways of opening the viewer:
 >  - ``slides`` and `masks` query parameters, where a comma-separated list of data IDs is provided
 >  - URL-encoded session after ``#`` hash in URL
->  - serialized session in GET (not recommended)
->  - serialized session in POST
+>  - simplified GET arguments: ``http://localhost:9000?slides=slide,list&masks=mask,list``
+>  - serialized session in GET (not recommended) ``http://localhost:9000#urlEncodedSessionJSONHere``
+>  - serialized session in POST (see ``http://localhost:9000/dev_setup`` for simple interface to this method)
 > 
 > Furthermore, the viewer remembers last successfull session and 
 > stores it inside the browser memory, so that opening a viewer without
 > a valid session opens the last visited one.
 > 
-> NOTE: Plugins can override this behavior. Check used plugin READMEs for more details.
+> NOTE: Plugins can override even this behavior. Check used plugin READMEs for more details.
 > 
 
-Note that language setting is an parameter that behaves a bit differently: you can either specify ``locale`` parameter
-or override any specification by sending ``lang=[code]`` as a GET parameter - for simple localization overrides.
 
 Example configuration:
 ````JSON
@@ -230,20 +189,22 @@ context via the `Dialogs` interface.
 ### `./assets/`
 Own images and styles.
 
-### `plugins.php` and `../plugins/`
+### `../plugins/`
 The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integration 
 of functionality to the visualizer GUI. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
 
-### `modules.php` and `../modules/`
+### `../modules/`
 The visualizer supports **modules** - a `JavaScript` libraries: it is a more dynamic version of `./external/`.
 Modules allow versatile library inclusion: plugins and other modules can declare dependency: 
 this dependency is resolved and necessary items are included (in the right order).
 See `./modules/README.md`. Modules are placed in `./modules/` folder.
 
 ### `../openseadragon/` 
-OpenSeadragon third-party javascript library the whole visualization builds on. `debug` contains unminified version for debugging & OSD modifications.
+OpenSeadragon **v6+** third-party javascript library the whole visualization builds on. `debug` contains unminified version for debugging & OSD modifications.
 These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.
-
+OpenSeadragon is not included by default, but you can clone it inside this repository to use internal
+copy of the library. You can also use CDN or different location of OpenSeadragon, but it must be of a v6+.
+The OSD location is configurable through the ENV.
 
 ## Available API
 
@@ -262,12 +223,16 @@ handling, plugin and module loading and the viewport and events management.
 Many features are available through ``modules`` that implement additional important functionality.
 
 ### UI
-**You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)**
-For easier UI renderings, ``ui_components.js`` define simple basic building blocks for
-basic elements, actions and containers (e.g. menus). ``user_interface.js`` creates
+**You should use new UI components, see [this README](../ui/README.md)**.
+Components are accessible through `UI` global variable. ``user_interface.js`` creates
 a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
+The UI builds upon *tailwind* css and *Daisy UI* system.
+
 > We recommend re-using and extending these instead of pulling new dependencies.
 > Please, make yourself familiar with the UI API before making new features. 
+> Especially, if you need some component that is likely present in DaisyUI, but
+> has no corresponding component here, create one in the ``ui/classes/elements`` folder
+> so that others can use it too.
 
 ### Localization
 Is possible through ``i18next`` library and also server-side with `i18n` class (with limited capabilities).
@@ -277,54 +242,62 @@ In spawned child window, the translation is available also through ``$`` symbol,
 
 For plugins localization, see the plugins README.
 
-### Re-using parts of the CORE in PHP and JS
+### Advanced: Re-using parts of the CORE SERVER in PHP and JS
+<details>
+<summary>Reusing the Viewer Code in custom apps.</summary>
+A good idea is to look at the server's implementation of the developer setup page.
+This way, you can load parts of the viewer code into any web page, using
+either Node.js, PHP, or other available server implementation.
 This is an example how to include modules and plugins API with loading capabilities
 to a custom PHP script:
 
-````php
-//load static config and core functions
+```php
+// load static config and core functions
 require_once "src/core.php";
-//load plugins and modules (required by plugins)
+// load plugins and modules (required by plugins)
 include_once(PROJECT_SOURCES . "plugins.php");
-global $PLUGINS, $MODULES;
-// use require_*() to load parts of the core -> prints JS script tags to attach
-//optionally add other parts of the core -> .js files
-//choose some of these to load (files to load are mapped in the env file)
-//    require_libs(); //libs - jquery, i18next... /src/libs)
-//    require_openseadragon(); //osd viewer
-//    require_external(); //external dependencies (some of src/external)
-//    require_core("loader"); //dynamic component loading
-//    require_core("deps"); //UI classes, shader configurator
 
-//set up here which modules/plugins are to be
-//statically loaded by setting $item["loaded"] = true;
-//and print them to the HTML:
+global $PLUGINS, $MODULES;
+
+// use require_*() to load parts of the core - prints JS script tags to attach
+// optionally add other parts of the core - .js files
+// choose some of these to load (files to load are mapped in the env file)
+//    require_libs(); // libs - jquery, i18next... /src/libs
+//    require_openseadragon(); // osd viewer
+//    require_external(); // external dependencies (some of src/external)
+//    require_core("loader"); // dynamic component loading
+//    require_core("deps"); // UI classes, shader configurator
+
+// set up here which modules/plugins are to be
+// statically loaded by setting $item["loaded"] = true;
+// and print them to the HTML:
 require_modules();
 require_plugins();
 
-//if we include this
+// if we include this
 require_core("loader");
-//we can do in javascript later
+// we can do in javascript later
 ?>
 <script>
-    async function() {
-        //loader needs this data from the plugins.php
-        const runLoader = initXOpatLoader(
-            <?php echo json_encode($PLUGINS) ?>,
-            <?php echo json_encode($MODULES) ?>,
-            '<?php echo PLUGINS_FOLDER ?>',
-            '<?php echo MODULES_FOLDER ?>',
-            '<?php echo VERSION ?>',
-            // for demonstration purposes, we request awaiting loader, which makes sure all 
-            // plugins finish their initialization, default is false
-            true  
-        );
-        await runLoader();
-    
-        UTILITIES.loadModules(()=>{
-            console.log('Loaded, yay!');
-        }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
-    }();
-</script>
+async function() {
+    // loader needs this data from the plugins.php
+    const runLoader = initXOpatLoader(
+        <?php echo json_encode($PLUGINS) ?>,
+        <?php echo json_encode($MODULES) ?>,
+        '<?php echo PLUGINS_FOLDER ?>',
+        '<?php echo MODULES_FOLDER ?>',
+        '<?php echo VERSION ?>',
+        // for demonstration purposes, we request awaiting loader, which makes sure all
+        // plugins finish their initialization, default is false
+        true  
+    );
+    await runLoader();
 
-````
+    UTILITIES.loadModules(() => {
+        console.log('Loaded, yay!');
+    }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
+}();
+</script>
+```
+The same works for the Node.js server, but with slightly different syntax.
+</details>

@@ -12,17 +12,6 @@ function initXopatScripts() {
         event.preventDefault();
     });
 
-    /**
-     * Replace share button in static preview mode
-     */
-    if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
-        const shareBtn = document.getElementById("copy-url");
-        const staticDisclaimer = document.getElementById("static-file-disclaimer");
-
-        shareBtn.style.display = "none";
-        staticDisclaimer.style.display = "grid";
-    }
-
     let failCount = new WeakMap();
     VIEWER_MANAGER.broadcastHandler('tile-load-failed', function(e) {
         if (e.message === "Image load aborted") return;

@@ -151,53 +151,55 @@ addPlugin("recorder", class extends XOpatPlugin {
                         new UI.Input({
                             legend: "Delay",
                             suffix: "s",
-                            onChange: (value) => _this.setValue('delay', parseFloat(value)),
+                            onChange: e => _this.setValue('delay', parseFloat(e.target.value)),
                             id: "point-delay",
                             size: UI.Input.SIZE.SMALL,
                             extraProperties: {
-                                type:"number", min:"0", value:_this._captureParams["delay"], step:"0.1", title:"Frame Delay",style: "width: 3rem;"
+                                type:"number", min:"0", value:_this._captureParams["delay"].toString(), step:"0.1", title:"Frame Delay",style: "width: 3rem;"
                             },
                             extraClasses: "mr-1",
                         }).create(),
                         new UI.Input({
                             legend: "Duration",
                             suffix: "s",
-                            onChange: (value) => _this.setValue('duration', parseFloat(value)),
+                            onChange: e => _this.setValue('duration', parseFloat(e.target.value)),
                             id: "point-duration",
                             size: UI.Input.SIZE.SMALL,
                             extraProperties: {
-                                type:"number", min:"0", value:_this._captureParams["duration"], step:"0.1", title:"Animation Duration",style: "width: 3rem; margin-right: 0.5rem;"
+                                type:"number", min:"0", value:_this._captureParams["duration"].toString(), step:"0.1", title:"Animation Duration",style: "width: 3rem; margin-right: 0.5rem;"
                             }
                         }).create(),
                         // Transition
                         new UI.Input({
                             legend: "Linear / Ease",
-                            onChange: (value) => _this.setValue('transition', parseFloat(value)),
+                            onChange: e => _this.setValue('transition', parseFloat(e.target.value)),
                             id: "point-spring",
                             size: UI.Input.SIZE.SMALL,
                             extraProperties: {
-                                type:"range", min:"1", value:_this._captureParams["transition"], step:"0.2", max:"10", style: "width: 3rem;"
+                                type:"range", min:"1", value:_this._captureParams["transition"].toString(), step:"0.2", max:"10", style: "width: 3rem;"
                             }
                         }).create()
                     ),
                 );
 
-                const track = div({
-                    id:"playback-timeline",
-                    class:"inline-block align-top relative flex-1 px-3 bg-base-200 rounded-sm w-full",
-                    style:"white-space:nowrap; overflow-x:auto; overflow-y:hidden; height:48px; min-width:100px;",
+                _this.track = div({
+                    id: "presenter-timeline-track",
+                    class:"inline-block align-top relative flex-1 flex items-start px-3 bg-base-200 rounded-sm w-full overflow-y-scroll",
+                    style:"white-space:nowrap; overflow-x:auto; overflow-y:hidden; height:48px; min-width:100px; max-height: 96px;"
                 });
 
-                return div({class:"flex items-start flex-column"}, track, controls);
+                return div({class:"flex items-start flex-column"}, _this.track, controls);
             }
         }
         return new TimelinePanel();
     }
 
+    get snapshots() {
+        return OpenSeadragon.Snapshots.viewerInstance(VIEWER);
+    }
+
     // ===== Lifecycle =====
     pluginReady() {
-        this.snapshots = OpenSeadragon.Snapshots.instance(VIEWER);
-
         // Right menu (pass BaseComponent instances)
         USER_INTERFACE.RightSideMenu.appendExtended(
             "Recorder",
@@ -214,12 +216,12 @@ addPlugin("recorder", class extends XOpatPlugin {
             this._toolsMenuId,
             "Timeline",
             this._TimelineComponent(),
-            "play_circle"
+            "play_circle",
+            true
         );
 
         // Enable sortable timeline (vanilla HTML5 DnD)
-        this._initSortableTimeline("playback-timeline");
-
+        this._initSortableTimeline();
         this._handleInitIO();
         this._initEvents();
 
@@ -232,12 +234,10 @@ addPlugin("recorder", class extends XOpatPlugin {
     }
 
     // ===== DnD reordering for timeline =====
-    _initSortableTimeline(containerId) {
-        const container = document.getElementById(containerId);
-        if (!container) return;
+    _initSortableTimeline() {
+        const timeline = this.track;
         let dragSrcId = null;
-
-        container.addEventListener("dragstart", (e) => {
+        timeline.addEventListener("dragstart", (e) => {
             const el = e.target.closest("[data-id]");
             if (!el) return;
             if (this.isPlaying) { e.preventDefault(); return; }
@@ -247,30 +247,30 @@ addPlugin("recorder", class extends XOpatPlugin {
             el.classList.add("dragging");
         });
 
-        container.addEventListener("dragend", (e) => {
+        timeline.addEventListener("dragend", (e) => {
             const el = e.target.closest("[data-id]");
             if (el) el.classList.remove("dragging");
             dragSrcId = null;
         });
 
-        container.addEventListener("dragover", (e) => {
+        timeline.addEventListener("dragover", (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
-            const after = this._getDragAfterElement(container, e.clientX);
-            const dragging = container.querySelector(".dragging");
+            const after = this._getDragAfterElement(timeline, e.clientX);
+            const dragging = timeline.querySelector(".dragging");
             if (!dragging) return;
             if (after == null) {
-                container.appendChild(dragging);
+                timeline.appendChild(dragging);
             } else {
-                container.insertBefore(dragging, after);
+                timeline.insertBefore(dragging, after);
             }
         });
 
-        container.addEventListener("drop", (e) => {
+        timeline.addEventListener("drop", (e) => {
             e.preventDefault();
-            const newOrder = Array.from(container.children).map((n) => n.dataset.id);
+            const newOrder = Array.from(timeline.children).map((n) => n.dataset.id);
             this.snapshots.sortWithIdList(newOrder);
-            const el = container.querySelector(`[data-id="${dragSrcId}"]`);
+            const el = timeline.querySelector(`[data-id="${dragSrcId}"]`);
             if (el) this.selectPoint(el);
         });
     }
@@ -340,6 +340,7 @@ addPlugin("recorder", class extends XOpatPlugin {
     selectPoint(node) {
         let index = Array.prototype.indexOf.call(node.parentNode.children, node);
         this.snapshots.goToIndex(index);
+        this._highlight(this.snapshots.currentStep, index);
     }
 
     setValue(key, value) {
@@ -349,7 +350,7 @@ addPlugin("recorder", class extends XOpatPlugin {
 
         let index = this.snapshots.currentStepIndex;
 
-        let node = $("#playback-timeline").children()[index];
+        let node = this.track.children[index];
         if (node) {
             this.snapshots.currentStep[key] = value;
             node.style[this._getStyleFor(key)] = this._convertValue(key, value);
@@ -374,7 +375,7 @@ addPlugin("recorder", class extends XOpatPlugin {
 
     removeHighlightedRecord() {
         let index = this.snapshots.currentStepIndex;
-        let child = $("#playback-timeline").children()[index];
+        let child = this.track.children[index];
         if (child) {
             this.snapshots.remove(index);
             $(child).remove();
@@ -435,16 +436,16 @@ addPlugin("recorder", class extends XOpatPlugin {
 
     _highlight(step, index) {
         if (this._oldHighlight) {
-            this._oldHighlight.removeClass("selected");
+            this._oldHighlight.classList.remove("border-red-700");
         }
-        this._oldHighlight = $($("#playback-timeline").children()[index]); //todo just keep no-jquery node?
-        this._oldHighlight.addClass("selected");
+        this._oldHighlight = this.track.children[index];
+        this._oldHighlight.classList.add("border-red-700");
         $("#point-delay").val(step.delay);
         $("#point-duration").val(step.duration);
         $("#point-spring").val(step.transition);
     }
 
-    _addUIStepFrom(step, withNav=true, atIndex=undefined) {
+    _addUIStepFrom(viewerId, step, withNav=true, atIndex=undefined) {
         let color = "#000";
         if (this.snapshots.stepCapturesVisualization(step)) {
             color = this.snapshots.stepCapturesViewport(step) ? "#ffd500" : "#9dff00";
@@ -454,15 +455,15 @@ addPlugin("recorder", class extends XOpatPlugin {
 
         const height = Math.max(7, Math.log(step.zoomLevel ?? 1) /
                 Math.log(VIEWER.viewport.getMaxZoom() + 1) * 18 + 14),
-            parent = $("#playback-timeline"),
-            html = `<span id="step-timeline-${step.id}" data-id="${step.id}"
+            parent = $(this.track),
+            html = `<span id="step-timeline-${step.id}" data-id="${step.id}" data-group="${viewerId}"
 style="background: ${color}; border-color: ${color};
 border-bottom-left-radius: ${this._convertValue('transition', step.transition)};
 width: ${this._convertValue('duration', step.duration)}; height: ${height}px; 
-margin-left: ${this._convertValue('delay', step.delay)};"
+margin-left: ${this._convertValue('delay', step.delay)}; margin-top: ${48 * VIEWER_MANAGER.getViewerIndex(viewerId)}px"
 draggable="true"></span>`;
 
-        if (parent[0].childElementCount > atIndex) {
+        if (parent.childElementCount > atIndex) {
             parent.children().eq(atIndex).before(html);
         } else {
             parent.append(html);
@@ -530,9 +531,14 @@ draggable="true"></span>`;
         let step = this.snapshots.currentStep;
         if (step) {
             const _this = this;
-            this.snapshots._steps.forEach(s => _this._addUIStepFrom(s, false));
+            this.snapshots._steps.forEach(s => _this._addUIStepFrom(s.viewerId, s, false));
             this._highlight(step, this.snapshots.currentStepIndex);
         }
+    }
+
+    _timelineId(viewerId=undefined, hash=true) {
+        if (hash) return `#${viewerId || VIEWER.id}-playback-timeline`;
+        return `${viewerId || VIEWER.id}-playback-timeline`;
     }
 
     _arrRemove(array, item) {
@@ -542,27 +548,31 @@ draggable="true"></span>`;
     };
 
     _handleInitAnnotationsModule() {
-        if (window.OSDAnnotations && !this.annotations) {
-            this.annotations = OSDAnnotations.instance();
-            this.annotations.forceExportsProp = "presenterSids";
-            this.annotations?.initPostIO();
-            this._bindAnnotations();
+        try {
+            if (window.OSDAnnotations && !this.annotations) {
+                this.annotations = OSDAnnotations.instance();
+                this.annotations.forceExportsProp = "presenterSids";
+                this.annotations?.initPostIO();
+                this._bindAnnotations();
 
-            const _this = this;
+                const _this = this;
 
-            const addSidRecord = (o) => {
-                if (o.presenterSids) {
-                    o.presenterSids.forEach(sid => _this._recordAnnotationRef(o, sid));
+                const addSidRecord = (o) => {
+                    if (o.presenterSids) {
+                        o.presenterSids.forEach(sid => _this._recordAnnotationRef(o, sid));
+                    }
                 }
-            }
 
-            this.annotations.addHandler('annotation-create', e => addSidRecord(e.object));
-            this.annotations.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
-            this.annotations.addHandler('annotation-replace', e => {
-                _this._removeAnnotationRef(e.previous);
-                e.next.presenterSids = e.previous.presenterSids;
-                addSidRecord(e.next);
-            });
+                this.annotations.addHandler('annotation-create', e => addSidRecord(e.object));
+                this.annotations.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
+                this.annotations.addHandler('annotation-replace', e => {
+                    _this._removeAnnotationRef(e.previous);
+                    e.next.presenterSids = e.previous.presenterSids;
+                    addSidRecord(e.next);
+                });
+            }
+        } catch (e) {
+            console.error(e);
         }
     }
 
@@ -607,7 +617,7 @@ draggable="true"></span>`;
             _this._referenceStamp = Date.now();
             _this._absoluteOffset = 0;
             _this._realtimeOffset = 0;
-            $("#playback-timeline").append('<span id="playback-timeline-measure" data-offset="0"></span>');
+            _this.track.insertAdjacentHTML('beforeend', '<span id="playback-timeline-measure" data-offset="0"></span>');
             _this._measureNode = document.getElementById('playback-timeline-measure');
 
             const engine = _this.annotations;
@@ -636,7 +646,6 @@ draggable="true"></span>`;
 
             if (_this._measureNode) {
                 if (!_this._loopMeasure) {
-                    const measure = $("#playback-timeline-measure");
                     _this._loopMeasure = setInterval(function() {
                         const d = (Date.now() - _this._referenceStamp) / 1000;
                         const animationEnds = !_this._delay && _this._duration < d;
@@ -673,18 +682,17 @@ draggable="true"></span>`;
                 }
                 if (updates) _this.annotations.canvas.renderAll();
 
-                let container = $("#playback-timeline");
                 _this._delay = false;
                 _this._duration = e.step.duration + 2.5;
                 _this._referenceStamp = Date.now();
-                _this._absoluteOffset = container.children().eq(e.index)[0].getBoundingClientRect().left
-                    - container[0].getBoundingClientRect().left - 7;
+                _this._absoluteOffset = _this.track.children[e.index].getBoundingClientRect().left
+                    - _this.track.getBoundingClientRect().left - 7;
             }
         });
 
         this.snapshots.addHandler('create', e => {
             USER_INTERFACE.Tools.notify(_this._toolsMenuId);
-            _this._addUIStepFrom(e.step, true, e.index);
+            _this._addUIStepFrom(e.viewerId, e.step, true, e.index);
         });
 
         this.snapshots.addHandler('remove', e => {
@@ -700,6 +708,11 @@ draggable="true"></span>`;
             }
         });
 
+        VIEWER_MANAGER.addHandler('viewer-create', e => {
+           this.track.style.height = `${48*VIEWER_MANAGER.viewers.length}px`;
+        });
+
+        // todo use integrate with singletons module instead
         VIEWER_MANAGER.addHandler('module-loaded', e => {
             if (e.id === "annotations") {
                 _this._handleInitAnnotationsModule();

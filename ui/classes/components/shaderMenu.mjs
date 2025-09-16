@@ -1,9 +1,8 @@
 // ui/components/ShaderMenu.mjs
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
 
-const { div, span, select, option, label, input, br, ul, li, a } = van.tags;
+const { div, span, select, option, br, ul, li, a } = van.tags;
 
 /**
  * ShaderMenu (DaisyUI)

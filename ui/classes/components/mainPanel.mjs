@@ -95,7 +95,6 @@ class MainPanel extends Menu {
     }
     _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId, title, html, icon, withSubmenu, container) {
     }
-
 }
 
 export { MainPanel };

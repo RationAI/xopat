@@ -6,7 +6,7 @@ const { legend, fieldset, input, label } = van.tags
 /**
  * @class Input
  * @extends BaseComponent
- * @description A icon component
+ * @description An Input component
  * @example
 */
 class Input extends BaseComponent {
@@ -29,31 +29,26 @@ class Input extends BaseComponent {
         this._applyOptions(options, "size", "style");
     }
 
-    /**
-     *
-     * @param {*} name name of the new icon from FontAwesome
-     * @description Changes the icon of the component
-     */
-    changeIcon(name) {
-        this.setClass("name", name);
-    }
-
     create() {
         const legendContent = this.options["legend"];
         const prefix = this.options["prefix"];
         const suffix = this.options["suffix"];
 
         let result = input({ ...this.extraProperties });
-        if (this.options["onChange"]) {
-            result.onchange = this.options["onChange"];
-        }
+
         if (prefix || suffix) {
+            const inp = input(this.extraProperties);
+            if (this.options["onChange"]) {
+                inp.onchange = this.options["onChange"];
+            }
             result = label(this.commonProperties,
-                this.toNode(prefix),
-                input(this.extraProperties),
-                this.toNode(suffix));
+                this.toNode(prefix), inp, this.toNode(suffix)
+            );
         } else {
             result = input({ ...this.commonProperties, ...this.extraProperties });
+            if (this.options["onChange"]) {
+                result.onchange = this.options["onChange"];
+            }
         }
         if (legendContent) {
             result = fieldset({class: "fieldset "},

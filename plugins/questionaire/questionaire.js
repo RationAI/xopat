@@ -7,8 +7,8 @@ addPlugin('questionaire', class extends XOpatPlugin {
         // NEW: lock editing when exporting (for now default true; flip later during real export)
         this.isExported = this.getOption('isExported', false);
 
-        this.SCHEMA_KEY = `xopat_questionnaire_schema_${this.id}`;
-        this.DRAFT_KEY  = `xopat_questionnaire_draft_${this.id}`;
+        this.SCHEMA_KEY = 'questionnaire_schema';
+        this.DRAFT_KEY  = 'questionnaire_draft';
 
         this.DEFAULT_SCHEMA = {
             display: "wizard",
@@ -276,10 +276,12 @@ addPlugin('questionaire', class extends XOpatPlugin {
         this._savedSchema = schemaObj;
     }
     _loadDraft() {
-        try { return JSON.parse(localStorage.getItem(this.DRAFT_KEY) || 'null'); } catch { return null; }
+        if (this.isExported) return;
+        try { return JSON.parse( APPLICATION_CONTEXT.AppCache.get(this.DRAFT_KEY) || 'null'); } catch { return null; }
     }
     _saveDraft(data) {
-        localStorage.setItem(this.DRAFT_KEY, JSON.stringify(data || {}));
+        if (this.isExported) return;
+        APPLICATION_CONTEXT.AppCache.set(this.DRAFT_KEY, JSON.stringify(data || {}));
     }
 
     // ========== builder (no preview) ==========

@@ -32,7 +32,7 @@ window.HTTPError = class extends Error {
  * - Do not call this inside the viewer; use it if you want to reuse plugins/modules elsewhere.
  * - Example usage:
  *   const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
- *   await initPlugins(); // if awaitPluginReady=true
+ *   await initPlugins();
  *
  * @param {Object.<string, {id:string, name?:string, directory?:string, includes?:string[], permaLoad?:boolean, instance?:any, loaded?:boolean, error?:any}>} PLUGINS
  *        Registry object of plugins keyed by plugin id (from include.json).
@@ -42,11 +42,9 @@ window.HTTPError = class extends Error {
  * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
  * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
  * @param {string} version - Version string of the running build.
- * @param {boolean} [awaitPluginReady=false] - If true, the returned initializer is async and awaits plugin readiness.
- * @returns {(() => void) | (() => Promise<void>)} A function to be called once the host app is ready. When
- *          awaitPluginReady=true it returns an async function that resolves when all plugins finish pluginReady().
+ * @returns {(() => Promise<void>)} A function to be called once the host app is ready. You can await the handler if you like.
  */
-function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version, awaitPluginReady=false) {
+function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
@@ -61,6 +59,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
      */
     let REGISTERED_PLUGINS = [];
     let LOADING_PLUGIN = false;
+
+    function pluginsWereInitialized() {
+        return REGISTERED_PLUGINS === undefined;
+    }
 
     function showPluginError(id, e) {
         if (!e) {
@@ -926,7 +928,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     window.XOpatModuleSingleton = class extends XOpatModule {
         /**
          * Get instance of the annotations manger, a singleton
-         * (only one instance can run since it captures mouse events)
+         * (only one instance can run since it captures mouse events).
          * @static
          * @return {XOpatModuleSingleton} manager instance
          */
@@ -1255,7 +1257,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 meta.includes = [];
             }
 
-            if (REGISTERED_PLUGINS === undefined) {
+            if (pluginsWereInitialized()) {
                 /**
                  * Before a request to plugin loading is processed at runtime.
                  * @property {string} id plugin id
@@ -1282,10 +1284,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                     }
                 }
 
-                //loaded after page load if REGISTERED_PLUGINS === undefined
-                const loadedAfterPluginInit = REGISTERED_PLUGINS === undefined;
-                if (loadedAfterPluginInit) {
-
+                if (pluginsWereInitialized()) {
                     initializePlugin(PLUGINS[id].instance).then(success => {
                         if (!success) {
                             /**
@@ -1528,6 +1527,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
+         *
+         * @param id
+         * @return number
+         */
+        getViewerIndex(id) {
+            return this.viewers.findIndex(v => v.id === id);
+        }
+
+        /**
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          * @param {number} index - Zero-based viewer slot index.
@@ -1730,15 +1738,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
                     }
 
-                    /**
-                     * Raised when a new viewer comes into the play. Index is the index-position on the screen.
-                     * @param {OpenSeadragon.Viewer} viewer
-                     * @param {string} id
-                     * @param {Number} index
-                     * @event viewer-create
-                     * @memberof VIEWER_MANAGER
-                     */
-                    this.raiseEvent('viewer-create', {viewer, id: cellId, index });
+                    // call here only when ready, otherwise the event is called after plugin initialization
+                    if (pluginsWereInitialized()) {
+                        /**
+                         * Raised when a new viewer comes into the play. Index is the index-position on the screen.
+                         * @param {OpenSeadragon.Viewer} viewer
+                         * @param {string} id
+                         * @param {Number} index
+                         * @event viewer-create
+                         * @memberof VIEWER_MANAGER
+                         */
+                        this.raiseEvent('viewer-create', {viewer, id: cellId, index });
+                    }
                 }
 
                 // Every load event, update data
@@ -1974,6 +1985,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 this.viewers.splice(index, 1);
                 this.layout.removeAt(index);
 
+                //todo check if viewer has data and if yes prompt user and export if possible
                 // explicitly clean store
                 for (let key in viewer[STORE_TOKEN]) {
                     const store = viewer[STORE_TOKEN][key];
@@ -1986,13 +1998,26 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
     }
 
-    return awaitPluginReady ? async function() {
-        //Notify plugins OpenSeadragon is ready
-        Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {
-            REGISTERED_PLUGINS = undefined;
-        });
-    } : function () {
-        REGISTERED_PLUGINS.forEach(plugin => initializePlugin(plugin));
-        REGISTERED_PLUGINS = undefined;
+    function callDeployedViewerInitialized() {
+        for (let i = 0; i < VIEWER_MANAGER.viewers.length; i++) {
+            const v = VIEWER_MANAGER.viewers[i];
+            if (v.isOpen()) {
+                /**
+                 * Raised when a new viewer comes into the play. Index is the index-position on the screen.
+                 * @param {OpenSeadragon.Viewer} viewer
+                 * @param {string} id
+                 * @param {Number} index
+                 * @event viewer-create
+                 * @memberof VIEWER_MANAGER
+                 */
+                VIEWER_MANAGER.raiseEvent('viewer-create', {v, id: v.id, index: i });
+            }
+        }
     }
+
+    return function() {
+        return Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {
+            REGISTERED_PLUGINS = undefined;
+        }).then(callDeployedViewerInitialized);
+    };
 }

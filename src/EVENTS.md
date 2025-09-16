@@ -47,15 +47,19 @@ to the handler function that might contain a lot of useful data.
 #### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
 Fired before the first open of the viewer happens. Apps can perform
 custom functionality just before the viewer gets initialized.
-In this event, you can also override the application rendering configuration,
-as it has not been initialized yet. For example, if the application rendering
-is missing all the data, you can provide default values for the rendering. This data can be set
-to the respective elements: data / background / visualization arrays.
 ``fromLocalStorage`` is true when the data was loaded from the user browser cache, but the viewer
 was not opened with a session spec. You can use this flag to monitor whether the viewer
 was properly opened, or just shows cached session and possibly replace it with more relevant one.
-
 Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
+
+#### async `before-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], bgSpec: [number|number[]|undefined|null], vizSpec: [number|number[]|undefined|null]}
+Unlike `before-first-open`, this event is invoked for each viewer that is opened. It is meant primarily
+as a place where you can also override the application rendering configuration,
+as the viewer is still loading. For example, if the application rendering
+is missing all the data, you can provide default values for the rendering. This data can be set
+to the respective elements: data / background / visualization arrays.
+Spec objects define what are active indexes to open. They are sometimes undefined - in that case,
+the initialization parses this information from the session information.
 
 #### `viewer-create` | e: `{id: string, index: Number, viewer: OpenSeadragon.Viewer}
 New viewer is added at position ``index`` in the screen.
@@ -149,13 +153,8 @@ The event occurs each time the viewer runs a visualization goal (switched betwee
 including when the first goal loads. The object is the goal setup object from the visualization configuration, 
 enriched by (private) properties of the rendering module.
 
-TODO: event not supported
-#### `visualization-redrawn`
-Called every time the user changes visualization configuration. Should not run expensive computation,
-as it blocks the rendering frames.
-
 #### `close`
-Native OpenSeadragon event called when the canvas gets reloaded.
+Native OpenSeadragon event called when the canvas gets reloaded or destroyed.
 
 
 

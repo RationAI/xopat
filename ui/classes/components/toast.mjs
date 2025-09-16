@@ -27,7 +27,7 @@ export class Toast extends BaseComponent {
         this._importance = importance || this._importance;
         this._buttons = normalizeButtons(buttons || []);
         // Patch DOM once mounted
-        const root = document.getElementById(this.id);
+        const root = this.root;
         if (!root) return;
         const toast = root.querySelector(".Toast");
         const board = root.querySelector("#system-notification");
@@ -53,22 +53,28 @@ export class Toast extends BaseComponent {
     }
 
     show() {
-        const root = document.getElementById(this.id);
+        const root = this.root;
         if (!root) return;
         root.classList.remove("popUpHide");
         root.classList.add("popUpEnter");
     }
 
     hide() {
-        const root = document.getElementById(this.id);
+        const root = this.root;
         if (!root) return;
         root.classList.remove("popUpEnter");
         root.classList.add("popUpHide");
     }
 
+    isHidden() {
+        const root = this.root;
+        if (!root) return true;
+        return root.classList.contains("popUpHide");
+    }
+
     create() {
         // A faithful recreation of your original DOM, just built with van
-        return div(
+        this.root = div(
             {
                 id: this.id,
                 class: "popUpHide fixed",
@@ -113,6 +119,7 @@ export class Toast extends BaseComponent {
                 )
             )
         );
+        return this.root;
     }
 }
 

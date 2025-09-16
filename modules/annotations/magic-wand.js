@@ -23,11 +23,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         VIEWER.addHandler('visualization-used', () => {
             this._invalidData = Date.now();
         });
-
-        // todo _invalidData not properly updated
-        VIEWER.addHandler('visualization-redrawn', () => {
-            this._invalidData = Date.now();
-        });
     }
 
     async refreshDrawer() {

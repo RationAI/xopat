@@ -26,10 +26,6 @@ $replacer = function($match) use ($i18n) {
             require_ui();  // TODO Jirka: do we need this?
             require_core("env");
             require_core("deps");
-            include_once(PHP_INCLUDES . "plugins.php");
-            global $MODULES;
-            $MODULES["webgl"]["loaded"] = true;
-            require_modules(true);
             break;
 
         case "form-init":

@@ -393,12 +393,22 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     /*------------ Initialization of  new UI -----------------------*/
     /*--------------------------------------------------------------*/
 
+    // todo make some cascading + registration strategy..
     USER_INTERFACE.TopVisualMenu.init();
     USER_INTERFACE.TopPluginsMenu.init();
     USER_INTERFACE.TopUserMenu.init();
     USER_INTERFACE.TopFullscreenButton.init();
     USER_INTERFACE.RightSideMenu.init();
     USER_INTERFACE.FullscreenMenu.init();
+    /**
+     * Replace share button in static preview mode
+     */
+    if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
+        USER_INTERFACE.TopUserMenu.setBanner(new UI.Badge({
+            style: UI.Badge.STYLE.SOFT,
+            color: UI.Badge.COLOR.WARNING,
+        }, "Exported Session"));
+    }
 
     /*---------------------------------------------------------*/
     /*------------ Initialization of OpenSeadragon ------------*/
@@ -1054,7 +1064,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @param {number|number[]|undefined|null} vizSpec
      * @param {{deriveOverlayFromBackgroundGoals?: boolean}} [opts]
      */
-    APPLICATION_CONTEXT.openViewerWith = function (
+    APPLICATION_CONTEXT.openViewerWith = async function (
         data = undefined,
         background = undefined,
         visualizations = undefined,
@@ -1063,6 +1073,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         opts = {}
     ) {
         USER_INTERFACE.Loading.show(true);
+
+        await VIEWER_MANAGER.raiseEventAwaiting(
+            'before-open', {data, background, visualizations, bgSpec, vizSpec}
+        ).catch(e => console.warn("Exception in 'before-open' event handler: ", e));
+
+        //todo consider return false if some dialog refuses the reload
+        await Dialogs.awaitHidden();
 
         // -- update CONFIG if new values are provided (undefined => keep ; null not expected here)
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
@@ -1396,7 +1413,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             8000
         );
 
-        Promise.allSettled(tasks).then(() => {
+        await Promise.allSettled(tasks).then(() => {
             USER_INTERFACE.SlidesMenu.refresh();
             // todo open?
             USER_INTERFACE.SlidesMenu.open();
@@ -1416,6 +1433,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             //todo make sure bypassCache and bypassCookies is set to true if this option is true - temporarily
             APPLICATION_CONTEXT.setOption("bypassCacheLoadTime", false);
         });
+        return true;
     }
 
     initXopatScripts();

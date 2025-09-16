@@ -56,6 +56,21 @@ function initXopatUI() {
             this._hideImpl(false, withCallback);
         },
 
+        /**
+         * Await dialogs are hidden and no messsages are shown
+         * @return {Promise}
+         */
+        async awaitHidden() {
+            return new Promise((resolve) => {
+                const interval = setInterval(() => {
+                    if (this._queue.length === 0 && this._timer === null && (!this._view || this._view.isHidden())) {
+                        clearInterval(interval);
+                        resolve();
+                    }
+                }, 250);
+            });
+        },
+
         _hideImpl(timeoutCleaned, callOnHide = true) {
             if (!this._view) return;
             this._view.hide();
@@ -779,18 +794,24 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
 
                 const logo = this.getLogo(-70, 20);
-                const body = new UI.Div({ id: "app-plugins", class: "height-full position-relative", style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);" },
-                    div({ class: "d-flex flex-column-reverse" },
-                        button({ onclick: function () {USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()}, class: "btn" }, "Load with selected"),
+                return new UI.Div({
+                        id: "app-plugins",
+                        class: "height-full position-relative",
+                        style: "margin-left: 10px; margin-right: 20px; max-width: 690px; width: calc(100vw - 65px);"
+                    },
+                    div({class: "d-flex flex-column-reverse"},
+                        button({
+                            onclick: function () {
+                                USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()
+                            }, class: "btn"
+                        }, "Load with selected"),
                     ),
-                    span({ class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
-                    div({ id: "plug-list-content-inner", class: "boxed" },
-                            div({ id: "plug-list-content-inner-content" }, ...pluginDivs),
-                        ),
+                    span({class: "f3-light header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
+                    div({id: "plug-list-content-inner", class: "boxed"},
+                        div({id: "plug-list-content-inner-content"}, ...pluginDivs),
+                    ),
                     logo,
                 );
-
-                return body;
 
             },
 
@@ -851,34 +872,34 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             init: function () {
                 this.button = new Button({
-                                            id: "fullscreen-button",
-                                            size: Button.SIZE.SMALL,
-                                            onClick: function () {
+                    id: "fullscreen-button",
+                    size: Button.SIZE.SMALL,
+                    onClick: function () {
 
-                                                // add components which you want to be hidden on fullscreen here:
-                                                document.getElementById("top-user").classList.toggle("hidden");
-                                                document.getElementById("top-side-left").classList.toggle("hidden");
+                        // add components which you want to be hidden on fullscreen here:
+                        document.getElementById("top-user").classList.toggle("hidden");
+                        document.getElementById("top-side-left").classList.toggle("hidden");
 
-                                                // cannot hide whole top-side, because it contains also fullscreen button
-                                                document.getElementById("top-side").classList.toggle("opaque-bg");
+                        // cannot hide whole top-side, because it contains also fullscreen button
+                        document.getElementById("top-side").classList.toggle("opaque-bg");
 
-                                                for(tab of Object.keys(USER_INTERFACE.RightSideMenu.menu.tabs)){
-                                                    if (!USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
-                                                        USER_INTERFACE.RightSideMenu.menu.tabs[tab].hide();
-                                                    }
-                                                }
-                                                //document.getElementById("right-side-menu").classList.toggle("hidden");
-                                                const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                                                if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
-                                                    toolbarDivs.forEach((el) => el.classList.remove("hidden"));
-                                                } else{
-                                                    toolbarDivs.forEach((el) => el.classList.add("hidden"));
-                                                }
+                        for(tab of Object.keys(USER_INTERFACE.RightSideMenu.menu.tabs)){
+                            if (!USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
+                                USER_INTERFACE.RightSideMenu.menu.tabs[tab].hide();
+                            }
+                        }
+                        //document.getElementById("right-side-menu").classList.toggle("hidden");
+                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
+                        if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
+                            toolbarDivs.forEach((el) => el.classList.remove("hidden"));
+                        } else{
+                            toolbarDivs.forEach((el) => el.classList.add("hidden"));
+                        }
 
-                                                USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
-                                            }
-                                        },
-                                        new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
+                        USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
+                    }
+                },
+                new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
                 this.button.attachTo(this.context);
             }
         },
@@ -897,7 +918,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
                     rounded: UI.Menu.ROUNDED.ENABLE,
                     extraClasses: { bg: "bg-transparent" }
-                }, { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
+                },
+                    { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: UI.MenuTabBanner },
+                    { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
                     { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
                     { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
                     { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
@@ -930,6 +953,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.attachTo(this.context);
                 this.menu.set(UI.Menu.DESIGN.ICONONLY);
             },
+
+            // todo better api
+            setBanner: function (banner) {
+                const bItem = this.menu.getTab("banner");
+                if (banner) {
+                    bItem.toggleHiden();
+                    bItem.setVisuals(banner);
+                } else {
+                    //todo might dissinc
+                    bItem.toggleHiden();
+                }
+
+            }
         },
 
         /**
@@ -1120,49 +1156,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
             createShadersMenu: function () {
-//                 const innerHTML = `
-// <div id="panel-images" class="inner-panel mt-2"></div>
-//
-// <div id="panel-shaders" class="inner-panel">
-//
-//     <!--NOSELECT important due to interaction with slider, default height must be defined due to height adjustment later, TODO: set from cookies-->
-//     <div class="inner-panel-content noselect">
-//         <div><!-- TODO fix clickHeader -->
-//             <span id="shaders-pin" class="material-icons btn-pointer inline-arrow"
-//             onclick="
-//                     toVisible = document.getElementById('data-layer-options');
-//                         if (toVisible.classList.contains('force-visible')){
-//                             toVisible.classList.remove('force-visible');
-//                             this.classList.remove('opened');
-//                         } else{
-//                             toVisible.classList.add('force-visible');
-//                             this.classList.add('opened');
-//                         }
-//                     "
-//             style="padding: 0;">navigate_next</span>
-//             <select name="shaders" id="shaders" style="max-width: 80%;" class="form-select v-align-baseline h3 mb-1 pointer" aria-label="Visualization">
-//                 <!--populated with shaders from the list -->
-//             </select>
-//             <div class="d-inline-block float-right position-relative hover-selectable">
-//                 <span id="cache-snapshot" class="material-icons btn-pointer text-right"
-//                 style="vertical-align:sub;" data-i18n="[title]main.shaders.saveCookies">bookmark</span>
-//                 <div class="position-absolute px-2 py-1 rounded-2 border-sm top-0 right-2 flex-row" style="display: none; background: var(--color-bg-tertiary);">
-//                     <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByName" onclick="UTILITIES.makeCacheSnapshot(true);">sort_by_alpha</span>
-//                     <span class="material-icons btn-pointer" data-i18n="[title]main.shaders.cacheByOrder" onclick="UTILITIES.makeCacheSnapshot(false);">format_list_numbered</span>
-//                 </div>
-//             </div>
-//             <br>
-//         </div>
-//
-//         <div id="data-layer-options" class="inner-panel-hidden" style="clear:both">
-//                 <!--populated with options for a given image data -->
-//         </div>
-//         <div id="blending-equation"></div>
-//     </div>
-// </div>`
-//                 const { div } = van.tags;
-//                 const shadersMenu = div();
-//                 shadersMenu.innerHTML = innerHTML;
                 return new UI.ShaderMenu({
                     pinned: false,
                     opacity: 1,
@@ -1190,7 +1183,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
                 const menu = new UI.Toolbar(
-                    {id: `toolbar-${ownerPluginId}`},
+                    {id: `toolbar-${ownerPluginId}`, horizontalOnly: forceHorizontal},
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
                         icon: icon,

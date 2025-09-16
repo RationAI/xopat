@@ -31,15 +31,14 @@ class Toolbar extends BaseComponent {
         options = super(options, ...args).options;
         args = this._children;
 
-        this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
-        this.classMap["flex"] = "flex-col";
-        this._design = options.design || "TITLEICON";
-        if (options.horizontalOnly) {
-            this.classMap["min-width"] = "min-w-max";
-        }
+        // not used since commonProperties are not used
+        // this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
+        // this.classMap["flex"] = "flex-col";
+        // if (options.horizontalOnly) {
+        //     this.classMap["min-width"] = "min-w-max";
+        // }
 
         this.tabs = {};
-        this._focused = undefined;
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed", events: "pointer-events-auto" }});
@@ -116,7 +115,8 @@ class Toolbar extends BaseComponent {
     }
 
     create() {
-        return div({id: `${this.id}`, class: "draggable flex flex-column bg-transparent pointer-events-none",
+        const w = this.options.horizontalOnly ? "min-w-max" : "";
+        return div({id: `${this.id}`, class: `draggable flex flex-column bg-transparent pointer-events-none ${w}`,
             style: `position: fixed; 
                     left: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionLeft`, 50)}px; 
                     top: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionTop`, 50)}px; 

@@ -74,7 +74,7 @@ class BaseComponent {
                 for (let key in this.propertiesMap) {
                     const value = this.propertiesMap[key];
                     if (typeof value !== "string") {
-                        console.warn("Extra property setter set without extra definition in the component constructor!");
+                        console.warn("Extra properties are allowed string values only!");
                     } else {
                         this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
                     }

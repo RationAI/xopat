@@ -31,7 +31,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             // State
             this.stacked = !!APPLICATION_CONTEXT.getOption("stackedBackground");
             const pre = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
-            const selection = (Array.isArray(pre) ? pre : (pre ? [pre] : [0])).map(Number.parseInt);
+            const selection = (Array.isArray(pre) ? pre : (pre ? [pre] : [0])).map(Number);
             this.selected = new Set(selection);
 
             // UI refs

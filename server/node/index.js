@@ -9,7 +9,6 @@ const PROJECT_PATH = "";
 
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
-const { loadUI } = require("../templates/javascript/vanUI");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
 const { ABSPATH } = require("./constants");
@@ -236,8 +235,7 @@ ${core.requireLib('jquery')}
 ${core.requireLib('render')}
 ${core.requireUI()}
 ${core.requireCore("env")}
-${core.requireCore("deps")}
-${core.requireModules(true)}`;
+${core.requireCore("deps")}`;
                 case "form-init":
                     return `
     <script type="text/javascript">
