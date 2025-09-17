@@ -515,6 +515,9 @@ input.selectable-image-row-context:checked + div {
     .shader-controls-row > * { grid-column: auto; }
 }
 
+@keyframes toastbar { from { transform: scaleX(1); transform-origin:left } to { transform: scaleX(0); transform-origin:left } }
+.animate-toastbar { animation-name: toastbar; animation-timing-function: linear; animation-fill-mode: forwards; }
+
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
