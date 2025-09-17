@@ -143,7 +143,7 @@ class Menu extends BaseComponent {
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-        const tab = item.class ? new item.class(item,this) : new MenuTab(item, this);
+        const tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
 
         this.tabs[item.id] = tab;
 
@@ -238,7 +238,7 @@ class Menu extends BaseComponent {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div(
-                    h3({class: "d-inline-block h3 btn-pointer"}, title),
+                    h3({class: "d-inline-block h3 btn-pointer ml-2"}, title),
                     this.toNode(titleItem),
                 ),
                 div({ class: "inner-panel-visible" },
@@ -265,10 +265,9 @@ class Menu extends BaseComponent {
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
                     span({
-                        class: "material-icons inline-arrow plugins-pin btn-pointer",
+                        class: "fa-auto fa-chevron-right inline-arrow plugins-pin btn-pointer",
                         id: `${id}-pin`,
                         style: "padding: 0;" },
-                        "navigate_next",
                     ),
                     h3({class: "d-inline-block h3 btn-pointer"}, title),
                     this.toNode(titleItem),
@@ -343,25 +342,25 @@ Menu.ORIENTATION = {
         this.setClass("flex", "flex-col");
         this._orientation = "TOP";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
         this._orientation = "BOTTOM";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
         this._orientation = "LEFT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
         this._orientation = "RIGHT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
     }
 }
 

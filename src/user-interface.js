@@ -512,8 +512,8 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
                     clbck(opts.selected);
                     window.DropDown._toggle(undefined, undefined);
                 });
-                const icon = opts.icon ? `<span class="material-icons pl-0" 
-style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon}</span>`
+                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0" 
+style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
@@ -623,17 +623,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         Tooltip: new UI.GlobalTooltip(),
 
-        // TODO make new component for main-panel -> add methods from user-interface RightSideMenu
-        // `<div id="${id}" -> id MENU, on components we will access through API
-        // `<div id="${id}" -> id MENU, on components we will access through API
-        // class="inner-panel ${pluginId}-plugin-root -> must be for every top level component of some plugin
-        // firstly we add plugin div and in it there will be our UI component hiearchy
-        // advanced menu shoudl be equiallent to our Menu, submenu -> creates menu in menu
-        // we can have always submenu and only hide header
-        // create one component for main menu and advanced menu
-
-        //appCache -> remember settings for each user, remember open/close etc
-
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
             context: $("#fullscreen-menu"),
@@ -654,9 +643,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 const notification = div({ class: "", style: "width: inherit; visibility: hidden;", id: "settings-notification" },
                     div({ class: "py-1 px-2 rounded-2", style: "background: var(--color-bg-warning); max-height: 70px; text-overflow: ellipsis;" },
-                      span({ class: "material-icons", style: "font-size: initial; color: var( --color-icon-warning)" },
-                        "warning",
-                      ),
+                      span({ class: "fa-auto fa-warning", style: "font-size: initial; color: var( --color-icon-warning)" }),
                       "To apply changes, please ",
                       a({ onclick: () => {UTILITIES.refreshPage()}, class: "pointer" },
                         b("reload the page"),
@@ -882,13 +869,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                         // cannot hide whole top-side, because it contains also fullscreen button
                         document.getElementById("top-side").classList.toggle("opaque-bg");
-
-                        for(tab of Object.keys(USER_INTERFACE.RightSideMenu.menu.tabs)){
-                            if (!USER_INTERFACE.RightSideMenu.menu.pinnedTabs[tab]){
-                                USER_INTERFACE.RightSideMenu.menu.tabs[tab].hide();
-                            }
-                        }
-                        //document.getElementById("right-side-menu").classList.toggle("hidden");
                         const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
                         if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
                             toolbarDivs.forEach((el) => el.classList.remove("hidden"));
@@ -975,15 +955,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         TopVisualMenu:{
             context: $("#top-visual"),
             menu: "",
+            rightMenuTabs: {},
+            _visualMenuNeedsRefresh: false,
 
             init: function () {
                 this.menu = new UI.MainPanel({
-                    id: "visual-menu",
-                    orientation: UI.Menu.ORIENTATION.TOP,
-                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                    rounded: UI.Menu.ROUNDED.ENABLE,
-                    extraClasses: { bg: "bg-transparent" },
-                }, { id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: UI.Dropdown, onClick: function (event) {USER_INTERFACE.TopVisualMenu.refreshVisualDropdown();} },
+                        id: "visual-menu",
+                        orientation: UI.Menu.ORIENTATION.TOP,
+                        buttonSide: UI.Menu.BUTTONSIDE.LEFT,
+                        rounded: UI.Menu.ROUNDED.ENABLE,
+                        extraClasses: { bg: "bg-transparent" },
+                    }, {
+                        id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: UI.Dropdown,
+                        onClick: e => USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()
+                    },
                 );
 
                 this.menu.attachTo(this.context);
@@ -991,6 +976,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             refreshVisualDropdown: function () {
+                if (!this._visualMenuNeedsRefresh) return;
+
                 const tab = this.menu.getTab('view');
                 tab.clear();
                 tab.addItem({
@@ -1006,19 +993,38 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     label: $.t('main.global.clone'),
                 });
 
+                for (let id in this.rightMenuTabs) {
+                    const item = this.rightMenuTabs[id][0];
+                    if (item) {
+                        tab.addItem({
+                            icon: item.iconName,
+                            label: item.title,
+                            selected: !APPLICATION_CONTEXT.getOption(`${id}-hidden`, false),
+                            onClick: () => {
+                                for (let child of this.rightMenuTabs[id]) {
+                                    // todo support toggle with t/f
+                                    child.toggleHiden();
+                                }
+                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, t.hidden);
+                            },
+                            section: 'right-menu',
+                        });
+                    }
 
-                const rightSideMenuTabs = USER_INTERFACE.RightSideMenu.menu.tabs;
-                for (const [tKey, t] of Object.entries(rightSideMenuTabs)) {
-                    tab.addItem({
-                        id: `visual-menu-ul-visual-checkbox-${tKey}`,
-                        icon: t.iconName,
-                        label: t.title,
-                        selected: !APPLICATION_CONTEXT.getOption(`${tKey}-hidden`, false),
-                        onClick: () => {t.toggleHiden(), APPLICATION_CONTEXT.setOption(`${tKey}-hidden`, t.hidden);},
-                        section: 'right-menu',
-                    });
                 }
             },
+
+            registerRightMenuTab(tab) {
+                // todo support removal
+                let parent = this.rightMenuTabs[tab.id];
+                if (!parent) {
+                    this.rightMenuTabs[tab.id] = parent = [tab];
+                    this._visualMenuNeedsRefresh = true;
+                } else {
+                    parent.push(tab)
+                    parent.sort((a, b) => a.title.localeCompare(b.title));
+                }
+            }
         },
 
         /**
@@ -1072,100 +1078,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(stTabId);
                 }
 
-            },
-        },
-
-        RightSideMenu: {
-            context: $("#right-side-menu"),
-            menu: undefined,
-
-            init: function () {
-                const { div } = van.tags;
-
-                const viewer = div();
-                viewer.innerHTML =`<div id="openseadragon-view" class="flex flex-col" style="width: 360px;">
-                                        <div id="panel-navigator" style=" height: 360px; width: 360px;"></div>
-                                    </div>`;
-
-                const slideName = this.CreateSlideTop();
-
-                this.menu = new UI.MultiPanelMenu({
-                    id: "myMenu",
-                },
-                {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: [slideName.create(), viewer]},
-                {id: "Shaders Menu", icon: "fa-eye", title: $.t('main.shaders.title'), body: [this.createShadersMenu()]})
-
-                this.menu.set(UI.Menu.DESIGN.TITLEONLY);
-                // todo override background with this color (does not work)
-                // this.menu.tabs["navigator"].openDiv.setClass({background: ""});
-                // this.menu.tabs["navigator"].openDiv.setExtraProperty({style: "var(--fallback-b2, oklch(var(--b2) / 0.5));"})
-                this.menu.tabs["navigator"]._setFocus(); // if not visible, navigator wont show
-                this.menu.attachTo(this.context);
-
-                // defaultly open menus
-                for(i of Object.keys(this.menu.tabs)){
-                    if (APPLICATION_CONTEXT.getOption(`${i}-open`, true)){
-                        this.menu.tabs[i]._setFocus();
-                    }
-                    else{
-                        this.menu.tabs[i]._removeFocus();
-                    }
-
-                    if (APPLICATION_CONTEXT.getOption(`${i}-hidden`, false)){
-                        this.menu.tabs[i].toggleHiden();
-                    }
-                }
-            },
-            CreateSlideTop: function () {
-                const text = new UI.Div(
-                    {id: "tissue-title-content",
-                    class: "",
-                    extraClasses: {btn: "btn btn-primary btn-sm"},
-                    extraProperties: {style: "flex-grow: 1; box-sizing: border-box; vertical-align: center", title: "Copy"},
-                    onClick: function () {
-                        UTILITIES.copyToClipboard(this.textContent);
-                    }
-                    });
-
-                const checkbox = new UI.Checkbox({
-                    id: "global-tissue-visibility",
-                    label: "",
-                    checked: true,
-                    onchange: function () {
-                        VIEWER.world.getItemAt(0).setOpacity(this.checked ? 1 : 0);
-                    },
-                });
-
-                const copyButton = new UI.Button({
-                    id: "tissue-title-copy",
-                    size: UI.Button.SIZE.SMALL,
-                    onClick: function () {
-                        UTILITIES.copyToClipboard(text.textContent);
-                    },
-                    extraProperties: { title: $.t('main.bar.copy'), style: "width: 30px" },
-                }, new UI.FAIcon({ name: "fa-copy" }),);
-
-                return new UI.Join({
-                    style: UI.Join.STYLE.HORIZONTAL,
-                    id: "tissue-title-header",
-                    extraClasses: {width: "w-full"}
-                }, checkbox, text, copyButton);
-            },
-            append(title, titleHtml, html, id, pluginId) {
-                this.menu.append(title, titleHtml, html, id, pluginId);
-            },
-            appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-                this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
-            },
-            createShadersMenu: function () {
-                return new UI.ShaderMenu({
-                    pinned: false,
-                    opacity: 1,
-                    onShaderChange: (value) => UTILITIES.setBackgroundAndGoal(undefined, value),
-                    onOpacityChange: (v) => UTILITIES.setGlobalLayerOpacity?.(v),
-                    onCacheSnapshotByName: () => UTILITIES.storeVisualizationSnapshot(true),
-                    onCacheSnapshotByOrder: () => UTILITIES.storeVisualizationSnapshot(false),
-                }).create();
             },
         },
 
@@ -1510,14 +1422,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param prerequisites a function to execute at the beginning, default undefined
              */
             add: function(plugidId, name, description, icon, steps, prerequisites = undefined) {
-                if (!icon) icon = "school";
+                if (!icon) icon = "fa-school";
                 const pluginName = pluginMeta(plugidId, "name");
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
                 const label = pluginName ? `<span class="rounded-2 px-3 py-1 position-absolute top-1 right-1 bg-opacity" style="font-size: 9px">${pluginName}</span>` : "";
                 this.tutorials.append(`
 <div class='d-inline-block px-2 pb-2 pt-3 m-1 pointer position-relative v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
 ${label}
-<span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
+<span class="d-block fa-auto ${icon} f1 text-center my-2"></span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
                 this.steps.push(steps);
                 this.prerequisites.push(prerequisites);
             },
@@ -1562,7 +1474,9 @@ ${label}
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                USER_INTERFACE.RightSideMenu.menu.focusAll();
+                for (let viewerMenu of VIEWER_MANAGER.viewerMenus) {
+                    viewerMenu.menu.focusAll();
+                }
                 enjoyhintInstance.set(data);
                 this.hide();
                 enjoyhintInstance.run();

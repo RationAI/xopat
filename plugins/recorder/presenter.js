@@ -33,17 +33,17 @@ addPlugin("recorder", class extends XOpatPlugin {
                             const node = document.getElementById("auto-recorder");
                             if (node) node.style.display = "none";
                         }},
-                    "Hide ", span({class: "material-icons"}, "hide_source")
+                    "Hide ", span({class: "fa-auto fa-eye-slash"})
                 );
 
                 const importBtn = span(
                     {class: "float-right", title: "Import Recording", onclick: () => fileInput.click()},
-                    span({class: "material-icons btn-pointer"}, "file_upload")
+                    span({class: "fa-solid fa-upload btn-pointer"})
                 );
 
                 const exportBtn = span(
                     {class: "float-right", title: "Export Recording", onclick: () => _this.export()},
-                    span({class: "material-icons btn-pointer"}, "file_download")
+                    span({class: "fa-solid fa-download btn-pointer"})
                 );
 
                 return span(hideBtn, importBtn, fileInput, exportBtn);
@@ -59,17 +59,27 @@ addPlugin("recorder", class extends XOpatPlugin {
         class RightControls extends UI.BaseComponent {
             create() {
                 const {button, span, div} = van.tags;
+                const toFA = (icon) => {
+                    switch(icon){
+                        case "play_arrow": return "fa-solid fa-play";
+                        case "stop": return "fa-solid fa-stop";
+                        case "replay": return "fa-solid fa-rotate-right";
+                        case "delete": return "fa-auto fa-trash-can";
+                        case "radio_button_checked": return "fa-solid fa-circle-dot";
+                        default: return "fa-solid fa-question";
+                    }
+                };
                 const mk = (id, title, icon, onclick, extra="") =>
                     button(
                         { id, onclick, class: `btn btn-ghost btn-square btn-sm ${extra}`, title },
-                        span({class:"material-icons"}, icon)
+                        span({class: toFA(icon)})
                     );
 
                 return div(
                     {class:"flex gap-2"},
                     span(
-                        {class:"material-icons timeline-play-small btn-pointer", onclick: () => _this.addRecord()},
-                        "radio_button_checked"
+                        {class:"timeline-play-small btn-pointer", onclick: () => _this.addRecord()},
+                        span({class: toFA("radio_button_checked")})
                     ),
                     mk("presenter-play-icon",  "Play", "play_arrow",  () => _this.snapshots.play(), "text-success"),
                     mk("presenter-stop-icon",  "Stop", "stop",   () => _this.snapshots.stop()),
@@ -198,14 +208,16 @@ addPlugin("recorder", class extends XOpatPlugin {
     pluginReady() {
         this.snapshots = OpenSeadragon.Snapshots.instance();
         // Right menu (pass BaseComponent instances)
-        USER_INTERFACE.RightSideMenu.appendExtended(
-            "Recorder",
-            this._RightHeaderComponent(),
-            this._RightBodyComponent(),
-            undefined,
-            "auto-recorder",
-            this.id
-        );
+
+        // TODO assign the menu elsewhere...
+        // USER_INTERFACE.RightSideMenu.appendExtended(
+        //     "Recorder",
+        //     this._RightHeaderComponent(),
+        //     this._RightBodyComponent(),
+        //     undefined,
+        //     "auto-recorder",
+        //     this.id
+        // );
 
         // Tools menu (pass BaseComponent instance)
         USER_INTERFACE.Tools.setMenu(

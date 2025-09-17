@@ -203,7 +203,6 @@ export class ShaderLayer extends BaseComponent {
         return div(
             {
                 ...this.commonProperties,
-                id: `${this.layer.id}-shader-part`,
                 "data-id": this.layer.id,
                 class: `${this.classState.val}`
             },

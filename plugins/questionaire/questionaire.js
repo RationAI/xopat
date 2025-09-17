@@ -6,8 +6,6 @@ addPlugin('questionaire', class extends XOpatPlugin {
 
         // NEW: lock editing when exporting (for now default true; flip later during real export)
         this.isExported = this.getOption('isExported', false);
-
-        this.SCHEMA_KEY = 'questionnaire_schema';
         this.DRAFT_KEY  = 'questionnaire_draft';
 
         this.DEFAULT_SCHEMA = {

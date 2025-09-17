@@ -11,7 +11,7 @@ const { div, ul, li, a, span } = van.tags;
  *   id: string,
  *   label: string|Node,
  *   sub?: string|Node,         // small secondary text (path) shown under label (optional)
- *   icon?: string|Node,        // material icon name or Node
+ *   icon?: string|Node,        // font awesome icon name, or generic Node
  *   kbd?: string,              // small hint on the right
  *   section?: string,          // section id/title
  *   selected?: boolean,

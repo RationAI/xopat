@@ -350,13 +350,16 @@ annotation logic, HTML sanitization, vega graphs, threading worker or keyframe s
 
 You can use
  - [jQuery](https://jquery.com/), 
- - [Material Design icons](https://fonts.google.com/icons?selected=Material+Icons)
- - [Font Awesome 6 Free icons](https://fontawesome.com/)
- for icons (prefer using `<span>`) and 
- - [Primer CSS bootstrap](https://primer.style/css).
+ - [Font Awesome 6 Free icons](https://fontawesome.com/) for icons
+   - Do use ``fa-auto`` which prefers regular over solid icons
+ - DaisyUI + TailwindCSS styling
+ - The CORE UI Component system (see `ui/`)
  - Pre-defined, documented CSS in the core ``src/assets/style.css``
+   - slowly moving away from, rely on UI components and tailwind / daisy UI
  - other libraries included in `/external`, the Monaco editor is available only in a child window
    context via the `Dialogs` interface
+
+> Primer.css and material icons are deprecated and slowly removed!
  
 #### `includes` property
 In fact, the plugin can either specify a string value to indicate local file, 

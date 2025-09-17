@@ -3,7 +3,7 @@ import van from "../../vanjs.mjs";
 
 const { select, option, div} = van.tags
 
-class Select extends BaseComponent{
+export class Select extends BaseComponent{
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
 
@@ -33,5 +33,3 @@ class Select extends BaseComponent{
         )
     }
 }
-
-export { Select };

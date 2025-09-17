@@ -32,7 +32,7 @@ const { div } = van.tags;
  * // you can also use just any buttons which have this type of onClick function
  * 
  **/
-class FullscreenMenu extends BaseComponent{
+export class FullscreenMenu extends BaseComponent{
 
     /**
      * @param {*} options
@@ -123,4 +123,3 @@ class FullscreenMenu extends BaseComponent{
         return document.getElementById(this.id + "-content");
     }
 }
-export { FullscreenMenu };

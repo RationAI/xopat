@@ -18,7 +18,7 @@ const { div, h3, span } = van.tags
  * //class to simulate original mainMenu and AdvancedMenu components from previous versions of xOpat
  * // WIP
  */
-class MainPanel extends Menu {
+export class MainPanel extends Menu {
     constructor(options, ...args) {
         super(options, ...args);
     }
@@ -96,5 +96,3 @@ class MainPanel extends Menu {
     _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId, title, html, icon, withSubmenu, container) {
     }
 }
-
-export { MainPanel };

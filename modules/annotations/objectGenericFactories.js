@@ -7,7 +7,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "crop_5_4";
+        return "fa-square";
     }
 
     fabricStructure() {
@@ -219,7 +219,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "brightness_1";
+        return "fa-circle";
     }
 
     fabricStructure() {
@@ -459,7 +459,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "language_japanese_kana";
+        return "fa-font";
     }
 
     fabricStructure() {
@@ -717,7 +717,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     getIcon() {
-        return "radio_button_checked";
+        return "fa-solid fa-location-crosshairs";
     }
 
     getDescription(ofObject) {
@@ -1270,7 +1270,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "horizontal_rule";
+        return "fa-minus";
     }
 
     fabricStructure() {
@@ -1578,7 +1578,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "pentagon";
+        return "fa-draw-polygon";
     }
 
     fabricStructure() {
@@ -1600,7 +1600,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "timeline";
+        return "share-nodes";
     }
 
     fabricStructure() {
@@ -1640,7 +1640,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "shape_line";
+        return "fa-object-group";
     }
 
     fabricStructure() {
@@ -1833,7 +1833,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getIcon() {
-        return "view_timeline";
+        return "fa-draw-polygon"; //todo same icon as polygon... does it matter?
     }
 
     fabricStructure() {

@@ -2329,7 +2329,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "🆀  navigate / select annotations");
+		super(context, "auto", "fa-arrows-up-down-left-right", "🆀  navigate / select annotations");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2519,7 +2519,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "🅴  brush to create/edit");
+		super(context, "fft-add", "fa-paintbrush", "🅴  brush to create/edit");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2572,7 +2572,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "🆁  brush to remove");
+		super(context, "fft-remove", "fa-paintbrush", "🆁  brush to remove");
 		this.candidates = null;
 	}
 
@@ -2640,7 +2640,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "format_shapes","🆆  create annotations manually");
+		super(context, "custom", "fa-object-group", "🆆  create annotations manually");
 		this._lastUsed = null;
 	}
 
@@ -2743,7 +2743,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "brush", "🆉  correction tool");
+		super(context, "fft-correct", "fa-paintbrush", "🆉  correction tool");
 		this.candidates = null;
 	}
 

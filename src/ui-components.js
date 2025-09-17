@@ -265,7 +265,7 @@ try {
          * Makes children in a parent draggable. These children might contain other elements you want to
          * prevent the dragging on: such children need 'non-draggable' class
          * (at least one between the dragged item and the child in hierarchy)
-         * @param parentContainerId parent ID that keeps elements for which dragging will be enabled
+         * @param {string|Node} parentContainerId parent ID that keeps elements for which dragging will be enabled
          * @param onEnabled called for each child upon initialization, the element node is passed as argument
          * @param onStartDrag called before the dragging starts, the param is the event of the drag,
          *    returns true if the dragging should really start, false if not
@@ -280,7 +280,8 @@ try {
          *  hint: use node.dataset.<> API to store and retrieve values within items
          */
     draggable: (parentContainerId, onEnabled=undefined, onStartDrag=undefined, onEndDrag=undefined) => {
-            const children = document.getElementById(parentContainerId)?.children;
+            const children = typeof parentContainerId === "string" ?
+                document.getElementById(parentContainerId)?.children : parentContainerId;
             if (!children) throw "Actions::draggable needs valid parent ID to access an element in DOM!";
         Array.prototype.forEach.call(children, (item) => {enableDragItem(item)});
 
@@ -660,7 +661,7 @@ ${contentAction}
 
             _getHeader(entityId, id, title, icon, isFirst, bodyId) {
                 entityId = entityId ? entityId + "-plugin-root" : "";
-                icon = icon ? `<span class="material-icons" style="font-size: 14px; padding-bottom: 3px;">${icon}</span>` : "";
+                icon = icon ? `<span class="fa-auto ${icon}" style="font-size: 14px; padding-bottom: 3px;"></span>` : "";
                 return `<span id="${id}-menu-header" class="width-full" style="flex-basis: min-content">
     <input type="radio" name="${this.uid}-header" ${isFirst ? "checked" : ""} id="${id}-input-header"
     class="panel-menu-input ${entityId}" onclick="

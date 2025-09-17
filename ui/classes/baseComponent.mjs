@@ -26,7 +26,7 @@ const HtmlRenderer = v => {
  * @class BaseComponent
  * @description The base class for all components
  */
-class BaseComponent {
+export class BaseComponent {
 
     /**
      * Generic Component constructor. If options are not provided (undefined or a child node is issued), children are
@@ -365,5 +365,3 @@ class BaseComponent {
         this.refreshPropertiesState();
     }
 }
-
-export { BaseComponent };

@@ -204,9 +204,7 @@
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
-                    this.scalebarContainer.style.position = "relative";
-                    this.scalebarContainer.style.margin = "0";
-                    this.scalebarContainer.style.pointerEvents = "none";
+                    this.scalebarContainer.classList.add("relative", "m-0", "pointer-events-none");
                     this.scalebarContainer.id = this.id;
                 }
                 this.viewer.container.appendChild(this.scalebarContainer);
@@ -227,10 +225,14 @@
                         this.magnificationContainer.style.opacity = "0.6";
                         this.magnificationContainer.style.display = "flex";
                         this.magnificationContainer.style.flexDirection = "column";
+                        this.magnificationContainer.style.borderRadius = "7px";
+                        this.magnificationContainer.classList.add("bg-base-200");
+
+
                         this.magnificationContainer.style.height =`${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "60px";
 
-                        this.magnificationContainer.style.borderRadius = "7px";
+
 
                         let steps = 0;
                         let testMag = this.magnification;
@@ -293,8 +295,7 @@
                         }
 
                         let button = document.createElement("span");
-                        button.innerHTML = "remove";
-                        button.classList.add("material-icons", "btn-pointer");
+                        button.classList.add("fa-auto", "fa-minus", "btn-pointer");
                         button.style.userSelect = 'none';
                         button.addEventListener("click", (event) => {
                             const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));
@@ -332,8 +333,7 @@
                             }
                         });
                         button = document.createElement("span");
-                        button.innerHTML = "add";
-                        button.classList.add("material-icons", "btn-pointer");
+                        button.classList.add("fa-auto", "fa-plus", "btn-pointer");
                         button.style.userSelect = 'none';
                         button.addEventListener("click", (event) => {
                             const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));

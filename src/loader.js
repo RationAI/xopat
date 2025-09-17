@@ -1445,6 +1445,16 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
     });
 
+    /**
+     * @property {function} getMenu
+     * @method
+     * @memberof OpenSeadragon.Viewer
+     * @return {RightSideViewerMenu|undefined}
+     */
+    OpenSeadragon.Viewer.prototype.getMenu = function() {
+        return VIEWER_MANAGER.getMenu(this);
+    };
+
     // 2) Manager that tracks the active viewer
     /**
      * Manages one or more OpenSeadragon viewers, keeps track of the active viewer,
@@ -1477,6 +1487,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.ENV = ENV;
             this.CONFIG = CONFIG;
             this.viewers = [];
+            this.viewerMenus = {};
             this.broadcastEvents = {};
             this.active = null;
 
@@ -1538,10 +1549,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          * Get viewer by ID
          * @param uniqueId
+         * @param _warn private arg
          * @return OpenSeadragon.Viewer
          */
-        getViewer(uniqueId) {
-            return this.viewers.find(v => v.uniqueId === uniqueId);
+        getViewer(uniqueId, _warn=true) {
+            let viewer = this.viewers.find(v => v.uniqueId === uniqueId);
+            if (!viewer) {
+                const viewer = this.viewers.find(v => v.id === uniqueId);
+                if (viewer && _warn) {
+                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${viewer.id} for ${viewer.uniqueId}`);
+                }
+            }
+            return viewer;
         }
 
         /**
@@ -1564,7 +1583,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
             // make a unique cell inside the grid
             const cellId = `osd-${index}`;
-            this.layout.attachCell(cellId, index);
+            const navigatorId = cellId + "-navigator";
+            const cell = this.layout.attachCell(cellId, index);
+            const menu = new UI.RightSideViewerMenu(cellId, navigatorId);
+            // todo think of a better way of hosting menu within the viewer
+            cell.append(menu.create());
+            this.viewerMenus[cellId] = menu;
 
             const headers = $.extend(
                 {},
@@ -1574,6 +1598,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
             const viewer = OpenSeadragon({
                 id: cellId, // mount into that grid cell
+                navigatorId: navigatorId,
                 prefixUrl: this.ENV.openSeadragonPrefix + "images",
                 showNavigator: true,
                 maxZoomPixelRatio: 2,
@@ -1591,65 +1616,11 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                         webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                         // todo: support debug in some reasonable way
                         // debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
-                        debugInfoContainer: 'panel-shaders',
                         interactive: true,
                         htmlHandler: (shaderLayer, shaderConfig) => {
-                            const container = document.getElementById("data-layer-options");
-
-                            // map the mediator list to [{type, name}]
-                            const availableShaders = OpenSeadragon
-                                .FlexRenderer
-                                .ShaderMediator
-                                .availableShaders()
-                                .map(s => ({type: s.type(), name: s.name()}));
-
-                            // map filters if you want editable rows (optional)
-                            const filters = {};
-                            for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
-                                if (shaderConfig.params.hasOwnProperty(key)) {
-                                    filters[key] = {
-                                        name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                                        value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
-                                    };
-                                }
-                            }
-
-                            const uiLayer = new UI.ShaderLayer({
-                                id: `${shaderLayer.id}-shader`,
-                                shaderLayer,
-                                shaderConfig: shaderConfig,
-                                availableFilters: filters,
-                                availableShaders,
-                                callbacks: {
-                                    onToggleVisible: (checked) => {
-                                        let shader = uiLayer.cfg;
-                                        if (shader) {
-                                            if (checked) {
-                                                shader.visible = true;
-                                                // todo change visual using this.something()
-                                                //self.parentNode.parentNode.classList.remove("shader-part-error");
-                                            } else {
-                                                shader.visible = false;
-                                                //self.parentNode.parentNode.classList.add("shader-part-error");
-                                            }
-                                            viewer.drawer.rebuild(0);
-                                        } else {
-                                            console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
-                                        }
-                                    },
-                                    onChangeType: (type) => UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
-                                    onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
-                                    onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
-                                    onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
-                                }
-                            });
-
-                            uiLayer.prependedTo(container);
+                            viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
                         },
-                        htmlReset: () => {
-                            //$("#data-layer-options").html();
-                            document.getElementById("data-layer-options").innerHTML = "";
-                        }
+                        htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
                     }
                 },
                 ajaxHeaders: headers,
@@ -1812,97 +1783,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 focusOnViewer = e.eventSource;
                 e.preventDefaultAction = true;
             });
-            
-            /**
-             * Made with love by @fitri
-             * This is a component of my ReactJS project https://codepen.io/fitri/full/oWovYj/
-             *
-             * Shader re-compilation and re-ordering logics
-             * Modified by Jiří
-             */
-            function enableDragSort(listId) {
-                UIComponents.Actions.draggable(listId, item => {
-                    const id = item.dataset.id;
-                    window.DropDown.bind(item, () => {
-                        const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
-                        const clipSelected = currentMask === "clip";
-                        const maskEnabled = typeof currentMask === "string" && currentMask !== "show";
 
-                        return [{
-                            title: $.t('main.shaders.defaultBlending'),
-                        }, {
-                            title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                            action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
-                            selected: maskEnabled
-                        }, {
-                            title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
-                            icon: "payments",
-                            styles: "padding-right: 5px;",
-                            action: (selected) => {
-                                const node = document.getElementById(`${id}-mode-toggle`);
-                                const newMode = selected ? "blend" : "clip";
-                                node.dataset.mode = newMode;
-                                if (!maskEnabled) {
-                                    UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
-                                } else {
-                                    UTILITIES.changeModeOfLayer(id, newMode, false);
-                                }
-                            },
-                            selected: clipSelected
-                        }];
-                    });
-                }, undefined, e => {
-                    const listItems = Array.prototype.map.call(e.target.parentNode.children, child => child.dataset.id);
-                    listItems.reverse();
-                    // todo no change on the navigator...
-                    viewer.drawer.renderer.setShaderLayerOrder(listItems);
-                    viewer.drawer.rebuild();
-                })
-            }
-
-            viewer.drawer.renderer.addHandler('html-controls-created', e => {
-                enableDragSort("data-layer-options");
-
-                let layers = viewer.drawer.renderer.getAllShaders();
-                for (let key in layers) {
-                    if (!layers.hasOwnProperty(key)) continue;
-
-                    const shader = layers[key];
-
-                    for (let source of shader.getConfig().tiledImages) {
-                        const tiledImage = viewer.world.getItemAt(source);
-
-                        if (typeof tiledImage?.source.getMetadata !== 'function') {
-                            console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
-                                'The visualization is unable to inspect problems with data sources.', tiledImage);
-                            continue;
-                        }
-
-                        const message = tiledImage.source.getMetadata();
-                        if (message.error) {
-                            // todo once we have ShaderMenu per viewer, use its api instead of fishing IDs
-                            let node = $(`#${key}-shader-part`);
-                            const alert = new UI.Alert({
-                                mode: "warning",
-                                title: $.t('main.shaders.faulty'),
-                                description: `<code>${message.error}</code>`,
-                                compact: true
-                            });
-                            alert.prependedTo(node);
-                            break;
-                        }
-                    }
-                }
-
-                /**
-                 * Fired when visualization goal is set up and run, but before first rendering occurs.
-                 * @property visualization visualization configuration used
-                 * @memberof OpenSeadragon.Viewer
-                 * @event visualization-used
-                 */
-                viewer.raiseEvent('visualization-used', e);
-            });
-            
             viewer.gestureSettingsMouse.clickToZoom = false;
             new OpenSeadragon.Tools(viewer);
 
@@ -1978,6 +1859,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         /**
+         *
+         * @param viewerOrId any viewer ID or viewer instance itself
+         */
+        getMenu(viewerOrId) {
+            let viewer = null;
+            if (typeof viewerOrId === "string") {
+                viewer = this.getViewer(viewerOrId, false);
+            } else {
+                viewer = viewerOrId;
+            }
+            return this.viewerMenus[viewer.id];
+        }
+
+        /**
          * Destroy and remove the viewer at a given index and detach its grid cell.
          * Does nothing if no viewer exists at the index.
          * @param {number} index - Zero-based viewer slot index.
@@ -1999,6 +1894,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             this.raiseEvent('viewer-destroy', {viewer, uniqueId: viewer.uniqueId, index });
 
             try {
+                const menu = this.viewerMenus[viewer.id];
+                if (menu) {
+                    menu.destroy();
+                    this.viewerMenus[viewer.id] = null;
+                }
+
                 delete viewer.__cachedUUID;
                 viewer.destroy();
                 this.viewers.splice(index, 1);

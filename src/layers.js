@@ -88,16 +88,6 @@ function initXopatLayers() {
         Dialogs.show($.t('messages.paramConfSaved'), 5000, Dialogs.MSG_INFO);
     };
 
-    // load desired shader upon selection
-    let shadersMenu = document.getElementById("shaders");
-    shadersMenu.addEventListener("mousedown", function (e) {
-        if (this.childElementCount < 2) {
-            e.preventDefault();
-            $(this.previousElementSibling).click();
-            return false;
-        }
-    });
-
     /**
      * Apply stored visualization parameters cache, best used before overrideConfigureAll().
      * Must rebuild the renderer otherwise.
@@ -118,11 +108,6 @@ function initXopatLayers() {
             sid++;
         }
     };
-
-    shadersMenu.addEventListener("change", function () {
-        const shaderIndex = Number.parseInt(this.value);
-        UTILITIES.setBackgroundAndGoal(undefined, shaderIndex);
-    });
 
     /**
      * @private

@@ -31,6 +31,23 @@ class Badge extends BaseComponent {
         return div({...this.commonProperties, ...this.extraProperties}, ...this.children);
     }
 
+    /**
+     * TODO component together with button is used in menu header, it needs a common interface so that menu can know its 'rotable-able'
+     */
+    iconRotate(){
+        const nodes = this.children;
+        for (let n of nodes){
+            if (n.nodeName === "I"){
+                if(this._orientation==="b-vertical-right"){
+                    n.classList.add("rotate-90");
+
+                } else if(this._orientation==="b-vertical-left"){
+                    n.classList.add("-rotate-90");
+                }
+            }
+        }
+    }
+
     static generateCode() {
         return `
 // DISCLAIMER this is static example code, it does not change based on the actual component configuration

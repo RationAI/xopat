@@ -90,6 +90,7 @@ class Button extends BaseComponent {
 
     /**
      * @description Rotates icon based on orientation
+     *  TODO WE SHOULD DEFINE ROTABLE COMPONENT AND MENU ONLY ACCEPTS SUCH COMPONENT...
     **/
     iconRotate(){
         const nodes = this.children;

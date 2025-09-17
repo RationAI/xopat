@@ -205,7 +205,7 @@ window.AdvancedMenuPages = class {
                     html.push(this.strategy(element, sanitizer));
                 }
 
-                USER_INTERFACE.RightSideMenu.append(
+                VIEWER_MANAGER.getMenu(viewerId).append(
                     data.title,
                     undefined,
                     html.join(""),
@@ -249,7 +249,7 @@ window.AdvancedMenuPages = class {
         // Compiled UI element aliases
         "div": "Div",
         "button": "Button",
-        "faicon": "FAIcon", "icon": "FAIcon", "fa-solid": "FAIcon",
+        "faicon": "FAIcon", "icon": "FAIcon", "fa-auto": "FAIcon",
         "join": "Join",
         "dropdown": "Dropdown",
         "menu": "Menu",

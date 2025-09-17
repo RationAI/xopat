@@ -398,7 +398,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     USER_INTERFACE.TopPluginsMenu.init();
     USER_INTERFACE.TopUserMenu.init();
     USER_INTERFACE.TopFullscreenButton.init();
-    USER_INTERFACE.RightSideMenu.init();
     USER_INTERFACE.FullscreenMenu.init();
     /**
      * Replace share button in static preview mode
@@ -477,16 +476,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (notified) return;
         if (e.message && e.message.statusCode) {
             //todo check if the first background
-            let title;
             switch (e.message.statusCode) {
                 case 401:
-                    $("#tissue-title-content").html($.t('main.global.tissue'));
+                    e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
                     Dialogs.show($.t('error.slide.401'),
                         20000, Dialogs.MSG_ERR);
                     XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
                     break;
                 case 403:
-                    $("#tissue-title-content").html($.t('main.global.tissue'));
+                    e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
                     Dialogs.show($.t('error.slide.403'),
                         20000, Dialogs.MSG_ERR);
                     break;
@@ -829,33 +827,30 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const tiledImage = viewer.world.getItemAt(referenceImage);
         const imageData = tiledImage?.getConfig();
 
-        const title = $("#tissue-title-header").removeClass('error-container');
         if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.find('#tissue-title-content').html(name);
-            title.attr('title', name);
+            viewer.getMenu().getNavigatorTab().setTitle(name, false);
         } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
             const name = UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                 || 'unknown'
             );
-            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
-
+            viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', {slide: name}), true);
         } else if (!imageData) {
-            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyViz'));
+            viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
         } else {
             const name = imageData.name || $.t('common.Image');
-            title.find('#tissue-title-content').html(name);
-            title.attr('title', name);
+            viewer.getMenu().getNavigatorTab().setTitle(name, false);
         }
 
-        const slideName = document.getElementById('tissue-title-content');
-        if (slideName.parentElement.classList.contains('error-container')){
-            slideName.classList.remove('btn-primary');
-            slideName.classList.add('btn-error', 'btn-outline');
-        }
+        // todo ok?
+        // const slideName = document.getElementById('tissue-title-content');
+        // if (slideName.parentElement.classList.contains('error-container')){
+        //     slideName.classList.remove('btn-primary');
+        //     slideName.classList.add('btn-error', 'btn-outline');
+        // }
 
         if (imageData) {
             const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
@@ -895,23 +890,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     layerWorldItem = viewer.world.getItemAt(++layerPosition);
                 } while (layerWorldItem);
 
-                // Init swwitching between goals
-                let i = 0;
-                // todo test change of visualization
-                const select = $("#shaders"),
-                    activeIndex = APPLICATION_CONTEXT.getOption("activeVisualizationIndex");
 
-                const html = [];
-                for (let vis of APPLICATION_CONTEXT.config.visualizations) {
-                    let selected = i == activeIndex ? "selected" : "";
-                    if (vis.error) { //todo valid prop? document
-                        html.push(`<option value="${i}" ${selected} title="${vis.error}">&#9888; ${vis['name']}</option>`);
-                    } else {
-                        html.push(`<option value="${i}" ${selected}>${vis['name']}</option>`);
-                    }
-                    i++;
-                }
-                select.html(html.join(""));
+                viewer.getMenu().getShadersTab().updateVisualizationList(
+                    APPLICATION_CONTEXT.config.visualizations,
+                    // todo is this accurate?
+                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex")
+                );
             } else {
                 //todo action page reload
                 Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);

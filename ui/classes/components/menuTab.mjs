@@ -4,7 +4,6 @@ import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 
-const ui = { Button, Div, FAIcon };
 const { span } = van.tags
 
 /**
@@ -43,7 +42,7 @@ class MenuTab extends BaseComponent {
     _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });
 
         //todo dirty?
         this.iconName = inIcon.options.name;
@@ -52,9 +51,9 @@ class MenuTab extends BaseComponent {
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
 
-        const b = new ui.Button({
+        const b = new Button({
             id: this.parent.id + "-b-" + item.id,
-            size: ui.Button.SIZE.SMALL,
+            size: Button.SIZE.SMALL,
             extraProperties: { title: inText },
             onClick: () => {
                 action();
@@ -64,13 +63,15 @@ class MenuTab extends BaseComponent {
 
         let c = undefined;
         if (content){
-            c = new ui.Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
+            c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
         };
         return [b, c];
     }
 
     removeTab() {
-        document.getElementById(this.headerButton.id).remove();
+        if (this.headerButton) {
+            document.getElementById(this.headerButton.id).remove();
+        }
         if (this.contentDiv){
             document.getElementById(this.contentDiv.id).remove();
         };
@@ -78,7 +79,7 @@ class MenuTab extends BaseComponent {
 
     focus() {
         for (let tab of Object.values(this.parent.tabs)) {
-            if (tab.headerButton.id != this.headerButton.id) {
+            if (tab.headerButton && tab.headerButton.id != this.headerButton?.id) {
                 tab._removeFocus();
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             }
@@ -100,7 +101,7 @@ class MenuTab extends BaseComponent {
 
     _setFocus() {
         this._focused = true;
-        this.headerButton.setClass("type", "btn-secondary");
+        this.headerButton?.setClass("type", "btn-secondary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "");
         };
@@ -108,14 +109,14 @@ class MenuTab extends BaseComponent {
 
     _removeFocus() {
         this._focused = false;
-        this.headerButton.setClass("type", "btn-primary");
+        this.headerButton?.setClass("type", "btn-primary");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");
         }
     }
 
     close() {
-        this.headerButton.setClass("type", "btn-primary");
+        this.headerButton?.setClass("type", "btn-primary");
         if (this.contentDiv){
             this._removeFocus();
         };
@@ -135,7 +136,7 @@ class MenuTab extends BaseComponent {
             return;
         }
         this.style = "TITLE";
-        const nodes = this.headerButton.children;
+        const nodes = this.headerButton?.children;
         nodes[0].classList.add("hidden");
         nodes[1].classList.remove("hidden");
     }
@@ -145,7 +146,7 @@ class MenuTab extends BaseComponent {
             return;
         }
         this.style = "ICONTITLE";
-        const nodes = this.headerButton.children;
+        const nodes = this.headerButton?.children;
         nodes[0].classList.remove("hidden");
         nodes[1].classList.remove("hidden");
     }
@@ -155,13 +156,13 @@ class MenuTab extends BaseComponent {
             return;
         }
         this.style = "ICON";
-        const nodes = this.headerButton.children;
+        const nodes = this.headerButton?.children;
         nodes[0].classList.remove("hidden");
         nodes[1].classList.add("hidden");
     }
 
     iconRotate(){
-        const nodes = this.headerButton.children;
+        const nodes = this.headerButton?.children;
         nodes[0].classList.remove("rotate-90");
         nodes[0].classList.remove("-rotate-90");
         if(!(this.style==="ICON")){

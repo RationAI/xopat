@@ -184,7 +184,7 @@ class AnnotationsGUI extends XOpatPlugin {
 				 style="top: 48px; left: 12px; z-index: 2; background: var(--color-bg-primary); border-color: var(--color-border-primary); display: none;">
 				<div class="flex items-center gap-3 btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
 					<button class="text-sm" id="comments-toggle-btn">
-						<span class="material-icons" style="color: var(--color-icon-secondary); font-size: 30px;">keyboard_arrow_down</span>
+                        <i class="fa-auto fa-chevron-down" style="color: var(--color-icon-secondary); font-size: 30px;"></i>
 					</button>
 					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
 				</div>
@@ -204,11 +204,11 @@ class AnnotationsGUI extends XOpatPlugin {
 							onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
 						></textarea>
 						<button 
-							class="px-3 py-2 btn btn-pointer material-icons"
+                            class="px-3 py-2 btn btn-pointer"
 							style="font-size: 22px;"
 							onclick="${this.THIS}._addComment()"
 						>
-							send
+							  <i class="fa-auto fa-paper-plane"></i>
 						</button>
 					</div>
 				</div>
@@ -223,10 +223,10 @@ class AnnotationsGUI extends XOpatPlugin {
         USER_INTERFACE.RightSideMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
-<span class="material-icons p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
-onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
-<button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><span class="material-icons pl-0 pr-1 v-align-text-top" style="font-size: 19px;">save</span>Save</button>
-<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
+<i class="fa-auto fa-eye p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
+onclick="${this.THIS}._toggleEnabled(this)"></i>
+<button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><i class="fa-auto fa-floppy-disk pl-0 pr-1 v-align-text-top" style="font-size: 19px;"></i>Save</button>
+<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
 </div>`,
 			'',
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
@@ -261,15 +261,20 @@ ${UIComponents.Elements.checkBox({
 		);
 
 		const vertSeparator = '<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>';
-		const modeOptions = [`<span id="toolbar-history-undo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.undo()">undo</span>
-<span id="toolbar-history-redo" class="material-icons btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.redo()">redo</span>`, vertSeparator],
+		const modeOptions = [`<span id="toolbar-history-undo" class="btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.undo()"><i class="fa-auto fa-rotate-left"></i></span>
+<span id="toolbar-history-redo" class="btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.redo()"><i class="fa-auto fa-rotate-right"></i></span>`, vertSeparator],
 			modes = this.context.Modes;
 		const defaultModeControl = (mode) => {
 			let selected = mode.default() ? "checked" : "";
-			return(`<input type="radio" id="${mode.getId()}-annotation-mode" class="hidden switch" ${selected} name="annotation-modes-selector">
-<label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative" onclick="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
- oncontextmenu="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
- title="${mode.getDescription()}"><span class="material-icons btn-pointer p-1 rounded-2">${mode.getIcon()}</span></label>`);
+			return(`
+  <input type="radio" id="${mode.getId()}-annotation-mode" class="hidden switch" ${selected} name="annotation-modes-selector">
+  <label for="${mode.getId()}-annotation-mode" class="label-annotation-mode position-relative"
+         onclick="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+         oncontextmenu="${this.THIS}.switchModeActive('${mode.getId()}');event.preventDefault(); return false;"
+         title="${mode.getDescription()}">
+    <i class="fa-auto ${mode.getIcon()} btn-pointer p-1 rounded-2"></i>
+  </label>
+`);
 		}
 
 		//AutoMode
@@ -287,7 +292,7 @@ ${UIComponents.Elements.checkBox({
 onclick="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', true);" 
 oncontextmenu="${this.THIS}.switchModeActive('${customMode.getId()}', '${factoryID}', false); event.preventDefault(); return false;"
 title="${customMode.getDescription()}: ${factory.title()}">
-<span class="material-icons btn-pointer p-1 rounded-2">${factory.getIcon()}</span></label>`);
+<i class="fa-auto ${factory.getIcon()} btn-pointer p-1 rounded-2"></i></label>`);
 			}
 		}
 		modeOptions.push('</span>');
@@ -441,7 +446,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const root = document.getElementById('annotation-comments-menu');
 		const commentsList = document.getElementById('comments-list');
 		const inputSection = document.getElementById('comments-input-section');
-		const arrow = document.getElementById('comments-toggle-btn').querySelector('span');
+		const arrow = document.getElementById('comments-toggle-btn').querySelector('i');
 
 		const isExpanded = !commentsList.classList.contains('hidden');
 
@@ -450,14 +455,14 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			root.classList.add('w-52');
 			commentsList.classList.add('hidden');
 			inputSection.classList.add('hidden');
-			arrow.textContent = 'keyboard_arrow_right';
+            arrow.className = 'fa-auto fa-chevron-right';
 		} else {
 			root.classList.add('w-80');
 			root.classList.remove('w-52');
 			commentsList.classList.remove('hidden');
 			inputSection.classList.remove('hidden');
-			arrow.textContent = 'keyboard_arrow_down';
-		}
+            arrow.className = 'fa-auto fa-chevron-down';
+        }
 	}
 
 	/**
@@ -560,9 +565,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			noCommentsElement.className = 'rounded-md flex items-center justify-center py-8 px-4 gap-2 select-none';
 			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
 			noCommentsElement.innerHTML = `
-				<span class="material-icons text-4xl" style="color: var(--color-text-tertiary);">chat_bubble_outline</span>
-				<p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
-			`;
+              <i class="fa-auto fa-comment text-4xl" style="color: var(--color-text-tertiary);"></i>
+              <p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
+            `;
 			commentsList.appendChild(noCommentsElement);
 			return;
 		}
@@ -658,20 +663,20 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const user = XOpatUser.instance();
 		const isAuthor = user.id === comment.author.id;
 		const deleteButtonHtml = isAuthor ?
-			`<button class="relative" title="Delete comment" data-confirmed="false">
-				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
-				<div class="show-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
-					<span>Click again to delete</span>
-				</div>
-			</button>` : '';
+            `<button class="relative" title="Delete comment" data-confirmed="false">
+                 <i class="fa-auto fa-trash btn-pointer" style="font-size: 21px; color: var(--color-text-danger);"></i>
+                 <div class="show-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+                   <span>Click again to delete</span>
+                 </div>
+               </button>` : '';
 
 		let replyButtonHtml = '';
 		if (!comment.replyTo) {
-			replyButtonHtml = `
-				<button class="relative" title="Reply to comment" data-reply="${comment.id}">
-					<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);">reply</span>
-				</button>
-			`;
+            replyButtonHtml = `
+                <button class="relative" title="Reply to comment" data-reply="${comment.id}">
+                  <i class="fa-auto fa-reply btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);"></i>
+                </button>
+              `;
 		}
 
 		commentElement.innerHTML = `
@@ -1130,7 +1135,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
 			actions.push({
 				title: "Copy",
-				icon: "content_copy",
+				icon: "fa-copy",
 				containerCss: !active && 'opacity-50',
 				action: () => {
 					if (active) handlerCopy();
@@ -1140,7 +1145,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
 			actions.push({
 				title: "Cut",
-				icon: "content_cut",
+				icon: "fa-scissors",
 				containerCss: !active && 'opacity-50',
 				action: () => {
 					if (active) handlerCut();
@@ -1151,7 +1156,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			const handlerPaste = this._pasteAnnotation.bind(this, e);
 			actions.push({
 				title: "Paste",
-				icon: "content_paste",
+				icon: "fa-paste",
 				containerCss: !canPaste && 'opacity-50',
 				action: () => {
 					if (canPaste) handlerPaste();
@@ -1161,7 +1166,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			const handlerDelete = this._deleteAnnotation.bind(this, active);
 			actions.push({
 				title: "Delete",
-				icon: "delete",
+				icon: "fa-trash",
 				containerCss: !active && 'opacity-50',
 				action: () => {
 					if (active) handlerDelete();
@@ -1285,7 +1290,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		// );
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Custom annotations", "create annotations with your hand", "architecture", [
+			this.id, "Custom annotations", "create annotations with your hand", "fa-ruler-combined", [
 				{
 					"next #annotations-custom-modes-panel": "Manual creation modes are available for each object type. <br> We recommend holding 'W' key instead of switching modes<br>with a mouse for faster workflow."
 				}, {
@@ -1307,7 +1312,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		);
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Magic Wand", "automatically select similar regions", "blur_on", [
+			this.id, "Magic Wand", "automatically select similar regions", "fa-wand-magic-sparkles", [
 				{
 					"click #magic-wand-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'T' key <br> instead in the future."
 				}, {
@@ -1325,7 +1330,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		);
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Brushing", "painting with your mouse", "gesture", [
+			this.id, "Brushing", "painting with your mouse", "fa-paintbrush", [
 				{
 					"click #fft-add-annotation-mode + label": "Click here to switch to the free form tool.<br>We recommend holding 'E' key <br> instead in the future."
 				}, {
@@ -1353,7 +1358,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		);
 
 		USER_INTERFACE.Tutorials.add(
-			this.id, "Other UI Controls", "annotations management", "dashboard_customize", [
+			this.id, "Other UI Controls", "annotations management", "fa-screwdriver-wrench", [
 				{
 					"next #viewer-container": "An annotation history is available."
 				}, {
@@ -1409,24 +1414,26 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 	};
 
 	_toggleEnabled(node) {
-		let self = $(node);
-		if (this.context.disabledInteraction) {
-			this.context.enableAnnotations(true);
-			self.html('visibility');
-			self.attr('data-ref', 'on');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'auto';
-			node.style.opacity = null;
-			node.ariaDisabled = 'true';
-		} else {
-			this.context.enableAnnotations(false);
-			self.html('visibility_off');
-			self.attr('data-ref', 'off');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'none';
-			node.style.opacity = '0.5';
-			node.ariaDisabled = 'false';
-		}
+        let self = $(node);
+        if (this.context.disabledInteraction) {
+            this.context.enableAnnotations(true);
+            // eye
+            self[0].className = 'fa-auto fa-eye p-1 mr-3';
+            self.attr('data-ref', 'on');
+            let node = document.getElementById('annotations-tool-bar-content');
+            node.style.pointerEvents = 'auto';
+            node.style.opacity = null;
+            node.ariaDisabled = 'true';
+        } else {
+            this.context.enableAnnotations(false);
+            // eye-slash
+            self[0].className = 'fa-auto fa-eye-slash p-1 mr-3';
+            self.attr('data-ref', 'off');
+            let node = document.getElementById('annotations-tool-bar-content');
+            node.style.pointerEvents = 'none';
+            node.style.opacity = '0.5';
+            node.ariaDisabled = 'false';
+        }
 	}
 
 	_annotationsDomRenderer(history, containerId) {
@@ -1537,7 +1544,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * @returns {string} HTML
 	 */
 	getMissingPresetHTML(isLeftClick) {
-		return `<div class="p-1" onclick="${this.THIS}.showPresets(${isLeftClick});"><span class="material-icons pr-1">add</span> 
+		return `<div class="p-1" onclick="${this.THIS}.showPresets(${isLeftClick});"><i class="fa-auto fa-plus pr-1"></i> 
 <span class="one-liner d-inline-block v-align-middle pr-2">Set</span></div>`;
 	}
 
@@ -1549,11 +1556,10 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	getPresetControlHTML(preset, isLeftClick) {
 		let category = preset.getMetaValue('category') || preset.objectFactory.title();
-		let icon = preset.objectFactory.getIcon();
-		return `<div class="position-relative p-1" onclick="${this.THIS}.showPresets(${isLeftClick});">
-<span class="material-icons position-absolute border-sm color-bg-primary close p-0 top-0 right-0 text-small" id="discard-annotation-p-selection"
- onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});">close</span>
-<span class="material-icons pr-0" style="color: ${preset.color};">${icon}</span>
+        return `<div class="position-relative p-1" onclick="${this.THIS}.showPresets(${isLeftClick});">
+<i class="fa-auto fa-xmark position-absolute border-sm color-bg-primary close p-0 top-0 right-0 text-small" id="discard-annotation-p-selection"
+ onclick="event.stopPropagation(); ${this.THIS}.context.setPreset(undefined, ${isLeftClick});"></i>
+<i class="fa-auto ${preset.objectFactory.getIcon()}" style="color: ${preset.color};"></i>
 <span class="one-liner d-inline-block v-align-middle pr-3">${category}</span>
 </div>`;
 	}
@@ -1681,11 +1687,10 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		this.context.presets.foreach(preset => {
 			const containerCss =
 				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
-			const icon = preset.objectFactory.getIcon();
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
+            html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
-<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
+<i class="fa-auto ${preset.objectFactory.getIcon()} pr-1" style="color: ${preset.color};"></i>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
 		});
@@ -1731,8 +1736,8 @@ onclick="$(this).parent().children().removeClass('highlighted-preset');$(this).a
 ${this.THIS}._presetSelection = '${preset.presetID}'">`);
 
 		if (this.enablePresetModify) {
-			html.push(`<span class="material-icons btn-pointer position-absolute top-0 right-0 px-0 z-3" 
-onclick="${this.THIS}.removePreset(this, '${preset.presetID}');">delete</span>`);
+            html.push(`<i class="fa-auto fa-trash btn-pointer position-absolute top-0 right-0 px-0 z-3" 
+onclick="${this.THIS}.removePreset(this, '${preset.presetID}');"></i>`);
 		}
 
 		if (preset.meta.category) {
@@ -1752,8 +1757,8 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 		}
 		html.push('<div>');
 		if (this.enablePresetModify) {
-			html.push(`<input class="form-control my-1" type="text" placeholder="name new field" style="width: 140px;">
-<span class="material-icons btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');">playlist_add</span>`);
+            html.push(`<input class="form-control my-1" type="text" placeholder="name new field" style="width: 140px;">
+<span class="btn-pointer" onclick="${this.THIS}.insertPresetMeta(this, '${preset.presetID}');"><i class="fa-auto fa-plus"></i></span>`);
 		}
 		html.push('</div></div>');
 		return html.join("");
@@ -1826,9 +1831,9 @@ ${this.THIS}.updatePresetWith('${preset.presetID}', 'objectFactory', this.value)
 
 	_metaFieldHtml(presetId, key, metaObject, allowDelete=true, classes="width-full") {
 		const disabled = this.enablePresetModify ? "" : " disabled ";
-		let delButton = allowDelete && this.enablePresetModify ? `<span 
-class="material-icons btn-pointer position-absolute right-0" style="font-size: 17px;"
-onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')">delete</span>` : "";
+        let delButton = allowDelete && this.enablePresetModify ? `<i 
+class="fa-auto fa-trash btn-pointer position-absolute right-0" style="font-size: 17px;"
+onclick="${this.THIS}.deletePresetMeta(this, '${presetId}', '${key}')"></i>` : "";
 
 		return `<div class="show-hint" data-hint="${metaObject.name}"><input class="form-control my-1 ${classes}" placeholder="unknown" type="text" onchange="
 ${this.THIS}.updatePresetWith('${presetId}', '${key}', this.value);" value="${metaObject.value}" ${disabled}>${delButton}</div>`;

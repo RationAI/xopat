@@ -33,7 +33,7 @@ class FAIcon extends BaseComponent {
         }
 
         options = super(options, ...args).options;
-        this.classMap["base"] = "fa-solid";
+        this.classMap["base"] = "fa-auto";
         this.classMap["name"] = options["name"] || "";
     }
 

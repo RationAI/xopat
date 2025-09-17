@@ -78,6 +78,7 @@ class MultiPanelMenu extends Menu {
         }
 
         tab.contentDiv.attachTo(this.body);
+        return tab;
     }
 
     /**

@@ -7,7 +7,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "straighten";
+        return "fa-ruler";
     }
 
     getDescription(ofObject) {

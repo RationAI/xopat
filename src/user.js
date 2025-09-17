@@ -83,7 +83,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     set icon(icon) {
-        $("#user-icon").html(icon || `<span class="material-icons btn-pointer">account_circle</span>`);
+        $("#user-icon").html(icon || `<i class="fa-auto fa-circle-user btn-pointer"></i>`);
     }
 
     onUserSelect() {

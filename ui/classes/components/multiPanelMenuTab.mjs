@@ -26,10 +26,10 @@ class MultiPanelMenuTab extends MenuTab {
      * @param {*} parent parent menu component
     **/
     constructor(item, parent) {
-        super(item, parent);
-        if (!parent.pinnedTabs) {
+        if (!parent._pinnedTabs) {
             parent._pinnedTabs = {};
         }
+        super(item, parent);
         this.openButton;
         this.openDiv;
         this.pin;
@@ -49,7 +49,7 @@ class MultiPanelMenuTab extends MenuTab {
         const pinIcon = new FAIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "fa-thumbtack" });
         this.pin = new Button({
             id: this.parent.id + "-b-pin-" + item.id,
-            type: Button.TYPE.SECONDARY,
+            type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraClasses: { display: "display-none" },
@@ -70,10 +70,10 @@ class MultiPanelMenuTab extends MenuTab {
             }
         }, pinIcon)
 
-        const crossIcon = new FAIcon({id: this.parent.id + "-b-icon-close-"+ item.id, name: "fa-xmark" });
+        const crossIcon = new FAIcon({id: this.parent.id + "-b-icon-close-"+ item.id, name: "fa-close" });
         this.closeButton = new Button({
             id: this.parent.id + "-b-close" + item.id,
-            type: Button.TYPE.SECONDARY,
+            type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
@@ -98,15 +98,16 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-opendiv-" + item.id, 
             extraClasses: {display: "display-none", flex: "flex flex-row", background: "bg-base-200", radius: "rouded-tl-md rounded-bl-md"},
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
-            }, div({ style: "width: 360px;" }, ...content));
+            }, div({ style: "width: 360px;" }, ...content)
+        );
 
+        this.fullId = this.parent.id + "-c-" + item.id;
         this.mainDiv = new Div({ 
-            id: this.parent.id + "-c-" + item.id, 
+            id: this.fullId,
             extraClasses: {display: "", flex: "flex flex-row", item: "ui-menu-item", background: "bg-base-200"},
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;" }
             }, this.openDiv, this.openButton);
 
-        this.fullId = this.parent.id + "-c-" + item.id;
         if (APPLICATION_CONTEXT.AppCache.get(`${this.id}-pinned`, false)){
             this.parent._pinnedTabs[this.id] = true;
             pinIcon.changeIcon("fa-thumbtack-slash");
@@ -125,9 +126,9 @@ class MultiPanelMenuTab extends MenuTab {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             this._removeFocus();
         } else {
-        APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
             this._setFocus();
-        };
+        }
     }
 
     _setFocus() {
@@ -196,7 +197,7 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     hide(){
-        document.getElementById(this.fullId).classList.toggle("hidden");
+        this.mainDiv.setClass("display", "hidden");
     }
 }
 

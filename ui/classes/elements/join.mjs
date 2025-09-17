@@ -14,7 +14,7 @@ const { div } = van.tags
  *                       }, button1, button2, button3);
  * join.attachTo(document.body);
  */
-class Join extends BaseComponent {
+export class Join extends BaseComponent {
 
     /**
      * @param {*} options
@@ -53,4 +53,3 @@ Join.ROUNDED = {
     DISABLE: function () { this.setClass("rounded", "join-unrounded"); },
 };
 
-export { Join };

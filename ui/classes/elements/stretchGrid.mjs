@@ -7,7 +7,7 @@ const { div } = van.tags;
  * @class StretchGrid
  * @description A grid component that stretches the last row to fill width
  */
-class StretchGrid extends BaseComponent {
+export class StretchGrid extends BaseComponent {
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
 
@@ -78,32 +78,31 @@ class StretchGrid extends BaseComponent {
     }
 
     _defaultItem(i) {
-        const d = document.createElement("div");
-        d.textContent = i + 1;
-        return d;
-    }
-
-    _makeCell(id) {
-        const d = document.createElement("div");
-        d.classList.add("stretch-grid__item");
-        d.id = id;
-        return d;
+        return div({textContent: i + 1});
     }
 
     createCell(id, index = this.items.length) {
-        const el = this._makeCell(id);
+        // Double-nested cells are intentional: this grid is used to
+        // host OSD viewers, and viewer menu lives in the parent cell.
+        const el = div(
+            {
+                class: "relative stretch-grid__item"
+            },
+            div(
+            {
+                id
+            }
+        ));
         this.insertAt(index, el);
         return el;
     }
 
     insertAt(idx, node) {
         const el = node || this._defaultItem(idx);
-        el.classList.add("stretch-grid__item");
+        el.classList.add("stretch-grid__item", "relative");
 
         // update model
         this.items.splice(idx, 0, el);
-
-        // update DOM
         const host = this._host();
         if (host) host.insertBefore(el, host.children[idx] || null);
 
@@ -167,4 +166,3 @@ class StretchGrid extends BaseComponent {
     }
 }
 
-export { StretchGrid };
