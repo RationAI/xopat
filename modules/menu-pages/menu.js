@@ -5,143 +5,63 @@ window.AdvancedMenuPages = class {
     /**
      * Create AdvancedMenuPages instance
      * @param {string} moduleId unique id of this module instance.
+     * @param {function|string} strategy builder strategy, renderUIFromJson or guessUIFromJson
      */
-    constructor(moduleId) {
+    constructor(moduleId, strategy=this.renderUIFromJson) {
         this.id = "menu-pages";
         this.uid = moduleId;
         this._count = 0;
-    }
-
-    /**
-     * Allowed types of page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
-     * Columns
-     * @param {array} output array to put the output strings to
-     * @param {object} root configuration node with 'type' property
-     * @param {function|false} sanitizer to sanitize strings, or false to not to sanitize
-     * @type {{}}
-     */
-    buildElements(output, root, sanitizer) {
-        root.classes = root.classes || "m-2 px-1";
-        let classes;
-        try {
-            switch (root.type) {
-            case 'vega':
-                classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
-                let uid = `vega-${Date.now()}`;
-                output.push(`<div class="${classes}" id="${uid}"></div>`);
-                this.vegaInit[uid] = root;
-                break;
-            case 'columns':
-                classes = root.classes ? (sanitizer ? sanitizer(root.classes) : root.classes) : "";
-                output.push(`<div class="d-flex ${classes}">`);
-                for (let col of root.children) {
-                    col.classes = (col.hasOwnProperty('classes') ? col.classes : "") + " flex-1";
-                    this.buildElements(output, col, sanitizer);
-                }
-                output.push('</div>');
-                break;
-            case 'html':
-                if (sanitizer) {
-                    output.push(sanitizer(root.html));
-                } else if (!APPLICATION_CONTEXT.secure) {
-                    output.push(root.html);
-                }
-                break;
-            default:
-                function sanitizeDeep(node) {
-                    const t = typeof node;
-                    if (t === "string") return sanitizer ? sanitizer(node) : node;
-                    if (Array.isArray(node)) return node.map(sanitizeDeep);
-                    if (t === "object") {
-                        const result = {};
-                        for (let p in node) result[p] = sanitizeDeep(node[p]);
-                        return result;
-                    }
-                    throw "Sanitization failed: possibly malicious or invalid object " + typeof node;
-                }
-                const result = UIComponents.Elements[root.type]?.(sanitizeDeep(root));
-                result && output.push(result);
-                break;
-            }
-        } catch (e) {
-            console.warn("AdvancedMenuPages: Failed to generate HTML.", root, e);
-            output.push(`<div class="error-container">${$.t('elementsBuilderErr')}</div>`);
-        }
+        this.strategy = typeof strategy === "string" ? this[strategy] : strategy;
     }
 
     loadVega(initialized=false) {
         for (let id in this.vegaInit) {
-            let object = this.vegaInit[id];
+            const object = this.vegaInit[id];
             if (object.view) continue;
-            if (!window.vega || !window.vega.View) {
-                if (initialized) throw "Could not load vega: ignoring vega components.";
 
+            if (!window.vega || !window.vega.View) {
+                if (initialized) {
+                    console.warn("Could not load vega: ignoring vega components.");
+                    delete this.vegaInit[id];
+                    continue;
+                }
                 const _this = this;
                 UTILITIES.loadModules(function() {
-                    //todo in case of failure e.g. integrity tag not verified, create error image
+                    // If the loader fails (e.g., integrity error), we just retry once; otherwise warn out
+                    // TODO (optional): draw an error placeholder image/canvas here
                     _this.loadVega(true);
-                }, APPLICATION_CONTEXT.secure ? 'vega-secure' : 'vega');
+                }, APPLICATION_CONTEXT.secure ? "vega-secure" : "vega");
                 return;
             }
 
             delete this.vegaInit[id];
-            object.view = new vega.View(vega.parse(object.vega), {renderer: 'canvas', container: `#${id}`, hover: true});
-            object.view.runAsync();
+            try {
+                object.view = new vega.View(
+                    vega.parse(object.vega),
+                    { renderer: "canvas", container: `#${id}`, hover: true }
+                );
+                object.view.runAsync();
+            } catch (err) {
+                console.warn("Vega failed to initialize for", id, err);
+            }
         }
-    }
-
-    _build(config, sanitizer) {
-        let parent, parentUnique;
-
-        for (let data of config) {
-            let html = [];
-
-            if (!data.title || !data.page) {
-                console.warn("Config for advanced manu pages missing title or page props - skipping!");
-                continue;
-            }
-
-            for (let element of (data.page || [])) {
-                this.buildElements(html, element, sanitizer);
-            }
-
-            //count is generated ID, if not supplied used generic ID that is not traceable
-            if (!parent || data.main) {
-                parentUnique = this.getMenuId(data.id, this._count++)
-                parent = this.builderInstance(data.id, this._count);
-            }
-
-            let unique = this.getSubMenuId(data.id, this._count++);
-            USER_INTERFACE.TopPluginsMenu._buildMenu(this, parent,
-                parentUnique,
-                data.title,
-                unique,
-                unique,
-                data.subtitle || data.title,
-                html.join(""),
-                data.icon || "",
-                true,
-                true);
-        }
-        this._count += config.length;
-        this.loadVega();
     }
 
     builderInstance(id, counter=undefined) {
         if (id) return `__builder-${id}`;
-        if (! Number.isNaN(counter))  return `__builder-${counter}`;
+        if (!Number.isNaN(counter))  return `__builder-${counter}`;
         throw "Cannot create builder ID: either valid ID or counter value must be supplied!";
     }
 
     getMenuId(id, counter=undefined) {
         if (id) return `pages-menu-root-${this.uid}-${id}`;
-        if (! Number.isNaN(counter)) return `pages-menu-root-${this.uid}-${counter}`;
+        if (!Number.isNaN(counter)) return `pages-menu-root-${this.uid}-${counter}`;
         throw "Cannot create menu ID: either valid ID or counter value must be supplied!";
     }
 
     getSubMenuId(id, counter=undefined) {
         if (id) return `pages-menu-item-${this.uid}-${id}`;
-        if (! Number.isNaN(counter)) return `pages-menu-item-${this.uid}-${counter}`;
+        if (!Number.isNaN(counter)) return `pages-menu-item-${this.uid}-${counter}`;
         throw "Cannot create submenu ID: either valid ID or counter value must be supplied!";
     }
 
@@ -154,26 +74,538 @@ window.AdvancedMenuPages = class {
     }
 
     /**
-     * Allowed types of config[i].page[] are either 'vega', 'columns' or 'newline' or types of UIComponents.Elements
-     * Columns
-     * @param {object} config array of objects - advanced menu page vega, each spec must have title and page props
-     * @param {boolean|object} sanitizeConfig configuration (see https://github.com/apostrophecms/sanitize-html)
+     * Allowed types of config[i].page[] are either 'vega', 'columns', 'newline', 'html'
+     *   or types that map to the compiled UI system.
+     *
+     * @param {object} config
+     * @param {boolean|object} sanitizeConfig configuration for sanitize-html,
      *   or simple on/off flag for default behaviour
-     * @type {{}}
      */
     buildMetaDataMenu(config, sanitizeConfig=false) {
+        const build = (config, sanitizer) => {
+            let parent, parentUnique;
+
+            for (let data of config) {
+                const html = [];
+
+                if (!data.title || !data.page) {
+                    console.warn("Config for advanced menu pages missing title or page props - skipping!", data);
+                    continue;
+                }
+
+                for (let element of (data.page || [])) {
+                    html.push(this.strategy(element, sanitizer));
+                }
+
+                // count is generated ID, if not supplied use generic ID that is not traceable
+                if (!parent || data.main) {
+                    parentUnique = this.getMenuId(data.id, this._count++);
+                    parent = this.builderInstance(data.id, this._count);
+                }
+
+                const unique = this.getSubMenuId(data.id, this._count++);
+                USER_INTERFACE.TopPluginsMenu._buildMenu(
+                    this,
+                    parent,
+                    parentUnique,
+                    data.title,
+                    unique,
+                    unique,
+                    data.subtitle || data.title,
+                    html.join(""),
+                    data.icon || "",
+                    true,
+                    true
+                );
+            }
+            this._count += config.length;
+            this.loadVega();
+        };
+
         if (typeof sanitizeConfig === "object") {
             const _this = this;
             UTILITIES.loadModules(() => {
-                _this._build(config, str => SanitizeHtml(str, sanitizeConfig));
-            }, 'sanitize-html');
+                build(config, str => SanitizeHtml(str, sanitizeConfig));
+            }, "sanitize-html");
         } else if (sanitizeConfig) {
             const _this = this;
             UTILITIES.loadModules(() => {
-                _this._build(config, str => SanitizeHtml(str));
-            }, 'sanitize-html');
+                build(config, str => SanitizeHtml(str));
+            }, "sanitize-html");
         } else {
-            this._build(config, false);
+            build(config, false);
         }
+    }
+
+    /**
+     * Allowed types of config[i].page[] are either 'vega', 'columns', 'newline', 'html'
+     *   or types that map to the compiled UI system. Instead of menu, buids a custom content at desired place
+     * @param config
+     * @param selector
+     * @param sanitizeConfig
+     */
+    buildCustom(config, selector, sanitizeConfig=false) {
+        const build = (config, sanitizer, selector=undefined) => {
+            const html = [];
+            if (Array.isArray(config)) {
+                for (let data of config) {
+                    // todo handle data title and other base props
+                    if (data.page) {
+                        for (let element of (data.page || [])) {
+                            html.push(this.strategy(element, sanitizer));
+                        }
+                    } else {
+                        html.push(this.strategy(data, sanitizer));
+                    }
+                }
+            } else {
+                html.push(this.strategy(config, sanitizer));
+            }
+
+            USER_INTERFACE.addHtml(
+                html.join(""),
+                this.uid,
+                selector
+            );
+            this.loadVega();
+        };
+        if (typeof sanitizeConfig === "object") {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                build(config, str => SanitizeHtml(str, sanitizeConfig), selector);
+            }, "sanitize-html");
+        } else if (sanitizeConfig) {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                build(config, str => SanitizeHtml(str), selector);
+            })
+        } else {
+            build(config, false, selector);
+        }
+    }
+
+    /**
+     *
+     * @param viewerId
+     * @param config
+     * @param sanitizeConfig
+     */
+    buildViewerMenu(viewerId, config, sanitizeConfig=false) {
+        const build = (config, sanitizer) => {
+
+            for (let data of config) {
+                const html = [];
+
+                if (!data.title || !data.page) {
+                    console.warn("Config for advanced menu pages missing title or page props - skipping!", data);
+                    continue;
+                }
+
+                for (let element of (data.page || [])) {
+                    html.push(this.strategy(element, sanitizer));
+                }
+
+                USER_INTERFACE.RightSideMenu.append(
+                    data.title,
+                    undefined,
+                    html.join(""),
+                    this.getMenuId(data.id, this._count++),
+                    this.uid
+                );
+            }
+            this._count += config.length;
+            this.loadVega();
+        };
+
+        if (typeof sanitizeConfig === "object") {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                build(config, str => SanitizeHtml(str, sanitizeConfig));
+            }, "sanitize-html");
+        } else if (sanitizeConfig) {
+            const _this = this;
+            UTILITIES.loadModules(() => {
+                build(config, str => SanitizeHtml(str));
+            }, "sanitize-html");
+        } else {
+            build(config, false);
+        }
+    }
+
+    // -----------------------------
+    // UI System translation utilities
+    // -----------------------------
+
+    norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    pascalize = t => {
+        return String(t || "")
+            .split(/[^a-z0-9]+/i)
+            .filter(Boolean)
+            .map(s => s[0].toUpperCase() + s.slice(1).toLowerCase())
+            .join("");
+    };
+
+    ALIAS = {
+        // Compiled UI element aliases
+        "div": "Div",
+        "button": "Button",
+        "faicon": "FAIcon", "icon": "FAIcon", "fa-solid": "FAIcon",
+        "join": "Join",
+        "dropdown": "Dropdown",
+        "menu": "Menu",
+        "menutab": "MenuTab",
+        "multipanelmenu": "MultiPanelMenu",
+        "fullscreenmenu": "FullscreenMenu",
+        "tabsmenu": "TabsMenu",
+        "checkbox": "Checkbox",
+        "title": "Title",
+        "header": "Title",
+        "heading": "Title",
+        "collapse": "Collapse",
+        // handled explicitly here:
+        "vega": true,
+        "html": true,
+        "columns": true,
+        "newline": true
+    };
+
+    // Try several name shapes against UI
+    resolveUIClass(type){
+        if (!type || !globalThis.UI) return null;
+        const UI = globalThis.UI;
+
+        // exact hit first
+        if (UI[type]) return UI[type];
+
+        // PascalCase
+        const pas = this.pascalize(type);
+        if (UI[pas]) return UI[pas];
+
+        // alias
+        const ali = this.ALIAS[this.norm(type)];
+        if (ali && ali !== true && UI[ali]) return UI[ali];
+
+        // legacy namespaces if any exist on your build
+        if (UI.Components?.[pas]) return UI.Components[pas];
+        if (UI.Elements?.[pas])   return UI.Elements[pas];
+
+        return null;
+    }
+
+    // Deep-sanitize helper (strings via sanitizer; objects/arrays recursively)
+    sanitizeDeep(node, sanitizer){
+        const t = typeof node;
+        if (!sanitizer) return node; // no-op if sanitizer not provided
+        if (t === "string") return sanitizer(node);
+        if (Array.isArray(node)) return node.map(n => this.sanitizeDeep(n, sanitizer));
+        if (t === "object" && node) {
+            const result = {};
+            for (let p in node) {
+                // these props are not allowed in UI options
+                if (p === "type" || p === "children") {
+                    continue;
+                }
+                result[p] = this.sanitizeDeep(node[p], sanitizer);
+            }
+            return result;
+        }
+        return node;
+    }
+
+    // Render a UI component (and nested children) to HTML string
+    renderUIFromJson(jsonNode, sanitizer){
+        if (!jsonNode || typeof jsonNode !== "object") return "";
+
+        // Special types handled here (keep parity with legacy builder)
+        const t = this.norm(jsonNode.type);
+
+        //todo consider supporting nodes to avoid returning innerHtml
+        try {
+            switch (t) {
+                case "vega": {
+                    // container + enqueue vega init
+                    const classes = jsonNode.classes ? (sanitizer ? sanitizer(jsonNode.classes) : jsonNode.classes) : "";
+                    const uid = `vega-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                    // store the ORIGINAL (unsanitized object is fine; spec is not injected into DOM)
+                    this.vegaInit[uid] = jsonNode;
+                    return `<div class="${classes}" id="${uid}"></div>`;
+                }
+
+                case "html": {
+                    if (sanitizer) return sanitizer(jsonNode.html || "");
+                    if (!APPLICATION_CONTEXT.secure) return String(jsonNode.html || "");
+                    return ""; // secure mode blocks raw-html unless sanitizer is provided
+                }
+
+                case "columns": {
+                    // Render columns as a flex row; each child becomes a flex-1 column.
+                    const classes = jsonNode.classes ? (sanitizer ? sanitizer(jsonNode.classes) : jsonNode.classes) : "";
+                    const children = Array.isArray(jsonNode.children) ? jsonNode.children : [];
+                    const cols = children.map(ch => {
+                        const cj = (typeof ch === "object" && ch) ? { ...ch } : { type: "div", children: [ch] };
+                        // Append flex-1 to each column's classes without clobbering user classes
+                        const colClasses = (cj.classes ? (sanitizer ? sanitizer(cj.classes) : cj.classes) : "");
+                        cj.classes = (colClasses + " flex-1").trim();
+                        return this.renderUIFromJson(cj, sanitizer);
+                    }).join("");
+                    return `<div class="flex ${classes}">${cols}</div>`;
+                }
+
+                case "newline": {
+                    // Simple visual separator / line break
+                    // Choose one: semantic <hr> (styled by DaisyUI) or a small spacer div
+                    return `<div class="divider my-2"></div>`;
+                }
+
+                default: {
+                    // Regular UI element -> compiled UI system
+                    const Cls = this.resolveUIClass(jsonNode.type);
+                    if (!Cls) return "";
+
+                    // Sanitize the options object (strings-only) if a sanitizer is provided
+                    const safeOptions = this.sanitizeDeep({ ...jsonNode }, sanitizer);
+
+                    // Render children: allow strings/HTML or nested {type:...}
+                    const kids = [];
+                    if (Array.isArray(jsonNode.children)) {
+                        for (const ch of jsonNode.children) {
+                            if (ch && typeof ch === "object" && ch.type) {
+                                // Nested UI element → render to HTML string and pass as Node
+                                const childHTML = this.renderUIFromJson(ch, sanitizer);
+                                const tmp = document.createElement("div");
+                                tmp.innerHTML = childHTML;
+                                // append all produced nodes (could be 1+)
+                                kids.push(...tmp.childNodes);
+                            } else {
+                                // Raw string/number/boolean → coerce to string (sanitized if configured)
+                                const str = (typeof ch === "string" ? (sanitizer ? sanitizer(ch) : ch) : String(ch ?? ""));
+                                kids.push(str);
+                            }
+                        }
+                    }
+
+                    // Create instance
+                    const inst = new Cls(safeOptions, ...kids);
+
+                    // Force a concrete node, then stringify to keep the old `html.join("")` pipeline
+                    const node = UI.BaseComponent.toNode(inst, /*reinit*/ true);
+                    const wrap = document.createElement("div");
+                    wrap.appendChild(node);
+                    return wrap.innerHTML;
+                }
+            }
+        } catch (e) {
+            console.warn("AdvancedMenuPages: Failed to generate HTML.", jsonNode, e);
+            return `<div class="error-container">${$.t('elementsBuilderErr')}</div>`;
+        }
+    }
+
+    //////////////
+    // Guessing //
+    //////////////
+
+    humanizeKey(k) {
+        if (!k && k !== 0) return "";
+        const s = String(k)
+            .replace(/[_\-]+/g, " ")
+            .replace(/([a-z])([A-Z])/g, "$1 $2")
+            .replace(/\s+/g, " ")
+            .trim();
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    _isPlainObject(v) { return Object.prototype.toString.call(v) === "[object Object]"; }
+    _isPrimitive(v) { return v === null || (typeof v !== "object" && typeof v !== "function"); }
+    _arrayKind(arr) {
+        if (!Array.isArray(arr)) return "none";
+        if (!arr.length) return "empty";
+        const allPrim = arr.every(this._isPrimitive);
+        if (allPrim) return "primitives";
+        const allObj = arr.every(this._isPlainObject);
+        if (allObj) return "objects";
+        return "mixed";
+    }
+    _fmtValue(v) {
+        if (v === null) return "null";
+        if (typeof v === "undefined") return "undefined";
+        if (typeof v === "string") return v;
+        try { return JSON.stringify(v); } catch { return String(v); }
+    }
+
+    /**
+     * Build a small UI spec node for a labeled value line.
+     * Uses generic Div + classes to avoid depending on unknown Input components.
+     */
+    _buildLabeledValue(label, valueStr) {
+        return {
+            type: "div",
+            extraClasses: "flex items-start gap-2 py-1",
+            children: [
+                { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
+                { type: "div", extraClasses: "text-xs font-mono bg-base-200 px-2 py-0.5 rounded", children: [valueStr] }
+            ]
+        };
+    }
+
+    /** Tag/badge chip */
+    _buildChip(text) {
+        return {
+            type: "div",
+            extraClasses: "badge badge-outline badge-sm",
+            children: [String(text)]
+        };
+    }
+
+    /** Join row of chips */
+    _buildChipRow(label, arr, max=10) {
+        const shown = arr.slice(0, max).map(v => this._buildChip(this._fmtValue(v)));
+        if (arr.length > max) shown.push(this._buildChip(`+${arr.length - max} more`));
+        return {
+            type: "div",
+            extraClasses: "flex items-start gap-2 py-1",
+            children: [
+                { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
+                { type: "join", extraClasses: "flex flex-wrap gap-1", children: shown }
+            ]
+        };
+    }
+
+    /**
+     * Guess UI spec for any JSON value.
+     *
+     * @param {string} key - current property key (for labels)
+     * @param {*} value - the JSON value
+     * @param {number} depth - current recursion depth
+     * @param {object} opts - { maxDepth, maxArrayItems }
+     * @returns {Array} array of UI spec nodes
+     */
+    _guessSpecForValue(key, value, depth, opts) {
+        const label = this.humanizeKey(key);
+        const nodes = [];
+
+        // Primitive types
+        if (typeof value === "boolean") {
+            nodes.push({ type: "checkbox", label, checked: !!value });
+            return nodes;
+        }
+        if (typeof value === "number") {
+            nodes.push(this._buildLabeledValue(label, String(value)));
+            return nodes;
+        }
+        if (typeof value === "string") {
+            const isLong = value.length > 120 || value.includes("\n");
+            nodes.push({
+                type: "div",
+                extraClasses: "flex items-start gap-2 py-1",
+                children: [
+                    { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
+                    { type: "div", extraClasses: (isLong ? "text-xs whitespace-pre-wrap" : "text-xs"),
+                        children: [value] }
+                ]
+            });
+            return nodes;
+        }
+        if (value === null) {
+            nodes.push(this._buildLabeledValue(label, "null"));
+            return nodes;
+        }
+
+        // Arrays
+        if (Array.isArray(value)) {
+            const kind = this._arrayKind(value);
+            if (kind === "empty") {
+                nodes.push(this._buildLabeledValue(label, "[]"));
+                return nodes;
+            }
+            if (kind === "primitives") {
+                nodes.push(this._buildChipRow(label, value, opts.maxArrayItems));
+                return nodes;
+            }
+            nodes.push({ type: "title", text: label, level: Math.min(4, depth + 2), separator: true });
+            const items = value.slice(0, opts.maxArrayItems);
+            items.forEach((item, i) => {
+                const title = { type: "title", text: `${label} – Item #${i+1}`, level: Math.min(4, depth + 3) };
+                nodes.push(title);
+                if (depth >= opts.maxDepth) {
+                    nodes.push(this._buildLabeledValue("Value", this._fmtValue(item)));
+                } else {
+                    nodes.push(...this._guessObjectSpec(item, depth + 1, opts));
+                }
+            });
+            if (value.length > opts.maxArrayItems) {
+                nodes.push(this._buildLabeledValue("Note", `+${value.length - opts.maxArrayItems} more items truncated`));
+            }
+            return nodes;
+        }
+
+        if (this._isPlainObject(value)) {
+            if (value.type && this.resolveUIClass(value.type)) {
+                if (Array.isArray(value.children)) {
+                    value.children = value.children.map(ch => this._guessObjectSpec(ch, depth + 1, opts));
+                }
+                nodes.push(value);
+                return nodes;
+            }
+
+            nodes.push({ type: "title", text: label || "Object", level: Math.min(4, depth + 2), separator: !!label });
+            if (depth >= opts.maxDepth) {
+                nodes.push(this._buildLabeledValue("Value", this._fmtValue(value)));
+                return nodes;
+            }
+            nodes.push(...this._guessObjectSpec(value, depth + 1, opts));
+            return nodes;
+        }
+
+        // Fallback
+        nodes.push(this._buildLabeledValue(label || "Value", this._fmtValue(value)));
+        return nodes;
+    }
+
+    /** Build specs for all properties of an object */
+    _guessObjectSpec(obj, depth, opts) {
+        if (obj.type && this.resolveUIClass(obj.type)) {
+            if (Array.isArray(obj.children)) {
+                obj.children = obj.children.map(ch => this._guessObjectSpec(ch, depth + 1, opts)).flat();
+            }
+            return [obj];
+        }
+
+        const nodes = [];
+        const keys = Object.keys(obj);
+        for (const k of keys) {
+            nodes.push(...this._guessSpecForValue(k, obj[k], depth, opts));
+        }
+        return nodes;
+    }
+
+    /**
+     * Public: guess UI from generic JSON and render to HTML string. It supports interleaving with
+     *  standardized UI JSON spec - you can interleave UI JSON Spec with random JSON values.
+     *  The system tries to estimate the best UI for the given JSON.
+     * @param {*} json - any JSON-serializable value (root)
+     * @param {object|false} sanitizer - optional sanitizer function (same convention as renderUIFromJson)
+     * @param {object} options - { title, maxDepth, maxArrayItems }
+     * @returns {string} HTML string
+     */
+    guessUIFromJson(json, sanitizer=false, options={}) {
+        options.maxDepth = Math.max(1, options.maxDepth ?? 3);
+        options.maxArrayItems = Math.max(1, options.maxArrayItems ?? 25);
+
+        const spec = [];
+
+        // Root title
+        if (options.title) {
+            spec.push({ type: "title", text: options.title, level: 2, separator: true });
+        }
+
+        if (Array.isArray(json)) {
+            spec.push(...this._guessSpecForValue("Items", json, 1, options));
+        } else if (this._isPlainObject(json)) {
+            spec.push(...this._guessObjectSpec(json, 1, options));
+        } else {
+            spec.push(...this._guessSpecForValue("Value", json, 1, options));
+        }
+
+        const htmlParts = spec.map(node => this.renderUIFromJson(node, sanitizer));
+        return htmlParts.join("");
     }
 };

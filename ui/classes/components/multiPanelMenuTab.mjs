@@ -79,7 +79,7 @@ class MultiPanelMenuTab extends MenuTab {
             extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 this.toggleHiden();
-                APPLICATION_CONTEXT.setOption(`${this.id}-hidden`, this.hidden);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-hidden`, this.hidden);
                 event.stopPropagation();
             }
         }, crossIcon)
@@ -107,7 +107,7 @@ class MultiPanelMenuTab extends MenuTab {
             }, this.openDiv, this.openButton);
 
         this.fullId = this.parent.id + "-c-" + item.id;
-        if (APPLICATION_CONTEXT.getOption(`${this.id}-pinned`, false)){
+        if (APPLICATION_CONTEXT.AppCache.get(`${this.id}-pinned`, false)){
             this.parent._pinnedTabs[this.id] = true;
             pinIcon.changeIcon("fa-thumbtack-slash");
         }
@@ -122,10 +122,10 @@ class MultiPanelMenuTab extends MenuTab {
 
     focus() {
         if (this._focused) {
-            APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             this._removeFocus();
         } else {
-        APPLICATION_CONTEXT.setOption(`${this.id}-open`, true);
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
             this._setFocus();
         };
     }
@@ -187,10 +187,10 @@ class MultiPanelMenuTab extends MenuTab {
 
     togglePinned(){
         if (this.parent._pinnedTabs[this.id]){
-            APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, false);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-pinned`, false);
             this.parent._pinnedTabs[this.id] = false;
         } else{
-            APPLICATION_CONTEXT.setOption(`${this.id}-pinned`, true);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-pinned`, true);
             this.parent._pinnedTabs[this.id] = true;
         }
     }

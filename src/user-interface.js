@@ -1083,7 +1083,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 const { div } = van.tags;
 
                 const viewer = div();
-                viewer.innerHTML =`<div id="openseadragon-view" class="flex flex-col" style="height: 360px; width: 360px;">
+                viewer.innerHTML =`<div id="openseadragon-view" class="flex flex-col" style="width: 360px;">
                                         <div id="panel-navigator" style=" height: 360px; width: 360px;"></div>
                                     </div>`;
 
@@ -1151,7 +1151,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     extraClasses: {width: "w-full"}
                 }, checkbox, text, copyButton);
             },
-
+            append(title, titleHtml, html, id, pluginId) {
+                this.menu.append(title, titleHtml, html, id, pluginId);
+            },
             appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
                 this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
             },
@@ -1576,7 +1578,8 @@ ${label}
          */
         addHtml: function(html, pluginId, selector="body") {
             try {
-                $(UI.BaseComponent.parseDomLikeItem(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                const jqNode = $(UI.BaseComponent.parseDomLikeItem(html));
+                jqNode.appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

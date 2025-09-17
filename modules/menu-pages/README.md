@@ -1,133 +1,267 @@
-## Advanced Menu Custom Pages
+# AdvancedMenuPages Module — Usage Guide
 
-Allows to create non-trivial content in the advanced menu, including graphs.
-See below DOCS for the configuration of pages. The configuration supposes an
-array of objects, each object contains:
+The **AdvancedMenuPages** module allows building interactive menu pages from declarative JSON specifications. It integrates with the compiled `UI` system (`window.UI`) and supports both explicit UI element definitions and automatic UI generation from raw JSON data.
 
-- [R]`title` - the page menu button title
-- [O]`icon` - material icon name
-- [O]`id` - if set, you can open the menu page programmatically using this ID
-- [O]`subtitle` - if set, the page subtitle, otherwise same as title
-- [O]`main` - if `false` (default), the page is attached to the previous main page, the first object ignores this property, always main
-- [R]`page` - a list of nodes of UI building blocks to generate data reports, where each node contains:
-    - [R]`type` - a node type, can be either "columns", "vega" or one of keys of `UIComponents.Elements` interface; based on the node type other
-      parameters are supported (interface nodes are described at the definition)
-    - [O]`classes` - a space separated list of classes to add to the generated HTML
-    - [R type=columns]`children` - a list of nodes to place in columns
-    - [R type=vega]`vega` - a VEGA visualization grammar configuration for a particular GRAPH
-    - [R type=vega]`html` - a HTML string (all other properties except type are ignored)
-    - ... other props as specified by the function of the given type
+---
 
-You can create your own HTML rendering by specifying the type as well as parameters like so:
-````js
-UIComponents.Elements.myHtmlElement = function(options) {
-  //I should support at least classes (defined above)
-  //I can define new props to support, I should not use 'type', 'columns', 'classes' and 'vega' and 'html'
-  return `<div class="${options.classes || ''}">${options.myField || "Hello"}</div>`;
+## Table of Contents
+
+* [Initialization](#initialization)
+* [Building Menus](#building-menus)
+* [Supported Element Types](#supported-element-types)
+
+    * [Special Root Types](#special-root-types)
+    * [UI Elements](#ui-elements)
+* [Automatic UI Guessing](#automatic-ui-guessing)
+* [Examples](#examples)
+
+---
+
+## Initialization
+
+```js
+const builder = new AdvancedMenuPages("my-module");
+```
+
+Each instance is tied to a module ID (`uid`) to ensure unique DOM IDs for menu items.
+
+---
+
+## Building Menus
+
+The main entrypoint is:
+
+```js
+builder.buildMetaDataMenu(config, sanitizeConfig);
+```
+
+* `config`: an array of menu page specifications (see below).
+* `sanitizeConfig`: `false` (no sanitization), `true` (default sanitize-html), or an object (custom sanitize-html config).
+
+### Menu Page Specification
+
+```jsonc
+{
+  "id": "optional-id",
+  "title": "Main Section Title",   // required
+  "subtitle": "Tooltip subtitle",  // optional
+  "icon": "fa-cogs",              // optional FontAwesome icon name
+  "main": true,                    // marks this page as the main parent
+  "page": [ ...elements... ]       // array of element specifications
 }
+```
 
-new AdvancedMenuPages('myPluginId').buildElements([{
-    title: "Custom",
-    page: [
-            {
-          type: 'myHtmlElement',
-          myField: 'こんばんは。' //good evening
-       }           
+---
+
+## Supported Element Types
+
+### Special Root Types
+
+#### `vega`
+
+Embed a Vega visualization.
+
+```json
+{ "type": "vega", "vega": { /* Vega spec */ }, "classes": "m-2" }
+```
+
+#### `columns`
+
+Arrange children into equal-width columns.
+
+```json
+{
+  "type": "columns",
+  "classes": "gap-2",
+  "children": [
+    { "type": "button", "text": "Left" },
+    { "type": "button", "text": "Right" }
+  ]
+}
+```
+
+#### `html`
+
+Inject raw HTML. Blocked in secure mode unless sanitization is enabled.
+
+```json
+{ "type": "html", "html": "<b>Raw HTML</b>" }
+```
+
+#### `newline`
+
+Insert a horizontal divider line.
+
+```json
+{ "type": "newline" }
+```
+
+---
+
+### UI Elements
+
+All other types resolve to compiled `UI` classes. The mapping is forgiving:
+
+* `button` → `UI.Button`
+* `fa-icon`, `faicon`, `FAIcon` → `UI.FAIcon`
+* `title`, `header`, `heading` → `UI.Title`
+* `checkbox` → `UI.Checkbox`
+* `dropdown` → `UI.Dropdown`
+* `menu` → `UI.Menu`
+* `tabsmenu` → `UI.TabsMenu`
+* `multipanelmenu` → `UI.MultiPanelMenu`
+* `fullscreenmenu` → `UI.FullscreenMenu`
+* `join` → `UI.Join`
+* `div` → `UI.Div`
+
+#### Title
+
+```json
+{ "type": "title", "text": "Section", "level": 3, "separator": true }
+```
+
+#### Button
+
+```json
+{
+  "type": "button",
+  "class": "btn btn-primary",
+  "children": [
+    { "type": "fa-icon", "name": "fa-play" },
+    " Run"
+  ]
+}
+```
+
+#### Checkbox
+
+```json
+{ "type": "checkbox", "label": "Enable feature", "checked": true }
+```
+
+#### Dropdown
+
+```json
+{
+  "type": "dropdown",
+  "label": "Mode",
+  "items": ["2D", "3D"]
+}
+```
+
+#### Menu
+
+```json
+{
+  "type": "menu",
+  "items": [
+    { "text": "File", "children": [
+        { "text": "Open" },
+        { "text": "Save" }
+    ]},
+    { "text": "Edit" }
+  ]
+}
+```
+
+#### TabsMenu
+
+```json
+{
+  "type": "tabsmenu",
+  "tabs": [
+    { "label": "Settings", "page": [
+        { "type": "checkbox", "label": "Show grid" }
+    ]},
+    { "label": "About", "page": [
+        { "type": "html", "html": "<p>Version 1.0</p>" }
+    ]}
+  ]
+}
+```
+
+---
+
+## Automatic UI Guessing
+
+The module includes a helper:
+
+```js
+const html = builder.guessUIFromJson(data, sanitizer?, { title, maxDepth, maxArrayItems });
+```
+
+* **data**: arbitrary JSON object.
+* **title**: optional root title string (default "Details").
+* **maxDepth**: recursion depth limit (default 3).
+* **maxArrayItems**: maximum items to render from arrays (default 25).
+
+### Heuristics
+
+* **Booleans** → Checkbox with label.
+* **Numbers** → Labeled value.
+* **Strings** → Labeled text; long strings as multiline.
+* **Arrays**
+
+    * Primitives → rendered as badge chips.
+    * Objects → nested sections with titles.
+* **Objects** → section titles + recursive rendering.
+
+### Example
+
+```js
+const json = {
+  some_item: 123,
+  someNested: {
+    arrayOF_VALUES: [1, 2, true],
+    "some value": true
+  }
+};
+
+const html = builder.guessUIFromJson(json);
+
+builder._build([
+  {
+    title: "Auto UI",
+    page: [ { type: "html", html } ]
+  }
+], false);
+```
+
+---
+
+## Examples
+
+### Simple Page
+
+```json
+[
+  {
+    "title": "Visualization",
+    "page": [
+      { "type": "title", "text": "Options", "separator": true },
+      {
+        "type": "columns",
+        "children": [
+          { "type": "checkbox", "label": "Show grid" },
+          { "type": "dropdown", "label": "Mode", "items": ["2D", "3D"] }
+        ]
+      },
+      { "type": "vega", "vega": { /* spec */ } }
     ]
-}]);
-````
+  }
+]
+```
 
-The module is optionally dependent on ``vega`` and `sanitize-html` (if features used).
+### Auto-Generated UI Page
 
-### Available Elements (types)
-Special types are ``columns``, `vega` and `html`. Columns allow you to place elements
-into columns (rows being generated naturally by the item order). Vega is a powerful
-graph renderer. HTML rendering ability is there just for completeness, and is disabled
-unless either ``APPLICATION_CONTEXT.secure===false`` or a sanitizer is configured.
+```js
+const data = { user: "Alice", active: true, roles: ["admin", "editor"] };
+const html = builder.guessUIFromJson(data);
 
-Note that this might not be the newest docs or miss ad-hoc appended functions: it is just a copy of the javadoc:
-
-    /**
-     * Render TEXT input
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
-     * @return {string} HTML for input TEXT field
-     */
-    textInput: function(options);
-    /**
-     * Render Checkbox button
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.label
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
-     * @return {string} HTML for checkbox
-    */
-    checkBox: function(options);
-    /**
-     * Render color input
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
-     * @return {string} HTML for color input
-    */
-    colorInput: function(options);
-    /**
-     * Render number input
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {string || *} options.default default value
-     * @param {number} options.min minimum value, default 0
-     * @param {number} options.max maximum value, default 1
-     * @param {number} options.step allowed increase, default 0.1
-     * @return {string} HTML for number input
-    */
-    numberInput: function(options);
-    /**
-     * Render select input
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.placeholder hint
-     * @param {string || undefined} options.onchange string to evaluate on input change
-     * @param {object} options.default default-selected opt_key
-     * @param {object} options.options select options, opt_key: 'option text' map
-     * @return {string} HTML for select input
-    */
-    select: function (options)
-    /**
-     * Render header
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.title
-     * @return {string} HTML for header
-    */
-    header: function (options) 
-    /**
-     * Render text
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.content
-     * @return {string} HTML for content text
-    */
-    text: function (options) 
-    /**
-     * Render button
-     * @param options
-     * @param {string} options.classes classes to assign, space-separated
-     * @param {string} options.title
-     * @param {string} options.action
-     * @return {string} HTML for button
-     */
-    button: function (options)
-    /**
-     * Render newline
-     * @param options no options supported as of now
-     */
-    newline: function (options) 
+builder._build([
+  {
+    title: "User Info",
+    page: [ { type: "html", html } ]
+  }
+], false);
+```

@@ -30,6 +30,8 @@ import { Toast } from "./classes/components/toast.mjs"
 import { Input } from "./classes/elements/input.mjs";
 import { Badge } from "./classes/elements/badge.mjs";
 import { MenuTabBanner } from "./classes/components/menuTabBanner.mjs";
+import { Title } from "./classes/elements/title.mjs";
+import { Collapse } from "./classes/elements/collapse.mjs";
 
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
@@ -37,7 +39,7 @@ const UI = {
     BaseComponent,
     Button, FAIcon, Join, Menu, Div, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
     Dropdown, Checkbox, Toolbar, Select, ShaderLayer, RawHtml, ShaderMenu, Alert, GlobalTooltip, StretchGrid,
-    FloatingWindow, SlideSwitcherMenu, MainLayout, Toast, Input, Badge, MenuTabBanner
+    FloatingWindow, SlideSwitcherMenu, MainLayout, Toast, Input, Badge, MenuTabBanner, Title, Collapse
 };
 globalThis.UI = UI;
 

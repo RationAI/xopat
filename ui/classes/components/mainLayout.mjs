@@ -259,7 +259,7 @@ export class MainLayout extends BaseComponent {
         // --- dock ---
         const dock = new Div({
             id:`${this.id}-dock`,
-            extraClasses:{ base:"bg-base-200 border-l border-base-300 shrink-0 overflow-hidden h-full" },
+            extraClasses:{ base:"bg-base-200 border-l border-base-300 shrink-0 overflow-hidden" },
             extraProperties:{ style:`width:${this.widthPx}px;` }
         });
         if (this._tabsArr.length) {

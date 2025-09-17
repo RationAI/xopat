@@ -118,8 +118,8 @@ class Toolbar extends BaseComponent {
         const w = this.options.horizontalOnly ? "min-w-max" : "";
         return div({id: `${this.id}`, class: `draggable flex flex-column bg-transparent pointer-events-none ${w}`,
             style: `position: fixed; 
-                    left: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionLeft`, 50)}px; 
-                    top: ${APPLICATION_CONTEXT.getOption(`${this.id}-PositionTop`, 50)}px; 
+                    left: ${APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50)}px; 
+                    top: ${APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50)}px; 
                     display: ${this.display};
                     z-index: 1000;`},
             div({class: "handle badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", style: "width: min(180px, 90%);"},

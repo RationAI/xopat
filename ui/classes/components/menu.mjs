@@ -234,8 +234,33 @@ class Menu extends BaseComponent {
         }
     }
 
-    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
+    append(title, titleItem, item, id, pluginId) {
+        let content =
+            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+                div(
+                    h3({class: "d-inline-block h3 btn-pointer"}, title),
+                    this.toNode(titleItem),
+                ),
+                div({ class: "inner-panel-visible" },
+                    this.toNode(item),
+                )
+            );
 
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+            this.tabs[id]._setFocus();
+        }
+        else {
+            this.tabs[id]._removeFocus();
+        }
+
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-hidden`, false)){
+            this.tabs[id].toggleHiden();
+        }
+    }
+
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
@@ -245,10 +270,7 @@ class Menu extends BaseComponent {
                         style: "padding: 0;" },
                         "navigate_next",
                     ),
-                    h3({
-                        class: "d-inline-block h3 btn-pointer",},
-                        title,
-                    ),
+                    h3({class: "d-inline-block h3 btn-pointer"}, title),
                     this.toNode(titleItem),
                 ),
                 div({ class: "inner-panel-visible" },
@@ -261,14 +283,14 @@ class Menu extends BaseComponent {
 
         this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
 
-        if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();
         }
         else{
             this.tabs[id]._removeFocus();
         }
 
-        if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-hidden`, false)){
             this.tabs[id].toggleHiden();
         }
     }

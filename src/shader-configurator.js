@@ -95,10 +95,10 @@ var ShaderConfigurator = {
         for (let shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
             let id = shader.type();
 
-            html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
+            html.push( "<div class='flex'><div style='min-width: 150px'><p class='text-lg font-semibold mb-0'>",
                 shader.name(), "</p><p style='max-width: 150px;'>", shader.description(),
-                "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
-                "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
+                "</p></div><div class='inline-block mx-1 px-1 py-1 cursor-pointer align-top rounded-md' style='border: 3px solid transparent'>",
+                "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-md' src='modules/webgl/shaders/",
                 shader.type(),".png'></div><div><code class='f4'>", id, "</code>");
 
             const supports = this.getAvailableControlsForShader(shader);
@@ -132,7 +132,7 @@ var ShaderConfigurator = {
         for (let type in uiControls) {
             html.push("<div><h4>Type <code>", type, "</code></h4>");
             for (let ctrl of uiControls[type]) {
-                html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
+                html.push( "<div class='flex'><div style='min-width: 150px'><p class='text-lg font-semibold mb-0'>",
                     ctrl.name,
                     "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
                     "</div><div>");

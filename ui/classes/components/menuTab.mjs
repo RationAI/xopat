@@ -80,21 +80,21 @@ class MenuTab extends BaseComponent {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton.id != this.headerButton.id) {
                 tab._removeFocus();
-                APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             }
         };
 
         if (this._focused) {
-            APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             this._removeFocus();
         } else {
-            APPLICATION_CONTEXT.setOption(`${this.id}-open`, true);
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
             this._setFocus();
         };
     }
 
     unfocus(){
-        APPLICATION_CONTEXT.setOption(`${this.id}-open`, false);
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
         this._removeFocus();
     }
 
