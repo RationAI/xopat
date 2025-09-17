@@ -1869,7 +1869,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             } else {
                 viewer = viewerOrId;
             }
-            return this.viewerMenus[viewer.id];
+            return this.viewerMenus[viewer?.id];
         }
 
         /**
@@ -1967,7 +1967,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                  * @event viewer-create
                  * @memberof VIEWER_MANAGER
                  */
-                VIEWER_MANAGER.raiseEvent('viewer-create', {v, uniqueId: v.uniqueId, index: i });
+                VIEWER_MANAGER.raiseEvent('viewer-create', {viewer: v, uniqueId: v.uniqueId, index: i });
             }
         }
     }

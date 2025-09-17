@@ -169,10 +169,10 @@ export class ShaderSideMenu extends BaseComponent {
     updateVisualizationList(shaders, selectedValue) {
         this.visualizations = shaders || [];
         this.selectedVisualization = selectedValue ?? (this.visualizations[0]?.value ?? "");
-        const sel = this.visualizations;
+        const sel = this.visualizationSelect;
         if (sel) {
             sel.innerHTML = "";
-            sel.forEach((s) => {
+            this.visualizations.forEach((s) => {
                 const opt = document.createElement("option");
                 opt.value = s.value;
                 opt.textContent = s.label;

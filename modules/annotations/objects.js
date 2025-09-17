@@ -295,6 +295,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
             offsetX: 25,
             offsetY: 20 + 45 * index,
             cursorStyle: 'grab',
+            mouseUpHandler: () => alert("hi"),
             render: (ctx, left, top, styleOverride, fabricObject) => {
                 const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
                 const value = valueRenderer ? (
@@ -338,7 +339,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.stroke();
                 
                 const iconX = -halfWidth + iconSize / 2;
-                ctx.font = `${iconSize * 0.8}px "Material Icons"`;
+                ctx.font = `${iconSize * 0.8}px Font Awesome 5 Free`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -361,12 +362,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
     renderAllControls(ofObject) {
         ofObject.controls = {
             private: this.renderIcon(
-                (obj) => obj.private ? 'visibility_lock' : 'visibility',
+                //fixme should use custom icon lock + eye
+                (obj) => obj.private ? 'fa-lock' : 'fa-eye',
                 undefined,
                 0,
             ),
             comments: this.renderIcon(
-                'comment',
+                'fa-comments',
                 (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
                 1,
             ),

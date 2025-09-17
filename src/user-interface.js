@@ -1005,7 +1005,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                     // todo support toggle with t/f
                                     child.toggleHiden();
                                 }
-                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, t.hidden);
+                                //todo taking item.hidden value is problematic, first element controls all
+                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.hidden);
                             },
                             section: 'right-menu',
                         });
@@ -1105,7 +1106,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         body: [html],
                     }
                 );
-                menu.attachTo($("#bottom-menu-center"));
+                menu.attachTo(document.body);
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
                 this.stayOnScreen(`toolbar-${ownerPluginId}`);
 

@@ -220,45 +220,45 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
 		this.context.addHandler('annotation-deselected', () => this._annotationDeselected());
 
-        USER_INTERFACE.RightSideMenu.appendExtended(
-			"Annotations",
-			`<div class="float-right">
-<i class="fa-auto fa-eye p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on" 
-onclick="${this.THIS}._toggleEnabled(this)"></i>
-<button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><i class="fa-auto fa-floppy-disk pl-0 pr-1 v-align-text-top" style="font-size: 19px;"></i>Save</button>
-<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
-</div>`,
-			'',
+//         USER_INTERFACE.RightSideMenu.appendExtended(
+// 			"Annotations",
+// 			`<div class="float-right">
+// <i class="fa-auto fa-eye p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on"
+// onclick="${this.THIS}._toggleEnabled(this)"></i>
+// <button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><i class="fa-auto fa-floppy-disk pl-0 pr-1 v-align-text-top" style="font-size: 19px;"></i>Save</button>
+// <button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
+// </div>`,
+// 			'',
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
-			`
-<div class="d-flex flex-row mt-1 width-full">
-<div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
-${UIComponents.Elements.checkBox({
-				label: this.t('outlineOnly'),
-				classes: "pl-2",
-				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
-				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
-</div>
-<div class="d-flex flex-row mt-1 width-full">
-<div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
-${UIComponents.Elements.checkBox({
-				label: 'Enable edge navigation',
-				classes: "pl-2",
-				onchange: `this.checked = ${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
-				default: this.getOption("edgeCursorNavigate", true)})}
-</div>
-<div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
-<button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
-<button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
-</div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
-<span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
-			"annotations-panel",
-			this.id
-		);
+// 			`
+// <div class="d-flex flex-row mt-1 width-full">
+// <div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
+// ${UIComponents.Elements.checkBox({
+// 				label: this.t('outlineOnly'),
+// 				classes: "pl-2",
+// 				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
+// 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
+// </div>
+// <div class="d-flex flex-row mt-1 width-full">
+// <div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
+// ${UIComponents.Elements.checkBox({
+// 				label: 'Enable edge navigation',
+// 				classes: "pl-2",
+// 				onchange: `this.checked = ${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
+// 				default: this.getOption("edgeCursorNavigate", true)})}
+// </div>
+// <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
+// <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
+// <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
+// </div>
+// <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
+// <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
+// <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
+// 			"annotations-panel",
+// 			this.id
+// 		);
 
 		const vertSeparator = '<span style="width: 1px; height: 28px; background: var(--color-text-tertiary); vertical-align: middle; opacity: 0.3;" class="d-inline-block ml-2 mr-1"></span>';
 		const modeOptions = [`<span id="toolbar-history-undo" class="btn-pointer" style="color: var(--color-icon-primary)" onclick="${this.THIS}.context.undo()"><i class="fa-auto fa-rotate-left"></i></span>

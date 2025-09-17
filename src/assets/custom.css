@@ -153,10 +153,6 @@ button div {
     height: 0;
 }
 
-.ui-menu-item{
-    pointer-events: auto;
-}
-
 .form-control {
     display: flex;
     flex-direction: column;

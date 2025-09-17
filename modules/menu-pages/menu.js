@@ -186,11 +186,11 @@ window.AdvancedMenuPages = class {
 
     /**
      *
-     * @param viewerId
+     * @param {OpenSeadragon.Viewer|string} viewerOrId
      * @param config
      * @param sanitizeConfig
      */
-    buildViewerMenu(viewerId, config, sanitizeConfig=false) {
+    buildViewerMenu(viewerOrId, config, sanitizeConfig=false) {
         const build = (config, sanitizer) => {
 
             for (let data of config) {
@@ -205,7 +205,7 @@ window.AdvancedMenuPages = class {
                     html.push(this.strategy(element, sanitizer));
                 }
 
-                VIEWER_MANAGER.getMenu(viewerId).append(
+                VIEWER_MANAGER.getMenu(viewerOrId).append(
                     data.title,
                     undefined,
                     html.join(""),
