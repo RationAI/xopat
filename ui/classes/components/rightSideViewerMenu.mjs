@@ -78,6 +78,15 @@ export class RightSideViewerMenu extends BaseComponent {
         this.classMap["base"] = "right-side-menu flex-column ui-menu";
     }
 
+    /**
+     * Needs two-level init, constructor is called before viewer is opened, because this menu needs to build
+     * navigator container before viewer creation, and register events after
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    init(viewer) {
+        this.shadersMenu.init(viewer);
+    }
+
     getShadersTab() {
         return this.shadersMenu;
     }

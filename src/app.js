@@ -418,7 +418,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     &description=${encodeURIComponent('ERROR: The visualization requires canvasses in order to work.')}`;
     }
 
-
+    /**
+     * Viewer manager for multi-view support
+     * @type {Window.ViewerManager}
+     */
     window.VIEWER_MANAGER = new ViewerManager(ENV, CONFIG);
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance

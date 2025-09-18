@@ -224,17 +224,7 @@ export class MainLayout extends BaseComponent {
     create() {
         // --- viewer core (IDs unchanged) ---
         const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });
-        const advert = div({ id:"viewer-demo-advertising", style:"display:none" },
-            h1("xOpat - The WSI Viewer"),
-            p("The viewer is missing the target data to view; this might happen, if"),
-            div({ id:"viewer-demo-error-description" }),
-            br(), br(),
-            p({ class:"text-small mx-6 text-center" },
-                "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
-            img({ src:"docs/assets/xopat-banner.png", style:"width:80%;display:block;margin:0 auto;" })
-        );
-
-        const viewerWrap = div({ class:"relative flex-1" }, osd, advert, new RawHtml(null, `
+        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `
 <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 45px; pointer-events: none;">
     <div id="top-menus" class="flex flex-row w-full" style="justify-content: flex-end;">
         <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>

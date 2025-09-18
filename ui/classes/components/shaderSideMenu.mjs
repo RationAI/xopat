@@ -44,6 +44,55 @@ export class ShaderSideMenu extends BaseComponent {
         };
     }
 
+    /**
+     * Needs two-level init, constructor is called before viewer is opened, because this menu needs to build
+     * navigator container before viewer creation, and register events after
+     * @param {OpenSeadragon.Viewer} viewer
+     */
+    init(viewer) {
+        viewer.drawer.renderer.addHandler('html-controls-created', e => {
+            this._enableDragSort(viewer);
+
+            let layers = viewer.drawer.renderer.getAllShaders();
+            for (let key in layers) {
+                if (!layers.hasOwnProperty(key)) continue;
+
+                const shader = layers[key];
+
+                for (let source of shader.getConfig().tiledImages) {
+                    const tiledImage = viewer.world.getItemAt(source);
+
+                    if (typeof tiledImage?.source.getMetadata !== 'function') {
+                        console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
+                            'The visualization is unable to inspect problems with data sources.', tiledImage);
+                        continue;
+                    }
+
+                    const message = tiledImage.source.getMetadata();
+                    const node = this.shaderNodeCells[key];
+                    if (message.error && node) {
+                        const alert = new Alert({
+                            mode: "warning",
+                            title: $.t('main.shaders.faulty'),
+                            description: `<code>${message.error}</code>`,
+                            compact: true
+                        });
+                        alert.prependedTo(node);
+                        break;
+                    }
+                }
+            }
+
+            /**
+             * Fired when visualization goal is set up and run, but before first rendering occurs.
+             * @property visualization visualization configuration used
+             * @memberof OpenSeadragon.Viewer
+             * @event visualization-used
+             */
+            viewer.raiseEvent('visualization-used', e);
+        });
+    }
+
     _setCacheOpen(open) {
         if (!this._cacheDropdownWrap) return;
         this._cacheDropdownWrap.classList.toggle("dropdown-open", !!open);
@@ -288,48 +337,6 @@ export class ShaderSideMenu extends BaseComponent {
         this.layerContainer.prepend(node);
         //uiLayer.prependedTo(this.layerContainer);
         this.shaderNodeCells[shaderLayer.id] = node;
-
-        viewer.drawer.renderer.addHandler('html-controls-created', e => {
-            this._enableDragSort(viewer);
-
-            let layers = viewer.drawer.renderer.getAllShaders();
-            for (let key in layers) {
-                if (!layers.hasOwnProperty(key)) continue;
-
-                const shader = layers[key];
-
-                for (let source of shader.getConfig().tiledImages) {
-                    const tiledImage = viewer.world.getItemAt(source);
-
-                    if (typeof tiledImage?.source.getMetadata !== 'function') {
-                        console.info('OpenSeadragon TileSource for the visualization layers is missing getMetadata() function.',
-                            'The visualization is unable to inspect problems with data sources.', tiledImage);
-                        continue;
-                    }
-
-                    const message = tiledImage.source.getMetadata();
-                    const node = this.shaderNodeCells[key];
-                    if (message.error && node) {
-                        const alert = new Alert({
-                            mode: "warning",
-                            title: $.t('main.shaders.faulty'),
-                            description: `<code>${message.error}</code>`,
-                            compact: true
-                        });
-                        alert.prependedTo(node);
-                        break;
-                    }
-                }
-            }
-
-            /**
-             * Fired when visualization goal is set up and run, but before first rendering occurs.
-             * @property visualization visualization configuration used
-             * @memberof OpenSeadragon.Viewer
-             * @event visualization-used
-             */
-            viewer.raiseEvent('visualization-used', e);
-        });
     }
 
     disconnected() {

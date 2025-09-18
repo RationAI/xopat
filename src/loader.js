@@ -1801,6 +1801,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 return viewer.drawer.renderer.urlMaker;
             };
 
+            menu.init(viewer);
+
             /**
              * Show demo page with error message
              * todo move to utils
@@ -1808,15 +1810,22 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
              * @param [explainErrorHtml=undefined]
              */
             viewer.toggleDemoPage = (enable, explainErrorHtml = undefined) => {
-                const overlay = document.getElementById('viewer-demo-advertising');
+                const id = "demo-ad-" + viewer.id;
+
                 if (enable) {
-                    const explain = document.getElementById('viewer-demo-error-description');
-                    explain.innerHTML = explainErrorHtml || $.t('error.defaultDemoHtml');
-                    viewer.addOverlay(overlay, new OpenSeadragon.Rect(0, 0, 1, 1));
-                    overlay.style.display = 'block';
+                    const {h1, br, img, p, div} = van.tags;
+                    viewer.addOverlay(div({ id: id },
+                        h1("xOpat - The WSI Viewer"),
+                        p("The viewer is missing the target data to view; this might happen, if"),
+                        div({innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml')}),
+                        br(), br(),
+                        p({ class:"text-small mx-6 text-center" },
+                            "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
+                        img({ src:"docs/assets/xopat-banner.png", style:"width:80%;display:block;margin:0 auto;" })
+                    ), new OpenSeadragon.Rect(0, 0, 1, 1));
                 } else {
-                    this.removeOverlay(overlay);
-                    overlay.style.display = 'none';
+                    const overlay = document.getElementById(id);
+                    viewer.removeOverlay(overlay);
                 }
             };
 
