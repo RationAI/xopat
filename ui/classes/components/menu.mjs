@@ -234,7 +234,7 @@ class Menu extends BaseComponent {
         }
     }
 
-    append(title, titleItem, item, id, pluginId) {
+    append(title, titleItem, item, id, pluginId, bg=undefined) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div(
@@ -246,7 +246,7 @@ class Menu extends BaseComponent {
                 )
             );
 
-        this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();
@@ -260,7 +260,7 @@ class Menu extends BaseComponent {
         }
     }
 
-    appendExtended(title, titleItem, item, hiddenItem, id, pluginId) {
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId, bg=undefined) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
@@ -280,7 +280,7 @@ class Menu extends BaseComponent {
                 ),
             );  
 
-        this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();

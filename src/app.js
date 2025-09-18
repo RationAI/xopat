@@ -845,13 +845,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             viewer.getMenu().getNavigatorTab().setTitle(name, false);
         }
 
-        // todo ok?
-        // const slideName = document.getElementById('tissue-title-content');
-        // if (slideName.parentElement.classList.contains('error-container')){
-        //     slideName.classList.remove('btn-primary');
-        //     slideName.classList.add('btn-error', 'btn-outline');
-        // }
-
         if (imageData) {
             const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
             if (!hasMicrons || !hasDimMicrons) {

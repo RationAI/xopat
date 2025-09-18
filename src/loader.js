@@ -1555,7 +1555,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         getViewer(uniqueId, _warn=true) {
             let viewer = this.viewers.find(v => v.uniqueId === uniqueId);
             if (!viewer) {
-                const viewer = this.viewers.find(v => v.id === uniqueId);
+                viewer = this.viewers.find(v => v.id === uniqueId);
                 if (viewer && _warn) {
                     console.warn(`Viewer with id ${uniqueId} not found, using fallback ${viewer.id} for ${viewer.uniqueId}`);
                 }
@@ -1566,10 +1566,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          *
          * @param uniqueId
+         * @param _warn private arg
          * @return number
          */
-        getViewerIndex(uniqueId) {
-            return this.viewers.findIndex(v => v.uniqueId === uniqueId);
+        getViewerIndex(uniqueId, _warn=true) {
+            let index = this.viewers.findIndex(v => v.uniqueId === uniqueId);
+            if (index < 0) {
+                index = this.viewers.findIndex(v => v.id === uniqueId);
+                if (index && _warn) {
+                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${index.id} for ${index.uniqueId}`);
+                }
+            }
+            return index;
         }
 
         /**

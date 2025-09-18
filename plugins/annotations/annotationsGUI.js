@@ -319,9 +319,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		modeOptions.push(this.RightSideMenuVisibleControls());
 
 		//status bar
-		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
-			`<div class="px-3 py-2" id="annotations-tool-bar-content" title="Hold keys or click to select. Scroll controls work with shift if hotkeys are not used.">
-${modeOptions.join("")}</div>`, 'draw');
+		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations", modeOptions.join(""), 'draw');
 
 		USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>

@@ -38,12 +38,12 @@ addPlugin("recorder", class extends XOpatPlugin {
 
                 const importBtn = span(
                     {class: "float-right", title: "Import Recording", onclick: () => fileInput.click()},
-                    span({class: "fa-solid fa-upload btn-pointer"})
+                    span({class: "fa-auto fa-upload btn-pointer"})
                 );
 
                 const exportBtn = span(
                     {class: "float-right", title: "Export Recording", onclick: () => _this.export()},
-                    span({class: "fa-solid fa-download btn-pointer"})
+                    span({class: "fa-auto fa-download btn-pointer"})
                 );
 
                 return span(hideBtn, importBtn, fileInput, exportBtn);
@@ -61,12 +61,12 @@ addPlugin("recorder", class extends XOpatPlugin {
                 const {button, span, div} = van.tags;
                 const toFA = (icon) => {
                     switch(icon){
-                        case "play_arrow": return "fa-solid fa-play";
-                        case "stop": return "fa-solid fa-stop";
-                        case "replay": return "fa-solid fa-rotate-right";
+                        case "play_arrow": return "fa-auto fa-play";
+                        case "stop": return "fa-auto fa-stop";
+                        case "replay": return "fa-auto fa-rotate-right";
                         case "delete": return "fa-auto fa-trash-can";
-                        case "radio_button_checked": return "fa-solid fa-circle-dot";
-                        default: return "fa-solid fa-question";
+                        case "radio_button_checked": return "fa-auto fa-circle-dot";
+                        default: return "fa-auto fa-question";
                     }
                 };
                 const mk = (id, title, icon, onclick, extra="") =>
@@ -625,8 +625,8 @@ draggable="true"></span>`;
             }
 
             $("#presenter-play-icon span").addClass("timeline-play");
-            $("#presenter-replay-icon span").text("fast_rewind");
-            $("#presenter-delete-icon span").text("fast_forward");
+            $("#presenter-replay-icon span")[0].className = "fa-auto fa-forward";
+            $("#presenter-delete-icon span")[0].className = "fa-auto fa-backward";
             USER_INTERFACE.Tools.notify(_this._toolsMenuId, '➤');
 
             _this._referenceStamp = Date.now();
@@ -643,8 +643,8 @@ draggable="true"></span>`;
         this.snapshots.addHandler('stop', function () {
             _this.isPlaying = false;
             $("#presenter-play-icon span").removeClass("timeline-play");
-            $("#presenter-replay-icon span").text("replay");
-            $("#presenter-delete-icon span").text("delete");
+            $("#presenter-replay-icon span")[0].className = "fa-auto  fa-rotate-right";
+            $("#presenter-delete-icon span")[0].className = "fa-auto fa-trash-can";
             if (_this._loopMeasure) {
                 clearInterval(_this._loopMeasure);
                 delete _this._loopMeasure;
