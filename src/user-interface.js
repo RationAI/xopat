@@ -5,22 +5,49 @@ function initXopatUI() {
      * @namespace Dialogs
      */
     window.Dialogs = {
-        MSG_INFO: { class: "", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' },
-        MSG_OK: { class: "Toast--success", icon: '<path fill-rule="evenodd"d="M6.3 5.69a.942.942 0 0 1-.28-.7c0-.28.09-.52.28-.7.19-.18.42-.28.7-.28.28 0 .52.09.7.28.18.19.28.42.28.7 0 .28-.09.52-.28.7a1 1 0 0 1-.7.3c-.28 0-.52-.11-.7-.3zM8 7.99c-.02-.25-.11-.48-.31-.69-.2-.19-.42-.3-.69-.31H6c-.27.02-.48.13-.69.31-.2.2-.3.44-.31.69h1v3c.02.27.11.5.31.69.2.2.42.31.69.31h1c.27 0 .48-.11.69-.31.2-.19.3-.42.31-.69H8V7.98v.01zM7 2.3c-3.14 0-5.7 2.54-5.7 5.68 0 3.14 2.56 5.7 5.7 5.7s5.7-2.55 5.7-5.7c0-3.15-2.56-5.69-5.7-5.69v.01zM7 .98c3.86 0 7 3.14 7 7s-3.14 7-7 7-7-3.12-7-7 3.14-7 7-7z"/>' },
-        MSG_WARN: { class: "Toast--warning", icon: '<path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z" />' },
-        MSG_ERR: { class: "Toast--error", icon: '<path fill-rule="evenodd" d="M10 1H4L0 5v6l4 4h6l4-4V5l-4-4zm3 9.5L9.5 14h-5L1 10.5v-5L4.5 2h5L13 5.5v5zM6 4h2v5H6V4zm0 6h2v2H6v-2z" />' },
+        MSG_INFO: Toast.MSG_INFO,
+        MSG_WARN: Toast.MSG_WARN,
+        MSG_ERR: Toast.MSG_ERROR,
+        MSG_SUCCESS: Toast.MSG_SUCCESS,
 
-        _view: null,
-        _timer: null,
-        _opts: null,
-        _queue: [],
+        _scheduler: null,
         _modals: {},
 
+
+        /**
+         * Show notification (same API)
+         * @param {string} text HTML allowed
+         * @param {number} delayMS >= 1000 autohides, <1000 sticks until closed
+         * @param importance one of Dialogs.MSG_*
+         * @param {object} props {queued?, onShow?, onHide?, buttons?}
+         */
+        show(text, delayMS = 5000, importance = this.MSG_INFO, props = {}) {
+            this._scheduler.show(text, delayMS, importance, props);
+        },
+
+        /**
+         * Hide current notification
+         * @param withCallback
+         */
+        hide(withCallback = true) {
+            this._scheduler.hide(withCallback);
+        },
+
+        /**
+         * Await dialogs are hidden and no messsages are shown
+         * @return {Promise}
+         */
+        async awaitHidden() {
+            await this._scheduler.awaitHidden();
+        },
+
         init() {
-            if (this._view) return; // already initialized
-            this._view = new UI.Toast();
+            if (this._scheduler) return; // already initialized
+            const view = new UI.Toast();
+            this._scheduler = new UI.Toast.Scheduler(view);
+
             // attach using your component system (works even if BaseComponent has helpers)
-            (document.body || document.documentElement).appendChild(this._view.create());
+            (document.body || document.documentElement).appendChild(view.create());
 
             // Close all child modals if parent dies (kept from your original)
             window.addEventListener("unload", () => {
@@ -32,82 +59,6 @@ function initXopatUI() {
                     }
                 }
             });
-        },
-
-        /**
-         * Show notification (same API)
-         * @param {string} text HTML allowed
-         * @param {number} delayMS >= 1000 autohides, <1000 sticks until closed
-         * @param importance one of Dialogs.MSG_*
-         * @param {object} props {queued?, onShow?, onHide?, buttons?}
-         */
-        show(text, delayMS = 5000, importance = this.MSG_INFO, props = {}) {
-            const queued = props.queued !== false; // default true
-            const job = { text, delayMS, importance, props };
-
-            if (this._timer && queued) {
-                this._queue.push(job);
-                return;
-            }
-            this._showImpl(text, delayMS, importance, props);
-        },
-
-        hide(withCallback = true) {
-            this._hideImpl(false, withCallback);
-        },
-
-        /**
-         * Await dialogs are hidden and no messsages are shown
-         * @return {Promise}
-         */
-        async awaitHidden() {
-            return new Promise((resolve) => {
-                const interval = setInterval(() => {
-                    if (this._queue.length === 0 && this._timer === null && (!this._view || this._view.isHidden())) {
-                        clearInterval(interval);
-                        resolve();
-                    }
-                }, 250);
-            });
-        },
-
-        _hideImpl(timeoutCleaned, callOnHide = true) {
-            if (!this._view) return;
-            this._view.hide();
-
-            if (!timeoutCleaned && this._timer) {
-                clearTimeout(this._timer);
-                if (callOnHide && this._opts?.onHide) {
-                    try { this._opts.onHide(); } catch {}
-                }
-            }
-            this._timer = null;
-            this._opts = null;
-
-            const next = this._queue.shift(); // FIFO
-            if (next) {
-                this._showImpl(next.text, next.delayMS, next.importance, next.props);
-            }
-        },
-
-        _showImpl(text, delayMS, importance, opts) {
-            this.init();
-            this._view.setContent({
-                html: text,
-                importance,
-                durationMs: delayMS,
-                buttons: opts?.buttons,
-            });
-            this._view.show();
-
-            if (delayMS >= 1000) {
-                if (this._timer) clearTimeout(this._timer);
-                this._timer = setTimeout(() => this._hideImpl(true), delayMS);
-            }
-            this._opts = opts || null;
-            if (this._opts?.onShow) {
-                try { this._opts.onShow(); } catch {}
-            }
         },
 
         /**
