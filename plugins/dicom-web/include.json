@@ -1,0 +1,13 @@
+{
+  "id": "dicom-web",
+  "name": "",
+  "author": "",
+  "version": "1.0.0",
+  "description": "",
+  "includes": [
+    "dicom-web.mjs"
+  ],
+  "modules": [],
+  // Provide service URL of your DICOM API
+  "serviceUrl": "http://localhost:8042/dicom-web"
+}
