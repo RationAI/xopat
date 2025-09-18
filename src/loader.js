@@ -1794,13 +1794,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
             viewer.gestureSettingsMouse.clickToZoom = false;
             new OpenSeadragon.Tools(viewer);
-
-            viewer.drawer.renderer.createUrlMaker = function (vis, isSecureMode) {
-                if (isSecureMode && vis) delete vis.protocol;
-                viewer.drawer.renderer.urlMaker = new Function("path,data", "return " + (vis?.protocol || APPLICATION_CONTEXT.env.client.data_group_protocol));
-                return viewer.drawer.renderer.urlMaker;
-            };
-
             menu.init(viewer);
 
             /**

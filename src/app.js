@@ -5,6 +5,8 @@
  * @property {?boolean} lossless default `false` if the data should be sent from the server as 'png' or 'jpg'
  * @property {?string} protocol see protocol construction below in advanced details
  * @property {?string} protocolPreview as above, must be able to generate file preview (fetch top-level tile)
+ * @property {?OpenSeadragon.TileSource} a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
+ *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
  * @property {?number} microns size of pixel in micrometers, default `undefined`,
  * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
@@ -1135,7 +1137,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         // Helper: build a tileSource URL for a background entry
         const bgUrlFromEntry = (bgEntry) => {
-            const proto = bgEntry.protocol || env.client.image_group_protocol;
+            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
+                return bgEntry.tileSource;
+            }
+            const proto = !isSecureMode && bgEntry.protocol ? bgEntry.protocol : env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
             const d = cfg.data[bgEntry.dataReference];
             return make(env.client.image_group_server, d);
@@ -1227,7 +1232,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         bg.id = UTILITIES.sanitizeID(bg.id);
                     }
 
-                    if (isSecureMode) delete bg.protocol;
                     toOpen.push(bgUrlFromEntry(bg));
                     openedBase.push(bg);
                 }
@@ -1241,7 +1245,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         } else {
                             bg.id = UTILITIES.sanitizeID(bg.id);
                         }
-                        if (isSecureMode) delete bg.protocol;
                         toOpen.push(bgUrlFromEntry(bg));
                         openedBase.push(bg);
                     }
@@ -1283,13 +1286,20 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     );
                 }
 
+                const vizUrlFromEntries = (dataIndex) => {
+                    // todo multiple tilesource support....
+                    // if (vis.tileSource instanceof OpenSeadragon.TileSource) {
+                    //     return vis.tileSource;
+                    // }
+                    const proto = !isSecureMode && activeV.protocol ? activeV.protocol : env.client.data_group_protocol;
+                    const make = new Function("path,data", "return " + proto);
+                    // todo old support for arrays, make this somehow fallback compatible and change it
+                    const d = [cfg.data[dataIndex]];
+                    return make(env.client.data_group_server, d);
+                };
+
                 APPLICATION_CONTEXT.prepareRendering();
-
                 const activeV = vis[visIndexForThis];
-                if (viewer.drawer && viewer.drawer.renderer && viewer.drawer.renderer.createUrlMaker) {
-                    viewer.drawer.renderer.createUrlMaker(activeV, isSecureMode);
-                }
-
                 const sourcesToOpen = {};
                 const lastBgIndex = toOpen.length;
                 let counter = toOpen.length;
@@ -1298,9 +1308,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 for (const shaderId in shaderConfigMap) {
                     const shaderCfg = shaderConfigMap[shaderId];
                     shaderCfg.tiledImages = [];
-                    const refs = (shaderCfg.dataReferences || []).map((rid) =>
-                        viewer.drawer.renderer.urlMaker(env.client.data_group_server, [cfg.data[rid]])
-                    );
+                    const refs = (shaderCfg.dataReferences || []).map(vizUrlFromEntries);
                     shaderCfg.name = shaderCfg.name || cfg.data[shaderCfg.dataReferences?.[0]] || shaderId;
 
                     for (const src of refs) {

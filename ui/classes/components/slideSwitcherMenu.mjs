@@ -239,6 +239,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         };
         VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs).then(() => {
             if (!eventArgs.imagePreview) {
+                // todo support tileSource argument
                 const previewUrlmaker = new Function("path,data", "return " +
                     (bg.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
                 eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);

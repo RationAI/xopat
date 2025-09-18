@@ -217,9 +217,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             headers: this.ajaxHeaders || {}
         }).then(async res => {
             const text = await res.text();
-            const json = JSON.parse(text);
-            if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
+            let json;
+            try { json = JSON.parse(text) } catch (e) {}
+            if (res.status !== 200 || !json) {
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json || text, res.error);
             }
             return json;
         }).then(imageInfo => {
