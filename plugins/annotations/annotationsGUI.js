@@ -177,43 +177,61 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	initHTML() {
 
-		USER_INTERFACE.addHtml(`
-			<div class="fixed flex-col shadow-lg rounded-lg border p-4 max-w-sm w-80 max-h-96 overflow-hidden" id="annotation-comments-menu" 
-				 style="top: 48px; left: 12px; z-index: 2; background: var(--color-bg-primary); border-color: var(--color-border-primary); display: none;">
-				<div class="flex items-center gap-3 btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
-					<button class="text-sm" id="comments-toggle-btn">
-						<span class="material-icons" style="color: var(--color-icon-secondary); font-size: 30px;">keyboard_arrow_down</span>
-					</button>
-					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
-				</div>
-				
-				<div class="flex-1 overflow-y-auto space-y-3 my-4" id="comments-list">
-				</div>
-				
-				<div class="pt-3" id="comments-input-section" style="border-top: 1px solid var(--color-border-secondary);">
-					<div class="flex gap-2">
-						<textarea 
-							type="text" 
-							placeholder="Add a comment..." 
-							class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
-							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
-							id="comment-input"
-							rows="2"
-							onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
-						></textarea>
-						<button 
-							class="px-3 py-2 btn btn-pointer material-icons"
-							style="font-size: 22px;"
-							onclick="${this.THIS}._addComment()"
-						>
-							send
-						</button>
+		USER_INTERFACE.addHtml(
+			new UI.FloatingWindow(
+				{
+					id: "annotation-comments-menu",
+					title: "Comments",
+					closable: false,
+					onClose: () => {this.commentsHide()},
+				}, new UI.RawHtml({},
+				`
+					<div class="flex-1 overflow-y-auto space-y-3 p-2" id="comments-list" style="min-height: 0;">
 					</div>
-				</div>
-			</div>
-		`, this.id);
+					<div id="comments-input-section" class="p-2 flex-shrink">
+						<div class="flex gap-2">
+							<textarea 
+								type="text" 
+								placeholder="Add a comment..."
+								class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+								style="background: var(--color-bg-primary); color: var(--color-text-primary);"
+								id="comment-input"
+								rows="2"
+								onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
+							></textarea>
+							<button 
+								class="px-3 py-2 btn btn-pointer material-icons"
+								style="font-size: 22px;"
+								onclick="${this.THIS}._addComment()"
+							>
+								send
+							</button>
+						</div>
+					</div>
+				`
+			)),
+			this.id
+		);
 
-		this._initCommentsTitlebar()
+		const commentsMenu = document.getElementById("annotation-comments-menu");
+		
+		const commentsBody = document.querySelector('.card-body div')
+		commentsBody.style.width = "100%";
+		commentsBody.style.height = "100%";
+		commentsBody.style.position = "relative";
+		commentsBody.style.display = "flex";
+		commentsBody.style.flexDirection = "column";
+
+		const commentsResize = document.querySelector('.cursor-se-resize')
+		commentsResize.style.borderColor = "var(--color-text-primary)";
+
+		commentsMenu.style.display = 'none';
+		commentsMenu.classList.add(
+			"flex-col", "shadow-lg", "rounded-lg", "border", "overflow-hidden", "bg-[var(--color-bg-primary)]"
+		)
+		commentsMenu.style.borderColor = "var(--color-border-primary)";
+		commentsMenu.style.minWidth = "320px";
+		commentsMenu.style.minHeight = "370px";
 
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
 		this.context.addHandler('annotation-deselected', () => this._annotationDeselected());
@@ -398,18 +416,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	/**
-	 * Initialize the comments titlebar for dragging
-	 */
-	_initCommentsTitlebar() {
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-
-		titlebar.style.cursor = "grab";
-
-		titlebar.addEventListener("mousedown", e => this._commentsMouseDown(e));
-		titlebar.addEventListener("mouseup", e => this._commentsMouseUp(e));
-	}
-
-	/**
 	 * Generate a consistent color corresponding to a username
 	 * @param {string} username 
 	 * @returns {string} HSL CSS color string
@@ -430,32 +436,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const lightness = 45;
 		
 		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-	}
-
-	/**
-	 * Expand or collapse comments
-	 */
-	_toggleCommentsExpanded() {
-		const root = document.getElementById('annotation-comments-menu');
-		const commentsList = document.getElementById('comments-list');
-		const inputSection = document.getElementById('comments-input-section');
-		const arrow = document.getElementById('comments-toggle-btn').querySelector('span');
-		
-		const isExpanded = !commentsList.classList.contains('hidden');
-		
-		if (isExpanded) {
-			root.classList.remove('w-80');
-			root.classList.add('w-52');
-			commentsList.classList.add('hidden');
-			inputSection.classList.add('hidden');
-			arrow.textContent = 'keyboard_arrow_right';
-		} else {
-			root.classList.add('w-80');
-			root.classList.remove('w-52');
-			commentsList.classList.remove('hidden');
-			inputSection.classList.remove('hidden');
-			arrow.textContent = 'keyboard_arrow_down';
-		}
 	}
 
 	/**
@@ -495,51 +475,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		document.addEventListener("mouseup", this._commentsUpListener);
 	}
 
-	_commentsMouseUp() {
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-		if (titlebar) titlebar.style.cursor = "grab";
-		document.body.style.cursor = "";
-
-		// clear existing listeners
-		if (this._commentsDragListener) {
-			document.removeEventListener("mousemove", this._commentsDragListener);
-			this._commentsDragListener = null;
-		}
-		if (this._commentsUpListener) {
-			document.removeEventListener("mouseup", this._commentsUpListener);
-			this._commentsUpListener = null;
-		}
-
-		// collapse on no movement
-		if (!this._commentsMoved) {
-			this._toggleCommentsExpanded();
-		}
-		
-		this._isDragging = false;
-		this._commentsMoved = false;
-	}
-
-	_commentsMouseMove(e) {
-		const root = document.getElementById('annotation-comments-menu');
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-		if (!root || !this._dragStartPos) return;
-
-		const deltaX = e.clientX - this._dragStartPos.x;
-		const deltaY = e.clientY - this._dragStartPos.y;
-
-		const threshold = 5;
-		if (!this._isDragging && (Math.abs(deltaX) > threshold || Math.abs(deltaY) > threshold)) {
-			this._isDragging = true;
-			this._commentsMoved = true;
-			titlebar.style.cursor = "grabbing";
-		}
-
-		if (this._isDragging && this._dragStartElementPos) {
-			root.style.left = (this._dragStartElementPos.left + deltaX) + "px";
-			root.style.top = (this._dragStartElementPos.top + deltaY) + "px";
-		}
-	}
-
 	/**
 	 * Render comments from an array of comment objects
 	 * @param {AnnotationComment[]} comments - Array of comment objects to render
@@ -555,8 +490,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		if (!comments || comments.filter(c => !c.removed).length === 0) {
 			const noCommentsElement = document.createElement('div');
 			noCommentsElement.id = 'comments-list-empty';
-			noCommentsElement.className = 'rounded-md flex items-center justify-center py-8 px-4 gap-2 select-none';
+			noCommentsElement.className = 'rounded-md flex items-center justify-center gap-2 w-full h-full select-none';
 			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
+			noCommentsElement.style.padding = "15px";
 			noCommentsElement.innerHTML = `
 				<span class="material-icons text-4xl" style="color: var(--color-text-tertiary);">chat_bubble_outline</span>
 				<p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
@@ -658,7 +594,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const deleteButtonHtml = isAuthor ? 
 			`<button class="relative" title="Delete comment" data-confirmed="false">
 				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
-				<div class="show-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+				<div class="delete-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
 					<span>Click again to delete</span>
 				</div>
 			</button>` : '';
@@ -692,12 +628,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					this._deleteComment(comment.id);
 				} else {
 					event.currentTarget.dataset.confirmed = 'true';
-					event.currentTarget.querySelector('.show-hint').classList.remove('hidden');
+					event.currentTarget.querySelector('.delete-hint').classList.remove('hidden');
 				}
 			});
 			deleteButton.addEventListener('mouseleave', (event) => {
 				event.currentTarget.dataset.confirmed = 'false';
-				event.currentTarget.querySelector('.show-hint').classList.add('hidden');
+				event.currentTarget.querySelector('.delete-hint').classList.add('hidden');
 			});
 		}
 
@@ -861,10 +797,25 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		}
 	}
 
-	_annotationSelected(object) {
-		this._selectedAnnot = object;
+	/**
+	 * Hide comments window
+	 */
+	commentsHide() {
+		const menu = document.getElementById("annotation-comments-menu");
+		menu.style.display = 'none';
+	}
+
+	/**
+	 * Show comments window
+	 */
+	commentsShow() {
 		const menu = document.getElementById("annotation-comments-menu");
 		menu.style.display = 'flex';
+	}
+
+	_annotationSelected(object) {
+		this._selectedAnnot = object;
+		this.commentsShow();
 		this._renderComments(object.comments);
 		
 		this._startCommentsRefresh();
@@ -872,8 +823,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 	_annotationDeselected() {
 		this._selectedAnnot = null;
-		const menu = document.getElementById("annotation-comments-menu");
-		menu.style.display = 'none';
+		this.commentsHide();
 		this._clearComments();
 		
 		this._stopCommentsRefresh();
