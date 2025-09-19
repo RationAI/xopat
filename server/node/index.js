@@ -170,6 +170,7 @@ async function responseViewer(req, res) {
 ${core.requireOpenseadragon()}
 ${core.requireLibs()}
 ${core.requireExternal()}
+${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}

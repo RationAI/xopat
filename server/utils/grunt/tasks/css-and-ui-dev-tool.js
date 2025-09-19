@@ -144,6 +144,7 @@ module.exports = function (grunt) {
         const lockExistsRecent = () => exists(LOCK) && (Date.now() - fs.statSync(LOCK).mtimeMs < 15 * 60 * 1000);
 
         async function ensureInitialOnce() {
+            await rebuildUI();
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) {
                 if (lockExistsRecent()) { grunt.log.writeln("[twinc-merge] Full build in progress/recent; skipping."); return; }
                 fs.writeFileSync(LOCK, String(Date.now()));
