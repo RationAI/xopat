@@ -263,7 +263,7 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
                 }
             }
             if (refreshToken) {
-                const refresh = jwtDecode(refreshToken);
+                const refresh = jwtDecode(refreshToken) || {};
                 //if exp not specified, act as if did not expire
                 return refresh.exp || refresh.profile?.exp || Infinity;
             }
@@ -301,16 +301,23 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
             }
 
             if (!user.isLogged) {
-                USER_INTERFACE.Loading.text("Logged in.");
-                const decodedToken = jwtDecode(oidcUser.access_token);
+                // const decodedToken = jwtDecode(oidcUser.access_token) || {};
+                //
+                // if (!decodedToken?.exp || decodedToken.exp < Date.now() / 1000) {
+                //     return returnNeedsRefresh();
+                // }
 
-                if (!decodedToken?.exp || decodedToken.exp < Date.now() / 1000) {
+                const profile = oidcUser.profile || {};
+                if (!oidcUser.expires_at || oidcUser.expires_at < Math.floor(Date.now() / 1000)) {
                     return returnNeedsRefresh();
                 }
 
-                const endpoint = this.getStaticMeta('oidcUserInfo');
+                USER_INTERFACE.Loading.text("Logged in.");
+                let username = [profile.given_name, profile.family_name].filter(Boolean).join(' ') || profile.name || 'Unknown User';
+                const userid = profile.sub || 'anonymous';
 
-                if (endpoint && (!decodedToken.family_name || !decodedToken.given_name)) {
+                const endpoint = this.getStaticMeta('oidcUserInfo');
+                if (endpoint) {
                     try {
                         const data = await (await fetch(endpoint, {
                             headers: {
@@ -319,15 +326,16 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
                             }
                         })).json();
 
-                        decodedToken.given_name = decodedToken.given_name || data.given_name;
-                        decodedToken.family_name = decodedToken.family_name || data.family_name;
+                        if (data.given_name) {
+                            username = data.given_name;
+                        }
+                        if (data.family_name) {
+                            username += (username ? ' ' : '') + data.family_name;
+                        }
                     } catch (e) {
                         console.error("OIDC: Could not fetch user info!", e);
                     }
                 }
-
-                const username = decodedToken.given_name + ' ' + decodedToken.family_name;
-                const userid = decodedToken.sub;
                 user.login(userid, username, "");
 
                 user.addHandler('secret-needs-update', async event => {

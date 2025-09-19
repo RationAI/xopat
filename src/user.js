@@ -39,7 +39,11 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     getSecret(type="jwt") {
-        return this._secret && this._secret[type];
+        const value = this._secret && this._secret[type];
+        if (type === "jwt" && value && !value.startsWith("Bearer ")) {
+            return "Bearer " + value;
+        }
+        return value;
     }
 
     setSecret(secret, type="jwt") {

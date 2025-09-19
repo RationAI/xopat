@@ -2,11 +2,27 @@ class InvalidTokenError extends Error {
 }
 InvalidTokenError.prototype.name = "InvalidTokenError";
 
+function isJwt(token) {
+    // JWT must be three dot-separated parts with decodable JSON header/payload
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    try {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+        return !!payload; // decodes to JSON
+    } catch { return false; }
+}
+
 function jwtDecode(token, options) {
     if (typeof token !== "string") {
         throw new InvalidTokenError("Invalid token specified: must be a string");
     }
     options || (options = {});
+    const valid = isJwt(token);
+    if (!valid) {
+        if (options.strict) throw new InvalidTokenError("Invalid token specified: not a valid JWT");
+        return undefined;
+    }
+
     const pos = options.header === true ? 0 : 1;
     const part = token.split(".")[pos];
     if (typeof part !== "string") {
