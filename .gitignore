@@ -17,7 +17,6 @@
 !/modules/vega-secure
 !/modules/webgl
 !/modules/sam-segmentation-experimental
-!/modules/sam-segmentation-experimental/**
 
 /plugins/**
 !/plugins/annotations
@@ -33,7 +32,7 @@
 !/plugins/user-session
 !/plugins/youtrack-feedback-form
 !/plugins/sam-segment-tool-experimental
-!/plugins/sam-segment-tool-experimental/**
+!/plugins/dicom-web
 
 #rubbish
 *.txt

@@ -200,12 +200,14 @@ window.onerror = function (message, file, line, col, error) {
     <!-- Template plugins -->
     <template id="template-plugins"></template>
 
-<script>
-    APPLICATION_CONTEXT.beginApplicationLifecycle(
-        APPLICATION_CONTEXT.config.data,
-        APPLICATION_CONTEXT.config.background,
-        APPLICATION_CONTEXT.config.visualizations
-    );
+<script type="text/javascript">
+    window.addEventListener('DOMContentLoaded', function() {
+        APPLICATION_CONTEXT.beginApplicationLifecycle(
+            APPLICATION_CONTEXT.config.data,
+            APPLICATION_CONTEXT.config.background,
+            APPLICATION_CONTEXT.config.visualizations
+        );
+    });
 </script>
 </body>
 </html>

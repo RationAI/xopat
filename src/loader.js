@@ -254,7 +254,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         } //else do not initialize plugin, wait untill all files loaded dynamically
     };
 
-    function extendIfContains(target, source, ...properties) {
+    function extendWith(target, source, ...properties) {
         for (let property of properties) {
             if (source.hasOwnProperty(property)) target[property] = source[property];
         }
@@ -268,9 +268,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 properties = {};
             if (typeof toLoad === "string") {
                 properties.src = `${folder}${sources.directory}/${toLoad}?v=${version}`;
+                if (toLoad.endsWith(".mjs")) {
+                    properties.type = "module";
+                }
             } else if (typeof toLoad === "object") {
-                extendIfContains(properties, toLoad,
-                    'async', 'crossOrigin', 'defer', 'integrity', 'referrerPolicy', 'src');
+                extendWith(properties, toLoad,
+                    'async', 'crossOrigin', 'defer', 'integrity', 'referrerPolicy', 'src', 'type'
+                );
             } else {
                 throw "Invalid dependency: invalid type " + (typeof toLoad);
             }
@@ -1211,6 +1215,23 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                 if (end >= 0) return imageFilePath.substr(begin, end - begin);
             }
             return imageFilePath.substr(begin, imageFilePath.length - begin);
+        },
+
+        /**
+         * Parse BG Item Name Safely
+         * @param {BackgroundItem|number} indexOrItem
+         * @param stripSuffix
+         */
+        nameFromBGOrIndex: function (indexOrItem, stripSuffix) {
+            // todo some error if not a string, that name must be provided etc...
+            const item = typeof indexOrItem === "number" ? APPLICATION_CONTEXT.config.background[indexOrItem] : indexOrItem;
+            if (item?.name) return name;
+            const path = APPLICATION_CONTEXT.config.data[item?.dataReference];
+            if (!path || typeof path !== "string") {
+                console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
+                return "undefined";
+            }
+            return this.fileNameFromPath(path, stripSuffix);
         },
 
         /**

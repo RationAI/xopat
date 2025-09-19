@@ -96,16 +96,6 @@ export class SlideSwitcherMenu extends BaseComponent {
         return bg && typeof bg.dataReference === "number" && this.data?.[bg.dataReference] != null;
     }
 
-    _displayName(bg) {
-        const path = this.data?.[bg.dataReference] ?? "";
-        if (bg?.name) return bg.name;
-        try {
-            return (globalThis.UTILITIES.fileNameFromPath(path)) ?? (path.split(/[\\/]/).pop() || "(unnamed)");
-        } catch {
-            return path.split(/[\\/]/).pop() || "(unnamed)";
-        }
-    }
-
     _openWith(bgIndices) {
         APPLICATION_CONTEXT.openViewerWith(
             this.data,
@@ -207,7 +197,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         const viewable = this._isViewable(bg);
         if (!viewable) return null;
 
-        const name = this._displayName(bg);
+        const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
         const checkboxId = `${this.windowId}-chk-${idx}`;
         const checked = this.selected.has(idx);
 

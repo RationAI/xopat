@@ -349,8 +349,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
             if (bgConfig) {
-                if (bgConfig.name) return bgConfig.name;
-                return UTILITIES.fileNameFromPath(CONFIG.data[bgConfig.dataReference], stripSuffix);
+                return UTILITIES.nameFromBGOrIndex(bgConfig, stripSuffix);
             }
             return undefined;
         },
