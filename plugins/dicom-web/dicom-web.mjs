@@ -14,7 +14,8 @@ addPlugin('dicom-web', class extends XOpatPlugin {
                         baseUrl: this.serviceUrl,
                         studyUID: data.studyUID,
                         seriesUID: data.seriesUID,
-                        instanceUID: data.instanceUID
+                        instanceUID: data.instanceUID,
+                        useRendered: this.getOption("useRendered", false),
                     });
                 }
             }

@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-09-09
-//! Git commit: --0f76ae9-dirty
+//! Built on 2025-09-22
+//! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -2193,1707 +2193,1707 @@ ${code}
 })(OpenSeadragon);
 
 (function($) {
+/**
+ * Factory Manager for predefined UIControls
+ *  - you can manage all your UI control logic within your shader implementation
+ *  and not to touch this class at all, but here you will find some most common
+ *  or some advanced controls ready to use, simple and powerful
+ *  - registering an IComponent implementation (or an UiElement) in the factory results in its support
+ *  among all the shaders (given the GLSL type, result of sample(...) matches).
+ *  - UiElements are objects to create simple controls quickly and get rid of code duplicity,
+ *  for more info @see OpenSeadragon.FlexRenderer.UIControls.register()
+ * @class OpenSeadragon.FlexRenderer.UIControls
+ */
+$.FlexRenderer.UIControls = class {
     /**
-     * Factory Manager for predefined UIControls
-     *  - you can manage all your UI control logic within your shader implementation
-     *  and not to touch this class at all, but here you will find some most common
-     *  or some advanced controls ready to use, simple and powerful
-     *  - registering an IComponent implementation (or an UiElement) in the factory results in its support
-     *  among all the shaders (given the GLSL type, result of sample(...) matches).
-     *  - UiElements are objects to create simple controls quickly and get rid of code duplicity,
-     *  for more info @see OpenSeadragon.FlexRenderer.UIControls.register()
-     * @class OpenSeadragon.FlexRenderer.UIControls
+     * Get all available control types
+     * @return {string[]} array of available control types
      */
-    $.FlexRenderer.UIControls = class {
-        /**
-         * Get all available control types
-         * @return {string[]} array of available control types
-         */
-        static types() {
-            return Object.keys(this._items).concat(Object.keys(this._impls));
+    static types() {
+        return Object.keys(this._items).concat(Object.keys(this._impls));
+    }
+
+    /**
+     * Get an element used to create simple controls, if you want
+     * an implementation of the controls themselves (IControl), use build(...) to instantiate
+     * @param {string} id type of the control
+     * @return {*}
+     */
+    static getUiElement(id) {
+        let ctrl = this._items[id];
+        if (!ctrl) {
+            console.error("Invalid control: " + id);
+            ctrl = this._items["number"];
         }
+        return ctrl;
+    }
 
-        /**
-         * Get an element used to create simple controls, if you want
-         * an implementation of the controls themselves (IControl), use build(...) to instantiate
-         * @param {string} id type of the control
-         * @return {*}
-         */
-        static getUiElement(id) {
-            let ctrl = this._items[id];
-            if (!ctrl) {
-                console.error("Invalid control: " + id);
-                ctrl = this._items["number"];
-            }
-            return ctrl;
+    /**
+     * Get an element used to create advanced controls, if you want
+     * an implementation of simple controls, use build(...) to instantiate
+     * @param {string} id type of the control
+     * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
+     */
+    static getUiClass(id) {
+        let ctrl = this._impls[id];
+        if (!ctrl) {
+            console.error("Invalid control: " + id);
+            ctrl = this._impls["colormap"];
         }
+        return ctrl;
+    }
 
-        /**
-         * Get an element used to create advanced controls, if you want
-         * an implementation of simple controls, use build(...) to instantiate
-         * @param {string} id type of the control
-         * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
-         */
-        static getUiClass(id) {
-            let ctrl = this._impls[id];
-            if (!ctrl) {
-                console.error("Invalid control: " + id);
-                ctrl = this._impls["colormap"];
-            }
-            return ctrl;
+    /**
+     * Build UI control object based on given parameters
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} owner owner of the control, shaderLayer
+     * @param {string} controlName name used for the control (eg.: opacity)
+     * @param {object} controlObject object from shaderLayer.defaultControls, defines control
+     * @param {string} controlId
+     * @param {object|*} customParams parameters passed to the control (defined by the control) or set as default value if not object ({})
+     * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
+     */
+    static build(owner, controlName, controlObject, controlId, customParams = {}) {
+        let defaultParams = controlObject.default,
+            accepts = controlObject.accepts,
+            requiredParams = controlObject.required === undefined ? {} : controlObject.required;
+
+        let interactivityEnabled = owner._interactive;
+
+        // if not an object, but a value, make it the default one
+        if (!(typeof customParams === 'object')) {
+            customParams = {default: customParams};
         }
-
-        /**
-         * Build UI control object based on given parameters
-         * @param {OpenSeadragon.FlexRenderer.ShaderLayer} owner owner of the control, shaderLayer
-         * @param {string} controlName name used for the control (eg.: opacity)
-         * @param {object} controlObject object from shaderLayer.defaultControls, defines control
-         * @param {string} controlId
-         * @param {object|*} customParams parameters passed to the control (defined by the control) or set as default value if not object ({})
-         * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
-         */
-        static build(owner, controlName, controlObject, controlId, customParams = {}) {
-            let defaultParams = controlObject.default,
-                accepts = controlObject.accepts,
-                requiredParams = controlObject.required === undefined ? {} : controlObject.required;
-
-            let interactivityEnabled = owner._interactive;
-
-            // if not an object, but a value, make it the default one
-            if (!(typeof customParams === 'object')) {
-                customParams = {default: customParams};
-            }
-            //must be false if HTML nodes are not managed
-            if (!interactivityEnabled) {
-                customParams.interactive = false;
-            }
-
-            let originalType = defaultParams.type;
-
-            // merge dP < cP < rP recursively with rP having the biggest overwriting priority, without modifying the original objects
-            const params = $.extend(true, {}, defaultParams, customParams, requiredParams);
-
-            if (!this._items[params.type]) {
-                const controlType = params.type;
-
-                // if cannot use the new control type, try to use the default one
-                if (!this._impls[controlType]) {
-                    return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
-                }
-
-                let cls = new this._impls[controlType](owner, controlName, controlId, params);
-
-                if (accepts(cls.type, cls)) {
-                    return cls;
-                }
-
-                // cannot built with custom implementation, try to build with a default one
-                return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
-
-            } else { // control's type (eg.: range/number/...) is defined in this._items
-                let intristicComponent = this.getUiElement(params.type);
-                let comp = new $.FlexRenderer.UIControls.SimpleUIControl(
-                    owner, controlName, controlId, params, intristicComponent
-                );
-
-                if (accepts(comp.type, comp)) {
-                    return comp;
-                }
-                return this._buildFallback(intristicComponent.glType, originalType,
-                    owner, controlName, controlObject, params);
-            }
-        }
-
-        static _buildFallback(newType, originalType, owner, controlName, controlObject, customParams) {
-            //repeated check when building object from type
-
+        //must be false if HTML nodes are not managed
+        if (!interactivityEnabled) {
             customParams.interactive = false;
-            if (originalType === newType) { //if default and new equal, fail - recursion will not help
-                console.error(`Invalid parameter in shader '${customParams.type}': the parameter could not be built.`);
-                return undefined;
-            } else { //otherwise try to build with originalType (default)
-                customParams.type = originalType;
-                console.warn("Incompatible UI control type '" + newType + "': making the input non-interactive.");
-                return this.build(owner, controlName, controlObject, customParams);
-            }
         }
 
-        /**
-         * Register simple UI element by providing necessary object
-         * implementation:
-         *  { defaults: function() {...}, // object with all default values for all supported parameters
-             html: function(uniqueId, params, classes="", css="") {...}, //how the HTML UI controls look like
-            glUniformFunName: function() {...}, //what function webGL uses to pass this attribute to GPU
-            decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
-                                                    gl[glUniformFunName()](...) can pass to GPU
-            glType: //what's the type of this parameter wrt. GLSL: int? vec3?
-         * @param type the identifier under which is this control used: lookup made against params.type
-         * @param uiElement the object to register, fulfilling the above-described contract
-         */
-        static register(type, uiElement) {
-            function check(el, prop, desc) {
-                if (!el[prop]) {
-                    console.warn(`Skipping UI control '${type}' due to '${prop}': missing ${desc}.`);
-                    return false;
-                }
-                return true;
+        let originalType = defaultParams.type;
+
+        // merge dP < cP < rP recursively with rP having the biggest overwriting priority, without modifying the original objects
+        const params = $.extend(true, {}, defaultParams, customParams, requiredParams);
+
+        if (!this._items[params.type]) {
+            const controlType = params.type;
+
+            // if cannot use the new control type, try to use the default one
+            if (!this._impls[controlType]) {
+                return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
             }
 
-            if (check(uiElement, "defaults", "defaults():object") &&
-                check(uiElement, "html", "html(uniqueId, params, css):htmlString") &&
-                check(uiElement, "glUniformFunName", "glUniformFunName():string") &&
-                check(uiElement, "decode", "decode(encodedValue):<compatible with glType>") &&
-                check(uiElement, "normalize", "normalize(value, params):<typeof value>") &&
-                check(uiElement, "sample", "sample(value, valueGlType):glslString") &&
-                check(uiElement, "glType", "glType:string")
-            ) {
-                uiElement.prototype.getName = () => type;
-                if (this._items[type]) {
-                    console.warn("Registering an already existing control component: ", type);
-                }
-                uiElement["uiType"] = type;
-                this._items[type] = uiElement;
+            let cls = new this._impls[controlType](owner, controlName, controlId, params);
+
+            if (accepts(cls.type, cls)) {
+                return cls;
             }
+
+            // cannot built with custom implementation, try to build with a default one
+            return this._buildFallback(controlType, originalType, owner, controlName, controlObject, params);
+
+        } else { // control's type (eg.: range/number/...) is defined in this._items
+            let intristicComponent = this.getUiElement(params.type);
+            let comp = new $.FlexRenderer.UIControls.SimpleUIControl(
+                owner, controlName, controlId, params, intristicComponent
+            );
+
+            if (accepts(comp.type, comp)) {
+                return comp;
+            }
+            return this._buildFallback(intristicComponent.glType, originalType,
+                owner, controlName, controlObject, params);
+        }
+    }
+
+    static _buildFallback(newType, originalType, owner, controlName, controlObject, customParams) {
+        //repeated check when building object from type
+
+        customParams.interactive = false;
+        if (originalType === newType) { //if default and new equal, fail - recursion will not help
+            console.error(`Invalid parameter in shader '${customParams.type}': the parameter could not be built.`);
+            return undefined;
+        } else { //otherwise try to build with originalType (default)
+            customParams.type = originalType;
+            console.warn("Incompatible UI control type '" + newType + "': making the input non-interactive.");
+            return this.build(owner, controlName, controlObject, customParams);
+        }
+    }
+
+    /**
+     * Register simple UI element by providing necessary object
+     * implementation:
+     *  { defaults: function() {...}, // object with all default values for all supported parameters
+         html: function(uniqueId, params, classes="", css="") {...}, //how the HTML UI controls look like
+        glUniformFunName: function() {...}, //what function webGL uses to pass this attribute to GPU
+        decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
+                                                gl[glUniformFunName()](...) can pass to GPU
+        glType: //what's the type of this parameter wrt. GLSL: int? vec3?
+     * @param type the identifier under which is this control used: lookup made against params.type
+     * @param uiElement the object to register, fulfilling the above-described contract
+     */
+    static register(type, uiElement) {
+        function check(el, prop, desc) {
+            if (!el[prop]) {
+                console.warn(`Skipping UI control '${type}' due to '${prop}': missing ${desc}.`);
+                return false;
+            }
+            return true;
         }
 
-        /**
-         * Register class as a UI control
-         * @param {string} type unique control name / identifier
-         * @param {OpenSeadragon.FlexRenderer.UIControls.IControl} cls to register, implementation class of the controls
-         */
-        static registerClass(type, cls) {
-            //todo not really possible with syntax checker :/
-            // if ($.FlexRenderer.UIControls.IControl.isPrototypeOf(cls)) {
-            cls.prototype.getName = () => type;
-
+        if (check(uiElement, "defaults", "defaults():object") &&
+            check(uiElement, "html", "html(uniqueId, params, css):htmlString") &&
+            check(uiElement, "glUniformFunName", "glUniformFunName():string") &&
+            check(uiElement, "decode", "decode(encodedValue):<compatible with glType>") &&
+            check(uiElement, "normalize", "normalize(value, params):<typeof value>") &&
+            check(uiElement, "sample", "sample(value, valueGlType):glslString") &&
+            check(uiElement, "glType", "glType:string")
+        ) {
+            uiElement.prototype.getName = () => type;
             if (this._items[type]) {
                 console.warn("Registering an already existing control component: ", type);
             }
-            cls._uiType = type;
-            this._impls[type] = cls;
-            // } else {
-            //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
-            // }
+            uiElement["uiType"] = type;
+            this._items[type] = uiElement;
         }
-    };
-
-    // Definitions of possible controls' types, simple functionalities:
-    $.FlexRenderer.UIControls._items = {
-        number: {
-            defaults: function() {
-                return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
-            },
-            // returns string corresponding to html code for injection
-            html: function(uniqueId, params, classes = "", css = "") {
-                let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
-    step="${params.step}" type="number" id="${uniqueId}">`;
-            },
-            glUniformFunName: function() {
-                return "uniform1f";
-            },
-            decode: function(fromValue) {
-                return Number.parseFloat(fromValue);
-            },
-            normalize: function(value, params) {
-                return (value - params.min) / (params.max - params.min);
-            },
-            sample: function(name, ratio) {
-                return name;
-            },
-            glType: "float",
-            uiType: "number"
-        },
-
-        range: {
-            defaults: function() {
-                return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
-            },
-            html: function(uniqueId, params, classes = "", css = "") {
-                let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="range" style="${css}"
-    class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
-            },
-            glUniformFunName: function() {
-                return "uniform1f";
-            },
-            decode: function(fromValue) {
-                return Number.parseFloat(fromValue);
-            },
-            normalize: function(value, params) {
-                return (value - params.min) / (params.max - params.min);
-            },
-            sample: function(name, ratio) {
-                return name;
-            },
-            glType: "float",
-            uiType: "range"
-        },
-
-        color: {
-            defaults: function() {
-                return { title: "Color", interactive: true, default: "#fff900" };
-            },
-            html: function(uniqueId, params, classes = "", css = "") {
-                let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
-            },
-            glUniformFunName: function() {
-                return "uniform3fv";
-            },
-            decode: function(fromValue) {
-                try {
-                    let index = fromValue.startsWith("#") ? 1 : 0;
-                    return [
-                        parseInt(fromValue.slice(index, index + 2), 16) / 255,
-                        parseInt(fromValue.slice(index + 2, index + 4), 16) / 255,
-                        parseInt(fromValue.slice(index + 4, index + 6), 16) / 255
-                    ];
-                } catch (e) {
-                    return [0, 0, 0];
-                }
-            },
-            normalize: function(value, params) {
-                return value;
-            },
-            sample: function(name, ratio) {
-                return name;
-            },
-            glType: "vec3",
-            uiType: "color"
-        },
-
-        bool: {
-            defaults: function() {
-                return { title: "Checkbox", interactive: true, default: true };
-            },
-            html: function(uniqueId, params, classes = "", css = "") {
-                let title = params.title ? `<span> ${params.title}</span>` : "";
-                let value = this.decode(params.default) ? "checked" : "";
-                //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
-                return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
-    class="${classes}" onchange="this.value=this.checked; return true;">`;
-            },
-            glUniformFunName: function() {
-                return "uniform1i";
-            },
-            decode: function(fromValue) {
-                return fromValue && fromValue !== "false" ? 1 : 0;
-            },
-            normalize: function(value, params) {
-                return value;
-            },
-            sample: function(name, ratio) {
-                return name;
-            },
-            glType: "bool",
-            uiType: "bool"
-        }
-    };
-
-    // Implementation of UI control classes, complex functionalities.
-    $.FlexRenderer.UIControls._impls = {
-        // e.g.: colormap: $.FlexRenderer.UIControls.ColorMap
-    };
+    }
 
     /**
-     * @interface
+     * Register class as a UI control
+     * @param {string} type unique control name / identifier
+     * @param {OpenSeadragon.FlexRenderer.UIControls.IControl} cls to register, implementation class of the controls
      */
-    $.FlexRenderer.UIControls.IControl = class {
+    static registerClass(type, cls) {
+        //todo not really possible with syntax checker :/
+        // if ($.FlexRenderer.UIControls.IControl.isPrototypeOf(cls)) {
+        cls.prototype.getName = () => type;
 
-        /**
-         * Sets common properties needed to create the controls:
-         *  this.owner @extends FlexRenderer.ShaderLayer - owner
-         *  this.name - name of the parameter for this.owner.[load/store]Property(...) call
-         *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
-         *      created as ${uniq}${name}-${owner.uid}
-         *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
-         *
-         * If extended (class-based definition, see registerCass) children should define constructor as
-         *
-         * @example
-         *   constructor(owner, name, webGLVariableName, params) {
-         *       super(owner, name, webGLVariableName);
-         *       ...
-         *       //possibly make use of params:
-         *       this.params = this.getParams(params);
-         *
-         *       //now access params:
-         *       this.params...
-         *   }
-         *
-         * @param {ShaderLayer} owner shader context owning this control
-         * @param {string} name name of the control (key to the params in the shader configuration)
-         * @param {string} uniq another element to construct the DOM id from, mostly for compound controls
-         */
-        constructor(owner, name, id) {
-            this.owner = owner;
-            this.name = name;
-            this.id = id;
-            this.webGLVariableName = `${name}_${owner.uid}`;
-            this._params = {};
-            this.__onchange = {};
+        if (this._items[type]) {
+            console.warn("Registering an already existing control component: ", type);
         }
+        cls._uiType = type;
+        this._impls[type] = cls;
+        // } else {
+        //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
+        // }
+    }
+};
 
-        /**
-         * Safely sets outer params with extension from 'supports'
-         *  - overrides 'supports' values with the correct type (derived from supports or supportsAll)
-         *  - sets 'supports' as defaults if not set
-         * @param params
-         */
-        getParams(params) {
-            const t = this.constructor.getVarType;
-            function mergeSafeType(mask, from, possibleTypes) {
-                const to = Object.assign({}, mask);
-                Object.keys(from).forEach(key => {
-                    const tVal = to[key],
-                        fVal = from[key],
-                        tType = t(tVal),
-                        fType = t(fVal);
+// Definitions of possible controls' types, simple functionalities:
+$.FlexRenderer.UIControls._items = {
+    number: {
+        defaults: function() {
+            return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
+        },
+        // returns string corresponding to html code for injection
+        html: function(uniqueId, params, classes = "", css = "") {
+            let title = params.title ? `<span> ${params.title}</span>` : "";
+            return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
+step="${params.step}" type="number" id="${uniqueId}">`;
+        },
+        glUniformFunName: function() {
+            return "uniform1f";
+        },
+        decode: function(fromValue) {
+            return Number.parseFloat(fromValue);
+        },
+        normalize: function(value, params) {
+            return (value - params.min) / (params.max - params.min);
+        },
+        sample: function(name, ratio) {
+            return name;
+        },
+        glType: "float",
+        uiType: "number"
+    },
 
-                    const typeList = possibleTypes ? possibleTypes[key] : undefined,
-                        pTypeList = typeList ? typeList.map(x => t(x)) : [];
+    range: {
+        defaults: function() {
+            return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
+        },
+        html: function(uniqueId, params, classes = "", css = "") {
+            let title = params.title ? `<span> ${params.title}</span>` : "";
+            return `${title}<input type="range" style="${css}"
+class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
+        },
+        glUniformFunName: function() {
+            return "uniform1f";
+        },
+        decode: function(fromValue) {
+            return Number.parseFloat(fromValue);
+        },
+        normalize: function(value, params) {
+            return (value - params.min) / (params.max - params.min);
+        },
+        sample: function(name, ratio) {
+            return name;
+        },
+        glType: "float",
+        uiType: "range"
+    },
 
-                    //our type detector distinguishes arrays and objects
-                    if (tVal && fVal && tType === "object" && fType === "object") {
-                        to[key] = mergeSafeType(tVal, fVal, typeList);
-                    } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
-                        to[key] = fVal;
-                    } else if (fType === "string") {
-                        //try parsing NOTE: parsing from supportsAll is ignored!
-                        if (tType === "number") {
-                            const parsed = Number.parseFloat(fVal);
-                            if (!Number.isNaN(parsed)) {
-                                to[key] = parsed;
-                            }
-                        } else if (tType === "boolean") {
-                            const value = fVal.toLowerCase();
-                            if (value === "false") {
-                                to[key] = false;
-                            }
-                            if (value === "true") {
-                                to[key] = true;
-                            }
+    color: {
+        defaults: function() {
+            return { title: "Color", interactive: true, default: "#fff900" };
+        },
+        html: function(uniqueId, params, classes = "", css = "") {
+            let title = params.title ? `<span> ${params.title}</span>` : "";
+            return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
+        },
+        glUniformFunName: function() {
+            return "uniform3fv";
+        },
+        decode: function(fromValue) {
+            try {
+                let index = fromValue.startsWith("#") ? 1 : 0;
+                return [
+                    parseInt(fromValue.slice(index, index + 2), 16) / 255,
+                    parseInt(fromValue.slice(index + 2, index + 4), 16) / 255,
+                    parseInt(fromValue.slice(index + 4, index + 6), 16) / 255
+                ];
+            } catch (e) {
+                return [0, 0, 0];
+            }
+        },
+        normalize: function(value, params) {
+            return value;
+        },
+        sample: function(name, ratio) {
+            return name;
+        },
+        glType: "vec3",
+        uiType: "color"
+    },
+
+    bool: {
+        defaults: function() {
+            return { title: "Checkbox", interactive: true, default: true };
+        },
+        html: function(uniqueId, params, classes = "", css = "") {
+            let title = params.title ? `<span> ${params.title}</span>` : "";
+            let value = this.decode(params.default) ? "checked" : "";
+            //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
+            return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
+class="${classes}" onchange="this.value=this.checked; return true;">`;
+        },
+        glUniformFunName: function() {
+            return "uniform1i";
+        },
+        decode: function(fromValue) {
+            return fromValue && fromValue !== "false" ? 1 : 0;
+        },
+        normalize: function(value, params) {
+            return value;
+        },
+        sample: function(name, ratio) {
+            return name;
+        },
+        glType: "bool",
+        uiType: "bool"
+    }
+};
+
+// Implementation of UI control classes, complex functionalities.
+$.FlexRenderer.UIControls._impls = {
+    // e.g.: colormap: $.FlexRenderer.UIControls.ColorMap
+};
+
+/**
+ * @interface
+ */
+$.FlexRenderer.UIControls.IControl = class {
+
+    /**
+     * Sets common properties needed to create the controls:
+     *  this.owner @extends FlexRenderer.ShaderLayer - owner
+     *  this.name - name of the parameter for this.owner.[load/store]Property(...) call
+     *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
+     *      created as ${uniq}${name}-${owner.uid}
+     *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
+     *
+     * If extended (class-based definition, see registerCass) children should define constructor as
+     *
+     * @example
+     *   constructor(owner, name, webGLVariableName, params) {
+     *       super(owner, name, webGLVariableName);
+     *       ...
+     *       //possibly make use of params:
+     *       this.params = this.getParams(params);
+     *
+     *       //now access params:
+     *       this.params...
+     *   }
+     *
+     * @param {ShaderLayer} owner shader context owning this control
+     * @param {string} name name of the control (key to the params in the shader configuration)
+     * @param {string} uniq another element to construct the DOM id from, mostly for compound controls
+     */
+    constructor(owner, name, id) {
+        this.owner = owner;
+        this.name = name;
+        this.id = id;
+        this.webGLVariableName = `${name}_${owner.uid}`;
+        this._params = {};
+        this.__onchange = {};
+    }
+
+    /**
+     * Safely sets outer params with extension from 'supports'
+     *  - overrides 'supports' values with the correct type (derived from supports or supportsAll)
+     *  - sets 'supports' as defaults if not set
+     * @param params
+     */
+    getParams(params) {
+        const t = this.constructor.getVarType;
+        function mergeSafeType(mask, from, possibleTypes) {
+            const to = Object.assign({}, mask);
+            Object.keys(from).forEach(key => {
+                const tVal = to[key],
+                    fVal = from[key],
+                    tType = t(tVal),
+                    fType = t(fVal);
+
+                const typeList = possibleTypes ? possibleTypes[key] : undefined,
+                    pTypeList = typeList ? typeList.map(x => t(x)) : [];
+
+                //our type detector distinguishes arrays and objects
+                if (tVal && fVal && tType === "object" && fType === "object") {
+                    to[key] = mergeSafeType(tVal, fVal, typeList);
+                } else if (tVal === undefined || tType === fType || pTypeList.includes(fType)) {
+                    to[key] = fVal;
+                } else if (fType === "string") {
+                    //try parsing NOTE: parsing from supportsAll is ignored!
+                    if (tType === "number") {
+                        const parsed = Number.parseFloat(fVal);
+                        if (!Number.isNaN(parsed)) {
+                            to[key] = parsed;
+                        }
+                    } else if (tType === "boolean") {
+                        const value = fVal.toLowerCase();
+                        if (value === "false") {
+                            to[key] = false;
+                        }
+                        if (value === "true") {
+                            to[key] = true;
                         }
                     }
-                });
-                return to;
-            }
-
-            return mergeSafeType(this.supports, params, this.supportsAll);
-        }
-
-        /**
-         * Safely check certain param value
-         * @param value  value to check
-         * @param defaultValue default value to return if check fails
-         * @param paramName name of the param to check value type against
-         * @return {boolean|number|*}
-         */
-        getSafeParam(value, defaultValue, paramName) {
-            const t = this.constructor.getVarType;
-            function nest(suppNode, suppAllNode) {
-                if (t(suppNode) !== "object") {
-                    return [suppNode, suppAllNode];
                 }
-                if (!suppNode[paramName]) {
-                    return [undefined, undefined];
-                }
-                return nest(suppNode[paramName], suppAllNode ? suppAllNode[paramName] : undefined);
+            });
+            return to;
+        }
+
+        return mergeSafeType(this.supports, params, this.supportsAll);
+    }
+
+    /**
+     * Safely check certain param value
+     * @param value  value to check
+     * @param defaultValue default value to return if check fails
+     * @param paramName name of the param to check value type against
+     * @return {boolean|number|*}
+     */
+    getSafeParam(value, defaultValue, paramName) {
+        const t = this.constructor.getVarType;
+        function nest(suppNode, suppAllNode) {
+            if (t(suppNode) !== "object") {
+                return [suppNode, suppAllNode];
             }
-            const param = nest(this.supports, this.supportsAll),
-                tParam = t(param[0]);
-
-            if (tParam === "object") {
-                console.warn("Parameters should not be stored at object level. No type inspection is done.");
-                return true; //no supported inspection
+            if (!suppNode[paramName]) {
+                return [undefined, undefined];
             }
-            const tValue = t(value);
-            //supported type OR supports all types includes the type
-            if (tValue === tParam || (param[1] && param[1].map(t).includes(tValue))) {
-                return value;
-            }
-
-            if (tValue === "string") {
-                //try parsing NOTE: parsing from supportsAll is ignored!
-                if (tParam === "number") {
-                    const parsed = Number.parseFloat(value);
-                    if (!Number.isNaN(parsed)) {
-                        return parsed;
-                    }
-                } else if (tParam === "boolean") {
-                    const val = value.toLowerCase();
-                    if (val === "false") {
-                        return false;
-                    }
-                    if (val === "true") {
-                        return true;
-                    }
-                }
-            }
-
-            return defaultValue;
+            return nest(suppNode[paramName], suppAllNode ? suppAllNode[paramName] : undefined);
         }
+        const param = nest(this.supports, this.supportsAll),
+            tParam = t(param[0]);
 
-        /**
-         * Uniform behaviour wrt type checking in shaders
-         * @param x
-         * @return {string}
-         */
-        static getVarType(x) {
-            if (x === undefined) {
-                return "undefined";
-            }
-            if (x === null) {
-                return "null";
-            }
-            return Array.isArray(x) ? "array" : typeof x;
+        if (tParam === "object") {
+            console.warn("Parameters should not be stored at object level. No type inspection is done.");
+            return true; //no supported inspection
         }
-
-        /**
-         * JavaScript initialization
-         *  - read/store default properties here using this.owner.[load/store]Property(...)
-         *  - work with own HTML elements already attached to the DOM
-         *      - set change listeners, input values!
-         */
-        init() {
-            throw "FlexRenderer.UIControls.IControl::init() must be implemented.";
-        }
-
-        /**
-         * TODO: improve overall setter API
-         * Allows to set the control value programatically.
-         * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
-         * @param encodedValue any value the given control can support, encoded
-         *  (e.g. as the control acts on the GUI - for input number of
-         *    values between 5 and 42, the value can be '6' or 6 or 6.15
-         */
-        set(encodedValue) {
-            throw "FlexRenderer.UIControls.IControl::set() must be implemented.";
-        }
-
-        /**
-         * Called when an image is rendered
-         * @param {WebGLProgram} program
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         */
-        glDrawing(program, gl) {
-            //the control should send something to GPU
-            throw "FlexRenderer.UIControls.IControl::glDrawing() must be implemented.";
-        }
-
-        /**
-         * Called when associated webgl program is switched to
-         * @param {WebGLProgram} program
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         */
-        glLoaded(program, gl) {
-            //the control should send something to GPU
-            throw "FlexRenderer.UIControls.IControl::glLoaded() must be implemented.";
-        }
-
-        /**
-         * Get the UI HTML controls
-         *  - these can be referenced in this.init(...)
-         *  - should respect this.params.interactive attribute and return non-interactive output if interactive=false
-         *      - don't forget to no to work with DOM elements in init(...) in this case
-         *
-         * todo: when overrided value before 'init' call on params, toHtml was already called, changes might not get propagated
-         *  - either: delay toHtml to trigger insertion later (not nice)
-         *  - do not allow changes before init call, these changes must happen at constructor
-         */
-        toHtml(classes = "", css = "") {
-            throw "FlexRenderer.UIControls.IControl::toHtml() must be implemented.";
-        }
-
-        /**
-         * Handles how the variable is being defined in GLSL
-         *  - should use variable names derived from this.webGLVariableName
-         */
-        define() {
-            throw "FlexRenderer.UIControls.IControl::define() must be implemented.";
-        }
-
-        /**
-         * Sample the parameter using ratio as interpolation, must be one-liner expression so that GLSL code can write
-         *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
-         * NOTE: you can define your own global-scope functions to keep one-lined sampling,
-         * see this.owner.includeGlobalCode(...)
-         * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active
-         *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
-         * @param {string} valueGlType GLSL type of the value
-         * @return {string} valid GLSL oneliner (wihtout ';') for sampling the value, or invalid code (e.g. error message) to signal error
-         */
-        sample(value = undefined, valueGlType = 'void') {
-            throw "FlexRenderer.UIControls.IControl::sample() must be implemented.";
-        }
-
-        /**
-         * Parameters supported by this UI component, must contain at least
-         *  - 'interactive' - type bool, enables and disables the control interactivity
-         *  (by changing the content available when rendering html)
-         *  - 'title' - type string, the control title
-         *
-         *  Additionally, for compatibility reasons, you should, if possible, define
-         *  - 'default' - type any; the default value for the particular control
-         * @return {{}} name: default value mapping
-         */
-        get supports() {
-            throw "FlexRenderer.UIControls.IControl::supports must be implemented.";
-        }
-
-        /**
-         * Type definitions for supports. Can return empty object. In case of missing
-         * type definitions, the type is derived from the 'supports()' default value type.
-         *
-         * Each key must be an array of default values for the given key if applicable.
-         * This is an _extension_ to the supports() and can be used only for keys that have more
-         * than one default type applicable
-         * @return {{}}
-         */
-        get supportsAll() {
-            throw "FlexRenderer.UIControls.IControl::typeDefs must be implemented.";
-        }
-
-        /**
-         * GLSL type of this control: what type is returned from this.sample(...) ?
-         * @return {string}
-         */
-        get type() {
-            throw "FlexRenderer.UIControls.IControl::type must be implemented.";
-        }
-
-        /**
-         * Raw value sent to the GPU, note that not necessarily typeof raw() === type()
-         * some controls might send whole arrays of data (raw) and do smart sampling such that type is only a number
-         * @return {any}
-         */
-        get raw() {
-            throw "FlexRenderer.UIControls.IControl::raw must be implemented.";
-        }
-
-        /**
-         * Encoded value as used in the UI, e.g. a name of particular colormap, or array of string values of breaks...
-         * @return {any}
-         */
-        get encoded() {
-            throw "FlexRenderer.UIControls.IControl::encoded must be implemented.";
-        }
-
-        //////////////////////////////////////
-        //////// COMMON API //////////////////
-        //////////////////////////////////////
-
-        /**
-         * The control type component was registered with. Handled internally.
-         * @return {*}
-         */
-        get uiControlType() {
-            return this.constructor._uiType;
-        }
-
-        /**
-         * Get current control parameters
-         * the control should set the value as this._params = this.getParams(incomingParams);
-         * @return {{}}
-         */
-        get params() {
-            return this._params;
-        }
-
-        /**
-         * Automatically overridden to return the name of the control it was registered with
-         * @return {string}
-         */
-        getName() {
-            return "IControl";
-        }
-
-        /**
-         * Load a value from cache to support its caching - should be used on all values
-         * that are available for the user to play around with and change using UI controls
-         *
-         * @param defaultValue value to return in case of no cached value
-         * @param paramName name of the parameter, must be equal to the name from 'supports' definition
-         *  - default value can be empty string
-         * @return {*} cached or default value
-         */
-        load(defaultValue, paramName = "") {
-            const value = this.owner.loadProperty(this.name + (paramName === "default" ? "" : paramName), defaultValue);
+        const tValue = t(value);
+        //supported type OR supports all types includes the type
+        if (tValue === tParam || (param[1] && param[1].map(t).includes(tValue))) {
             return value;
         }
 
-        /**
-         * Store a value from cache to support its caching - should be used on all values
-         * that are available for the user to play around with and change using UI controls
-         *
-         * @param value to store
-         * @param paramName name of the parameter, must be equal to the name from 'supports' definition
-         *  - default value can be empty string
-         */
-        store(value, paramName = "") {
-            if (paramName === "default") {
-                paramName = "";
-            }
-            this.owner.storeProperty(this.name + paramName, value);
-        }
-
-        /**
-         * On parameter change register self
-         * @param {string} event which event to fire on
-         *  - events are with inputs the names of supported parameters (this.supports), separated by dot if nested
-         *  - most controls support "default" event - change of default value
-         *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
-         * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
-         */
-        on(event, clbck) {
-            this.__onchange[event] = clbck; //only one possible event -> rewrite?
-        }
-
-        /**
-         * Clear events of the event type
-         * @param {string} event type
-         */
-        off(event) {
-            delete this.__onchange[event];
-        }
-
-        /**
-         * Clear ALL events
-         */
-        clearEvents() {
-            this.__onchange = {};
-        }
-
-        /**
-         * Invoke changed value event
-         *  -- should invoke every time a value changes !driven by USER!, and use unique or compatible
-         *     event name (event 'value') so that shader knows what changed
-         * @param event event to call
-         * @param value decoded value of encodedValue
-         * @param encodedValue value that was received from the UI input
-         * @param context self reference to bind to the callback
-         */
-        changed(event, value, encodedValue, context) {
-            if (typeof this.__onchange[event] === "function") {
-                this.__onchange[event](value, encodedValue, context);
-            }
-        }
-
-        /**
-         * Create cache object to store this control's values.
-         * @returns {object}
-         */
-        createCacheObject() {
-            this._cache = {
-                encodedValue: this.encoded,
-                value: this.raw
-            };
-            return this._cache;
-        }
-
-        /**
-         *
-         * @param {object} cache object to serve as control's cache
-         */
-        loadCacheObject(cache) {
-            this._cache = cache;
-            this.set(cache.encodedValue);
-        }
-    };
-
-
-    /**
-     * Generic UI control implementations
-     * used if:
-     * {
-     *     type: "CONTROL TYPE",
-     *     ...
-     * }
-     *
-     * The subclass constructor should get the owner reference, the name
-     * of the input and the parametrization.
-     *
-     * Further parameters passed are dependent on the control type, see
-     * @ FlexRenderer.UIControls
-     *
-     * @class FlexRenderer.UIControls.SimpleUIControl
-     */
-    $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIControls.IControl {
-        /**
-         * Uses intristicComponent from UIControls._items that corresponds to type of this control.
-         * @param {ShaderLayer} owner owner of the control (shaderLayer)
-         * @param {string} name name of the control (eg. "opacity")
-         * @param {string} id unique control's id, corresponds to it's DOM's element's id
-         * @param {object} params
-         * @param {object} intristicComponent control's object from UIControls._items, keyed with it's params.default.type?
-         */
-        constructor(owner, name, id, params, intristicComponent) {
-            super(owner, name, id);
-            this.component = intristicComponent;
-            this._params = this.getParams(params);
-            this._needsLoad = true;
-        }
-
-        /**
-         * Set this.encodedValue to the default value defined in the intristicComponent.
-         * Set this.value to the normalized value (from the encoded value) that will be sent to the GLSL.
-         * Register "change" event handler to the control, if interactive.
-         */
-        init() {
-            this.encodedValue = this.load(this.params.default);
-            // nothing was stored in the cache so we got the default value from the load call => store the value in the cache
-            if (this.encodedValue === this.params.default) {
-                this.store(this.encodedValue);
-            }
-
-            /** Firstly decode encodedValue:
-             *      for color it means that it is converted from string "#ffffff" to an array of three floats,
-             *      for range it just parses the float on input.
-             *  Secondly normalize the obtained value:
-             *      for color it does nothing,
-             *      for range it somehow gets it to the range <0, 1>;
-             *          e.g.: with the range-min being 0 and range-max 100 and default value 40, it will set the min to 0, max to 100, and value to 0.4;
-             *                  so that "distances" between the value and min and max remain the same.
-             */
-            this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
-
-            if (this.params.interactive) {
-                const _this = this;
-                let node = document.getElementById(this.id);
-                if (node) {
-                    let updater = function(e) {
-                        _this.set(e.target.value);
-                        _this.owner.invalidate();
-                    };
-
-                    // TODO: some elements do not have 'value' attribute, but 'checked' or 'selected' instead
-                    node.value = this.encodedValue;
-                    node.addEventListener('change', updater);
-                } else {
-                    console.error('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
+        if (tValue === "string") {
+            //try parsing NOTE: parsing from supportsAll is ignored!
+            if (tParam === "number") {
+                const parsed = Number.parseFloat(value);
+                if (!Number.isNaN(parsed)) {
+                    return parsed;
+                }
+            } else if (tParam === "boolean") {
+                const val = value.toLowerCase();
+                if (val === "false") {
+                    return false;
+                }
+                if (val === "true") {
+                    return true;
                 }
             }
         }
 
-        set(encodedValue) {
-            this.encodedValue = encodedValue;
-            this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
+        return defaultValue;
+    }
 
-            this.changed("default", this.value, this.encodedValue, this);
+    /**
+     * Uniform behaviour wrt type checking in shaders
+     * @param x
+     * @return {string}
+     */
+    static getVarType(x) {
+        if (x === undefined) {
+            return "undefined";
+        }
+        if (x === null) {
+            return "null";
+        }
+        return Array.isArray(x) ? "array" : typeof x;
+    }
+
+    /**
+     * JavaScript initialization
+     *  - read/store default properties here using this.owner.[load/store]Property(...)
+     *  - work with own HTML elements already attached to the DOM
+     *      - set change listeners, input values!
+     */
+    init() {
+        throw "FlexRenderer.UIControls.IControl::init() must be implemented.";
+    }
+
+    /**
+     * TODO: improve overall setter API
+     * Allows to set the control value programatically.
+     * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
+     * @param encodedValue any value the given control can support, encoded
+     *  (e.g. as the control acts on the GUI - for input number of
+     *    values between 5 and 42, the value can be '6' or 6 or 6.15
+     */
+    set(encodedValue) {
+        throw "FlexRenderer.UIControls.IControl::set() must be implemented.";
+    }
+
+    /**
+     * Called when an image is rendered
+     * @param {WebGLProgram} program
+     * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
+     */
+    glDrawing(program, gl) {
+        //the control should send something to GPU
+        throw "FlexRenderer.UIControls.IControl::glDrawing() must be implemented.";
+    }
+
+    /**
+     * Called when associated webgl program is switched to
+     * @param {WebGLProgram} program
+     * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
+     */
+    glLoaded(program, gl) {
+        //the control should send something to GPU
+        throw "FlexRenderer.UIControls.IControl::glLoaded() must be implemented.";
+    }
+
+    /**
+     * Get the UI HTML controls
+     *  - these can be referenced in this.init(...)
+     *  - should respect this.params.interactive attribute and return non-interactive output if interactive=false
+     *      - don't forget to no to work with DOM elements in init(...) in this case
+     *
+     * todo: when overrided value before 'init' call on params, toHtml was already called, changes might not get propagated
+     *  - either: delay toHtml to trigger insertion later (not nice)
+     *  - do not allow changes before init call, these changes must happen at constructor
+     */
+    toHtml(classes = "", css = "") {
+        throw "FlexRenderer.UIControls.IControl::toHtml() must be implemented.";
+    }
+
+    /**
+     * Handles how the variable is being defined in GLSL
+     *  - should use variable names derived from this.webGLVariableName
+     */
+    define() {
+        throw "FlexRenderer.UIControls.IControl::define() must be implemented.";
+    }
+
+    /**
+     * Sample the parameter using ratio as interpolation, must be one-liner expression so that GLSL code can write
+     *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
+     * NOTE: you can define your own global-scope functions to keep one-lined sampling,
+     * see this.owner.includeGlobalCode(...)
+     * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active
+     *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
+     * @param {string} valueGlType GLSL type of the value
+     * @return {string} valid GLSL oneliner (wihtout ';') for sampling the value, or invalid code (e.g. error message) to signal error
+     */
+    sample(value = undefined, valueGlType = 'void') {
+        throw "FlexRenderer.UIControls.IControl::sample() must be implemented.";
+    }
+
+    /**
+     * Parameters supported by this UI component, must contain at least
+     *  - 'interactive' - type bool, enables and disables the control interactivity
+     *  (by changing the content available when rendering html)
+     *  - 'title' - type string, the control title
+     *
+     *  Additionally, for compatibility reasons, you should, if possible, define
+     *  - 'default' - type any; the default value for the particular control
+     * @return {{}} name: default value mapping
+     */
+    get supports() {
+        throw "FlexRenderer.UIControls.IControl::supports must be implemented.";
+    }
+
+    /**
+     * Type definitions for supports. Can return empty object. In case of missing
+     * type definitions, the type is derived from the 'supports()' default value type.
+     *
+     * Each key must be an array of default values for the given key if applicable.
+     * This is an _extension_ to the supports() and can be used only for keys that have more
+     * than one default type applicable
+     * @return {{}}
+     */
+    get supportsAll() {
+        throw "FlexRenderer.UIControls.IControl::typeDefs must be implemented.";
+    }
+
+    /**
+     * GLSL type of this control: what type is returned from this.sample(...) ?
+     * @return {string}
+     */
+    get type() {
+        throw "FlexRenderer.UIControls.IControl::type must be implemented.";
+    }
+
+    /**
+     * Raw value sent to the GPU, note that not necessarily typeof raw() === type()
+     * some controls might send whole arrays of data (raw) and do smart sampling such that type is only a number
+     * @return {any}
+     */
+    get raw() {
+        throw "FlexRenderer.UIControls.IControl::raw must be implemented.";
+    }
+
+    /**
+     * Encoded value as used in the UI, e.g. a name of particular colormap, or array of string values of breaks...
+     * @return {any}
+     */
+    get encoded() {
+        throw "FlexRenderer.UIControls.IControl::encoded must be implemented.";
+    }
+
+    //////////////////////////////////////
+    //////// COMMON API //////////////////
+    //////////////////////////////////////
+
+    /**
+     * The control type component was registered with. Handled internally.
+     * @return {*}
+     */
+    get uiControlType() {
+        return this.constructor._uiType;
+    }
+
+    /**
+     * Get current control parameters
+     * the control should set the value as this._params = this.getParams(incomingParams);
+     * @return {{}}
+     */
+    get params() {
+        return this._params;
+    }
+
+    /**
+     * Automatically overridden to return the name of the control it was registered with
+     * @return {string}
+     */
+    getName() {
+        return "IControl";
+    }
+
+    /**
+     * Load a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param defaultValue value to return in case of no cached value
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     * @return {*} cached or default value
+     */
+    load(defaultValue, paramName = "") {
+        const value = this.owner.loadProperty(this.name + (paramName === "default" ? "" : paramName), defaultValue);
+        return value;
+    }
+
+    /**
+     * Store a value from cache to support its caching - should be used on all values
+     * that are available for the user to play around with and change using UI controls
+     *
+     * @param value to store
+     * @param paramName name of the parameter, must be equal to the name from 'supports' definition
+     *  - default value can be empty string
+     */
+    store(value, paramName = "") {
+        if (paramName === "default") {
+            paramName = "";
+        }
+        this.owner.storeProperty(this.name + paramName, value);
+    }
+
+    /**
+     * On parameter change register self
+     * @param {string} event which event to fire on
+     *  - events are with inputs the names of supported parameters (this.supports), separated by dot if nested
+     *  - most controls support "default" event - change of default value
+     *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
+     * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
+     */
+    on(event, clbck) {
+        this.__onchange[event] = clbck; //only one possible event -> rewrite?
+    }
+
+    /**
+     * Clear events of the event type
+     * @param {string} event type
+     */
+    off(event) {
+        delete this.__onchange[event];
+    }
+
+    /**
+     * Clear ALL events
+     */
+    clearEvents() {
+        this.__onchange = {};
+    }
+
+    /**
+     * Invoke changed value event
+     *  -- should invoke every time a value changes !driven by USER!, and use unique or compatible
+     *     event name (event 'value') so that shader knows what changed
+     * @param event event to call
+     * @param value decoded value of encodedValue
+     * @param encodedValue value that was received from the UI input
+     * @param context self reference to bind to the callback
+     */
+    changed(event, value, encodedValue, context) {
+        if (typeof this.__onchange[event] === "function") {
+            this.__onchange[event](value, encodedValue, context);
+        }
+    }
+
+    /**
+     * Create cache object to store this control's values.
+     * @returns {object}
+     */
+    createCacheObject() {
+        this._cache = {
+            encodedValue: this.encoded,
+            value: this.raw
+        };
+        return this._cache;
+    }
+
+    /**
+     *
+     * @param {object} cache object to serve as control's cache
+     */
+    loadCacheObject(cache) {
+        this._cache = cache;
+        this.set(cache.encodedValue);
+    }
+};
+
+
+/**
+ * Generic UI control implementations
+ * used if:
+ * {
+ *     type: "CONTROL TYPE",
+ *     ...
+ * }
+ *
+ * The subclass constructor should get the owner reference, the name
+ * of the input and the parametrization.
+ *
+ * Further parameters passed are dependent on the control type, see
+ * @ FlexRenderer.UIControls
+ *
+ * @class FlexRenderer.UIControls.SimpleUIControl
+ */
+$.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIControls.IControl {
+    /**
+     * Uses intristicComponent from UIControls._items that corresponds to type of this control.
+     * @param {ShaderLayer} owner owner of the control (shaderLayer)
+     * @param {string} name name of the control (eg. "opacity")
+     * @param {string} id unique control's id, corresponds to it's DOM's element's id
+     * @param {object} params
+     * @param {object} intristicComponent control's object from UIControls._items, keyed with it's params.default.type?
+     */
+    constructor(owner, name, id, params, intristicComponent) {
+        super(owner, name, id);
+        this.component = intristicComponent;
+        this._params = this.getParams(params);
+        this._needsLoad = true;
+    }
+
+    /**
+     * Set this.encodedValue to the default value defined in the intristicComponent.
+     * Set this.value to the normalized value (from the encoded value) that will be sent to the GLSL.
+     * Register "change" event handler to the control, if interactive.
+     */
+    init() {
+        this.encodedValue = this.load(this.params.default);
+        // nothing was stored in the cache so we got the default value from the load call => store the value in the cache
+        if (this.encodedValue === this.params.default) {
             this.store(this.encodedValue);
-            this._needsLoad = true;
         }
 
-        glDrawing(program, gl) {
-            if (this._needsLoad) {
-                // debugging purposes
-                // console.debug('Setting', this.component.glUniformFunName(), 'corresponding to', this.webGLVariableName, 'to value', this.value);
+        /** Firstly decode encodedValue:
+         *      for color it means that it is converted from string "#ffffff" to an array of three floats,
+         *      for range it just parses the float on input.
+         *  Secondly normalize the obtained value:
+         *      for color it does nothing,
+         *      for range it somehow gets it to the range <0, 1>;
+         *          e.g.: with the range-min being 0 and range-max 100 and default value 40, it will set the min to 0, max to 100, and value to 0.4;
+         *                  so that "distances" between the value and min and max remain the same.
+         */
+        this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
-                gl[this.component.glUniformFunName()](this.glLocation, this.value);
-                this._needsLoad = false;
-            }
-        }
-
-        glLoaded(program, gl) {
-            // debugging purposes
-            // console.debug(`Setting control's glLocation to ${this.webGLVariableName}`);
-            this.glLocation = gl.getUniformLocation(program, this.webGLVariableName);
-            this._needsLoad = true;
-        }
-
-        toHtml(classes = "", css = "") {
-            if (!this.params.interactive) {
-                return "";
-            }
-            return this.component.html(this.id, this.params, classes, css);
-        }
-
-        define() {
-            return `uniform ${this.component.glType} ${this.webGLVariableName};`;
-        }
-
-        sample(value = undefined, valueGlType = 'void') {
-            if (!value || valueGlType !== 'float') {
-                return this.webGLVariableName;
-            }
-            return this.component.sample(this.webGLVariableName, value);
-        }
-
-        get uiControlType() {
-            return this.component["uiType"];
-        }
-
-        get supports() {
-            return this.component.defaults();
-        }
-
-        get supportsAll() {
-            return {};
-        }
-
-        get raw() {
-            return this.value;
-        }
-
-        get encoded() {
-            return this.encodedValue;
-        }
-
-        get type() {
-            return this.component.glType;
-        }
-    };
-
-    $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(owner, name, webGLVariableName, params) {
-            super(owner, name, webGLVariableName);
-            this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                owner, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
-            params.title = "";
-            this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
-        }
-
-        init() {
+        if (this.params.interactive) {
             const _this = this;
-            this._c2._params = this._c1._params;
-            this._c1.init();
-            this._c2.init();
-            this._c1.on("default", function(value, encoded, owner) {
-                document.getElementById(_this._c2.id).value = encoded;
-                _this._c2.value = value;
-                _this.changed("default", value, encoded, owner);
-            }, true); //silently fail if registered
-            this._c2.on("default", function(value, encoded, owner) {
-                document.getElementById(_this._c1.id).value = encoded;
-                _this._c1.value = value;
-                // Only C1 loads values to gpu, request change
-                _this._c1._needsLoad = true;
-                _this.changed("default", value, encoded, owner);
-            }, true); //silently fail if registered
-        }
+            let node = document.getElementById(this.id);
+            if (node) {
+                let updater = function(e) {
+                    _this.set(e.target.value);
+                    _this.owner.invalidate();
+                };
 
-        glDrawing(program, dimension, gl) {
-            this._c1.glDrawing(program, dimension, gl);
-        }
-
-        glLoaded(program, gl) {
-            this._c1.glLoaded(program, gl);
-        }
-
-        toHtml(classes = "", css = "") {
-            if (!this._c1.params.interactive) {
-                return "";
+                // TODO: some elements do not have 'value' attribute, but 'checked' or 'selected' instead
+                node.value = this.encodedValue;
+                node.addEventListener('change', updater);
+            } else {
+                console.error('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
             }
-            return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
         }
+    }
 
-        define() {
-            return this._c1.define();
-        }
+    set(encodedValue) {
+        this.encodedValue = encodedValue;
+        this.value = this.component.normalize(this.component.decode(this.encodedValue), this.params);
 
-        sample(ratio) {
-            return this._c1.sample(ratio);
-        }
+        this.changed("default", this.value, this.encodedValue, this);
+        this.store(this.encodedValue);
+        this._needsLoad = true;
+    }
 
-        get supports() {
-            return this._c1.supports;
-        }
+    glDrawing(program, gl) {
+        if (this._needsLoad) {
+            // debugging purposes
+            // console.debug('Setting', this.component.glUniformFunName(), 'corresponding to', this.webGLVariableName, 'to value', this.value);
 
-        get params() {
-            return this._c1.params;
+            gl[this.component.glUniformFunName()](this.glLocation, this.value);
+            this._needsLoad = false;
         }
+    }
 
-        get type() {
-            return this._c1.type;
-        }
+    glLoaded(program, gl) {
+        // debugging purposes
+        // console.debug(`Setting control's glLocation to ${this.webGLVariableName}`);
+        this.glLocation = gl.getUniformLocation(program, this.webGLVariableName);
+        this._needsLoad = true;
+    }
 
-        get raw() {
-            return this._c1.raw;
+    toHtml(classes = "", css = "") {
+        if (!this.params.interactive) {
+            return "";
         }
+        return this.component.html(this.id, this.params, classes, css);
+    }
 
-        get encoded() {
-            return this._c1.encoded;
+    define() {
+        return `uniform ${this.component.glType} ${this.webGLVariableName};`;
+    }
+
+    sample(value = undefined, valueGlType = 'void') {
+        if (!value || valueGlType !== 'float') {
+            return this.webGLVariableName;
         }
-    };
-    $.FlexRenderer.UIControls.registerClass("range_input", $.FlexRenderer.UIControls.SliderWithInput);
+        return this.component.sample(this.webGLVariableName, value);
+    }
+
+    get uiControlType() {
+        return this.component["uiType"];
+    }
+
+    get supports() {
+        return this.component.defaults();
+    }
+
+    get supportsAll() {
+        return {};
+    }
+
+    get raw() {
+        return this.value;
+    }
+
+    get encoded() {
+        return this.encodedValue;
+    }
+
+    get type() {
+        return this.component.glType;
+    }
+};
+
+$.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+        this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
+            owner, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
+        params.title = "";
+        this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
+            owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
+    }
+
+    init() {
+        const _this = this;
+        this._c2._params = this._c1._params;
+        this._c1.init();
+        this._c2.init();
+        this._c1.on("default", function(value, encoded, owner) {
+            document.getElementById(_this._c2.id).value = encoded;
+            _this._c2.value = value;
+            _this.changed("default", value, encoded, owner);
+        }, true); //silently fail if registered
+        this._c2.on("default", function(value, encoded, owner) {
+            document.getElementById(_this._c1.id).value = encoded;
+            _this._c1.value = value;
+            // Only C1 loads values to gpu, request change
+            _this._c1._needsLoad = true;
+            _this.changed("default", value, encoded, owner);
+        }, true); //silently fail if registered
+    }
+
+    glDrawing(program, dimension, gl) {
+        this._c1.glDrawing(program, dimension, gl);
+    }
+
+    glLoaded(program, gl) {
+        this._c1.glLoaded(program, gl);
+    }
+
+    toHtml(classes = "", css = "") {
+        if (!this._c1.params.interactive) {
+            return "";
+        }
+        return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
+    }
+
+    define() {
+        return this._c1.define();
+    }
+
+    sample(ratio) {
+        return this._c1.sample(ratio);
+    }
+
+    get supports() {
+        return this._c1.supports;
+    }
+
+    get params() {
+        return this._c1.params;
+    }
+
+    get type() {
+        return this._c1.type;
+    }
+
+    get raw() {
+        return this._c1.raw;
+    }
+
+    get encoded() {
+        return this._c1.encoded;
+    }
+};
+$.FlexRenderer.UIControls.registerClass("range_input", $.FlexRenderer.UIControls.SliderWithInput);
 })(OpenSeadragon);
 
 
 (function($) {
-    /**
-     * ColorMap Input
-     * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
-     */
-    $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(owner, name, webGLVariableName, params) {
-            super(owner, name, webGLVariableName);
-            this.prepare();
+/**
+ * ColorMap Input
+ * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
+ */
+$.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+        this.prepare();
+    }
+
+    prepare() {
+        //Note that builtin colormap must support 2->this.MAX_SAMPLES color arrays
+        this.MAX_SAMPLES = 8;
+        this.GLOBAL_GLSL_KEY = 'colormap';
+
+        this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
+        if (this.params.continuous) {
+            this.cssGradient = this._continuousCssFromPallete;
+        } else {
+            this.cssGradient = this._discreteCssFromPallete;
+        }
+        this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        //steps could have been set manually from the outside
+        if (!Array.isArray(this.steps)) {
+            this.setSteps();
         }
 
-        prepare() {
-            //Note that builtin colormap must support 2->this.MAX_SAMPLES color arrays
-            this.MAX_SAMPLES = 8;
-            this.GLOBAL_GLSL_KEY = 'colormap';
-
-            this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
-            if (this.params.continuous) {
-                this.cssGradient = this._continuousCssFromPallete;
-            } else {
-                this.cssGradient = this._discreteCssFromPallete;
-            }
-            this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
+        if (!this.value || !$.FlexRenderer.ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
+            this.value = $.FlexRenderer.ColorMaps.defaults[this.params.mode];
         }
+        this.colorPallete = $.FlexRenderer.ColorMaps[this.value][this.maxSteps];
 
-        init() {
-            this.value = this.load(this.params.default);
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target),
+                    selected = self.val();
+                _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
+                _this._setPallete(_this.colorPallete);
+                self.css("background", _this.cssGradient(_this.colorPallete));
+                _this.value = selected;
+                _this.store(selected);
+                _this.changed("default", _this.pallete, _this.value, _this);
+                _this.owner.invalidate();
+            };
 
-            //steps could have been set manually from the outside
-            if (!Array.isArray(this.steps)) {
-                this.setSteps();
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+
+            let schemas = [];
+            for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
+                schemas.push(`<option value="${pallete}">${pallete}</option>`);
             }
-
-            if (!this.value || !$.FlexRenderer.ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
-                this.value = $.FlexRenderer.ColorMaps.defaults[this.params.mode];
-            }
-            this.colorPallete = $.FlexRenderer.ColorMaps[this.value][this.maxSteps];
-
-            if (this.params.interactive) {
-                const _this = this;
-                let updater = function(e) {
-                    let self = $(e.target),
-                        selected = self.val();
-                    _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
-                    _this._setPallete(_this.colorPallete);
-                    self.css("background", _this.cssGradient(_this.colorPallete));
-                    _this.value = selected;
-                    _this.store(selected);
-                    _this.changed("default", _this.pallete, _this.value, _this);
-                    _this.owner.invalidate();
-                };
-
-                this._setPallete(this.colorPallete);
-                let node = this.updateColormapUI();
-
-                let schemas = [];
-                for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
-                    schemas.push(`<option value="${pallete}">${pallete}</option>`);
-                }
-                node.html(schemas.join(""));
-                node.val(this.value);
-                node.on('change', updater);
-            } else {
-                this._setPallete(this.colorPallete);
-                this.updateColormapUI();
-                //be careful with what the DOM elements contains or not if not interactive...
-                let existsNode = document.getElementById(this.id);
-                if (existsNode) {
-                    existsNode.style.background = this.cssGradient(this.pallete);
-                }
+            node.html(schemas.join(""));
+            node.val(this.value);
+            node.on('change', updater);
+        } else {
+            this._setPallete(this.colorPallete);
+            this.updateColormapUI();
+            //be careful with what the DOM elements contains or not if not interactive...
+            let existsNode = document.getElementById(this.id);
+            if (existsNode) {
+                existsNode.style.background = this.cssGradient(this.pallete);
             }
         }
+    }
 
-        _glslCode() {
-            return `
+    _glslCode() {
+        return `
 #define COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} ${this.MAX_SAMPLES}
 vec3 sample_colormap(in float ratio, in vec3 map[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}], in float steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1], in int max_steps, in bool discrete) {
-    for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
-        if (ratio <= steps[i]) {
-            if (discrete) return map[i-1];
+for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
+    if (ratio <= steps[i]) {
+        if (discrete) return map[i-1];
 
-            float scale = (ratio - steps[i-1]) / (steps[i] - steps[i-1]) - 0.5;
+        float scale = (ratio - steps[i-1]) / (steps[i] - steps[i-1]) - 0.5;
 
-            if (scale < .0) {
-                if (i == 1) return map[0];
-                //scale should be positive, but we need to keep the right direction
-                return mix(map[i-1], map[i-2], -scale);
+        if (scale < .0) {
+            if (i == 1) return map[0];
+            //scale should be positive, but we need to keep the right direction
+            return mix(map[i-1], map[i-2], -scale);
+        }
+
+        if (i == max_steps) return map[i-1];
+        return mix(map[i-1], map[i], scale);
+    } else if (i >= max_steps) {
+        return map[i-1];
+    }
+}
+}`;
+    }
+
+    updateColormapUI() {
+        let node = $(`#${this.id}`);
+        node.css("background", this.cssGradient(this.colorPallete));
+        return node;
+    }
+
+    /**
+     * Setup the pallete density, the value is trimmed with a cap of MAX_SAMPLES
+     * @param {(number|number[])} steps - amount of sampling steps
+     *   number: input number of colors to use
+     *   array: put number of colors + 1 values, example: for three color pallete,
+     *      put 4 numbers: 2 separators and 2 bounds (min, max value)
+     * @param maximum max number of steps available, should not be greater than this.MAX_SAMPLES
+     *   unless you know you can modify that value
+     */
+    setSteps(steps, maximum = this.MAX_SAMPLES) {
+        this.steps = steps || this.params.steps;
+        if (!Array.isArray(this.steps)) {
+            if (this.steps < 2) {
+                this.steps = 2;
             }
+            if (this.steps > maximum) {
+                this.steps = maximum;
+            }
+            this.maxSteps = this.steps;
 
-            if (i == max_steps) return map[i-1];
-            return mix(map[i-1], map[i], scale);
-        } else if (i >= max_steps) {
-            return map[i-1];
+            this.steps++; //step generated must have one more value (separators for colors)
+            let step = 1.0 / this.maxSteps;
+            this.steps = new Array(maximum + 1);
+            this.steps.fill(-1);
+            this.steps[0] = 0;
+            for (let i = 1; i < this.maxSteps; i++) {
+                this.steps[i] = this.steps[i - 1] + step;
+            }
+            this.steps[this.maxSteps] = 1.0;
+        } else {
+            this.steps = this.steps.filter(x => x >= 0);
+            this.steps.sort();
+            let max = this.steps[this.steps.length - 1];
+            let min = this.steps[0];
+            this.steps = this.steps.slice(0, maximum + 1);
+            this.maxSteps = this.steps.length - 1;
+            this.steps.forEach(x => (x - min) / (max - min));
+            for (let i = this.maxSteps + 1; i < maximum + 1; i++) {
+                this.steps.push(-1);
+            }
         }
     }
-}`;
+
+    _continuousCssFromPallete(pallete) {
+        let css = [`linear-gradient(90deg`];
+        for (let i = 0; i < this.maxSteps; i++) {
+            css.push(`, ${pallete[i]} ${Math.round((this.steps[i] + this.steps[i + 1]) * 50)}%`);
         }
+        css.push(")");
+        return css.join("");
+    }
 
-        updateColormapUI() {
-            let node = $(`#${this.id}`);
-            node.css("background", this.cssGradient(this.colorPallete));
-            return node;
+    _discreteCssFromPallete(pallete) {
+        let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
+        for (let i = 1; i < this.maxSteps; i++) {
+            css.push(`, ${pallete[i - 1]} ${Math.round(this.steps[i] * 100)}%, ${pallete[i]} ${Math.round(this.steps[i] * 100)}%`);
         }
+        css.push(")");
+        return css.join("");
+    }
 
-        /**
-         * Setup the pallete density, the value is trimmed with a cap of MAX_SAMPLES
-         * @param {(number|number[])} steps - amount of sampling steps
-         *   number: input number of colors to use
-         *   array: put number of colors + 1 values, example: for three color pallete,
-         *      put 4 numbers: 2 separators and 2 bounds (min, max value)
-         * @param maximum max number of steps available, should not be greater than this.MAX_SAMPLES
-         *   unless you know you can modify that value
-         */
-        setSteps(steps, maximum = this.MAX_SAMPLES) {
-            this.steps = steps || this.params.steps;
-            if (!Array.isArray(this.steps)) {
-                if (this.steps < 2) {
-                    this.steps = 2;
-                }
-                if (this.steps > maximum) {
-                    this.steps = maximum;
-                }
-                this.maxSteps = this.steps;
-
-                this.steps++; //step generated must have one more value (separators for colors)
-                let step = 1.0 / this.maxSteps;
-                this.steps = new Array(maximum + 1);
-                this.steps.fill(-1);
-                this.steps[0] = 0;
-                for (let i = 1; i < this.maxSteps; i++) {
-                    this.steps[i] = this.steps[i - 1] + step;
-                }
-                this.steps[this.maxSteps] = 1.0;
-            } else {
-                this.steps = this.steps.filter(x => x >= 0);
-                this.steps.sort();
-                let max = this.steps[this.steps.length - 1];
-                let min = this.steps[0];
-                this.steps = this.steps.slice(0, maximum + 1);
-                this.maxSteps = this.steps.length - 1;
-                this.steps.forEach(x => (x - min) / (max - min));
-                for (let i = this.maxSteps + 1; i < maximum + 1; i++) {
-                    this.steps.push(-1);
-                }
+    _setPallete(newPallete) {
+        if (typeof newPallete[0] === "string") {
+            let temp = newPallete; //if this.pallete passed
+            this.pallete = [];
+            for (let color of temp) {
+                this.pallete.push(...this.parser(color));
             }
         }
-
-        _continuousCssFromPallete(pallete) {
-            let css = [`linear-gradient(90deg`];
-            for (let i = 0; i < this.maxSteps; i++) {
-                css.push(`, ${pallete[i]} ${Math.round((this.steps[i] + this.steps[i + 1]) * 50)}%`);
-            }
-            css.push(")");
-            return css.join("");
+        for (let i = this.pallete.length; i < 3 * (this.MAX_SAMPLES); i++) {
+            this.pallete.push(0);
         }
+    }
 
-        _discreteCssFromPallete(pallete) {
-            let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
-            for (let i = 1; i < this.maxSteps; i++) {
-                css.push(`, ${pallete[i - 1]} ${Math.round(this.steps[i] * 100)}%, ${pallete[i]} ${Math.round(this.steps[i] * 100)}%`);
-            }
-            css.push(")");
-            return css.join("");
-        }
+    glDrawing(program, gl) {
+        gl.uniform3fv(this.colormapGluint, Float32Array.from(this.pallete));
+        gl.uniform1fv(this.stepsGluint, Float32Array.from(this.steps));
+        gl.uniform1i(this.colormapSizeGluint, this.maxSteps);
+    }
 
-        _setPallete(newPallete) {
-            if (typeof newPallete[0] === "string") {
-                let temp = newPallete; //if this.pallete passed
-                this.pallete = [];
-                for (let color of temp) {
-                    this.pallete.push(...this.parser(color));
-                }
-            }
-            for (let i = this.pallete.length; i < 3 * (this.MAX_SAMPLES); i++) {
-                this.pallete.push(0);
-            }
-        }
+    glLoaded(program, gl) {
+        this.stepsGluint = gl.getUniformLocation(program, this.webGLVariableName + "_steps[0]");
+        this.colormapGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap[0]");
+        this.colormapSizeGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap_size");
+    }
 
-        glDrawing(program, gl) {
-            gl.uniform3fv(this.colormapGluint, Float32Array.from(this.pallete));
-            gl.uniform1fv(this.stepsGluint, Float32Array.from(this.steps));
-            gl.uniform1i(this.colormapSizeGluint, this.maxSteps);
-        }
-
-        glLoaded(program, gl) {
-            this.stepsGluint = gl.getUniformLocation(program, this.webGLVariableName + "_steps[0]");
-            this.colormapGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap[0]");
-            this.colormapSizeGluint = gl.getUniformLocation(program, this.webGLVariableName + "_colormap_size");
-        }
-
-        toHtml(classes = "", css = "") {
-            if (!this.params.interactive) {
-                return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2"
+    toHtml(classes = "", css = "") {
+        if (!this.params.interactive) {
+            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2"
 style="width: 60%;">${this.load(this.params.default)}</span></div>`;
-            }
-
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow"
-style="width: 60%;"></select></div>`;
         }
 
-        define() {
-            return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}];
+        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow"
+style="width: 60%;"></select></div>`;
+    }
+
+    define() {
+        return `uniform vec3 ${this.webGLVariableName}_colormap[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}];
 uniform float ${this.webGLVariableName}_steps[COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES}+1];
 uniform int ${this.webGLVariableName}_colormap_size;`;
+    }
+
+    get type() {
+        return "vec3";
+    }
+
+    sample(value = undefined, valueGlType = 'void') {
+        if (!value || valueGlType !== 'float') {
+            return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+        }
+        return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.webGLVariableName}_colormap_size, ${!this.params.continuous})`;
+    }
+
+    get supports() {
+        return {
+            steps: 3,
+            default: "YlOrRd",
+            mode: "sequential",  // todo provide 'set' of available values for documentation
+            interactive: true,
+            title: "Colormap",
+            continuous: false,
+        };
+    }
+
+    get supportsAll() {
+        return {
+            steps: [3, [0, 0.5, 1]]
+        };
+    }
+
+    get raw() {
+        return this.pallete;
+    }
+
+    get encoded() {
+        return this.value;
+    }
+};
+$.FlexRenderer.UIControls.registerClass("colormap", $.FlexRenderer.UIControls.ColorMap);
+
+
+$.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexRenderer.UIControls.ColorMap {
+    prepare() {
+        this.MAX_SAMPLES = 32;
+        this.GLOBAL_GLSL_KEY = 'custom_colormap';
+
+        this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
+        if (this.params.continuous) {
+            this.cssGradient = this._continuousCssFromPallete;
+        } else {
+            this.cssGradient = this._discreteCssFromPallete;
+        }
+        this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        if (!Array.isArray(this.steps)) {
+            this.setSteps();
+        }
+        if (this.maxSteps < this.value.length) {
+            this.value = this.value.slice(0, this.maxSteps);
         }
 
-        get type() {
-            return "vec3";
-        }
+        //super class compatibility in methods, keep updated
+        this.colorPallete = this.value;
 
-        sample(value = undefined, valueGlType = 'void') {
-            if (!value || valueGlType !== 'float') {
-                return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
-            }
-            return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.webGLVariableName}_colormap_size, ${!this.params.continuous})`;
-        }
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target),
+                    index = Number.parseInt(e.target.dataset.index, 10),
+                    selected = self.val();
 
-        get supports() {
-            return {
-                steps: 3,
-                default: "YlOrRd",
-                mode: "sequential",  // todo provide 'set' of available values for documentation
-                interactive: true,
-                title: "Colormap",
-                continuous: false,
-            };
-        }
-
-        get supportsAll() {
-            return {
-                steps: [3, [0, 0.5, 1]]
-            };
-        }
-
-        get raw() {
-            return this.pallete;
-        }
-
-        get encoded() {
-            return this.value;
-        }
-    };
-    $.FlexRenderer.UIControls.registerClass("colormap", $.FlexRenderer.UIControls.ColorMap);
-
-
-    $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexRenderer.UIControls.ColorMap {
-        prepare() {
-            this.MAX_SAMPLES = 32;
-            this.GLOBAL_GLSL_KEY = 'custom_colormap';
-
-            this.parser = $.FlexRenderer.UIControls.getUiElement("color").decode;
-            if (this.params.continuous) {
-                this.cssGradient = this._continuousCssFromPallete;
-            } else {
-                this.cssGradient = this._discreteCssFromPallete;
-            }
-            this.owner.includeGlobalCode(this.GLOBAL_GLSL_KEY, this._glslCode());
-        }
-
-        init() {
-            this.value = this.load(this.params.default);
-
-            if (!Array.isArray(this.steps)) {
-                this.setSteps();
-            }
-            if (this.maxSteps < this.value.length) {
-                this.value = this.value.slice(0, this.maxSteps);
-            }
-
-            //super class compatibility in methods, keep updated
-            this.colorPallete = this.value;
-
-            if (this.params.interactive) {
-                const _this = this;
-                let updater = function(e) {
-                    let self = $(e.target),
-                        index = Number.parseInt(e.target.dataset.index, 10),
-                        selected = self.val();
-
-                    if (Number.isInteger(index)) {
-                        _this.colorPallete[index] = selected;
-                        _this._setPallete(_this.colorPallete);
-                        self.parent().css("background", _this.cssGradient(_this.colorPallete));
-                        _this.value = _this.colorPallete;
-                        _this.store(_this.colorPallete);
-                        _this.changed("default", _this.pallete, _this.value, _this);
-                        _this.owner.invalidate();
-                    }
-                };
-
-                this._setPallete(this.colorPallete);
-                let node = this.updateColormapUI();
-
-                const width = 1 / this.colorPallete.length * 100;
-                node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
-                node.val(this.value);
-                node.children().on('change', updater);
-            } else {
-                this._setPallete(this.colorPallete);
-                this.updateColormapUI();
-                //be careful with what the DOM elements contains or not if not interactive...
-                let existsNode = document.getElementById(this.id);
-                if (existsNode) {
-                    existsNode.style.background = this.cssGradient(this.pallete);
+                if (Number.isInteger(index)) {
+                    _this.colorPallete[index] = selected;
+                    _this._setPallete(_this.colorPallete);
+                    self.parent().css("background", _this.cssGradient(_this.colorPallete));
+                    _this.value = _this.colorPallete;
+                    _this.store(_this.colorPallete);
+                    _this.changed("default", _this.pallete, _this.value, _this);
+                    _this.owner.invalidate();
                 }
+            };
+
+            this._setPallete(this.colorPallete);
+            let node = this.updateColormapUI();
+
+            const width = 1 / this.colorPallete.length * 100;
+            node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
+            node.val(this.value);
+            node.children().on('change', updater);
+        } else {
+            this._setPallete(this.colorPallete);
+            this.updateColormapUI();
+            //be careful with what the DOM elements contains or not if not interactive...
+            let existsNode = document.getElementById(this.id);
+            if (existsNode) {
+                existsNode.style.background = this.cssGradient(this.pallete);
             }
         }
+    }
 
-        toHtml(classes = "", css = "") {
-            if (!this.params.interactive) {
-                return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block"
+    toHtml(classes = "", css = "") {
+        if (!this.params.interactive) {
+            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block"
 style="width: 60%;">&emsp;</span></div>`;
-            }
+        }
 
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block"
+        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block"
 style="width: 60%;"></span></div>`;
-        }
+    }
 
-        get supports() {
-            return {
-                default: ["#000000", "#888888", "#ffffff"],
-                steps: 3,  // todo probably not necessary
-                mode: "sequential",  // todo not used
-                interactive: true,
-                title: "Colormap:",
-                continuous: false,
-            };
-        }
+    get supports() {
+        return {
+            default: ["#000000", "#888888", "#ffffff"],
+            steps: 3,  // todo probably not necessary
+            mode: "sequential",  // todo not used
+            interactive: true,
+            title: "Colormap:",
+            continuous: false,
+        };
+    }
 
-        get supportsAll() {
-            return {
-                steps: [3, [0, 0.5, 1]]
-            };
-        }
-    });
+    get supportsAll() {
+        return {
+            steps: [3, [0, 0.5, 1]]
+        };
+    }
+});
 
-    /**
-     * Advanced slider that can define multiple points and interval masks
-     * | --- A - B -- C -- D ----- |
-     * will be sampled with mask float[5], the result is
-     * the percentage reached within this interval: e.g. if C <= ratio < D, then
-     * the result is  4/5 * mask[3]   (4-th interval out of 5 reached, multiplied by 4th mask)
-     * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
-     */
-    $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(owner, name, webGLVariableName, params) {
-            super(owner, name, webGLVariableName);
-            this.MAX_SLIDERS = 12;
+/**
+ * Advanced slider that can define multiple points and interval masks
+ * | --- A - B -- C -- D ----- |
+ * will be sampled with mask float[5], the result is
+ * the percentage reached within this interval: e.g. if C <= ratio < D, then
+ * the result is  4/5 * mask[3]   (4-th interval out of 5 reached, multiplied by 4th mask)
+ * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
+ */
+$.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+        this.MAX_SLIDERS = 12;
 
-            this.owner.includeGlobalCode('advanced_slider', `
+        this.owner.includeGlobalCode('advanced_slider', `
 #define ADVANCED_SLIDER_LEN ${this.MAX_SLIDERS}
 float sample_advanced_slider(in float ratio, in float breaks[ADVANCED_SLIDER_LEN], in float mask[ADVANCED_SLIDER_LEN+1], in bool maskOnly, in float minValue) {
-    float bigger = .0, actualLength = .0, masked = minValue;
-    bool sampling = true;
-    for (int i = 0; i < ADVANCED_SLIDER_LEN; i++) {
-        if (breaks[i] < .0) {
-            if (sampling) masked = mask[i];
-            sampling = false;
-            break;
-        }
-
-        if (sampling) {
-            if (ratio <= breaks[i]) {
-                sampling = false;
-                masked = mask[i];
-            } else bigger++;
-        }
-        actualLength++;
+float bigger = .0, actualLength = .0, masked = minValue;
+bool sampling = true;
+for (int i = 0; i < ADVANCED_SLIDER_LEN; i++) {
+    if (breaks[i] < .0) {
+        if (sampling) masked = mask[i];
+        sampling = false;
+        break;
     }
-    if (sampling) masked = mask[ADVANCED_SLIDER_LEN];
-    if (maskOnly) return masked;
-    return masked * bigger / actualLength;
+
+    if (sampling) {
+        if (ratio <= breaks[i]) {
+            sampling = false;
+            masked = mask[i];
+        } else bigger++;
+    }
+    actualLength++;
+}
+if (sampling) masked = mask[ADVANCED_SLIDER_LEN];
+if (maskOnly) return masked;
+return masked * bigger / actualLength;
 }`);
+    }
+
+    init() {
+        this._updatePending = false;
+        //encoded values hold breaks values between min and max,
+        this.encodedValues = this.load(this.params.breaks, "breaks");
+        this.mask = this.load(this.params.mask, "mask");
+
+        this.value = this.encodedValues.map(this._normalize.bind(this));
+        this.value = this.value.slice(0, this.MAX_SLIDERS);
+        this.sampleSize = this.value.length;
+
+        this.mask = this.mask.slice(0, this.MAX_SLIDERS + 1);
+        let size = this.mask.length;
+        this.connects = this.value.map(_ => true);
+        this.connects.push(true); //intervals have +1 elems
+        for (let i = size; i < this.MAX_SLIDERS + 1; i++) {
+            this.mask.push(-1);
         }
 
-        init() {
-            this._updatePending = false;
-            //encoded values hold breaks values between min and max,
-            this.encodedValues = this.load(this.params.breaks, "breaks");
-            this.mask = this.load(this.params.mask, "mask");
+        if (!this.params.step || this.params.step < 1) {
+            delete this.params.step;
+        }
 
-            this.value = this.encodedValues.map(this._normalize.bind(this));
-            this.value = this.value.slice(0, this.MAX_SLIDERS);
-            this.sampleSize = this.value.length;
+        let limit =  this.value.length < 2 ? undefined : this.params.max;
 
-            this.mask = this.mask.slice(0, this.MAX_SLIDERS + 1);
-            let size = this.mask.length;
-            this.connects = this.value.map(_ => true);
-            this.connects.push(true); //intervals have +1 elems
-            for (let i = size; i < this.MAX_SLIDERS + 1; i++) {
-                this.mask.push(-1);
+        let format = this.params.max < 10 ? {
+            to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 1 }),
+            from: v => Number.parseFloat(v)
+        } : {
+            to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 0 }),
+            from: v => Number.parseFloat(v)
+        };
+
+        if (this.params.interactive) {
+            const _this = this;
+            let container = document.getElementById(this.id);
+            if (!window.noUiSlider) {
+                throw new Error("noUiSlider not found: install noUiSlide library!");
             }
+            window.noUiSlider.create(container, {
+                range: {
+                    min: _this.params.min,
+                    max: _this.params.max
+                },
+                step: _this.params.step,
+                start: _this.encodedValues,
+                margin: _this.params.minGap,
+                limit: limit,
+                connect: _this.connects,
+                direction: 'ltr',
+                orientation: 'horizontal',
+                behaviour: 'drag',
+                tooltips: true,
+                format: format,
+                pips: $.extend({format: format}, this.params.pips)
+            });
 
-            if (!this.params.step || this.params.step < 1) {
-                delete this.params.step;
-            }
+            if (this.params.pips) {
+                let pips = container.querySelectorAll('.noUi-value');
+                /* eslint-disable no-inner-declarations */
+                function clickOnPip() {
+                    let idx = 0;
+                    /* eslint-disable no-invalid-this */
+                    let value = Number(this.getAttribute('data-value'));
+                    let encoded = container.noUiSlider.get();
+                    let values = encoded.map(v => Number.parseFloat(v));
 
-            let limit =  this.value.length < 2 ? undefined : this.params.max;
-
-            let format = this.params.max < 10 ? {
-                to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 1 }),
-                from: v => Number.parseFloat(v)
-            } : {
-                to: v => (v).toLocaleString('en-US', { minimumFractionDigits: 0 }),
-                from: v => Number.parseFloat(v)
-            };
-
-            if (this.params.interactive) {
-                const _this = this;
-                let container = document.getElementById(this.id);
-                if (!window.noUiSlider) {
-                    throw new Error("noUiSlider not found: install noUiSlide library!");
-                }
-                window.noUiSlider.create(container, {
-                    range: {
-                        min: _this.params.min,
-                        max: _this.params.max
-                    },
-                    step: _this.params.step,
-                    start: _this.encodedValues,
-                    margin: _this.params.minGap,
-                    limit: limit,
-                    connect: _this.connects,
-                    direction: 'ltr',
-                    orientation: 'horizontal',
-                    behaviour: 'drag',
-                    tooltips: true,
-                    format: format,
-                    pips: $.extend({format: format}, this.params.pips)
-                });
-
-                if (this.params.pips) {
-                    let pips = container.querySelectorAll('.noUi-value');
-                    /* eslint-disable no-inner-declarations */
-                    function clickOnPip() {
-                        let idx = 0;
-                        /* eslint-disable no-invalid-this */
-                        let value = Number(this.getAttribute('data-value'));
-                        let encoded = container.noUiSlider.get();
-                        let values = encoded.map(v => Number.parseFloat(v));
-
-                        if (Array.isArray(values)) {
-                            let closest = Math.abs(values[0] - value);
-                            for (let i = 1; i < values.length; i++) {
-                                let d = Math.abs(values[i] - value);
-                                if (d < closest) {
-                                    idx = i;
-                                    closest = d;
-                                }
+                    if (Array.isArray(values)) {
+                        let closest = Math.abs(values[0] - value);
+                        for (let i = 1; i < values.length; i++) {
+                            let d = Math.abs(values[i] - value);
+                            if (d < closest) {
+                                idx = i;
+                                closest = d;
                             }
-                            container.noUiSlider.setHandle(idx, value, false, false);
-                        } else { //just one
-                            container.noUiSlider.set(value);
                         }
-                        value = _this._normalize(value);
-                        _this.value[idx] = value;
+                        container.noUiSlider.setHandle(idx, value, false, false);
+                    } else { //just one
+                        container.noUiSlider.set(value);
+                    }
+                    value = _this._normalize(value);
+                    _this.value[idx] = value;
 
-                        _this.changed("breaks", _this.value, encoded, _this);
-                        _this.store(values, "breaks");
+                    _this.changed("breaks", _this.value, encoded, _this);
+                    _this.store(values, "breaks");
+                    _this.owner.invalidate();
+                }
+
+                for (let i = 0; i < pips.length; i++) {
+                    pips[i].addEventListener('click', clickOnPip);
+                }
+            }
+
+            if (this.params.toggleMask) {
+                this._originalMask = this.mask.map(x => x > 0 ? x : 1);
+                let connects = container.querySelectorAll('.noUi-connect');
+                for (let i = 0; i < connects.length; i++) {
+                    connects[i].addEventListener('mouseup', function(e) {
+                        let d = Math.abs(Date.now() - _this._timer);
+                        _this._timer = 0;
+                        if (d >= 180) {
+                            return;
+                        }
+
+                        let idx = Number.parseInt(this.dataset.index, 10);
+                        _this.mask[idx] = _this.mask[idx] > 0 ? 0 : _this._originalMask[idx];
+                        /* eslint-disable eqeqeq */
+                        this.style.background = (!_this.params.inverted && _this.mask[idx] > 0) ||
+                            (_this.params.inverted && _this.mask[idx] == 0) ?
+                                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
                         _this.owner.invalidate();
-                    }
+                        _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize - 1;
+                        _this.changed("mask", _this.mask, _this.mask, _this);
+                        _this.store(_this.mask, "mask");
+                    });
 
-                    for (let i = 0; i < pips.length; i++) {
-                        pips[i].addEventListener('click', clickOnPip);
-                    }
+                    connects[i].addEventListener('mousedown', function(e) {
+                        _this._timer = Date.now();
+                    });
+
+                    connects[i].style.cursor = "pointer";
                 }
+            }
 
-                if (this.params.toggleMask) {
-                    this._originalMask = this.mask.map(x => x > 0 ? x : 1);
-                    let connects = container.querySelectorAll('.noUi-connect');
-                    for (let i = 0; i < connects.length; i++) {
-                        connects[i].addEventListener('mouseup', function(e) {
-                            let d = Math.abs(Date.now() - _this._timer);
-                            _this._timer = 0;
-                            if (d >= 180) {
-                                return;
-                            }
+            container.noUiSlider.on("change", function(strValues, handle, unencoded, tap, positions, noUiSlider) {
+                _this.value[handle] = _this._normalize(unencoded[handle]);
+                _this.encodedValues = strValues;
+                if (_this._ignoreNextClick) {
+                    _this._ignoreNextClick = false;
+                } else if (!_this._updatePending) {
+                    //can be called multiple times upon multiple handle updates, do once if possible
+                    _this._updatePending = true;
+                    setTimeout(_ => {
+                        //todo re-scale values or filter out -1ones
+                        _this.changed("breaks", _this.value, strValues, _this);
+                        _this.store(unencoded, "breaks");
 
-                            let idx = Number.parseInt(this.dataset.index, 10);
-                            _this.mask[idx] = _this.mask[idx] > 0 ? 0 : _this._originalMask[idx];
-                            /* eslint-disable eqeqeq */
-                            this.style.background = (!_this.params.inverted && _this.mask[idx] > 0) ||
-                                (_this.params.inverted && _this.mask[idx] == 0) ?
-                                    "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
-                            _this.owner.invalidate();
-                            _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize - 1;
-                            _this.changed("mask", _this.mask, _this.mask, _this);
-                            _this.store(_this.mask, "mask");
-                        });
-
-                        connects[i].addEventListener('mousedown', function(e) {
-                            _this._timer = Date.now();
-                        });
-
-                        connects[i].style.cursor = "pointer";
-                    }
+                        _this.owner.invalidate();
+                        _this._updatePending = false;
+                    }, 50);
                 }
+            });
 
-                container.noUiSlider.on("change", function(strValues, handle, unencoded, tap, positions, noUiSlider) {
-                    _this.value[handle] = _this._normalize(unencoded[handle]);
-                    _this.encodedValues = strValues;
-                    if (_this._ignoreNextClick) {
-                        _this._ignoreNextClick = false;
-                    } else if (!_this._updatePending) {
-                        //can be called multiple times upon multiple handle updates, do once if possible
-                        _this._updatePending = true;
-                        setTimeout(_ => {
-                            //todo re-scale values or filter out -1ones
-                            _this.changed("breaks", _this.value, strValues, _this);
-                            _this.store(unencoded, "breaks");
-
-                            _this.owner.invalidate();
-                            _this._updatePending = false;
-                        }, 50);
-                    }
-                });
-
-                this._updateConnectStyles(container);
-            }
-
-            //do at last since value gets stretched by -1ones
-            for (let i =  this.sampleSize; i < this.MAX_SLIDERS; i++) {
-                this.value.push(-1);
-            }
+            this._updateConnectStyles(container);
         }
 
-        _normalize(value) {
-            return (value - this.params.min) / (this.params.max - this.params.min);
+        //do at last since value gets stretched by -1ones
+        for (let i =  this.sampleSize; i < this.MAX_SLIDERS; i++) {
+            this.value.push(-1);
         }
+    }
 
-        _updateConnectStyles(container) {
-            if (!container) {
-                container = document.getElementById(this.id);
-            }
-            let pips = container.querySelectorAll('.noUi-connect');
-            for (let i = 0; i < pips.length; i++) {
-                /* eslint-disable eqeqeq */
-                pips[i].style.background = (!this.params.inverted && this.mask[i] > 0) ||
-                    (this.params.inverted && this.mask[i] == 0) ?
-                    "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
-                pips[i].dataset.index = (i).toString();
-            }
+    _normalize(value) {
+        return (value - this.params.min) / (this.params.max - this.params.min);
+    }
+
+    _updateConnectStyles(container) {
+        if (!container) {
+            container = document.getElementById(this.id);
         }
-
-        glDrawing(program, gl) {
-            gl.uniform1fv(this.breaksGluint, Float32Array.from(this.value));
-            gl.uniform1fv(this.maskGluint, Float32Array.from(this.mask));
+        let pips = container.querySelectorAll('.noUi-connect');
+        for (let i = 0; i < pips.length; i++) {
+            /* eslint-disable eqeqeq */
+            pips[i].style.background = (!this.params.inverted && this.mask[i] > 0) ||
+                (this.params.inverted && this.mask[i] == 0) ?
+                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+            pips[i].dataset.index = (i).toString();
         }
+    }
 
-        glLoaded(program, gl) {
-            this.minGluint = gl.getUniformLocation(program, this.webGLVariableName + "_min");
-            gl.uniform1f(this.minGluint, this.params.min);
-            this.breaksGluint = gl.getUniformLocation(program, this.webGLVariableName + "_breaks[0]");
-            this.maskGluint = gl.getUniformLocation(program, this.webGLVariableName + "_mask[0]");
+    glDrawing(program, gl) {
+        gl.uniform1fv(this.breaksGluint, Float32Array.from(this.value));
+        gl.uniform1fv(this.maskGluint, Float32Array.from(this.mask));
+    }
+
+    glLoaded(program, gl) {
+        this.minGluint = gl.getUniformLocation(program, this.webGLVariableName + "_min");
+        gl.uniform1f(this.minGluint, this.params.min);
+        this.breaksGluint = gl.getUniformLocation(program, this.webGLVariableName + "_breaks[0]");
+        this.maskGluint = gl.getUniformLocation(program, this.webGLVariableName + "_mask[0]");
+    }
+
+    toHtml(classes = "", css = "") {
+        if (!this.params.interactive) {
+            return "";
         }
-
-        toHtml(classes = "", css = "") {
-            if (!this.params.interactive) {
-                return "";
-            }
-            return `<div style="${css}" class="${classes}"><span>${this.params.title}: </span><div id="${this.id}" style="height: 9px;
+        return `<div style="${css}" class="${classes}"><span>${this.params.title}: </span><div id="${this.id}" style="height: 9px;
 margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
-        }
+    }
 
-        define() {
-            return `uniform float ${this.webGLVariableName}_min;
+    define() {
+        return `uniform float ${this.webGLVariableName}_min;
 uniform float ${this.webGLVariableName}_breaks[ADVANCED_SLIDER_LEN];
 uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
-        }
+    }
 
-        get type() {
-            return "float";
-        }
+    get type() {
+        return "float";
+    }
 
-        sample(value = undefined, valueGlType = 'void') {
-            // TODO: throwing & managing exception would be better, now we don't know what happened when this gets baked to GLSL
-            if (!value || valueGlType !== 'float') {
-                return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+    sample(value = undefined, valueGlType = 'void') {
+        // TODO: throwing & managing exception would be better, now we don't know what happened when this gets baked to GLSL
+        if (!value || valueGlType !== 'float') {
+            return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+        }
+        return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly}, ${this.webGLVariableName}_min)`;
+    }
+
+    get supports() {
+        return {
+            breaks: [0.2, 0.8],
+            mask: [1, 0, 1],
+            interactive: true,
+            inverted: true,
+            maskOnly: true,
+            toggleMask: true,
+            title: "Threshold",
+            min: 0,
+            max: 1,
+            minGap: 0.05,
+            step: null,
+            pips: {
+                mode: 'positions',
+                values: [0, 20, 40, 50, 60, 80, 90, 100],
+                density: 4
             }
-            return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly}, ${this.webGLVariableName}_min)`;
-        }
+        };
+    }
 
-        get supports() {
-            return {
-                breaks: [0.2, 0.8],
-                mask: [1, 0, 1],
-                interactive: true,
-                inverted: true,
-                maskOnly: true,
-                toggleMask: true,
-                title: "Threshold",
-                min: 0,
-                max: 1,
-                minGap: 0.05,
-                step: null,
-                pips: {
-                    mode: 'positions',
-                    values: [0, 20, 40, 50, 60, 80, 90, 100],
-                    density: 4
-                }
+    get supportsAll() {
+        return {
+            step: [null, 0.1]
+        };
+    }
+
+    get raw() {
+        return this.value;
+    }
+
+    get encoded() {
+        return this.encodedValues;
+    }
+};
+$.FlexRenderer.UIControls.registerClass("advanced_slider", $.FlexRenderer.UIControls.AdvancedSlider);
+
+/**
+ * Text area input
+ * @class WebGLModule.UIControls.TextArea
+ */
+$.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                let self = $(e.target);
+                _this.value = self.val();
+                _this.store(_this.value);
+                _this.changed("default", _this.value, _this.value, _this);
             };
+            let node = $(`#${this.id}`);
+            node.val(this.value);
+            node.on('change', updater);
+        } else {
+            let node = $(`#${this.id}`);
+            node.val(this.value);
         }
+    }
 
-        get supportsAll() {
-            return {
-                step: [null, 0.1]
-            };
-        }
+    glDrawing(program, gl) {
+        //do nothing
+    }
 
-        get raw() {
-            return this.value;
-        }
+    glLoaded(program, gl) {
+        //do nothing
+    }
 
-        get encoded() {
-            return this.encodedValues;
-        }
-    };
-    $.FlexRenderer.UIControls.registerClass("advanced_slider", $.FlexRenderer.UIControls.AdvancedSlider);
-
-    /**
-     * Text area input
-     * @class WebGLModule.UIControls.TextArea
-     */
-    $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(owner, name, webGLVariableName, params) {
-            super(owner, name, webGLVariableName);
-        }
-
-        init() {
-            this.value = this.load(this.params.default);
-
-            if (this.params.interactive) {
-                const _this = this;
-                let updater = function(e) {
-                    let self = $(e.target);
-                    _this.value = self.val();
-                    _this.store(_this.value);
-                    _this.changed("default", _this.value, _this.value, _this);
-                };
-                let node = $(`#${this.id}`);
-                node.val(this.value);
-                node.on('change', updater);
-            } else {
-                let node = $(`#${this.id}`);
-                node.val(this.value);
-            }
-        }
-
-        glDrawing(program, gl) {
-            //do nothing
-        }
-
-        glLoaded(program, gl) {
-            //do nothing
-        }
-
-        toHtml(classes = "", css = "") {
-            let disabled = this.params.interactive ? "" : "disabled";
-            let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
-            return `<div class="${classes}">${title}<textarea id="${this.id}" class="form-control"
+    toHtml(classes = "", css = "") {
+        let disabled = this.params.interactive ? "" : "disabled";
+        let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
+        return `<div class="${classes}">${title}<textarea id="${this.id}" class="form-control"
 style="width: 100%; display: block; resize: vertical; ${css}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
-        }
+    }
 
-        define() {
-            return "";
-        }
+    define() {
+        return "";
+    }
 
-        get type() {
-            return "text";
-        }
+    get type() {
+        return "text";
+    }
 
-        sample(value = undefined, valueGlType = 'void') {
-            return this.value;
-        }
+    sample(value = undefined, valueGlType = 'void') {
+        return this.value;
+    }
 
-        get supports() {
-            return {
-                default: "",
-                placeholder: "",
-                interactive: true,
-                title: "Text"
+    get supports() {
+        return {
+            default: "",
+            placeholder: "",
+            interactive: true,
+            title: "Text"
+        };
+    }
+
+    get supportsAll() {
+        return {};
+    }
+
+    get raw() {
+        return this.value;
+    }
+
+    get encoded() {
+        return this.value;
+    }
+};
+$.FlexRenderer.UIControls.registerClass("text_area", $.FlexRenderer.UIControls.TextArea);
+
+/**
+ * Button Input
+ * @class OpenSeadragon.FlexRenderer.UIControls.Button
+ */
+$.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+    }
+
+    init() {
+        this.value = this.load(this.params.default);
+
+        if (this.params.interactive) {
+            const _this = this;
+            let updater = function(e) {
+                _this.value++;
+                _this.store(_this.value);
+                _this.changed("default", _this.value, _this.value, _this);
             };
+            let node = $(`#${this.id}`);
+            node.html(this.params.title);
+            node.click(updater);
+        } else {
+            let node = $(`#${this.id}`);
+            node.html(this.params.title);
         }
+    }
 
-        get supportsAll() {
-            return {};
-        }
+    glDrawing(program, gl) {
+        //do nothing
+    }
 
-        get raw() {
-            return this.value;
-        }
+    glLoaded(program, gl) {
+        //do nothing
+    }
 
-        get encoded() {
-            return this.value;
-        }
-    };
-    $.FlexRenderer.UIControls.registerClass("text_area", $.FlexRenderer.UIControls.TextArea);
+    toHtml(classes = "", css = "") {
+        let disabled = this.params.interactive ? "" : "disabled";
+        css = `style="${css ? css : ""}float: right;"`;
+        return `<button id="${this.id}" ${css} class="${classes}" ${disabled}></button>`;
+    }
 
-    /**
-     * Button Input
-     * @class OpenSeadragon.FlexRenderer.UIControls.Button
-     */
-    $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(owner, name, webGLVariableName, params) {
-            super(owner, name, webGLVariableName);
-        }
+    define() {
+        return "";
+    }
 
-        init() {
-            this.value = this.load(this.params.default);
+    get type() {
+        return "action";
+    }
 
-            if (this.params.interactive) {
-                const _this = this;
-                let updater = function(e) {
-                    _this.value++;
-                    _this.store(_this.value);
-                    _this.changed("default", _this.value, _this.value, _this);
-                };
-                let node = $(`#${this.id}`);
-                node.html(this.params.title);
-                node.click(updater);
-            } else {
-                let node = $(`#${this.id}`);
-                node.html(this.params.title);
-            }
-        }
+    sample(value = undefined, valueGlType = 'void') {
+        return "";
+    }
 
-        glDrawing(program, gl) {
-            //do nothing
-        }
+    get supports() {
+        return {
+            default: 0, //counts clicks
+            interactive: true,
+            title: "Button"
+        };
+    }
 
-        glLoaded(program, gl) {
-            //do nothing
-        }
+    get supportsAll() {
+        return {};
+    }
 
-        toHtml(classes = "", css = "") {
-            let disabled = this.params.interactive ? "" : "disabled";
-            css = `style="${css ? css : ""}float: right;"`;
-            return `<button id="${this.id}" ${css} class="${classes}" ${disabled}></button>`;
-        }
+    get raw() {
+        return this.value;
+    }
 
-        define() {
-            return "";
-        }
-
-        get type() {
-            return "action";
-        }
-
-        sample(value = undefined, valueGlType = 'void') {
-            return "";
-        }
-
-        get supports() {
-            return {
-                default: 0, //counts clicks
-                interactive: true,
-                title: "Button"
-            };
-        }
-
-        get supportsAll() {
-            return {};
-        }
-
-        get raw() {
-            return this.value;
-        }
-
-        get encoded() {
-            return this.value;
-        }
-    };
-    $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
+    get encoded() {
+        return this.value;
+    }
+};
+$.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
 })(OpenSeadragon);
 
 (function($) {
@@ -5643,7 +5643,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 usePrivateCache: true,
                 preloadCache: true,
                 copyShaderConfig: false,
-                debugInfoContainer: undefined,
                 handleNavigator: true
             };
         }
@@ -6699,181 +6698,641 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 }(OpenSeadragon));
 
 (function($) {
-    /**
-     * Edges shader
-     * data reference must contain one index to the data to render using edges strategy
-     */
-    $.FlexRenderer.SobelShader = class extends $.FlexRenderer.ShaderLayer {
+/**
+ * Bi-colors shader
+ * data reference must contain one index to the data to render using bipolar heatmap strategy
+ *
+ * $_GET/$_POST expected parameters:
+ *  index - unique number in the compiled shader
+ * $_GET/$_POST supported parameters:
+ *  colorHigh - color to fill-in areas with high values (-->255), url encoded '#ffffff' format or digits only 'ffffff', default "#ff0000"
+ *  colorLow - color to fill-in areas with low values (-->0), url encoded '#ffffff' format or digits only 'ffffff', default "#7cfc00"
+ *  ctrlColor - whether to allow color modification, true or false, default true
+ *  ctrlThreshold - whether to allow threshold modification, true or false, default true
+ *  ctrlOpacity - whether to allow opacity modification, true or false, default true
+ *
+ * this shader considers insignificant values to be around the middle (0.5), and significant are low or high values,
+ * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively
+ */
 
-        static type() {
-            return "sobel";
-        }
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
 
-        static name() {
-            return "Sobel";
-        }
-
-        static description() {
-            return "sobel edge detector";
-        }
-
-        static sources() {
-            return [{
-                acceptsChannelCount: (x) => x === 3,
-                description: "Data to detect edges on"
-            }];
-        }
-
-        static get defaultControls() {
-            return {
-                use_channel0: {  // eslint-disable-line camelcase
-                    default: "rgb"
-                }
-            };
-        }
-
-        getFragmentShaderExecution() {
-            return `
-            // Sobel kernel for edge detection
-            float kernelX[9] = float[9](-1.0,  0.0,  1.0,
-                                        -2.0,  0.0,  2.0,
-                                        -1.0,  0.0,  1.0);
-
-            float kernelY[9] = float[9](-1.0, -2.0, -1.0,
-                                         0.0,  0.0,  0.0,
-                                         1.0,  2.0,  1.0);
-
-            vec3 sumX = vec3(0.0);
-            vec3 sumY = vec3(0.0);
-            vec2 texelSize = vec2(1.0) / vec2(float(${this.getTextureSize()}.x), float(${this.getTextureSize()}.y));
-
-            // Sampling 3x3 neighborhood
-            int idx = 0;
-            for (int y = -1; y <= 1; y++) {
-                for (int x = -1; x <= 1; x++) {
-                    vec3 sampleColor = ${this.sampleChannel('v_texture_coords + vec2(float(x), float(y)) * texelSize')};
-                    sumX += sampleColor * kernelX[idx];
-                    sumY += sampleColor * kernelY[idx];
-                    idx++;
-                }
-            }
-
-            float edgeStrength = length(sumX) + length(sumY);
-            return vec4(vec3(edgeStrength), 1.0);
-    `;
-        }
-    };
-
-    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.SobelShader);
-
-})(OpenSeadragon);
-
-(function($) {
-    /**
-     * Identity shader
-     */
-    $.FlexRenderer.IdentityLayer = class extends $.FlexRenderer.ShaderLayer {
-
-        static get defaultControls() {
-            return {
-                use_channel0: {  // eslint-disable-line camelcase
-                    required: "rgba"
-                }
-            };
-        }
-
-        static type() {
-            return "identity";
-        }
-
-        static name() {
-            return "Identity";
-        }
-
-        static description() {
-            return "shows the data AS-IS";
-        }
-
-        static sources() {
-            return [{
-                acceptsChannelCount: (x) => x === 4,
-                description: "4d texture to render AS-IS"
-            }];
-        }
-
-        getFragmentShaderExecution() {
-            return `
-        return ${this.sampleChannel("v_texture_coords")};`;
-        }
-    };
-
-    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.IdentityLayer);
-
-})(OpenSeadragon);
-
-(function($) {
-    /**
-     * Identity shader
-     */
-    $.FlexRenderer.HeatmapLayer = class extends $.FlexRenderer.ShaderLayer {
-
-        static type() {
-            return "heatmap";
-        }
-
-        static name() {
-            return "Heatmap";
-        }
-
-        static description() {
-            return "encode data values in opacity";
-        }
-
-        static sources() {
-            return [{
-                acceptsChannelCount: (x) => x === 1,
-                description: "The value to map to opacity"
-            }];
-        }
-
-        static get defaultControls() {
-            return {
-                use_channel0: {  // eslint-disable-line camelcase
-                    default: "r"
-                },
-                color: {
-                    default: {type: "color", default: "#fff700", title: "Color: "},
-                    accepts: (type, instance) => type === "vec3",
-                },
-                threshold: {
-                    default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
-                    accepts: (type, instance) => type === "float"
-                },
-                inverse: {
-                    default: {type: "bool", default: false, title: "Invert: "},
-                    accepts: (type, instance) => type === "bool"
-                }
-            };
-        }
-
-        getFragmentShaderExecution() {
-            return `
-    float chan = ${this.sampleChannel('v_texture_coords')};
-    bool shows = chan >= ${this.threshold.sample('chan', 'float')};
-    if (${this.inverse.sample()}) {
-        if (!shows) {
-            shows = true;
-            chan = 1.0;
-        } else chan = 1.0 - chan;
+    static type() {
+        return "bipolar-heatmap";
     }
-    if (shows) return vec4(${this.color.sample('chan', 'float')}, chan);
+
+    static name() {
+        return "Bi-polar Heatmap";
+    }
+
+    static description() {
+        return "values are of two categories, smallest considered in the middle";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "1D diverging data encoded in opacity"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            colorHigh: {
+                default: {type: "color", default: "#ff1000", title: "Color High: "},
+                accepts: (type, instance) => type === "vec3",
+            },
+            colorLow: {
+                default: {type: "color", default: "#01ff00", title: "Color Low: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+        };
+    }
+
+    getFragmentShaderExecution() {
+        return `
+    float chan = ${this.sampleChannel('v_texture_coords', 0, true)};
+    if (!close(chan, .5)) {
+        if (chan < .5) {
+            chan = ${this.filter(`1.0 - chan * 2.0`)};
+            if (chan > ${this.threshold.sample('chan', 'float')}) {
+               return vec4(${this.colorLow.sample('chan', 'float')}, chan);
+            }
+            return vec4(.0);
+        }
+
+        chan = ${this.filter(`(chan - 0.5) * 2.0`)};
+        if (chan > ${this.threshold.sample('chan', 'float')}) {
+            return vec4(${this.colorHigh.sample('chan', 'float')}, chan);
+        }
+        return vec4(.0);
+    }
+`;
+    }
+});
+
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Colormap shader
+ * data reference must contain one index to the data to render using colormap strategy
+ *
+ * expected parameters:
+ *  index - unique number in the compiled shader
+ * supported parameters:
+ *  color - can be a ColorMap, number of steps = x
+ *  threshold - must be an AdvancedSlider, default values array (pipes) = x-1, mask array size = x, incorrect
+ *      values are changed to reflect the color steps
+ *  connect - a boolean switch to enable/disable advanced slider mapping to break values, enabled for type==="colormap" only
+ *
+ * colors shader will read underlying data (red component) and output
+ * to canvas defined color with opacity based on the data
+ * (0.0 => transparent, 1.0 => opaque)
+ * supports thresholding - outputs color on areas above certain value
+ * mapping html input slider 0-100 to .0-1.0
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "colormap";
+    }
+
+    static name() {
+        return "ColorMap";
+    }
+
+    static description() {
+        return "data values encoded in color scale";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "1D data mapped to color map"
+        }];
+    }
+
+    construct(options, dataReferences) {
+        super.construct(options, dataReferences);
+        //delete unused controls if applicable after initialization
+        if (this.color.getName() !== "colormap") {
+            this.removeControl("connect");
+        }
+    }
+
+    static get defaultControls() {
+        return {
+            color: {
+                default: {
+                    type: "colormap",
+                    steps: 3, //number of categories
+                    default: "Viridis",
+                    mode: "sequential",
+                    title: "Colormap",
+                    continuous: false,
+                },
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {
+                    type: "advanced_slider",
+                    default: [0.25, 0.75], //breaks/separators, e.g. one less than bin count
+                    mask: [1, 0, 1],  //same number of steps as color
+                    title: "Breaks",
+                    pips: {
+                        mode: 'positions',
+                        values: [0, 35, 50, 75, 90, 100],
+                        density: 4
+                    }
+                },
+                accepts: (type, instance) => type === "float",
+                required: {type: "advanced_slider", inverted: false}
+            },
+            connect: {
+                default: {type: "bool", interactive: true, title: "Connect breaks: ", default: false},
+                accepts: (type, instance) => type === "bool"
+            }
+        };
+    }
+
+    getFragmentShaderExecution() {
+        return `
+    float chan = ${this.sampleChannel('v_texture_coords')};
+    return vec4(${this.color.sample('chan', 'float')}, step(0.05, ${this.threshold.sample('chan', 'float')}));
+`;
+    }
+
+    defaultColSteps(length) {
+        return [...Array(length).keys()].forEach(x => x + 1);
+    }
+
+    init() {
+        const _this = this;
+
+        this.opacity.init();
+
+        if (this.connect) {
+            this.connect.on('default', function(raw, encoded, ctx) {
+                _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
+                    _this.defaultColSteps(_this.color.maxSteps)
+                );
+                _this.color.updateColormapUI();
+            }, true);
+            this.connect.init();
+
+
+            this.threshold.on('breaks', function(raw, encoded, ctx) {
+                if (_this.connect.raw) { //if YES
+                    _this.color.setSteps([0, ...raw, 1]);
+                    _this.color.updateColormapUI();
+                }
+            }, true);
+        }
+        this.threshold.init();
+
+        //todo fix this scenario
+        // if (this.threshold.raw.length != this.color.params.steps - 1) {
+        // }
+
+        if (this.connect) {
+            if (this.connect.raw) {
+                this.color.setSteps([0, ...this.threshold.raw, 1]);
+            } else {
+                //default breaks mapping for colormap if connect not enabled
+                this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
+            }
+        }
+
+        this.color.init();
+        // let steps = this.color.steps.filter(x => x >= 0);
+        // steps.splice(steps.length-1, 1); //last element is 1 not a break
+        // this.storeProperty('threshold_values', steps);
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Identity shader
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                required: "rgba"
+            }
+        };
+    }
+
+    static type() {
+        return "identity";
+    }
+
+    static name() {
+        return "Identity";
+    }
+
+    static description() {
+        return "shows the data AS-IS";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 4,
+            description: "4d texture to render AS-IS"
+        }];
+    }
+
+    getFragmentShaderExecution() {
+        return `
+    return ${this.sampleChannel("v_texture_coords")};`;
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
+    /**
+ * Edges shader
+ * data reference must contain one index to the data to render using edges strategy
+ *
+ * $_GET/$_POST expected parameters:
+ *  index - unique number in the compiled shader
+ * $_GET/$_POST supported parameters:
+ *  color - for more details, see @WebGLModule.UIControls color UI type
+ *  edgeThickness - for more details, see @WebGLModule.UIControls number UI type
+ *  threshold - for more details, see @WebGLModule.UIControls number UI type
+ *  opacity - for more details, see @WebGLModule.UIControls number UI type
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "edge";
+    }
+
+    static name() {
+        return "Edges";
+    }
+
+    static description() {
+        return "highlights edges at threshold values";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "1D data to detect edges on threshold value"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            color: {
+                default: {type: "color", default: "#fff700", title: "Color: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            threshold: {
+                default: {type: "range_input", default: 50, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            edgeThickness: {
+                default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
+                accepts: (type, instance) => type === "float"
+            },
+        };
+    }
+
+    getFragmentShaderDefinition() {
+        //here we override so we should call super method to include our uniforms
+        return `
+${super.getFragmentShaderDefinition()}
+
+//todo try replace with step function
+float clipToThresholdf_${this.uid}(float value) {
+    //for some reason the condition > 0.02 is crucial to render correctly...
+    if ((value > ${this.threshold.sample('value', 'float')}
+        || close(value, ${this.threshold.sample('value', 'float')}))) return 1.0;
+    return 0.0;
+}
+
+//todo try replace with step function
+int clipToThresholdi_${this.uid}(float value) {
+     //for some reason the condition > 0.02 is crucial to render correctly...
+    if ((value > ${this.threshold.sample('value', 'float')}
+        || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
+    return 0;
+}`;
+    }
+
+    getFragmentShaderExecution() {
+        return `
+    float mid = ${this.sampleChannel('v_texture_coords')};
+    if (mid < 1e-6) return vec4(.0);
+    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
+
+    float u = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y)')};
+    float b = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y)')};
+    float l = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - dist)')};
+    float r = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + dist)')};
+    int counter = clipToThresholdi_${this.uid}(u) +
+                clipToThresholdi_${this.uid}(b) +
+                clipToThresholdi_${this.uid}(l) +
+                clipToThresholdi_${this.uid}(r);
+    if (counter == 2 || counter == 3) {  //two or three points hit the region
+        return vec4(${this.color.sample()}, 1.0); //border
+    }
+
+    float u2 = ${this.sampleChannel('vec2(v_texture_coords.x - 3.0*dist, v_texture_coords.y)')};
+    float b2 = ${this.sampleChannel('vec2(v_texture_coords.x + 3.0*dist, v_texture_coords.y)')};
+    float l2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - 3.0*dist)')};
+    float r2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + 3.0*dist)')};
+
+    float mid2 = clipToThresholdf_${this.uid}(mid);
+    float dx = min(clipToThresholdf_${this.uid}(u2) - mid2, clipToThresholdf_${this.uid}(b2) - mid2);
+    float dy = min(clipToThresholdf_${this.uid}(l2) - mid2, clipToThresholdf_${this.uid}(r2) - mid2);
+    if ((dx < -0.5 || dy < -0.5)) {
+        return vec4(${this.color.sample()} * 0.7, .7); //inner border
+    }
     return vec4(.0);
 `;
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Heatmap Shader
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "heatmap";
+    }
+
+    static name() {
+        return "Heatmap";
+    }
+
+    static description() {
+        return "encode data values in opacity";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "The value to map to opacity"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                default: "r"
+            },
+            color: {
+                default: {type: "color", default: "#fff700", title: "Color: "},
+                accepts: (type, instance) => type === "vec3",
+            },
+            threshold: {
+                default: {type: "range_input", default: 1, min: 1, max: 100, step: 1, title: "Threshold: "},
+                accepts: (type, instance) => type === "float"
+            },
+            inverse: {
+                default: {type: "bool", default: false, title: "Invert: "},
+                accepts: (type, instance) => type === "bool"
+            }
+        };
+    }
+
+    getFragmentShaderExecution() {
+        return `
+float chan = ${this.sampleChannel('v_texture_coords')};
+bool shows = chan >= ${this.threshold.sample('chan', 'float')};
+if (${this.inverse.sample()}) {
+    if (!shows) {
+        shows = true;
+        chan = 1.0;
+    } else chan = 1.0 - chan;
+}
+if (shows) return vec4(${this.color.sample('chan', 'float')}, chan);
+return vec4(.0);
+`;
+    }
+});
+
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Sobel shader
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "sobel";
+    }
+
+    static name() {
+        return "Sobel";
+    }
+
+    static description() {
+        return "sobel edge detector";
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 3,
+            description: "Data to detect edges on"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                default: "rgb"
+            }
+        };
+    }
+
+    getFragmentShaderExecution() {
+        return `
+        // Sobel kernel for edge detection
+        float kernelX[9] = float[9](-1.0,  0.0,  1.0,
+                                    -2.0,  0.0,  2.0,
+                                    -1.0,  0.0,  1.0);
+
+        float kernelY[9] = float[9](-1.0, -2.0, -1.0,
+                                     0.0,  0.0,  0.0,
+                                     1.0,  2.0,  1.0);
+
+        vec3 sumX = vec3(0.0);
+        vec3 sumY = vec3(0.0);
+        vec2 texelSize = vec2(1.0) / vec2(float(${this.getTextureSize()}.x), float(${this.getTextureSize()}.y));
+
+        // Sampling 3x3 neighborhood
+        int idx = 0;
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                vec3 sampleColor = ${this.sampleChannel('v_texture_coords + vec2(float(x), float(y)) * texelSize')};
+                sumX += sampleColor * kernelX[idx];
+                sumY += sampleColor * kernelY[idx];
+                idx++;
+            }
         }
-    };
 
-    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.HeatmapLayer);
+        float edgeStrength = length(sumX) + length(sumY);
+        return vec4(vec3(edgeStrength), 1.0);
+`;
+    }
+});
 
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Identity shader
+ *
+ * data reference must contain one index to the data to render using identity
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    construct(options, dataReferences) {
+        //todo supply options clone? options changes are propagated and then break things
+
+        const ShaderClass = $.FlexRenderer.ShaderMediator.getClass(options.seriesRenderer);
+        if (!ShaderClass) {
+            //todo better way of throwing errors to show users
+            throw "";
+        }
+        this._renderer = new ShaderClass(`series_${this.uid}`, {
+            layer: this.__visualizationLayer,
+            webgl: this.webglContext,
+            invalidate: this.invalidate,
+            rebuild: this._rebuild,
+            refetch: this._refetch
+        });
+        this.series = options.series;
+        if (!this.series) {
+            //todo err
+            this.series = [];
+        }
+
+        //parse and correct timeline data
+        let timeline = options.timeline;
+        if (typeof timeline !== "object") {
+            timeline = {type: timeline};
+        }
+        if (!timeline.step) {
+            timeline.step = 1;
+        }
+        const seriesLength = this.series.length;
+        if (timeline.min % timeline.step !== 0) {
+            timeline.min = 0;
+        }
+        if ((timeline.default - timeline.min) % timeline.step !== 0) {
+            timeline.default = timeline.min;
+        }
+        //min is also used as a valid selection: +1
+        const requestedLength = (timeline.max - timeline.min) / timeline.step + 1;
+        if (requestedLength !== seriesLength) {
+            timeline.max = (seriesLength - 1) * timeline.step + timeline.min;
+        }
+
+        this._dataReferences = dataReferences;
+        super.construct(options, dataReferences);
+        this._renderer.construct(options, dataReferences);
+    }
+
+    static type() {
+        return "time-series";
+    }
+
+    static name() {
+        return "Time Series";
+    }
+
+    static description() {
+        return "internally use different shader to render one of chosen elements";
+    }
+
+    static get customParams() {
+        return {
+            seriesRenderer: {
+                usage: "Specify shader type to use in this series. Attach the shader properties as you would normally do with your desired shader.",
+                default: "identity"
+            },
+            series: {
+                //todo allow using the same data in different channels etc.. now the data must be distinct
+                usage: "Specify data indexes for the series (as if you've specified dataReferences). The dataReferences is expected to be array with single number, the starting data reference. For now, the data indexes must be unique.",
+            }
+        };
+    }
+
+    static get defaultControls() {
+        return {
+            timeline: {
+                default: {title: "Timeline: "},
+                accepts: (type, instance) => type === "float",
+                required: {type: "range_input"}
+            },
+            opacity: false
+        };
+    }
+
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => true,
+            description: "render selected data source by underlying shader"
+        }];
+    }
+
+    getFragmentShaderDefinition() {
+
+        return `
+${super.getFragmentShaderDefinition()}
+${this._renderer.getFragmentShaderDefinition()}`;
+    }
+
+    getFragmentShaderExecution() {
+        return this._renderer.getFragmentShaderExecution();
+    }
+
+    glLoaded(program, gl) {
+        super.glLoaded(program, gl);
+        this._renderer.glLoaded(program, gl);
+    }
+
+    glDrawing(program, gl) {
+        super.glDrawing(program, gl);
+        this._renderer.glDrawing(program, gl);
+    }
+
+    init() {
+        super.init();
+        this._renderer.init();
+
+        const _this = this;
+        this.timeline.on('default', (raw, encoded, ctx) => {
+            const value = (Number.parseInt(encoded, 10) - this.timeline.params.min) / _this.timeline.params.step;
+            _this._dataReferences[0] = _this.series[value];
+            _this._refetch();
+        });
+    }
+
+    htmlControls() {
+        return `
+${super.htmlControls()}
+<h4>Rendering as ${this._renderer.constructor.name()}</h4>
+${this._renderer.htmlControls()}`;
+    }
+});
 })(OpenSeadragon);
 
 (function ($) {
@@ -7396,8 +7855,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-09-09
-//! Git commit: --0f76ae9-dirty
+//! Built on 2025-09-22
+//! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -7569,8 +8028,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-09-09
-//! Git commit: --0f76ae9-dirty
+//! Built on 2025-09-22
+//! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
