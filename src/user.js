@@ -14,7 +14,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
         this._id = id;
         this._name = name;
         this._secret = {};
-        $("#user-name").html(name);
+        USER_INTERFACE.TopUserMenu.menu.getTab('user').setTitle(name);
 
         this.icon = icon;
         this.raiseEvent('login', {
@@ -28,7 +28,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
         this._id = null;
         this._name = $.t('user.anonymous');
         this._secret = {};
-        $("#user-name").html(this.name);
+        USER_INTERFACE.TopUserMenu.menu.getTab('user').setTitle(this.name);
         this.icon = null;
         this.secret = null;
         this.raiseEvent('logout', null);
@@ -39,11 +39,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     getSecret(type="jwt") {
-        const value = this._secret && this._secret[type];
-        if (type === "jwt" && value && !value.startsWith("Bearer ")) {
-            return "Bearer " + value;
-        }
-        return value;
+        return this._secret && this._secret[type];
     }
 
     setSecret(secret, type="jwt") {

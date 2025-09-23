@@ -1,16 +1,10 @@
-// ui/classes/components/slideSwitcher.mjs
-import van from "../../vanjs.mjs";
-import {BaseComponent} from "../baseComponent.mjs";
-import {Div} from "../elements/div.mjs";
-import {FAIcon} from "../elements/fa-icon.mjs";
-import {FloatingWindow} from "./floatingWindow.mjs";
-
+const van = globalThis.van;
 const { div, input, label, img, span, button } = van.tags;
 
 /**
  * SlideSwitcherMenu (compact, instant selection; embedded FloatingWindow)
  */
-export class SlideSwitcherMenu extends BaseComponent {
+export class SlideSwitcherMenu extends UI.BaseComponent {
     constructor(options = undefined) {
         super(options);
         this._needsRefresh = true;
@@ -39,7 +33,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             this._toolbarEl = null;
 
             // Floating window host
-            this._fw = new FloatingWindow({
+            this._fw = new UI.FloatingWindow({
                 id: this.windowId,
                 title: this.title,
                 width: this.w,
@@ -49,9 +43,7 @@ export class SlideSwitcherMenu extends BaseComponent {
                 resizable: true,
                 onClose: () => this.options.onClose?.(),
                 onPopout: (w) => this.options.onPopout?.(w),
-            }, new Div({
-                    extraClasses: { body: "card-body p-1 gap-1 flex-1 min-h-0 overflow-hidden" }
-                },
+            }, div({class: "card-body p-1 gap-1 flex-1 min-h-0 overflow-hidden"},
                 (this._toolbarEl = this._renderToolbar()),
                 (this._listEl = this._renderList([])),
             ));
@@ -62,7 +54,6 @@ export class SlideSwitcherMenu extends BaseComponent {
         } else {
             this._fw.focus();
         }
-        if (this._needsRefresh) this.refresh();
     }
 
     close() { this._fw.close(); }
@@ -163,7 +154,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         return div({ class: "flex items-center justify-between gap-2 px-2 py-1 border border-base-300 bg-base-100" },
             // left: tiny title
             div({ class: "flex items-center gap-2 text-sm" },
-                new FAIcon({ name: "fa-images" }).create(),
+                new UI.FAIcon({ name: "fa-images" }).create(),
                 span({ class: "font-semibold" }, this.title),
             ),
             // right: stacked toggle + clear
@@ -214,7 +205,6 @@ export class SlideSwitcherMenu extends BaseComponent {
                     class: "max-w-[86%] max-h-[86%] object-contain select-none pointer-events-none",
                     alt: name,
                     draggable: "false",
-                    onerror: (e) => { e.target.classList.add("opacity-30"); e.target.removeAttribute("src"); },
                 })
             )
         );
@@ -222,32 +212,57 @@ export class SlideSwitcherMenu extends BaseComponent {
         // --- Preview URL fetch (unchanged) ---
         const imagePath = this.data[bg.dataReference];
         const eventArgs = {
+            // todo also support viz server ...
             server: APPLICATION_CONTEXT.env.client.image_group_server,
             usesCustomProtocol: !!bg.protocolPreview,
             image: imagePath,
             imagePreview: null,
         };
+
+        const viewer = this._getViewerForBg(idx);
         VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs).then(() => {
-            if (!eventArgs.imagePreview) {
-                // todo support tileSource argument
-                const previewUrlmaker = new Function("path,data", "return " +
-                    (bg.protocolPreview || APPLICATION_CONTEXT.env.client.image_group_preview));
-                eventArgs.imagePreview = previewUrlmaker(eventArgs.server, imagePath);
-            } else if (eventArgs.imagePreview instanceof Image) {
+
+            if (eventArgs.imagePreview instanceof Image) {
                 const imageEl = eventArgs.imagePreview;
                 imageEl.classList.add("max-w-[86%]", "max-h-[86%]", "object-contain", "select-none");
                 imageEl.id = `${this.windowId}-thumb-${idx}`;
+                document.getElementById(`${this.windowId}-thumb-${idx}`).replaceWith(imageEl);
                 return;
-            } else if (typeof eventArgs.imagePreview !== "string" && !(eventArgs.imagePreview instanceof Image)) {
-                eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
-                imageEl.onload = imageEl.onerror = () => URL.revokeObjectURL(eventArgs.imagePreview);
             }
+
             const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
-            if (imageEl) imageEl.src = eventArgs.imagePreview;
+            if (imageEl) {
+                imageEl.onload = () => URL.revokeObjectURL(eventArgs.imagePreview);
+                imageEl.onerror = e => {
+                    e.target.classList.add("opacity-30");
+                    e.target.removeAttribute("src");
+                    if (eventArgs.needsRevoke) {
+                        URL.revokeObjectURL(eventArgs.imagePreview);
+                    }
+                };
+
+                if (!eventArgs.imagePreview) {
+                    viewer.tools.navigatorThumbnail(bg, {
+                        width: 250, height: 250,
+                    }).then(ctx => {
+                        imageEl.src = ctx.canvas.toDataURL();
+                    }).catch(e => {
+                        console.error(e);
+                        // todo better preview
+                        const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
+                        imageEl.src = "unknown";
+                    });
+                } else if (typeof eventArgs.imagePreview === "string") {
+                    imageEl.src = eventArgs.imagePreview;
+                } else {
+                    // todo not very smart fallback
+                    eventArgs.needsRevoke = true;
+                    eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
+                    imageEl.src = eventArgs.imagePreview;
+                }
+            }
         });
 
-        // --- Existing viewer/link controls ---
-        const viewer = this._getViewerForBg(idx);
         const linked = this._isLinked(viewer);
 
         const controls = div({ class: "flex items-center gap-2 p-2" },
@@ -269,7 +284,7 @@ export class SlideSwitcherMenu extends BaseComponent {
                     ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
                     : "Not open",
                 onclick: (e) => this._onToggleLink(idx, e)
-            }, new FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
+            }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
         );
 
         // --- New action buttons (lock, visibility, center, fit, remove) ---
@@ -346,7 +361,7 @@ export class SlideSwitcherMenu extends BaseComponent {
             : "Not open";
         btn.disabled = !viewer;
         btn.innerHTML = "";  // replace icon
-        btn.appendChild(new FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
+        btn.appendChild(new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
     }
     _refreshAllLinkIcons() {
         // Call this after list render, after selection changes, and after viewer open

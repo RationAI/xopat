@@ -35,8 +35,10 @@ export class NavigatorSideMenu extends BaseComponent {
      * @param {boolean} isError
      */
     setTitle(title, isError) {
-        this.title.textContent = title;
-        this.title.title = title;
+        // todo ugly
+        const domNode = document.getElementById(this.id + "-title");
+        domNode.textContent = title;
+        domNode.title = title;
         // todo style error-container using tailwind?
         if (isError) {
             this.title.setClass("err", "error-container");

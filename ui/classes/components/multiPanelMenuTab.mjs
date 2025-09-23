@@ -116,6 +116,15 @@ class MultiPanelMenuTab extends MenuTab {
         return [undefined, this.mainDiv];
     }
 
+    setTitle(title) {
+        if (this.headerButton) {
+            if (this.openButton) {
+                this.openButton.children[1].title = title;
+                this.openButton.children[1].innerHTML = title;
+            }
+        }
+    }
+
     removeTab() {
         this.contentDiv.remove();
         this.openButton.remove();

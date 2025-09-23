@@ -17,7 +17,6 @@
      *   path: string,
      *   image_group_server: string,
      *   image_group_protocol: string,
-     *   image_group_preview: string,
      *   data_group_server: string,
      *   data_group_protocol: string,
      *   headers: ?Object,
@@ -47,7 +46,6 @@
              */
             "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`", //one-liner expression
-            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`", //one-liner expression
             /*
                Data Group Server for visualized data, specifies the server and protocol as javascript one-liner
                resulting in a string. Available are 'path' (image server URL) and 'data'
@@ -78,7 +76,6 @@
             "path": null,
             "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
-            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
             "headers": {},
@@ -228,7 +225,7 @@
             //"env": "",
             "loader": ["store.js", "loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
-            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
+            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js", "tile-source.js"]
         },
         "ui": {
             "van": ["index.js"]

@@ -61,6 +61,11 @@ to the respective elements: data / background / visualization arrays.
 Spec objects define what are active indexes to open. They are sometimes undefined - in that case,
 the initialization parses this information from the session information.
 
+#### async `after-open` | e: {}
+This event is fired once all viewers are opened and set up. There is no data since
+you can read everything from the xOpat API, as the state was updated to reflect the current viewing session.
+This event fires like ``before-open`` every time the whole viewing session is changed.
+
 #### `viewer-create` | e: `{uniqueId: string, index: Number, viewer: OpenSeadragon.Viewer}
 New viewer is added at position ``index`` in the screen.
 
@@ -75,8 +80,8 @@ so that the index is occupied if ``viewers.length > index``.
 #### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
 Fired when the UI wants to know what is a slide _preview url_, which can be constructed
 from ``server`` on which `image` slide identification lives. If `imagePreview`
-is not set to be a valid string or blob value by the event handlers, it is created automatically based on server and image
-values using the ``image_group_preview`` configuration specification.
+is not set to be a valid string or blob value by the event handlers, it is created automatically 
+from the available data in the viewer.
 
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).

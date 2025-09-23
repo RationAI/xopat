@@ -101,6 +101,8 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
     - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
     - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`tileSource` - a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized
+      - the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads using events
     - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
     - [O]`microns` - size of pixel in micrometers, default `undefined`,
     - [O]`micronsX` - horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y

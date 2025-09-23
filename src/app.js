@@ -174,7 +174,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     //Prepare xopat core loading utilities and interfaces
-    const runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
+    let runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
     /**
      * @namespace APPLICATION_CONTEXT
@@ -574,11 +574,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * If arg is null => erase (set option to undefined).
      * If arg is undefined => keep the stored option.
      *
+     * Modifies the viewer session configuration accordingly. Used mainly internally
+     * by openViewerWith(...)
+     *
      * @param {Number|Array<number>|undefined|null} [bgSpec=undefined]
      * @param {Number|Array<number>|undefined|null} [vizSpec=undefined]
      * @param {{deriveOverlayFromBackgroundGoals?: boolean}} opts
      *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex
      *        (array in non-stacked; single number in stacked).
+     * @return {boolean} true if something needed change
      */
     window.UTILITIES.parseBackgroundAndGoal = function (
         bgSpec = undefined,
@@ -597,7 +601,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         // Normalize an index or array of indices; preserves explicit undefined entries (via null/undefined)
         const normalizeIndexArg = (arg, max) => {
-            if (arg == null) return undefined; // null or undefined => undefined
+            if (arg == null) return undefined;
             if (Array.isArray(arg)) {
                 return arg.map(v => normIndexValue(v, max));
             }
@@ -607,9 +611,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         // From a bgArg produce: undefined | number | number[]
         const selectBackgroundIndices = (bgArg, bgCount) => {
             const norm = normalizeIndexArg(bgArg, bgCount);
-            if (norm === undefined) return undefined; // no backgrounds requested
+            if (norm === undefined) return undefined;
             if (Array.isArray(norm)) {
-                // drop undefined & duplicates while preserving order
                 const seen = new Set();
                 const out = [];
                 for (const v of norm) {
@@ -685,7 +688,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         let updated = false;
 
         // ---------- Handle bgSpec (null => erase; undefined => keep; value => set) ----------
-        let effectiveBg;          // what we'll treat as the current bg selection (number|array|undefined)
+        let effectiveBg;
         if (bgSpec === null) {
             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", undefined);
             updated = true;
@@ -822,87 +825,90 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         handleSyntheticEventFinishWithValidData(viewer, 0, 1);
     }
 
-    let initialized = false;
     function handleSyntheticEventFinishWithValidData(viewer, referenceImage, layerPosition) {
-        //Todo once rewritten, treat always low level item as the reference layer (index == 0)
+        try {
+            //Todo once rewritten, treat always low level item as the reference layer (index == 0)
 
-        //the viewer scales differently-sized layers sich that the biggest rules the visualization
-        //this is the largest image layer, or possibly the rendering layers layer
-        const tiledImage = viewer.world.getItemAt(referenceImage);
-        const imageData = tiledImage?.getConfig();
+            //the viewer scales differently-sized layers sich that the biggest rules the visualization
+            //this is the largest image layer, or possibly the rendering layers layer
+            const tiledImage = viewer.world.getItemAt(referenceImage);
+            const imageData = tiledImage?.getConfig();
 
-        if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-            const name = imageData.name || UTILITIES.fileNameFromPath(
-                APPLICATION_CONTEXT.config.data[imageData.dataReference]
-            );
-            viewer.getMenu().getNavigatorTab().setTitle(name, false);
-        } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
-            const name = UTILITIES.fileNameFromPath(
-                APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
-                || 'unknown'
-            );
-            viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', {slide: name}), true);
-        } else if (!imageData) {
-            viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
-        } else {
-            const name = imageData.name || $.t('common.Image');
-            viewer.getMenu().getNavigatorTab().setTitle(name, false);
-        }
+            if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
+                const name = imageData.name || UTILITIES.fileNameFromPath(
+                    APPLICATION_CONTEXT.config.data[imageData.dataReference]
+                );
+                viewer.getMenu().getNavigatorTab().setTitle(name, false);
+            } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
+                const name = UTILITIES.fileNameFromPath(
+                    APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                    || 'unknown'
+                );
+                viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', {slide: name}), true);
+            } else if (!imageData) {
+                viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
+            } else {
+                const name = imageData.name || $.t('common.Image');
+                viewer.getMenu().getNavigatorTab().setTitle(name, false);
+            }
 
-        if (imageData) {
-            const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
-            if (!hasMicrons || !hasDimMicrons) {
-                const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
-                if (sourceMeta) {
-                    if (!hasMicrons) imageData.microns = sourceMeta.microns;
-                    if (!hasDimMicrons) {
-                        imageData.micronsX = sourceMeta.micronsX;
-                        imageData.micronsY = sourceMeta.micronsY;
+            if (imageData) {
+                const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
+                if (!hasMicrons || !hasDimMicrons) {
+                    const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
+                    if (sourceMeta) {
+                        if (!hasMicrons) imageData.microns = sourceMeta.microns;
+                        if (!hasDimMicrons) {
+                            imageData.micronsX = sourceMeta.micronsX;
+                            imageData.micronsY = sourceMeta.micronsY;
+                        }
                     }
                 }
             }
-        }
 
-        UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
-        viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
+            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
+            viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
-        const eventOpts = {};
+            const eventOpts = {};
 
-        if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
-            let layerWorldItem = viewer.world.getItemAt(layerPosition);
-            const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
-            if (layerWorldItem) {
-                const async = APPLICATION_CONTEXT.getOption("fetchAsync");
-                do {
-                    // todo legacy, remove setFormat support....
-                    if (layerWorldItem.source.setFormat) {
-                        const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
-                        const lossless = activeVis.lossless;
-                        const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
-                        layerWorldItem.source.setFormat(format);
-                    }
-                    if (layerWorldItem.source.requireLossless) {
-                        layerWorldItem.source.requireLossless(activeVis.lossless);
-                    }
-                    layerWorldItem = viewer.world.getItemAt(++layerPosition);
-                } while (layerWorldItem);
+            if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
+                let layerWorldItem = viewer.world.getItemAt(layerPosition);
+                const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
+                if (layerWorldItem) {
+                    const async = APPLICATION_CONTEXT.getOption("fetchAsync");
+                    do {
+                        // todo legacy, remove setFormat support....
+                        if (layerWorldItem.source.setFormat) {
+                            const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
+                            const lossless = activeVis.lossless;
+                            const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
+                            layerWorldItem.source.setFormat(format);
+                        }
+                        if (layerWorldItem.source.requireLossless) {
+                            layerWorldItem.source.requireLossless(activeVis.lossless);
+                        }
+                        layerWorldItem = viewer.world.getItemAt(++layerPosition);
+                    } while (layerWorldItem);
 
 
-                viewer.getMenu().getShadersTab().updateVisualizationList(
-                    APPLICATION_CONTEXT.config.visualizations,
-                    // todo is this accurate?
-                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex")
-                );
-            } else {
-                //todo action page reload
-                Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
-                eventOpts.error = $.t('messages.overlaysDisabled');
+                    viewer.getMenu().getShadersTab().updateVisualizationList(
+                        APPLICATION_CONTEXT.config.visualizations,
+                        // todo is this accurate?
+                        APPLICATION_CONTEXT.getOption("activeVisualizationIndex")
+                    );
+                } else {
+                    //todo action page reload
+                    Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
+                    eventOpts.error = $.t('messages.overlaysDisabled');
+                }
             }
+        } catch (e) {
+            console.error(e);
         }
 
-        if (!initialized) {
-            initialized = true;
+        if (runLoader) {
             runLoader();
+            runLoader = null;
         }
 
         if (!viewer.__initialized) {
@@ -1006,20 +1012,22 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             /*------------ Initialization of UI -----------------------*/
             /*---------------------------------------------------------*/
 
+            const event = {
+                data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
+            };
+
             /**
              * First loading of the viewer from a clean state.
              * @memberOf VIEWER_MANAGER
              * @event before-first-open
              */
-            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', {
-                data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
-            }).catch(e =>
+            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', event).catch(e =>
                 {
                     //todo something meaningful
                     console.error(e);
                 }
             );
-            this.openViewerWith(data, background, visualizations || []);
+            this.openViewerWith(event.data, event.background || [], event.visualizations || []);
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1134,6 +1142,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             VM.delete(i);
         }
 
+        // todo duplicated in OSD tools when creating tiled image, make this usable elsewhere
         // Helper: build a tileSource URL for a background entry
         const bgUrlFromEntry = (bgEntry) => {
             if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
@@ -1273,6 +1282,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             let shaderConfigMap = {};
             let numVisLayersAtEnd = 0;
 
+            // Configure renderer (background layers first)
+            const renderOutput = {};
+            for (let i = 0; i < openedBase.length; i++) {
+                const bgRef = openedBase[i];
+                // todo this code is duplicated in tools, once adding support for shaders, create api from it
+                renderOutput[bgRef.id] = {
+                    id: bgRef.id,
+                    type: "identity",
+                    tiledImages: [i],
+                    name: bgRef.name || cfg.data[bgRef.dataReference]
+                };
+            }
+
             if (renderingWithWebGL) {
                 try {
                     UTILITIES.testRendering();
@@ -1321,23 +1343,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
 
                 numVisLayersAtEnd = counter - lastBgIndex;
-
-                // Configure renderer (background layers first)
-                const renderOutput = {};
-                for (let i = 0; i < openedBase.length; i++) {
-                    const bgRef = openedBase[i];
-                    renderOutput[`bg_${i}`] = {
-                        type: "identity",
-                        tiledImages: [i],
-                        name: bgRef.name || cfg.data[bgRef.dataReference]
-                    };
-                }
                 Object.assign(renderOutput, shaderConfigMap);
-                UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+            }
 
-                if (viewer.drawer && viewer.drawer.overrideConfigureAll) {
-                    viewer.drawer.overrideConfigureAll(renderOutput);
-                }
+            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+            if (viewer.drawer && viewer.drawer.overrideConfigureAll) {
+                viewer.drawer.overrideConfigureAll(renderOutput);
             }
 
             // (D) Finally add the images to the viewer world
@@ -1388,14 +1399,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         );
 
         await Promise.allSettled(tasks).then(() => {
-            USER_INTERFACE.SlidesMenu.refresh();
-            // todo open?
-            USER_INTERFACE.SlidesMenu.open();
-
             clearTimeout(loadTooLongTimeout);
             USER_INTERFACE.Loading.show(false);
-            // select first viewer as active if needed
+            // todo: maybe dont do this, only if no active viewer is set
             VM.setActive(0);
+            // todo a bit ugly, fix later
+            setTimeout(() => {
+                const vv = VIEWER_MANAGER.viewers[VIEWER_MANAGER.viewers.length - 1];
+                if (!vv.isOpen()) {
+                    vv.addOnceHandler('open', e => {
+                        VIEWER_MANAGER.raiseEvent('after-open');
+                    });
+                } else {
+                    VIEWER_MANAGER.raiseEvent('after-open');
+                }
+            });
         }).catch((e) => {
             console.error("Open failed:", e);
             clearTimeout(loadTooLongTimeout);

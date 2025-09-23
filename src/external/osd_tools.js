@@ -120,10 +120,8 @@ OpenSeadragon.Tools = class {
     screenshot(toImage, size = {}, focus=undefined) {
         return this.constructor.screenshot(this.viewer, toImage, size, focus);
     }
-    static screenshot(context, toImage, size = {}, focus=undefined) {
-        if (context.drawer.canvas.width < 1) return undefined;
-        let drawCtx = context.drawer.context;
-        if (!drawCtx) throw "OpenSeadragon must render with canvasses!";
+    static screenshot(viewer, toImage, size = {}, focus=undefined) {
+        if (viewer.drawer.canvas.width < 1) return undefined;
 
         if (!focus) focus = new OpenSeadragon.Rect(0, 0, window.innerWidth, window.innerHeight);
         size.width = size.width || focus.width;
@@ -132,251 +130,287 @@ OpenSeadragon.Tools = class {
         if (focus.width < focus.height) focus.width *= ar;
         else focus.height /= ar;
 
-        if (toImage) {
-            let data = drawCtx.getImageData(focus.x,focus.y, focus.width, focus.height);
-            let canvas = document.createElement('canvas'),
-                ctx = canvas.getContext('2d');
-            canvas.width = size.width;
-            canvas.height = size.height;
-            ctx.putImageData(data, 0, 0);
+        let canvas = document.createElement('canvas'),
+            ctx = canvas.getContext('2d');
+        canvas.width = size.width;
+        canvas.height = size.height;
+        ctx.drawImage(viewer.drawer.canvas, focus.x, focus.y, size.width, size.height, 0, 0, size.width, size.height);
 
+        if (toImage) {
             let img = document.createElement("img");
             img.src = canvas.toDataURL();
             return img;
         }
-        return drawCtx;
+        return ctx;
     }
 
     /**
-     * Create region screenshot, the screenshot CAN BE ANYWHERE
-     * @param {object} region region of interest in the image pixel space
-     * @param {number} region.x
-     * @param {number} region.y
-     * @param {number} region.width
-     * @param {number} region.height
-     * @param {object} targetSize desired size (should have the same AR -aspect ratio- as region),
-     *  the result tries to find a level on which the region
-     *  is closest in size to the desired size
-     * @param {number} targetSize.width
-     * @param {number} targetSize.height
-     * @param {function} onfinish function that is called on screenshot finish, argument is a canvas with resulting image
-     * @param {object} [outputSize=targetSize] output image size, defaults to target size
-     * @param {number} outputSize.width
-     * @param {number} outputSize.height
+     * Create thumbnail screenshot
+     * @param {BackgroundItem} config bg config
+     * @param {object} size the output size
+     * @param {number} size.width
+     * @param {number} size.height
+     * @return {Promise<CanvasRenderingContext2D>}
      */
-    offlineScreenshot(region, targetSize, onfinish, outputSize=targetSize) {
-        let referencedTiledImage = this.viewer.scalebar.getReferencedTiledImage();
-        let referencedSource = referencedTiledImage.source;
+    navigatorThumbnail(config, size = {}) {
+        return this.constructor.navigatorThumbnail(this.viewer, config, size);
+    }
+    static navigatorThumbnail(viewer, bgConfig, size = {}) {
+        if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
+        // todo works for background right now only -> check how we can extend for also viz layers
+        if (!bgConfig.id) {
+            console.error("Thumbnail can be created for now only from background configurations!");
+            return Promise.reject("No background configuration provided!");
+        }
 
-        function download(tiledImage, level, x, y, onload, onfail) {
-            //copied over from tileSource.js
-            //todo consider using  tiledImage._getTile(...)
-            let tileSource = tiledImage.source;
-            let numTiles = tileSource.getNumTiles( level );
-            let xMod    = ( numTiles.x + ( x % numTiles.x ) ) % numTiles.x;
-            let yMod    = ( numTiles.y + ( y % numTiles.y ) ) % numTiles.y;
-            let bounds  = tiledImage.getTileBounds( level, x, y );
-            let sourceBounds = tileSource.getTileBounds( level, xMod, yMod, true );
-            let exists  = tileSource.tileExists( level, xMod, yMod );
-            let url     = tileSource.getTileUrl( level, xMod, yMod );
-            let post    = tileSource.getTilePostData( level, xMod, yMod );
-            let ajaxHeaders;
+        // Keep single offscreen renderer between apps
+        let drawer;
+        viewer.__ofscreenRender = (drawer = viewer.__ofscreenRender || OpenSeadragon.makeStandaloneFlexDrawer(viewer));
+        if (viewer.navigator) {
+            viewer = viewer.navigator;
+        }
+        
+        drawer.renderer.setDimensions(0, 0, viewer.drawer.canvas.width, viewer.drawer.canvas.height, 1);
+        let config = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id) || {
+            id: bgConfig.id,
+            type: "identity",
+            tiledImages: [-1],
+            name: bgConfig.name || APPLICATION_CONTEXT.config.data[bgConfig.dataReference]
+        };
+        drawer.overrideConfigureAll({[bgConfig.id]: config});
 
-            // Headers are only applicable if loadTilesWithAjax is set
-            if (tiledImage.loadTilesWithAjax) {
-                ajaxHeaders = tileSource.getTileAjaxHeaders( level, xMod, yMod );
-                // Combine tile AJAX headers with tiled image AJAX headers (if applicable)
-                if (OpenSeadragon.isPlainObject(tiledImage.ajaxHeaders)) {
-                    ajaxHeaders = $.extend({}, tiledImage.ajaxHeaders, ajaxHeaders);
+        const bgUrlFromEntry = (bgEntry) => {
+            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
+                return bgEntry.tileSource;
+            }
+            const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const make = new Function("path,data", "return " + proto);
+            const d = APPLICATION_CONTEXT.config.data[bgEntry.dataReference];
+            return make(APPLICATION_CONTEXT.env.client.image_group_server, d);
+        };
+
+        return new Promise((resolve, reject) => {
+            let exited = false;
+            let timeout;
+
+            let loadCount = 0;
+            const images = [];
+            for (let idx of config.tiledImages) {
+                loadCount++;
+                if (idx === -1) {
+                    loadCount++;
+                    viewer.createTiledImage({tileSource: bgUrlFromEntry(bgConfig),
+                        success: e => {
+                            if (exited) return;
+                            e.item.__sshotIndex = images.length;
+                            e.item.__synthetic = true;
+                            // simply download the current tiles
+                            e.item.update(true);
+                            e.item.whenFullyLoaded(() => {
+                                images.push(e.item);
+
+                                if (loadCount < 1) {
+                                    loadCount--;
+                                    clearTimeout(timeout);
+                                    resolve(images);
+                                }
+                            });
+                        }, error: e => {
+                            if (exited) return;
+                            loadCount--;
+                            images.error = e;
+
+                            if (loadCount < 1) {
+                                clearTimeout(timeout);
+                                resolve(images);
+                            }
+                        }}
+                    );
+                } else {
+                    const item = viewer.world.getItemAt(idx);
+                    item.whenFullyLoaded(() => {
+                        images.push(item);
+                        loadCount--;
+                        item.__sshotIndex = images.length;
+
+                        if (loadCount < 1) {
+                            clearTimeout(timeout);
+                            resolve(images);
+                        }
+                    });
                 }
+            }
+
+            if (loadCount < 1) {
+                resolve(images);
             } else {
-                ajaxHeaders = null;
+                timeout = setTimeout(() => {
+                    exited = true;
+                    reject("Failed to retrieve tiled images and their tiles before timeout.");
+                }, 30000);
+            }
+        }).then(async images => {
+            // todo check images are properly freed if created...
+            if (images.error) {
+                throw images.error;
             }
 
-            let tile = new OpenSeadragon.Tile(
-                level,
-                x,
-                y,
-                bounds,
-                exists,
-                url,
-                undefined,
-                tiledImage.loadTilesWithAjax,
-                ajaxHeaders,
-                sourceBounds,
-                post,
-                tileSource.getTileHashKey(level, xMod, yMod, url, ajaxHeaders, post)
-            );
+            const originalTiledImages = config.tiledImages;
+            config.tiledImages = images.map(i => i.__sshotIndex);
 
-            tile.loading = true;
-            tiledImage._imageLoader.addJob({
-                src: tile.getUrl(),
-                tile: tile,
-                source: tiledImage.source,
-                postData: tile.postData,
-                loadWithAjax: tile.loadWithAjax,
-                ajaxHeaders: tile.ajaxHeaders,
-                crossOriginPolicy: tiledImage.crossOriginPolicy,
-                ajaxWithCredentials: tiledImage.ajaxWithCredentials,
-                callback: function( data, errorMsg, tileRequest ){
-                    tile.loading = false;
-                    if ( !data ) {
-                        tile.exists = false;
-                        onfail(data, tile);
-                        return;
-                    }
-                    tile.tiledImage = tiledImage;
-                    onload(data, tile);
-                },
-                abort: function() {
-                    tile.loading = false;
-                    onfail(data, tile);
-                }
+            const bounds = viewer.viewport.getHomeBounds();
+            await drawer.draw(images, {
+                bounds: bounds,
+                center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                rotation: 0,
+                zoom: 1.0 / bounds.width,
             });
-        }
+            config.tiledImages = originalTiledImages;
 
-        function buildImageForLayer(tiledImage, region, level, onBuilt) {
-            let source = tiledImage.source,
-                viewportX = region.x / referencedSource.width,
-                viewportY = region.y / referencedSource.width,
-                viewportXAndWidth = (region.x+region.width-1) / referencedSource.width,
-                viewportYAdnHeight = (region.y+region.height-1) / referencedSource.width; //minus 1 to avoid next tile if not needed
-
-            let tileXY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportY)),
-                tileXWY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportY)),
-                tileXYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportYAdnHeight)),
-                tileXWYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportYAdnHeight));
-
-            let scale = referencedSource.getLevelScale(level),
-                tileWidth = source.getTileWidth(level),
-                tileHeight = source.getTileHeight(level),
-                x = Math.floor(region.x * scale),
-                y = Math.floor(region.y * scale),
-                w = Math.floor(region.width * scale),
-                h = Math.floor(region.height * scale),
-                canvas = document.createElement('canvas'),
-                c2d = canvas.getContext('2d');
-
-            canvas.width = w;
-            canvas.height = h;
-
-            function draw(data, tile) {
-                let sx = tileWidth * tile.x - x, sy = tileHeight * tile.y - y,
-                    sDx = 0, sDy = 0,
-                    dw = tile.sourceBounds.width, dh = tile.sourceBounds.height;
-
-                if (sx < 0) { //tile above rendering area
-                    dw += sx;
-                    sDx = -sx;
-                    sx = 0;
-                }
-                if (sDy < 0) {
-                    dh += sy;
-                    sDy = -sy;
-                    sy = 0;
-                }
-
-                //prepares all underlying workings
-                tile.setCache(data, tile.cacheKey);
-                const canvas = tile.getCanvasContext ? tile.getCanvasContext()?.canvas : tile.getImage();
-                c2d.drawImage(canvas, sDx, sDy, dw, dh, sx, sy, dw, dh);
-
-                //frees the unused tile
-                //TODO allow destruction: source.destroyTileCache(cache);
-                finish();
-            }
-
-            function fill(data, tile) {
-                console.log("aborted", data);
-                finish();
-            }
-
-            function finish() {
-                count--;
-                if (count === 0) {
-                    //todo draw annotation or just the rectangle...? maybe add padding first now we just render the region of interest
-                    // c2d.lineWidth = 3;
-                    // c2d.rect(1, 1, w-1, h-1);
-                    // c2d.stroke();
-                    onBuilt(canvas);
-                }
-            }
-
-            //todo check this more programatically by comparing necessary coords
-            let count = 4;
-            download(tiledImage, level, tileXY.x, tileXY.y, draw, fill);
-            if (tileXY.x !== tileXWY.x) download(tiledImage, level, tileXWY.x, tileXWY.y, draw, fill);
-            else count--;
-            if (tileXY.y !== tileXYH.y) download(tiledImage, level, tileXYH.x, tileXYH.y, draw, fill);
-            else count--;
-            //being forced to download all means diagonally too
-            if (count === 4) download(tiledImage, level, tileXWYH.x, tileXWYH.y, draw, fill);
-            else count--;
-        }
-
-        let canvasCache = {};
-
-        const itemCount = 1; //VIEWER.world.getItemCount(); todo not working properly across different levels :/
-
-        /**
-         * Problem: should render either the same level (preferred if possible),
-         *  or scale different level so that they overlap correctly
-         */
-
-
-        let steps = itemCount;
-        // let level = Math.min(
-        //     this.constructor._bestLevelForTiledImage(referencedTiledImage, region, targetSize),
-        //     this.viewer.bridge ? this.viewer.bridge.getTiledImage().source.maxLevel : Infinity
-        // );
-        for (let itemIndex = 0; itemIndex < itemCount; itemIndex++) {
-            //todo if not transparent and opacity 1, do not draw previous item
-            const tImage = VIEWER.world.getItemAt(itemIndex);
-            const handler = (index, canvas) => {
-                steps--;
-                canvasCache[index] = canvas;
-
-                if (steps < 1) {
-                    let outputCanvas = document.createElement('canvas'),
-                        c2d = outputCanvas.getContext('2d');
-                    outputCanvas.width = outputSize.width;
-                    outputCanvas.height = outputSize.height;
-
-                    for (let i=0; i < itemCount; i++) {
-                        const c = canvasCache[i];
-                        if (c) c2d.drawImage(c, 0, 0, c.width, c.height);
-                    }
-                    onfinish(outputCanvas);
-                }
-            };
-
-            const level = this.constructor._bestLevelForTiledImage(tImage, region, targetSize);
-            buildImageForLayer(tImage, region, level, handler.bind(null, itemIndex));
-        }
+            let canvas = document.createElement('canvas'),
+                ctx = canvas.getContext('2d');
+            canvas.width = size.width;
+            canvas.height = size.height;
+            ctx.drawImage(drawer.canvas, 0, 0, drawer.canvas.width, drawer.canvas.height, 0, 0, size.width, size.height);
+            return ctx;
+        });
     }
-    static _bestLevelForTiledImage(image, region, targetSize) {
 
-        //best level is found by tile size fit wrt. annotation size
-        function getDiff(source, level) {
-            let scale = source.getLevelScale(level);
+    // /**
+    //  * Create region screenshot, the screenshot CAN BE ANYWHERE
+    //  * @param {object} region region of interest in the image pixel space
+    //  * @param {number} region.x
+    //  * @param {number} region.y
+    //  * @param {number} region.width
+    //  * @param {number} region.height
+    //  * @param {object} targetSize desired size (should have the same AR -aspect ratio- as region),
+    //  *  the result tries to find a level on which the region
+    //  *  is closest in size to the desired size
+    //  * @param {number} targetSize.width
+    //  * @param {number} targetSize.height
+    //  * @param {function} onfinish function that is called on screenshot finish, argument is a canvas with resulting image
+    //  * @param {object} [outputSize=targetSize] output image size, defaults to target size
+    //  * @param {number} outputSize.width
+    //  * @param {number} outputSize.height
+    //  */
+    // offlineScreenshot(region, targetSize, onfinish, outputSize=targetSize) {
+    //     throw new Error("not implemented yet");
+    //     // todo consume a configuration object, and render it -> could be used also for the
 
-            //scale multiplication computes no. of pixels at given pyramid level
-            return Math.min(Math.abs(region.width * scale - targetSize.width),
-                Math.abs(region.height * scale - targetSize.height));
-        }
-
-        let source = image.source,
-            bestLevel = source.maxLevel,
-            d = getDiff(source, bestLevel);
-
-        for (let i = source.maxLevel-1; i >= source.minLevel; i--) {
-            let dd = getDiff(source, i);
-            if (dd > d) break;
-            bestLevel = i;
-            d = dd;
-        }
-        return bestLevel;
-    }
+    //
+    //     let referencedTiledImage = this.viewer.scalebar.getReferencedTiledImage();
+    //
+    //     const batches = {};
+    //     this.viewer.addHandler('tile-loaded', e => {
+    //         if (e.tile in batches) {
+    //             const data = batches[e.tile];
+    //             if (data.timeout) clearTimeout(data.timeout);
+    //             data.onload(e.tile);
+    //         }
+    //     });
+    //
+    //     function download(tiledImage, level, x, y, onload, onfail) {
+    //         const tile = tiledImage._getTile(level, x, y);
+    //         if (!tile.loaded || !tile.loading) {
+    //             batches[tile] = { onload, onfail, timeout: setTimeout(() => {
+    //                     onfail(tile);
+    //                     delete batches[tile].timeout;
+    //                 }, 15000)};
+    //             tiledImage._loadTile(tile, OpenSeadragon.now());
+    //         }
+    //     }
+    //
+    //     function buildImageForLayer(tiledImage, region, level, onBuilt) {
+    //         let source = tiledImage.source,
+    //             viewportX = region.x / source.width,
+    //             viewportY = region.y / source.width,
+    //             viewportXAndWidth = (region.x+region.width-1) / source.width,
+    //             viewportYAdnHeight = (region.y+region.height-1) / source.width; //minus 1 to avoid next tile if not needed
+    //
+    //         let tileXY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportY)),
+    //             tileXWY = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportY)),
+    //             tileXYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportX, viewportYAdnHeight)),
+    //             tileXWYH = source.getTileAtPoint(level, new OpenSeadragon.Point(viewportXAndWidth, viewportYAdnHeight));
+    //
+    //         const onLoad = tile => {
+    //             finish();
+    //         }
+    //
+    //         const onFail = tile => {
+    //             delete batches[tile];
+    //             finish();
+    //         };
+    //
+    //         function finish() {
+    //             count--;
+    //             if (count === 0) {
+    //                 onBuilt();
+    //             }
+    //         }
+    //
+    //         // todo correct zoom based on size
+    //         let count = 4;
+    //         download(tiledImage, level, tileXY.x, tileXY.y, onLoad, onFail);
+    //         if (tileXY.x !== tileXWY.x) download(tiledImage, level, tileXWY.x, tileXWY.y, onLoad, onFail);
+    //         else count--;
+    //         if (tileXY.y !== tileXYH.y) download(tiledImage, level, tileXYH.x, tileXYH.y, onLoad, onFail);
+    //         else count--;
+    //         //being forced to download all means diagonally too
+    //         if (count === 4) download(tiledImage, level, tileXWYH.x, tileXWYH.y, onLoad, onFail);
+    //         else count--;
+    //     }
+    //
+    //     // todo consider multiimage support
+    //     for (let tImage of [referencedTiledImage]) {
+    //         const level = this.constructor._bestLevelForTiledImage(tImage, region, targetSize);
+    //         // todo support multiple images, e.g. fluorescence
+    //         buildImageForLayer(tImage, region, level, () => {
+    //             let drawer;
+    //             this.viewer.__ofscreenRender = (drawer = this.viewer.__ofscreenRender || OpenSeadragon.makeStandaloneFlexDrawer(this.viewer));
+    //             drawer.renderer.setDimensions(0, 0, outputSize.width, outputSize.height, 1);
+    //             const bg = tImage.getConfig("background");
+    //             const config = this.viewer.drawer.renderer.getShaderLayerConfig(bg?.id);
+    //             drawer.overrideConfigureAll({[config.id]: config});
+    //
+    //             const oldHandler = tImage.getTilesToDraw;
+    //             tImage.getTilesToDraw = function() {
+    //                 return Object.keys(batches);
+    //             }
+    //             const bounds = tImage.imageToViewportRectangle(region);
+    //             drawer.draw([tImage], {
+    //                 bounds: bounds,
+    //                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+    //                 rotation: 0,
+    //                 zoom: 1.0 / bounds.width,
+    //             });
+    //             tImage.getTilesToDraw = oldHandler;
+    //             onfinish();
+    //         });
+    //     }
+    // }
+    // static _bestLevelForTiledImage(image, region, targetSize) {
+    //
+    //     //best level is found by tile size fit wrt. annotation size
+    //     function getDiff(source, level) {
+    //         let scale = source.getLevelScale(level);
+    //
+    //         //scale multiplication computes no. of pixels at given pyramid level
+    //         return Math.min(Math.abs(region.width * scale - targetSize.width),
+    //             Math.abs(region.height * scale - targetSize.height));
+    //     }
+    //
+    //     let source = image.source,
+    //         bestLevel = source.maxLevel,
+    //         d = getDiff(source, bestLevel);
+    //
+    //     for (let i = source.maxLevel-1; i >= source.minLevel; i--) {
+    //         let dd = getDiff(source, i);
+    //         if (dd > d) break;
+    //         bestLevel = i;
+    //         d = dd;
+    //     }
+    //     return bestLevel;
+    // }
 
     /**
      * Link the viewer to context-sharing navigation link: all viewers of the same context

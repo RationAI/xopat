@@ -1,0 +1,11 @@
+{
+  "id": "slide-info",
+  "name": "",
+  "author": "",
+  "version": "1.0.0",
+  "description": "",
+  "includes": [
+    "slide-info.mjs"
+  ],
+  "modules": ["menu-pages"]
+}

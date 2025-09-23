@@ -62,10 +62,21 @@ class MenuTab extends BaseComponent {
         }, inIcon, span(inText));
 
         let c = undefined;
-        if (content){
+        if (content) {
             c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
-        };
+        }
         return [b, c];
+    }
+
+    // todo do not force each component having ID
+    setTitle(title) {
+        if (this.headerButton) {
+            let header = document.getElementById(this.headerButton.id);
+            if (header) {
+                header.children[1].title = title;
+                header.children[1].innerHTML = title;
+            }
+        }
     }
 
     removeTab() {
@@ -74,7 +85,7 @@ class MenuTab extends BaseComponent {
         }
         if (this.contentDiv){
             document.getElementById(this.contentDiv.id).remove();
-        };
+        }
     }
 
     focus() {

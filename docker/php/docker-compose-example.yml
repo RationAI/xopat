@@ -15,7 +15,6 @@ services:
                 "path": "/",
                 "image_group_server": "http://localhost:9002",
                 "image_group_protocol": "`$${path}/v3/batch/info?slides=$${data}`",
-                "image_group_preview": "`$${path}/v3/batch/thumbnail/max_size/250/250?slides=$${data}`",
                 "data_group_server": "http://localhost:9002",
                 "data_group_protocol": "`$${path}/v3/batch/info?slides=$${data.join(\",\")}`",
                 "headers": {},

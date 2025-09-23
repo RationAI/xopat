@@ -12,7 +12,6 @@ And works with the env configuration:
 ````json
 "image_group_server": "/wsi-server/", //the server url mapped to host machine localhost at port 8080
 "image_group_protocol": "`${path}v3/slides/${data}/info`", //the server query
-"image_group_preview": "`${path}v3/slides/${data}/thumbnail/max_size/1024/1024`", //the thumbnail query
 ````
 The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XOPAT_ENV` variable.

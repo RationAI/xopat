@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-09-22
+//! Built on 2025-09-23
 //! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -401,7 +401,7 @@
          * @memberof FlexRenderer
          */
         createShaderLayer(id, shaderConfig, copyConfig = false) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
 
             const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
             if (!Shader) {
@@ -461,7 +461,7 @@
         }
 
         getShaderLayer(id) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
             return this._shaders[id];
         }
 
@@ -481,7 +481,7 @@
             if (!order) {
                 this._shadersOrder = null;
             }
-            this._shadersOrder = order.map(this._sanitizeKey);
+            this._shadersOrder = order.map($.FlexRenderer.sanitizeKey);
         }
 
         /**
@@ -501,7 +501,7 @@
          * @memberof FlexRenderer
          */
         removeShader(id) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
             const shader = this._shaders[id];
             if (!shader) {
                 return;
@@ -546,7 +546,7 @@
             this._programImplementations = {};
         }
 
-        _sanitizeKey(key) {
+        static sanitizeKey(key) {
             if (!$.FlexRenderer.idPattern.test(key)) {
                 key = key.replace(/[^0-9a-zA-Z_]/g, '');
                 key = key.replace(/_+/g, '_');
@@ -5980,8 +5980,13 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         /**
          * Draw using FlexRenderer.
          * @param {[TiledImage]} tiledImages array of TiledImage objects to draw
+         * @param {Object} [view=undefined] custom view position if desired
+         * @param view.bounds {OpenSeadragon.Rect} bounds of the viewport
+         * @param view.center {OpenSeadragon.Point} center of the viewport
+         * @param view.rotation {Number} rotation of the viewport
+         * @param view.zoom {Number} zoom of the viewport
          */
-        draw(tiledImages) {
+        draw(tiledImages, view = undefined) {
             // If we did not rebuild yet, avoid rendering - invalid program
             if (this._hasInvalidBuildState()) {
                 this.viewer.forceRedraw();
@@ -5989,7 +5994,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             }
 
             const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
-            let view = {
+            view = view || {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: this.viewport.getRotation(true) * Math.PI / 180,
@@ -6137,7 +6142,8 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 const shader = shaders[shaderID];
                 const config = shader.getConfig();
 
-                // Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+                // TODO Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+                // also when rendering offscreen, the tiled image might be detached
                 const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
                 sources.push({
                     zoom: viewport.zoom,
@@ -6314,9 +6320,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             // SETUP CANVASES
             this._gl = this.renderer.gl;
             this._setupCanvases();
-
-            // Todo not supported:
-            //this.context = this._outputContext; // API required by tests
 
             canvas.width = viewportSize.x;
             canvas.height = viewportSize.y;
@@ -6609,12 +6612,25 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             options:            options
         });
 
-        drawer.draw = (function (tiledImages) {
+        const originalDraw = drawer.draw.bind(drawer);
+        drawer.draw = (function (tiledImages, view = undefined) {
+            if (view) {
+                const tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                const tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+
+                return Promise.all(tasks).then(() => {
+                    originalDraw(tiledImages, view);
+                }).catch(e => console.error(e)).then(() => {
+                    // free data
+                    const dId = drawer.getId();
+                    tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                });
+            }
+
             // Steal FP initialized textures
             if (!this.renderer.__firstPassResult) {
                 // todo dirty, hide the __firstPassResult structure within the program logics
                 const program = this.renderer.getProgram('firstPass');
-                console.log("Stealing first pass result from the renderer: ", program.colorTextureA, program.stencilTextureA);
                 this.renderer.__firstPassResult = {
                     texture: program.colorTextureA,
                     stencil: program.stencilTextureA,
@@ -6623,7 +6639,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
             // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
             viewer.drawer.renderer.copyRenderOutputToContext(this.renderer);
-            this._drawTwoPassSecond({
+            return this._drawTwoPassSecond({
                 zoom: this.viewport.getZoom(true)
             });
 
@@ -7855,7 +7871,7 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-09-22
+//! Built on 2025-09-23
 //! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -8028,7 +8044,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-09-22
+//! Built on 2025-09-23
 //! Git commit: --34711ad-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

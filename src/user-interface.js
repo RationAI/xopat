@@ -797,8 +797,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
         },
 
-        SlidesMenu: new UI.SlideSwitcherMenu(),
-
         /**
          * Application TopFullscreenButton
          * @namespace USER_INTERFACE.TopFullscreenButton
@@ -895,7 +893,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     //todo might dissinc
                     bItem.toggleHiden();
                 }
-
             }
         },
 
@@ -907,6 +904,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             context: $("#top-visual"),
             menu: "",
             rightMenuTabs: {},
+            otherWindows: {},
             _visualMenuNeedsRefresh: false,
 
             init: function () {
@@ -918,7 +916,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         extraClasses: { bg: "bg-transparent" },
                     }, {
                         id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: UI.Dropdown,
-                        onClick: e => USER_INTERFACE.TopVisualMenu.refreshVisualDropdown()
+                        onClick: e => USER_INTERFACE.TopVisualMenu._refreshVisualDropdown()
                     },
                 );
 
@@ -926,23 +924,44 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 this.menu.set(UI.Menu.DESIGN.TITLEICON);
             },
 
-            refreshVisualDropdown: function () {
+
+
+            _refreshVisualDropdown: function () {
                 if (!this._visualMenuNeedsRefresh) return;
 
                 const tab = this.menu.getTab('view');
                 tab.clear();
-                tab.addItem({
-                    id: 'preview',
-                    onClick: () => USER_INTERFACE.SlidesMenu.open(),
-                    icon: "fa-rectangle-list",
-                    label: $.t('main.global.preview'),
-                });
+
+                // TODO: allow custom windows here
+                // tab.addItem({
+                //     id: 'preview',
+                //     onClick: () => USER_INTERFACE.SlidesMenu.open(),
+                //     icon: "fa-rectangle-list",
+                //     label: $.t('main.global.preview'),
+                // });
                 tab.addItem({
                     id: 'clone-viewer',
                     onClick: () => UTILITIES.clone(),
                     icon: "fa-clone",
                     label: $.t('main.global.clone'),
                 });
+
+                // todo consider sort
+                for (let id in this.otherWindows) {
+                    const item = this.otherWindows[id];
+                    tab.addItem({
+                        icon: item.icon,
+                        label: item.label,
+                        selected: item.selected,
+                        onClick: () => {
+                            item.selected = !item.selected;
+                            APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
+                            item.onClick?.(item.selected);
+                        },
+                        section: 'right-menu',
+                    });
+                }
+
 
                 for (let id in this.rightMenuTabs) {
                     const item = this.rightMenuTabs[id][0];
@@ -962,10 +981,28 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             section: 'right-menu',
                         });
                     }
-
                 }
             },
 
+            /**
+             * Register a window tab
+             */
+            registerWindowTab(id, icon, label, onClick) {
+                const selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, false);
+                if (selected) {
+                    onClick?.(selected);
+                }
+                this.otherWindows[id] = {
+                    id, icon, label, onClick, selected
+                };
+                this._visualMenuNeedsRefresh = true;
+            },
+
+            /**
+             * Register menu tab that is driven by the core right menu for each viewer.
+             * Not advised to use manually, used in core UI.
+             * @param tab
+             */
             registerRightMenuTab(tab) {
                 // todo support removal
                 let parent = this.rightMenuTabs[tab.id];

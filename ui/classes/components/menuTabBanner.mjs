@@ -53,6 +53,17 @@ class MenuTabBanner extends MenuTab {
         return [b, c];
     }
 
+    setTitle(title) {
+        if (this.headerButton) {
+            let header = document.getElementById(this.headerButton.id);
+            if (header) {
+                // todo dirty, touching internal badge structure
+                header.children[2].title = title;
+                header.children[2].innerHTML = title;
+            }
+        }
+    }
+
     setVisuals(...props) {
         if (props.length && props[0] instanceof Badge) {
             const comp = props.shift();

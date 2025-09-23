@@ -32,7 +32,6 @@ import { Toolbar } from "./classes/components/toolbar.mjs";
 import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { ShaderSideMenu } from "./classes/components/shaderSideMenu.mjs";
 import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
-import { SlideSwitcherMenu } from "./classes/components/slideSwitcherMenu.mjs";
 import { MainLayout } from "./classes/components/mainLayout.mjs";
 import { Toast } from "./classes/components/toast.mjs";
 import { MenuTabBanner } from "./classes/components/menuTabBanner.mjs";
@@ -49,7 +48,7 @@ const UI = {
 
     // Components
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
-    Toolbar, ShaderLayer, ShaderSideMenu, FloatingWindow, SlideSwitcherMenu,
+    Toolbar, ShaderLayer, ShaderSideMenu, FloatingWindow,
     MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
 
     // Services

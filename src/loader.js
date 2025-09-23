@@ -1207,6 +1207,12 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * @param stripSuffix
          */
         fileNameFromPath: function(imageFilePath, stripSuffix=true) {
+            if (typeof imageFilePath !== 'string') {
+                console.error("fileNameFromPath: invalid argument type. This often happens when configuration" +
+                    "specifies non-string data item, but fails to set the 'name' attribute.");
+                return "error";
+            }
+
             let begin = imageFilePath.lastIndexOf('/');
             if (begin === -1) return imageFilePath;
             begin++;
