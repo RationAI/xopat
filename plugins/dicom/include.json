@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "description": "",
   "includes": [
-    "dicom-web.mjs"
+    "dicom.mjs"
   ],
   "modules": [],
   // Provide service URL of your DICOM API

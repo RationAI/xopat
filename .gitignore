@@ -32,7 +32,8 @@
 !/plugins/user-session
 !/plugins/youtrack-feedback-form
 !/plugins/sam-segment-tool-experimental
-!/plugins/dicom-web
+!/plugins/dicom
+!/plugins/slide-info
 
 #rubbish
 *.txt
