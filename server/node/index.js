@@ -219,11 +219,6 @@ async function responseDeveloperSetup(req, res) {
     const core = initViewerCoreAndPlugins(req, res);
     if (!core) return;
 
-    if (core.MODULES["webgl"]) {
-        core.MODULES["webgl"].loaded = true;
-    } else {
-        console.warn("Could not find webgl module: visualizations will not work!");
-    }
     const replacer = function (match, p1) {
         try {
             switch (p1) {

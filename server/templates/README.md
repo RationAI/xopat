@@ -80,7 +80,6 @@ You can of course add more features if you like to each of the templates.
 The dev setup page defines the following replacements:
 - `head`: where header scripts and other tags are rendered, here we require 
   - CORE: ``primer``, `jquery`, `env`, `deps`
-  - PLUGINS & MODULES: ``webgl``
 - `form-init`:  optional JS script that can override the following `window.formInit` object (defaults are shown):
   ````html
     <script type="text/javascript">

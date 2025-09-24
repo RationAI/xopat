@@ -63,8 +63,8 @@ Scanning existing modules and plugins folder and parsing the available items:
  - override this plugins default configuration with relevant values from the global 
 static configuration available (the environment-based config) 
 
-It should also reason about what items should be loaded at the beginning (e.g. load the `webgl` module
-if the viewer is going to render visualizations, etc. Server should parse correctly the
+It should also reason about what items should be loaded at the beginning (e.g. load the `annotations` plugin
+if the viewer is going to be used with annotations, etc. Server should parse correctly the
 configuration input and act relevantly on errors, providing translated interface where possible.
 Servers should also allow to
  - pass POST data to the JS app initialization function

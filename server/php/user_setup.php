@@ -69,10 +69,6 @@ include_once ABSPATH . "server/php/inc/core.php";
             '<?php echo VERSION ?>');
         runLoader();
 
-        UTILITIES.loadModules(()=>{
-            ShaderConfigurator.runShaderAndControlSelector("container", x => callback(x));
-        },'webgl');
-
         window.runConfigurator = function(clbck) {
             callback = clbck;
         };
