@@ -160,6 +160,7 @@ class Dropdown extends BaseComponent {
                 "flex items-center gap-3 rounded-md px-3 py-2",
                 "hover:bg-base-300 focus:bg-base-300",
                 selected ? "bg-primary/20 text-primary-content" : "",
+                item.pluginRootClass || "",
             ].join(" "),
             onclick: (e) => {
                 if (!item.href) e.preventDefault();

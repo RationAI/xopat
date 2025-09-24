@@ -780,7 +780,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     div({ class: "text-sm opacity-70" }, plugin.description),
                 );
 
-                return div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
+                return div({ id: `plug-list-content-inner-row-${pluginCount}`, class: `selectable-image-row-container plugin-${plugin.id}-root` },
                     input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
                     div({ class: "w-full flex selectable-image-row rounded-md cursor-pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
@@ -1031,6 +1031,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         id: ownerPluginId,
                         icon: pluginMeta(ownerPluginId, "icon"),
                         label: pluginMeta(ownerPluginId, "name"),
+                        pluginRootClass: `plugin-${ownerPluginId}-root`,
                         onClick: () => USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`),
                     });
 
@@ -1042,7 +1043,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         extraClasses: { bg: "bg-transparent" }
                     },);
 
-                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, class: "flex flex-col" }, InsideMenu);
+                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, extraClasses: `flex flex-col plugin-${ownerPluginId}-root` }, InsideMenu);
 
                     USER_INTERFACE.FullscreenMenu.menu.addTab(d);
                 }
@@ -1081,7 +1082,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
                 const menu = new UI.Toolbar(
-                    {id: `toolbar-${ownerPluginId}`, horizontalOnly: forceHorizontal},
+                    {id: `toolbar-${ownerPluginId}`, horizontalOnly: forceHorizontal, pluginRootClass: `plugin-${ownerPluginId}-root`},
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
                         icon: icon,
