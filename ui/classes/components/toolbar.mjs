@@ -128,7 +128,7 @@ class Toolbar extends BaseComponent {
         // OUTER fixed/draggable container (same as before)
         this._outerEl = div({
                 id: `${this.id}`,
-                class: `draggable flex flex-col bg-transparent pointer-events-none ${wMin}`,
+                class: `draggable flex flex-col bg-transparent pointer-events-none ${wMin} ${this.options.pluginRootClass || ""}`,
                 style: `
         position: fixed;
         left: ${left}px;
