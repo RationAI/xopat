@@ -333,7 +333,10 @@ export class BaseComponent {
                 child.remove();
             }
         });
-        document.getElementById(this.id).remove();
+        const self = document.getElementById(this.id);
+        if (self) {
+            self.remove();
+        }
     }
 
     /**

@@ -58,6 +58,7 @@
             options.viewer = this;
             this.scalebar = new $.Scalebar(options);
         } else {
+            options.viewer = this;
             this.scalebar.refresh(options);
         }
     };

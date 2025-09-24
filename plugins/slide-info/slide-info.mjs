@@ -9,7 +9,9 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     pluginReady() {
-        this.menu = new SlideSwitcherMenu();
+        this.menu = new SlideSwitcherMenu({
+            onClose: () => USER_INTERFACE.TopVisualMenu.setTabSelected(false)
+        });
         USER_INTERFACE.TopVisualMenu.registerWindowTab('slide-info-switcher', 'fa-window-restore', 'Slide Manager', selected => {
             if (selected) {
                 this.menu.open();

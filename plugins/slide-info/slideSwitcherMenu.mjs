@@ -56,7 +56,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
     }
 
-    close() { this._fw.close(); }
+    close() { this._fw && this._fw.close(); }
     opened() { return this._fw && this._fw.opened(); }
 
     _openCurrentSelection() {

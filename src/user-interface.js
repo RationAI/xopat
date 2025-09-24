@@ -949,11 +949,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         label: item.label,
                         selected: item.selected,
                         onClick: () => {
-                            item.selected = !item.selected;
+                            item.selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
                             APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
                             item.onClick?.(item.selected);
                         },
-                        section: 'right-menu',
+                        section: 'global-windows',
                     });
                 }
 
@@ -971,7 +971,8 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                     child.toggleHiden();
                                 }
                                 //todo taking item.hidden value is problematic, first element controls all
-                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.hidden);
+                                item.selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
+                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
                             },
                             section: 'right-menu',
                         });
@@ -1008,7 +1009,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     parent.push(tab)
                     parent.sort((a, b) => a.title.localeCompare(b.title));
                 }
-            }
+            },
+
+            setTabSelected: function (id, selected) {
+                APPLICATION_CONTEXT.setOption(`${id}-hidden`, !!selected);
+                this._visualMenuNeedsRefresh = true; // todo consider just updataing tab state
+            },
         },
 
         /**
