@@ -1,5 +1,7 @@
 # Development Guidelines
 
+If you haven't already, install dependencies using ``npm install``.
+
 Npm or grunt tasks can be used to develop the viewer. Furthermore, new modules and plugins can be
 created by using
 
@@ -24,15 +26,26 @@ UI elements can be furthermore tested and developed using the ``npm run dev-ui``
 Instead of coding in a live viewer session, you can use the viewer sandbox playground for
 developing the UI components in an isolated environment.
 
-### Bundling
+### Using NPM for modules or plugins.
+The core uses no NPM, except for development purposes and documentation deployment.
+If you develop an external item and need to use NPM packages, there is a way to do this directly:
+ - mount a plugin or module as you would do normally
+ - create ``package.json`` file in the plugin or module directory
+   - define ``main`` file, the entrypoint that will be later compiled for browser
+ - you can (but don't have to) crete ``include.json``, this file now only overrides values otherwise
+ defined in ``package.json``, or allow you to provide custom static default properties - all fields are
+ however from now on optional
+ - run ``npm i`` to install your new dependencies
+ - you now also need to run a watcher task on the plugin files as well, so that changes are re-compiled
 
+
+### Bundling
 Only core UI components are automatically bundled into ``ui/index.js`` file. This is the viewer UI component
 system we encourage you to use across the viewer. Custom modules and plugins are not bundled in the development.
 For production, ``npm run minify`` can be used to compile the viewer components into minified files.
-Such files are then included instead of the sources defined in ``include.json``, which might be 
-confusing if you try to develop after running ``npm run minify`` (your changes will not be reflected because
-the system loads minified files).
-
+Such files are then included instead of the sources defined in ``include.json`` (or `package.json` for workspaces), 
+which might be confusing if you try to develop after running ``npm run minify`` (your changes will not be reflected because
+the system loads minified files). This behavior is only active in **production mode**. See [the default configuration](./src/config.json).
 ### Predefined sessions
 You can use ``/docs/example_sessions`` to open sessions for testing purposes, these sessions
 explore various viewer modes.

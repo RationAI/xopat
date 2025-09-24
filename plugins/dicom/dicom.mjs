@@ -1,5 +1,7 @@
+import * as cs from '@cornerstonejs/core';
+
 import { DICOMWebTileSource } from "./tileSource.mjs";
-addPlugin('dicom-web', class extends XOpatPlugin {
+addPlugin('dicom', class extends XOpatPlugin {
     constructor(id) { 
         super(id);
 
@@ -36,8 +38,6 @@ addPlugin('dicom-web', class extends XOpatPlugin {
                     } catch (e) {
                         throw new Error(`Failed to parse QIDO response: ${e.message} - used ${text}`);
                     }
-
-
                 }
 
                 const token = XOpatUser.instance().getSecret();

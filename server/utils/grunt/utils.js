@@ -36,35 +36,63 @@ module.exports = function(grunt) {
      *
      * @param accumulator function, accepts (accumulator, newValue, folderName)
      * @param initialValue
-     * @param parseMeta
      * @param log
      * @return {*}
      */
-    grunt.util.reducePlugins = function (accumulator, initialValue, parseMeta=true, log=false) {
-        return reduceFolder(accumulator, initialValue, parseMeta, "Plugin", "plugins", log);
+    grunt.util.reducePlugins = function (accumulator, initialValue, log=false) {
+        return reduceFolder(accumulator, initialValue, "Plugin", "plugins", log);
     };
 
     /**
      *
      * @param accumulator function, accepts (accumulator, newValue, folderName)
      * @param initialValue
-     * @param parseMeta
      * @param log
      * @return {*}
      */
-    grunt.util.reduceModules = function (accumulator, initialValue, parseMeta=true, log=false) {
-        return reduceFolder(accumulator, initialValue, parseMeta, "Module", "modules", log);
+    grunt.util.reduceModules = function (accumulator, initialValue, log=false) {
+        return reduceFolder(accumulator, initialValue, "Module", "modules", log);
     };
 
-    function reduceFolder(accumulator, initialValue, parseMeta, contextName, directoryName, log) {
-        const itemDirectory = grunt.file.expand({filter: "isDirectory", cwd: directoryName}, ["*"]);
-        for (let item of itemDirectory) {
-            const file = `${directoryName}/${item}/include.json`;
+    function reduceFolder(accumulator, initialValue, contextName, directoryName, log) {
+        const directoryContents = grunt.file.expand({filter: "isDirectory", cwd: directoryName}, ["*"]);
+        for (let item of directoryContents) {
+            const itemDirectory = `${directoryName}/${item}`;
+            const file = `${itemDirectory}/include.json`;
 
+            let data = null;
             if (grunt.file.isFile(file)) {
                 if (log) grunt.log.write(`${contextName} found: ${item}`);
                 const content = grunt.file.read(file).toString().trim();
-                const data = parseMeta ? parse(content) : content;
+                data = parse(content);
+            }
+
+            let workspaceFile = `${itemDirectory}/package.json`;
+            if (grunt.file.isFile(workspaceFile)) {
+                const content = grunt.file.read(workspaceFile).toString().trim();
+                const packageData = parse(content);
+
+                if (log) grunt.log.write(`${data["id"] || packageData["name"] || contextName} is a workspace: ${workspaceFile}`);
+                if (!packageData["main"]) {
+                    grunt.log.errorlns(`${contextName} ${item} has no main entry! package.json must define main file to compile!`);
+                    data = null;
+                } else {
+                    data = data || {};
+                    data["includes"] = data["includes"] || [];
+                    data["includes"].unshift("index.workspace.js");
+
+                    data["id"] = data["id"] || packageData["name"];
+                    data["name"] = data["name"] || packageData["name"];
+                    data["author"] = data["author"] || packageData["author"];
+                    data["version"] = data["version"] || packageData["version"];
+                    data["description"] = data["description"] || packageData["description"];
+
+                    data["__workspace_item_entry__"] = `${itemDirectory}/${packageData["main"]}`;
+                }
+            }
+
+            if (data) {
+                data["directory"] = itemDirectory;
                 initialValue = accumulator(initialValue, data, item);
                 if (log) grunt.log.write("\n");
             } else {

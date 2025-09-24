@@ -7,6 +7,16 @@
 //   • adds downloadPreviewImage() and downloadMacroImage() helpers
 // - Tested against Google Cloud Healthcare + Orthanc DICOMweb
 // - Still honors partial, not‑yet‑published OSD TileSource init flow in v3
+async function _loadDICOMwebClient() {
+    if (window.DICOMwebClient) return window.DICOMwebClient; // CDN/global
+    try {
+        // ESM/bundler path (vite/webpack): install `dicomweb-client`
+        const mod = await import(/* @vite-ignore */ 'dicomweb-client');
+        return mod.DICOMwebClient || mod.default || mod;
+    } catch (e) {
+        return null; // fallback to manual fetch
+    }
+}
 
 export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     constructor(options) {
@@ -37,33 +47,67 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         // general SOPs
         this.WSI_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.77.1.6"; // VL WSI
+
+        this._dwClient = null;
+        this._getDW = async () => {
+            if (this._dwClient) return this._dwClient;
+            const DICOMwebClient = await _loadDICOMwebClient();
+            if (!DICOMwebClient) return null;
+            this._dwClient = new DICOMwebClient({ url: this.baseUrl });
+            return this._dwClient;
+        };
     }
 
     supports(data) { return data && data.type === "dicomweb"; }
 
     /* ------------------------ QIDO/WADO helpers ------------------------ */
     async _qido(path, params = {}) {
-        const qs = new URLSearchParams(params);
-        const url = `${this.baseUrl}${path}${qs.toString() ? "?" + qs.toString() : ""}`;
-        const res = await fetch(url, {
-            headers: { Accept: "application/dicom+json", ...this.ajaxHeaders },
-            credentials: "omit",
-        });
-        if (res.status === 204) return [];
-        const text = await res.text();
-        if (res.status === 404 && /Unknown resource/i.test(text)) throw new Error(`QIDO endpoint missing at ${path}`);
-        if (res.status === 404) return [];
-        if (!res.ok) throw new Error(`QIDO ${res.status}: ${text}`);
-        return text ? JSON.parse(text) : [];
+        const dw = await this._getDW();
+        if (dw) {
+            const headers = { Accept: 'application/dicom+json', ...this.ajaxHeaders };
+            const p = path.replace(/^\/+/, '').split('/');
+            if (p[0] === 'studies' && p.length === 1)
+                return await dw.searchForStudies({ headers, searchParams: params });
+            if (p[0] === 'studies' && p[2] === 'series' && p.length === 3)
+                return await dw.searchForSeries({ headers, studyInstanceUID: p[1], searchParams: params });
+            if (p[0] === 'studies' && p[2] === 'series' && p[4] === 'instances')
+                return await dw.searchForInstances({
+                    headers, studyInstanceUID: p[1], seriesInstanceUID: p[3], searchParams: params
+                });
+            if (p[0] === 'instances' && p.length === 1)
+                return await dw.searchForInstances({ headers, searchParams: params });
+            // Unknown path → fall through
+        }
+        return null;
+        // const qs = new URLSearchParams(params);
+        // const url = `${this.baseUrl}${path}${qs.toString() ? "?" + qs.toString() : ""}`;
+        // const res = await fetch(url, {
+        //     headers: { Accept: "application/dicom+json", ...this.ajaxHeaders },
+        //     credentials: "omit",
+        // });
+        // if (res.status === 204) return [];
+        // const text = await res.text();
+        // if (res.status === 404 && /Unknown resource/i.test(text)) throw new Error(`QIDO endpoint missing at ${path}`);
+        // if (res.status === 404) return [];
+        // if (!res.ok) throw new Error(`QIDO ${res.status}: ${text}`);
+        // return text ? JSON.parse(text) : [];
     }
 
     async _wadoMetadata(studyUID, seriesUID, instanceUID) {
-        const url = `${this.baseUrl}/studies/${studyUID}/series/${seriesUID}/instances/${instanceUID}/metadata`;
-        const res = await fetch(url, { headers: { Accept: "application/dicom+json", ...this.ajaxHeaders }, credentials: "omit" });
-        const text = await res.text();
-        let json; try { json = JSON.parse(text); } catch {}
-        if (!res.ok || !json) throw new Error(`WADO metadata ${res.status}: ${text}`);
-        return json;
+        const dw = await this._getDW();
+        if (dw) {
+            const headers = { Accept: 'application/dicom+json', ...this.ajaxHeaders };
+            return await dw.retrieveInstanceMetadata({
+                headers, studyInstanceUID: studyUID, seriesInstanceUID: seriesUID, sopInstanceUID: instanceUID
+            });
+        }
+        return null;
+        // const url = `${this.baseUrl}/studies/${studyUID}/series/${seriesUID}/instances/${instanceUID}/metadata`;
+        // const res = await fetch(url, { headers: { Accept: "application/dicom+json", ...this.ajaxHeaders }, credentials: "omit" });
+        // const text = await res.text();
+        // let json; try { json = JSON.parse(text); } catch {}
+        // if (!res.ok || !json) throw new Error(`WADO metadata ${res.status}: ${text}`);
+        // return json;
     }
 
     _first(a) { return Array.isArray(a) && a.length ? a[0] : null; }
@@ -354,23 +398,67 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     async _getTile(context) {
-        const res = await fetch(context.src, {
-            headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader() },
-            mode: 'cors', cache: 'no-store',
-        });
+        // Parse the four UIDs + frame from the URL we generate in getTileUrl(...)
+        // .../studies/{s}/series/{se}/instances/{i}/frames/{f}[/rendered]
+        const m = /\/studies\/([^/]+)\/series\/([^/]+)\/instances\/([^/]+)\/frames\/(\d+)(\/rendered)?$/.exec(context.src);
+        const studyUID  = m?.[1]; const seriesUID = m?.[2]; const instanceUID = m?.[3];
+        const frameNo   = m ? parseInt(m[4], 10) : null;
+        const isRendered = !!m?.[5];
 
-        if (!res.ok) return context.fail("Failed to fetch DICOM frame.", res);
+        let error = "Unknown error.";
+        try {
+            const dw = await this._getDW();
+            if (dw && studyUID && seriesUID && instanceUID && frameNo) {
+                const headers = { Accept: this._acceptHeader(), ...this.ajaxHeaders };
+                let payload;
 
-        const parts = await this.parseMultipartRelated(res);
-        if (!parts.length) return context.fail("DICOM response carries no frames!", res);
-        const { headers, bytes } = parts[0];
-        const type = (headers['content-type'] || '').toLowerCase() || 'application/octet-stream';
-        if (parts.length > 2) console.warn("DICOM response carries multiple frames!", res);
+                if (this.useRendered || isRendered) {
+                    // Rendered frames → typically a single Blob (JPEG/PNG)
+                    payload = await dw.retrieveRenderedFrames({
+                        headers, studyInstanceUID: studyUID, seriesInstanceUID: seriesUID,
+                        sopInstanceUID: instanceUID, frameNumbers: [frameNo]
+                    });
+                } else {
+                    // Raw frames (still returns an array of parts decoded by client)
+                    payload = await dw.retrieveFrames({
+                        headers, studyInstanceUID: studyUID, seriesInstanceUID: seriesUID,
+                        sopInstanceUID: instanceUID, frameNumbers: [frameNo]
+                    });
+                }
 
-        if (type.includes('image/png'))  return context.finish(new Blob([bytes], { type: 'image/png'  }), res, "rasterBlob");
-        if (type.includes('image/jpeg')) return context.finish(new Blob([bytes], { type: 'image/jpeg' }), res, "rasterBlob");
+                // Normalize to a Blob for OSD
+                let blob = null;
 
-        return context.fail("DICOM tile format unsupported.", res);
+                // Common returns:
+                //  - Blob
+                //  - Array of Blobs
+                //  - Array of { data: ArrayBuffer | Uint8Array, type?: string }
+                if (payload instanceof Blob) {
+                    blob = payload;
+                } else if (Array.isArray(payload)) {
+                    const part = payload[0];
+                    if (part instanceof Blob) {
+                        blob = part;
+                    } else if (part?.data) {
+                        const type = part.type || (this.useRendered ? 'image/jpeg' : 'application/octet-stream');
+                        blob = new Blob([part.data], { type });
+                    } else if (part?.byteLength != null) {
+                        blob = new Blob([payload[0]], { type: this.useRendered ? 'image/jpeg' : 'application/octet-stream' });
+                    }
+                }
+
+                if (blob) {
+                    // Prefer PNG/JPEG; if the server sent octet-stream but it actually is jpeg, browser will still decode fine.
+                    return context.finish(blob, null, "rasterBlob");
+                }
+                // If we couldn't normalize, fall through to legacy fetch
+                error = 'dicomweb-client returned an unexpected tile payload';
+            }
+        } catch (err) {
+            error = `dicomweb-client tile fetch failed: ${err}`;
+        }
+
+        return context.fail(error, null);
     }
 
     downloadTileStart(context) { this._getTile(context); }

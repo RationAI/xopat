@@ -1,13 +1,5 @@
 {
-  "id": "dicom-web",
-  "name": "",
-  "author": "",
-  "version": "1.0.0",
-  "description": "",
-  "includes": [
-    "dicom.mjs"
-  ],
-  "modules": [],
+  "name": "DICOM Integration",
   // Provide service URL of your DICOM API
   "serviceUrl": "http://localhost:8042/dicom-web",
   // Default study to open

@@ -19,6 +19,8 @@ dependencies are detected and result in error.
     "requires": []
 }
 ````
+Exception to this rule is a workspace module, which is set to use NPM ([see development basics](../DEVELOPMENT.md)).
+
 Using third party hosted scripts: an include array item should (instead of a string) look like this:
 ````json
 {
@@ -66,6 +68,10 @@ If your entity works with a viewer instance, the xOpat viewer can have multiple 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically, 
 > respect the ``APPLICATION_CONTEXT.secure`` flag parameter
 > and provide necessary steps to ensure secure execution if applicable.
+
+## NPM Support and UI
+Please, [see development basics](../DEVELOPMENT.md) on how to develop with NPM and have live UI support.
+Also, [read ui specification](../ui/README.md) and get to know available UI elements.
     
 ## Modules: Extensions
 Extensions are unconstrained code libraries with no (or little) constrains; but without features. Only basic rules 

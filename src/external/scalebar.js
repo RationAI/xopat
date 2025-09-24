@@ -215,24 +215,19 @@
                     // this.magnificationContainer.style.display = "none";
 
                     if (this.magnification > 0) {
-                        this.magnificationContainer.style.position = "relative";
-                        this.magnificationContainer.style.margin = "0";
-                        this.magnificationContainer.style.background = "var(--color-bg-backdrop)";
-                        this.magnificationContainer.style.paddingBottom = "8px";
-                        this.magnificationContainer.style.paddingTop = "4px";
-                        this.magnificationContainer.style.paddingLeft = "16px";
-                        this.magnificationContainer.style.paddingRight = "8px";
-                        this.magnificationContainer.style.opacity = "0.6";
-                        this.magnificationContainer.style.display = "flex";
-                        this.magnificationContainer.style.flexDirection = "column";
-                        this.magnificationContainer.style.borderRadius = "7px";
-                        this.magnificationContainer.classList.add("bg-base-200");
-
-
-                        this.magnificationContainer.style.height =`${this.magnificationContainerHeight}px`;
-                        this.magnificationContainer.style.width = "60px";
-
-
+                        this.magnificationContainer.classList.add(
+                            "relative",
+                            "m-0",
+                            "bg-base-200",
+                            "backdrop-blur-[2px]",
+                            "pr-2", "pt-1", "pb-2",
+                            "rounded-lg",
+                            "shadow-sm",
+                            "ring-1", "ring-base-300/40",
+                            "flex", "flex-col", "items-center", "gap-1.5",
+                        );
+                        this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width  = "50px";
 
                         let steps = 0;
                         let testMag = this.magnification;
@@ -294,54 +289,55 @@
                             return result;
                         }
 
-                        let button = document.createElement("span");
-                        button.classList.add("fa-auto", "fa-minus", "btn-pointer");
-                        button.style.userSelect = 'none';
-                        button.addEventListener("click", (event) => {
-                            const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));
-                            if (index < 1) return;
-                            sliderContainer.noUiSlider.set(values[index-1]);
-                            updateZoom(values[index-1]);
+                        const mkBtn = (iconClass) => {
+                            const b = document.createElement("button");
+                            b.type = "button";
+                            b.className = "btn btn-ghost btn-xs min-h-0 w-7 h-7 p-0 rounded-md text-base-content/70 hover:text-base-content";
+                            b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
+                            return b;
+                        };
+
+                        let minusBtn = mkBtn("fa-minus");
+                        minusBtn.addEventListener("click", () => {
+                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
+                            if (idx > 0) { sliderContainer.noUiSlider.set(values[idx-1]); updateZoom(values[idx-1]); }
                         });
-                        this.magnificationContainer.appendChild(button);
+                        this.magnificationContainer.appendChild(minusBtn);
+
                         this.magnificationContainer.appendChild(sliderContainer);
                         noUiSlider.create(sliderContainer, {
-                            range: range,
+                            range,
                             start: minValue,
-                            // limit: limit,
                             connect: true,
-                            direction: 'ltr',
-                            orientation: 'vertical',
-                            behaviour: 'drag',
+                            direction: "ltr",
+                            orientation: "vertical",
+                            behaviour: "drag",
                             tooltips: false,
-                            //format: format,
                             pips: {
-                                mode: 'values',
-                                values: values,
+                                mode: "values",
+                                values,
                                 density: 5,
                                 format: {
-                                    // 'to' the formatted value. Receives a number.
-                                    to: function (value) {
-                                        return value < 2 ? '⌂' : value;
-                                    },
-                                    // 'from' the formatted value.
-                                    // Receives a string, should return a number.
-                                    from: function (value) {
-                                        return value === '⌂' ? 0 : value;
-                                    }
-                                }
-                            }
+                                    to: (v) => (v < 2 ? "⌂" : v),
+                                    from: (s) => (s === "⌂" ? 0 : s),
+                                },
+                            },
                         });
-                        button = document.createElement("span");
-                        button.classList.add("fa-auto", "fa-plus", "btn-pointer");
-                        button.style.userSelect = 'none';
-                        button.addEventListener("click", (event) => {
-                            const index = closestValue(Number.parseInt(sliderContainer.noUiSlider.get()));
-                            if (index >= values.length-1) return;
-                            sliderContainer.noUiSlider.set(values[index+1]);
-                            updateZoom(values[index+1]);
+                        const sliderEl = sliderContainer.noUiSlider.target;
+                        sliderEl.classList.add("flex-1", "mx-auto");
+                        sliderEl.style.width = "6px"; // thicker track
+
+                        const sliderWrap = document.createElement("div");
+                        sliderWrap.className = "relative flex-1 flex items-center";
+                        this.magnificationContainer.appendChild(sliderWrap);
+                        sliderWrap.appendChild(sliderContainer);
+
+                        let plusBtn = mkBtn("fa-plus");
+                        plusBtn.addEventListener("click", () => {
+                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
+                            if (idx < values.length - 1) { sliderContainer.noUiSlider.set(values[idx+1]); updateZoom(values[idx+1]); }
                         });
-                        this.magnificationContainer.appendChild(button);
+                        this.magnificationContainer.appendChild(plusBtn);
                         //todo custom ranges
 
                         sliderContainer.noUiSlider.target.classList.add('d-inline-block', 'flex-1');
@@ -356,10 +352,11 @@
                             sliderContainer.noUiSlider.set(value);
                             updateZoom(value);
                         }
-                        let pips = sliderContainer.querySelectorAll('.noUi-value');
-                        for (let i = 0; i < pips.length; i++) {
-                            pips[i].addEventListener('click', onPipiClick);
-                        }
+                        const pips = sliderContainer.querySelectorAll(".noUi-value");
+                        pips.forEach(p => {
+                            p.classList.add("cursor-pointer", "hover:text-base-content"); // nicer hover
+                            p.addEventListener("click", onPipiClick);
+                        });
                     }
                     this.viewer.container.appendChild(this.magnificationContainer);
                 }

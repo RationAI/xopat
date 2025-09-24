@@ -22,6 +22,8 @@ Inside a plugin, at least this file must exist (otherwise the directory is not t
 }
 ````
 
+exception to this rule is a workspace plugin, which is set to use NPM ([see development basics](../DEVELOPMENT.md)).
+
 ##### Built-in keys
 
   - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
@@ -68,6 +70,10 @@ position/element, **not the data it opens**.
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
 > respect the ``APPLICATION_CONTEXT.secure`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
+
+### NPM Support and UI
+Please, [see development basics](../DEVELOPMENT.md) on how to develop with NPM and have live UI support.
+Also, [read ui specification](../ui/README.md) and get to know available UI elements.
 
 ### Interface XOpatPlugin
 Basic functions that are available to plugins atop what ``XOpatElement`` provides.

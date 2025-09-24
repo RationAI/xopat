@@ -20,7 +20,7 @@ module.exports = function(grunt) {
     );
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
-        require('./server/utils/grunt/tasks/css-and-ui-dev-tool')(grunt)
+        require('./server/utils/grunt/tasks/realtime-compile')(grunt)
     );
 
     // library tasks
@@ -75,7 +75,6 @@ module.exports = function(grunt) {
             }
         },
         uglify: {
-
             ...grunt.util.reduceModules( (acc, module, folder) => {
                 //we cannot minify items that have third-party network deps, object describes source URL
                 if (module.includes.some(i => typeof i === "object")) {
@@ -85,6 +84,11 @@ module.exports = function(grunt) {
 
                 acc.modules.files[`modules/${folder}/index.min.js`] =
                     module.includes.map(i => `modules/${folder}/${i}`);
+                if (module.__workspace_item_entry__) {
+                    const mainFile = module.__workspace_item_entry__;
+                    exec(`npx esbuild --bundle --sourcemap --format=esm --outfile=modules/${folder}/index.workspace.js ${mainFile}`);
+                    acc.modules.files[`modules/${folder}/index.min.js`].unshift(`modules/${folder}/index.workspace.js`);
+                }
                 return acc;
             }, uglification, true, true),
 
@@ -97,12 +101,17 @@ module.exports = function(grunt) {
 
                 acc.plugins.files[`plugins/${folder}/index.min.js`] =
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
+                if (plugin.__workspace_item_entry__) {
+                    const mainFile = plugin.__workspace_item_entry__;
+                    exec(`npx esbuild --bundle --sourcemap --format=esm --outfile=plugins/${folder}/index.workspace.js ${mainFile}`);
+                    acc.plugins.files[`plugins/${folder}/index.min.js`].unshift(`plugins/${folder}/index.workspace.js`);
+                }
                 return acc;
             }, uglification, true, true),
 
             ...grunt.util.reduceUI((acc, ui, folder) => {
-                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs")
-                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"]
+                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"];
                 return acc;
             }, uglification, true, true),
         },
@@ -122,7 +131,9 @@ module.exports = function(grunt) {
                 'ui/index.js',
                 'src/libs/**',
                 '.dev-cache/**',
-                '**/*.min.js'
+                '**/*.min.js',
+                '**/*.workspace.js',
+                '**/*.workspace.js.map'
             ],
             minify: true,
             debounceMs: 150,

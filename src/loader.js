@@ -64,7 +64,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         return REGISTERED_PLUGINS === undefined;
     }
 
-    function showPluginError(id, e) {
+    window.showPluginError = function (id, e) {
+        // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
             $(`#load-plugin-${id}`).html("");
@@ -2010,6 +2011,13 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     }
 
     return function() {
+        for (let pid of APPLICATION_CONTEXT.pluginIds()) {
+            let plugin = PLUGINS[pid];
+            if (plugin) {
+                showPluginError(plugin.id, plugin.error);
+            }
+        }
+
         return Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {
             REGISTERED_PLUGINS = undefined;
         }).then(callDeployedViewerInitialized);

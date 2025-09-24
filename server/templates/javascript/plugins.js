@@ -2,7 +2,7 @@ const {parse} = require("comment-json")
 const {loadModules} = require("./modules");
 const {safeScanDir} = require("./utils");
 
-module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n) {
+module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
     if (!Object.keys(core.MODULES).length) {
         //require modules
@@ -10,7 +10,6 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
             core,
             fileExists,
             readFile,
-            scanDir,
             i18n
         );
     }
@@ -27,10 +26,31 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
         let fullPath = `${core.ABS_PLUGINS}${dir}/`;
         let pluginConfig = fullPath + "include.json";
 
-        if (fileExists(pluginConfig)) {
-            try {
+        let data = null;
 
-                let data = parse(readFile(pluginConfig));
+        try {
+            if (fileExists(pluginConfig)) {
+                data = parse(readFile(pluginConfig));
+            }
+
+            let workspace = fullPath + "package.json";
+            if (fileExists(workspace)) {
+                if (!fileExists(fullPath + "index.workspace.js")) {
+                    console.warn(`Plugin ${fullPath} has package.json but no index.workspace.js! The plugin needs to be compiled first!`);
+                }
+
+                let packageData = parse(readFile(workspace));
+                data = data || {};
+                data["includes"] = data["includes"] || [];
+                data["includes"].unshift("index.workspace.js");
+                data["id"] = data["id"] || packageData["name"];
+                data["name"] = data["name"] || packageData["name"];
+                data["author"] = data["author"] || packageData["author"];
+                data["version"] = data["version"] || packageData["version"];
+                data["description"] = data["description"] || packageData["description"];
+            }
+
+            if (data) {
                 if (!data["id"]) {
                     data["id"] = "__generated_id_" + dir;
                     data["error"] = `Plugin (dir ${dir}) removed: probably include.json misconfiguration.`;
@@ -45,7 +65,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                 }
                 data["modules"] = data["modules"] || [];
 
-                for(let modId of data["modules"]) {
+                for (let modId of data["modules"]) {
                     if (!MODULES[modId]) {
                         data["error"] = i18n.t('php.pluginUnknownDeps');
                     } else if (MODULES[modId].error) {
@@ -78,19 +98,18 @@ module.exports.loadPlugins = function(core, fileExists, readFile, scanDir, i18n)
                 if (core.parseBool(data["enabled"]) !== false) {
                     PLUGINS[data["id"]] = data;
                 }
-
-            } catch (e) {
-                PLUGINS[dir] = {
-                    "id": dir,
-                    "name": dir,
-                    "error": i18n.t('php.pluginInvalid', {error: typeof e === "string" ? e : e.message}),
-                    "author": "-",
-                    "version": "-",
-                    "icon": "",
-                    "includes": [],
-                    "modules": [],
-                };
             }
+        } catch (e) {
+            PLUGINS[dir] = {
+                "id": dir,
+                "name": dir,
+                "error": i18n.t('php.pluginInvalid', {error: typeof e === "string" ? e : e.message}),
+                "author": "-",
+                "version": "-",
+                "icon": "",
+                "includes": [],
+                "modules": [],
+            };
         }
     }
 

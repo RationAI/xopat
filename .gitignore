@@ -28,7 +28,7 @@
 !/plugins/profiler
 !/plugins/questionaire
 !/plugins/recorder
-!/plugins/simple-integration
+!/plugins/.removed/simple-integration
 !/plugins/user-session
 !/plugins/youtrack-feedback-form
 !/plugins/sam-segment-tool-experimental

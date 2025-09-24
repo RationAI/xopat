@@ -44,10 +44,7 @@ const initViewerCoreAndPlugins = (req, res) => {
     const language = requestUrl.query.lang;
     if (language) core.CORE.setup.locale = language;
 
-    loadPlugins(core, fs.existsSync,
-        path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
-        dirName => fs.readdirSync(dirName).filter(f => fs.statSync(dirName + '/' + f).isDirectory()),
-        i18n);
+    loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
     if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
     return core;
 }
@@ -67,10 +64,9 @@ function getI18NData(language) {
     }
 }
 
-async function responseStaticFile(req, res, targetPath) {
-    //taken from https://stackoverflow.com/questions/28061080/node-itself-can-serve-static-files-without-express-or-any-other-module
-    const extname = String(path.extname(targetPath)).toLowerCase();
-    const mimeTypes = {
+function _mimeOf(p) {
+    const ext = path.extname(p).toLowerCase();
+    return  {
         '.html': 'text/html',
         '.js': 'text/javascript',
         '.mjs': 'application/javascript',
@@ -87,8 +83,12 @@ async function responseStaticFile(req, res, targetPath) {
         '.eot': 'application/vnd.ms-fontobject',
         '.otf': 'application/font-otf',
         '.wasm': 'application/wasm',
-    };
-    const contentType = mimeTypes[extname] || 'application/octet-stream';
+    }[ext] || 'application/octet-stream';
+}
+
+async function responseStaticFile(req, res, targetPath) {
+    //taken from https://stackoverflow.com/questions/28061080/node-itself-can-serve-static-files-without-express-or-any-other-module
+    const contentType = _mimeOf(targetPath);
     fs.readFile(targetPath, (err, content) => {
         if (err) {
             res.writeHead(500);

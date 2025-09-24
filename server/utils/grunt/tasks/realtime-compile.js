@@ -17,7 +17,7 @@ const globParent = require("glob-parent");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { spawn } = require("child_process");
+const { spawn, exec} = require("child_process");
 const postcss = require("postcss");
 const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
@@ -94,6 +94,44 @@ module.exports = function (grunt) {
             fs.copyFileSync(outFile, baselineCss);
             fs.writeFileSync(stateFile, JSON.stringify({ createdAt: Date.now() }, null, 2));
             grunt.log.ok("[twinc-merge] Baseline created.");
+        }
+
+        async function detectAndRebuildWorkspaceElements(files) {
+            async function rebuildWorkspaceItem(childPath) {
+                let itemPath = path.dirname(childPath);
+                while (itemPath !== root && itemPath && itemPath.length > 4) {
+                    const workspaceItem = path.join(itemPath, "package.json");
+                    if (exists(workspaceItem)) {
+                        // todo avoid parsing unless the file itself changed? cache somehow
+                        const workspace = JSON.parse(fs.readFileSync(workspaceItem, "utf8"));
+                        // todo in future let the workspace item redefine default build
+                        // if (workspace.scripts?.build) {
+                        //     grunt.log.writeln(`[twinc-merge] Rebuild workspace item ${workspaceItem}...`);
+                        //     await new Promise((resolve, reject) => {
+                        //         const child = spawn("npm", ["run", "dev"], { cwd: itemPath, stdio: "inherit", shell: process.platform === "win32" });
+                        //         child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm run dev exited ${code}`))));
+                        //     });
+                        //     return;
+                        // }
+                        if (workspace["main"]) {
+                            return new Promise((resolve, reject) => {
+                                const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm",
+                                        `--outfile=${itemPath}/index.workspace.js`, `${itemPath}/${workspace["main"]}`],
+                                    {stdio: "inherit", shell: process.platform === "win32"});
+                                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
+                            });
+                        } else {
+                            grunt.log.warn(`[twinc-merge] No "main" field found in ${workspaceItem}.`);
+                        }
+                        break;
+                    }
+                    if (exists(path.join(itemPath, "include.json"))) {
+                        break;
+                    }
+                    itemPath = path.dirname(itemPath);
+                }
+            }
+            return Promise.all(files.map(rebuildWorkspaceItem));
         }
 
         async function rebuildUI() {
@@ -244,6 +282,7 @@ module.exports = function (grunt) {
                     if (needUI) {
                         await rebuildUI();
                     }
+                    await detectAndRebuildWorkspaceElements(files);
                 } catch (e) {
                     grunt.log.error(e.message);
                     if (retry && e.message?.includes("ENOENT")) {

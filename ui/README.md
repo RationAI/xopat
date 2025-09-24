@@ -5,7 +5,7 @@ You can build and re-use components using ``Van.js``.
 ### Development
 Develop & test components independently of the viewer:
 
-- use npm tasks or grunt directly to develop UI (see [development guidelines](../src/DEVELOPMENT.md))
+- use npm tasks or grunt directly to develop UI (see [development guidelines](../DEVELOPMENT.md))
   - you can develop directly in the running viewer, or
   - using grunt watch task, a separate UI playground page should be accessible on [this page](http://localhost:9000/ui/test_ui.html)
 - each file is documented in its module

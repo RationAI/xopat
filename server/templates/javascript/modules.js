@@ -1,7 +1,7 @@
 const {parse} = require("comment-json");
 const {safeScanDir} = require("./utils");
 
-module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n) {
+module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
     const isType = core.isType;
     const MODULES = core.MODULES,
@@ -15,8 +15,32 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
         let fullPath = `${core.ABS_MODULES}${dir}/`;
         let modConfig = fullPath + "include.json";
 
-        if (fileExists(modConfig)) {
-            try {
+        let data = null;
+
+        try {
+            if (fileExists(modConfig)) {
+                data = parse(readFile(modConfig));
+            }
+
+            let workspace = fullPath + "package.json";
+            if (fileExists(workspace)) {
+                if (!fileExists(fullPath + "index.workspace.js")) {
+                    console.warn(`Module ${fullPath} has package.json but no index.workspace.js! The module needs to be compiled first!`);
+                }
+
+                let packageData = parse(readFile(workspace));
+                data = data || {};
+                data["includes"] = data["includes"] || [];
+                data["includes"].unshift("index.workspace.js");
+
+                data["id"] = data["id"] || packageData["name"];
+                data["name"] = data["name"] || packageData["name"];
+                data["author"] = data["author"] || packageData["author"];
+                data["version"] = data["version"] || packageData["version"];
+                data["description"] = data["description"] || packageData["description"];
+            }
+
+            if (data) {
                 let data = parse(readFile(modConfig));
                 data["directory"] = dir;
                 data["path"] = `${core.MODULES_FOLDER}${dir}/`;
@@ -50,11 +74,10 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                 if (core.parseBool(data["enabled"]) !== false) {
                     MODULES[data["id"]] = data;
                 }
-
-            } catch (e) {
-                core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
-                console.error(core.exception, e);
             }
+        } catch (e) {
+            core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
+            console.error(core.exception, e);
         }
     }
 

@@ -755,23 +755,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
             createPluginDiv: function (plugin, pluginCount) {
                 const { div, img, button, input } = van.tags;
-
-                let errMessage = plugin.error ? div({ class: "p-1 rounded-md error-container" }, `${plugin.error}`) : "";
-                let problematic = div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" },`${errMessage}`);
-
                 let actionPart;
-                if (errMessage || plugin.loaded){
+                if (plugin.loaded){
                     actionPart = div({ id: `load-plugin-${plugin.id}` },
-                                        button({class: "btn btn-disabled" },
-                                            $.t('common.Loaded')
-                                        )
-                                    )
+                        button({class: "btn btn-disabled" },
+                            $.t('common.Loaded')
+                        )
+                    )
                 } else{
                     actionPart = div({ id: `load-plugin-${plugin.id}` },
-                                        button({ onclick: function () {UTILITIES.loadPlugin(plugin.id); return false;}, class: "btn" },
-                                            `${$.t('common.Load')}`,
-                                        ),
-                                    );
+                        button({ onclick: function () {UTILITIES.loadPlugin(plugin.id); return false;}, class: "btn" },
+                            `${$.t('common.Load')}`,
+                        ),
+                    );
                 }
 
                 let icon = plugin.icon || (plugin.icon !== "" ? APPLICATION_CONTEXT.url + "src/assets/image.png" : "");
@@ -780,20 +776,19 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 let text = div({ class: "flex flex-col", style: "flex-grow: 1;" },
-                                                              div({ class: "text-lg font-semibold" }, plugin.name),
-                                div({ class: "text-sm opacity-70" }, plugin.description),
-                              );
+                    div({ class: "text-lg font-semibold" }, plugin.name),
+                    div({ class: "text-sm opacity-70" }, plugin.description),
+                );
 
-                const plugin_div = div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
+                return div({ id: `plug-list-content-inner-row-${pluginCount}`, class: "selectable-image-row-container" },
                     input({ type: "checkbox", name: "plug-list-content", class: "hidden selectable-image-row-context", value: plugin.id }),
                     div({ class: "w-full flex selectable-image-row rounded-md cursor-pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
                         text,
                         actionPart,
                     ),
-                    problematic,
-                )
-                return plugin_div;
+                    div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" }),
+                );
             },
         },
 

@@ -482,7 +482,8 @@ ${renders.join("")}
         if (this.__uicontrols) return this.__uicontrols;
         this.__uicontrols = {};
         let types = OpenSeadragon.FlexRenderer.UIControls.types();
-        let fallbackLayer = new OpenSeadragon.FlexRenderer.IdentityLayer("id", {
+        const ShaderClass = OpenSeadragon.FlexRenderer.ShaderMediator.getClass("identity");
+        let fallbackLayer = new ShaderClass("id", {
             shaderConfig: {
                 id: "fallback__",
                 name: "Layer",

@@ -15,10 +15,45 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
     $dir_path = ABS_PLUGINS . "$dir/";
     if (is_dir($dir_path)) {
         $interface = $dir_path . "include.json";
-        if (file_exists($interface)) {
-            try {
-                $data = (new Comment)->decode(file_get_contents($interface), true);
 
+        try {
+            $data = NULL;
+            if (file_exists($interface)) {
+                $data = (new Comment)->decode(file_get_contents($interface), true);
+            }
+
+            $workspace = $dir_path . "package.json";
+            if (file_exists($workspace)) {
+                if (!file_exists($full_path . 'index.workspace.js')) {
+                    error_log('Module ' . $full_path . ' has package.json but no index.workspace.js! The module needs to be compiled first!');
+                }
+
+                $packageData = (new Comment)->decode(file_get_contents($workspace), true);
+
+                if (!isset($data['includes']) || !is_array($data['includes'])) {
+                    $data['includes'] = [];
+                }
+                array_unshift($data['includes'], 'index.workspace.js');
+
+                // Fill missing fields from package.json
+                if (!isset($data['id']) || $data['id'] === '' ) {
+                    if (isset($packageData['name'])) $data['id'] = $packageData['name'];
+                }
+                if (!isset($data['name']) || $data['name'] === '' ) {
+                    if (isset($packageData['name'])) $data['name'] = $packageData['name'];
+                }
+                if (!isset($data['author']) || $data['author'] === '' ) {
+                    if (isset($packageData['author'])) $data['author'] = $packageData['author'];
+                }
+                if (!isset($data['version']) || $data['version'] === '' ) {
+                    if (isset($packageData['version'])) $data['version'] = $packageData['version'];
+                }
+                if (!isset($data['description']) || $data['description'] === '' ) {
+                    if (isset($packageData['description'])) $data['description'] = $packageData['description'];
+                }
+            }
+
+            if (!empty($data) && is_array($data)) {
                 if (!$data["id"]) {
                     $data["id"] = "__generated_id_$dir";
                     $data["error"] = "Plugin (dir $dir) removed: probably include.json misconfiguration.";

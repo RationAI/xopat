@@ -40,11 +40,8 @@ module.exports = function (grunt, message) {
         //todo o18n and locale
         //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
         grunt.log.writeln('Parsing module and plugins configuration...');
-        loadPlugins(core, grunt.file.isFile, grunt.file.read, dirName => {
-            return grunt.file.expand({filter: "isDirectory", cwd: dirName}, ["*"])
-        }, {t: function () {return "Dummy trasnlation function";}});
+        loadPlugins(core, grunt.file.isFile, grunt.file.read, {t: function () {return "Dummy trasnlation function";}});
         throwIfError(core, "Failed to parse the MODULES or PLUGINS initialization!");
-
 
         const replacer = function(match, p1) {
             try {
