@@ -28,6 +28,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.registerAsEventSource();
 		this._init();
 		this._setListeners();
+		this.user = XOpatUser.instance();
 	}
 
 	/**
@@ -1398,6 +1399,29 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
+	_computeObjectStroke(obj) {
+		if (obj.factoryID === 'ellipse') console.log(this.user.id, obj.author);
+		if (
+			!obj.id ||
+			!this.user
+		) return;
+
+		if (this.user.id === obj.author) return;
+
+		const author = this.mapAuthorCallback(
+			obj.author,
+			obj.authorType
+		);
+		
+		if (author === this.user.id) return;
+
+		return {
+			dash: [60, 30],
+			color: '#f59e0b',
+			width: Math.max(obj.strokeWidth, 10)
+		};
+	}
+
 	/********************* PRIVATE **********************/
 
 	_init() {
@@ -1422,6 +1446,27 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
+
+		const __renderStroke = fabric.Object.prototype._renderStroke;
+		fabric.Object.prototype._renderStroke = function(ctx) {
+			const oDash = this.strokeDashArray;
+			const oColor = this.stroke;
+			const oWidth = this.strokeWidth;
+
+			const { dash, color, width } = _this._computeObjectStroke(this) || {};
+			if (dash !== undefined)  this.strokeDashArray = dash;
+			if (color !== undefined) this.stroke  = color;
+			if (width !== undefined) this.strokeWidth = width;
+
+			try {
+				return __renderStroke.call(this, ctx);
+			} finally {
+				this.strokeDashArray = oDash;
+				this.stroke = oColor;
+				this.strokeWidth = oWidth;
+			}
+		};
+
 
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
@@ -1504,6 +1549,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._layers = {};
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 		this.setMouseOSDInteractive(true, false);
+	}
+
+	/**
+	 * Set a callback to get author ID in form matching XOpatUser.id
+	 * @param {(authorId, authorType) => string} callback Function used to return expected author ID
+	 */
+	setAuthorGetter(callback) {
+		this.mapAuthorCallback = callback;
 	}
 
 	_requireAnnotationObjectPresence(type) {
