@@ -1408,7 +1408,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (this.user.id === obj.author) return;
 
-		const author = this.mapAuthorCallback(
+		const author = this.mapAuthorCallback?.(
 			obj.author,
 			obj.authorType
 		);
