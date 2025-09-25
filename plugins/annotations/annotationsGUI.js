@@ -108,7 +108,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		this._selectedAnnot = null;
 
 		this._refreshCommentsInterval = null;
-		this._commentsMoved = false;
 	}
 
 	async setupFromParams() {
@@ -446,33 +445,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		if (commentsList) {
 			commentsList.innerHTML = '';
 		}
-	}
-
-	_commentsMouseDown(e) {
-		e.preventDefault();
-
-		if (this._isDragging) {
-			this._commentsMouseUp();
-			return;
-		}
-		
-		this._isDragging = false;
-		this._commentsMoved = false;
-		this._dragStartPos = {x: e.clientX, y: e.clientY};
-		
-		const root = document.getElementById('annotation-comments-menu');
-		if (root) {
-			this._dragStartElementPos = {
-				left: root.offsetLeft,
-				top: root.offsetTop
-			};
-		}
-
-		this._commentsDragListener = (e) => this._commentsMouseMove(e);
-		this._commentsUpListener = (e) => this._commentsMouseUp();
-
-		document.addEventListener("mousemove", this._commentsDragListener);
-		document.addEventListener("mouseup", this._commentsUpListener);
 	}
 
 	/**
