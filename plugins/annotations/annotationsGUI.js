@@ -55,6 +55,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		 * @type {Set<string>}
 		 */
 		this._preferredPresets = new Set();
+		this.user = XOpatUser.instance();
 
 		this.registerAsEventSource();
 	}
@@ -267,10 +268,12 @@ ${UIComponents.Elements.checkBox({
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
+<button id="author-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
 </div>
 <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
+<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>
+<div id="author-list-mp" class="mx-2" style="display: none;"><div id="author-list-inner-mp"></div></div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -391,6 +394,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		if (!commentText) return;
 		
 		const user = XOpatUser.instance();
+		// TODO fix for anon user
 		
 		const comment = {
 			id: crypto.randomUUID(),
@@ -879,14 +883,25 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchMenuList(type) {
+		// reset buttons
+		$("#preset-list-button-mp").attr('aria-selected', false);
+		$("#annotation-list-button-mp").attr('aria-selected', false);
+		$("#author-list-button-mp").attr('aria-selected', false);
+		
+		// hide panels
+		$("#preset-list-mp").css('display', 'none');
+		$("#annotation-list-mp").css('display', 'none');
+		$("#author-list-mp").css('display', 'none');
+
 		if (type === "preset") {
 			$("#preset-list-button-mp").attr('aria-selected', true);
-			$("#annotation-list-button-mp").attr('aria-selected', false);
 			$("#preset-list-mp").css('display', 'block');
-			$("#annotation-list-mp").css('display', 'none');
-		} else {
+		} else if (type === "authors") {
+			$("#author-list-button-mp").attr('aria-selected', true);
+			$("#author-list-mp").css('display', 'block');
+			this._populateAuthorsList();
+		} else { // annot
 			if (!this.isModalHistory) {
-				$("#preset-list-mp").css('display', 'none');
 				$("#annotation-list-mp").css('display', 'block');
 			}
 			if (this._preventOpenHistoryWindowOnce) {
@@ -894,7 +909,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			} else {
 				this.openHistoryWindow(this.isModalHistory);
 			}
-			$("#preset-list-button-mp").attr('aria-selected', false);
 			$("#annotation-list-button-mp").attr('aria-selected', true);
 		}
 	}
@@ -923,6 +937,94 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			$("#annotation-list-button-mp").click();
 		}
 		this.isModalHistory = asModal;
+	}
+
+	_toggleAuthorShown(authorId) {
+		this.context.toggleAuthorShown(authorId);
+		this._populateAuthorsList();
+	}
+
+	_updateAuthorBorderColor(authorId, color) {
+		this.context.updateAuthorBorderColor(authorId, color);
+	}
+
+	_updateAuthorBorderDashing(authorId, dashing) {
+		this.context.updateAuthorBorderDashing(authorId, dashing);
+	}
+
+	_toggleAuthorIgnoreCustomStyling(authorId) {
+		this.context.updateAuthorIgnoreCustomStyling(authorId, !this.context.getAuthorConfig(authorId).ignoreCustomStyling);
+		this._populateAuthorsList();
+	}
+
+	_populateAuthorsList() {
+		const authorListContainer = $("#author-list-inner-mp");
+		if (!authorListContainer.length) return;
+
+		const objects = this.context.canvas.getObjects();
+		const authorCounts = new Map();
+
+		objects.forEach(obj => {
+			if (this.context.isAnnotation(obj) && obj.author) {
+				const author = this.context.mapAuthorCallback?.(
+					obj.author,
+					obj.authorType,
+				) ?? obj.author;
+				
+				// skip current user
+				if (author === this.user.id) return;
+				
+				authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+			}
+		});
+
+		authorListContainer.empty();
+
+		if (authorCounts.size === 0) {
+			authorListContainer.html('<div class="text-muted text-small p-2">No authors found</div>');
+			return;
+		}
+
+		const sortedAuthors = Array.from(authorCounts.keys()).sort();
+
+		const authorItems = sortedAuthors.map(author => {
+			const count = authorCounts.get(author);
+			const pluralS = count === 1 ? '' : 's';
+			const config = this.context.getAuthorConfig(author);
+			const authorIdSafe = author.replace(/[^a-zA-Z0-9]/g, '_');
+			
+			return `<div class="author-item p-2 border-bottom border-secondary" style="${config.shown ? '' : 'opacity: 0.6;'}">
+				<div class="d-flex align-items-center mb-2">
+					<span class="material-icons mr-2">person</span>
+					<span class="author-name">${author}</span>
+				</div>
+				<div class="d-flex align-items-center text-muted text-small ml-4 mb-2">
+					<span class="mr-2">${count} annotation${pluralS}</span>
+					<input type="checkbox" disabled id="author-shown-${authorIdSafe}" ${config.shown ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorShown('${author.replace(/'/g, "\\'")}')">
+					<label for="author-shown-${authorIdSafe}" class="text-small ml-1 mr-3">Show</label>
+					<input type="checkbox" id="author-ignore-styling-${authorIdSafe}" ${config.ignoreCustomStyling ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorIgnoreCustomStyling('${author.replace(/'/g, "\\'")}')">
+					<label for="author-ignore-styling-${authorIdSafe}" class="text-small ml-1">Ignore styling</label>
+				</div>
+				<div class="ml-4">
+					<div class="d-flex align-items-center mb-1">
+						<label class="text-small mr-2" style="min-width: 60px;">Color:</label>
+						<input type="color" value="${config.borderColor}" class="form-control form-control-sm" style="width: 50px; height: 25px; padding: 1px;"
+							onchange="${this.THIS}._updateAuthorBorderColor('${author.replace(/'/g, "\\'")}', this.value)">
+					</div>
+					<div class="d-flex align-items-center">
+						<label class="text-small mr-2" style="min-width: 60px;">Dash:</label>
+						<input type="range" min="1" max="50" value="${config.borderDashing}" class="form-control-range flex-grow-1 mr-2"
+							oninput="document.getElementById('dash-value-${authorIdSafe}').textContent = this.value"
+							onchange="${this.THIS}._updateAuthorBorderDashing('${author.replace(/'/g, "\\'")}', this.value)">
+						<span id="dash-value-${authorIdSafe}" class="text-small" style="min-width: 20px;">${config.borderDashing}</span>
+					</div>
+				</div>
+			</div>`;
+		}).join('');
+
+		authorListContainer.html(authorItems);
 	}
 
 	_createHistoryInAdvancedMenu(focus = false) {
@@ -963,7 +1065,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
 
-		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('import', (e) => {
+			this.updatePresetsHTML(e);
+			if ($("#author-list-mp").css('display') !== 'none') {
+				this._populateAuthorsList();
+			}
+		});
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
@@ -984,7 +1091,19 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 		this.context.addHandler('annotation-set-private', e => {
 			this.context.canvas.requestRenderAll();
-		})
+		});
+
+		this.context.canvas.on('object:added', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
+
+		this.context.canvas.on('object:removed', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
