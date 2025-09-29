@@ -384,6 +384,24 @@ form.submit();
     };
 
     /**
+     * UUID4 Generator
+     * Copied from cornerstone.js
+     * @return {string}
+     */
+    window.UTILITIES.uuid4 = function () {
+        if (typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+        // Fallback for environments where crypto.randomUUID is not available
+        return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) =>
+            (
+                c ^
+                (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))
+            ).toString(16)
+        );
+    }
+
+    /**
      * Export the current viewer session as a self-contained HTML file.
      * When opened, it automatically loads the saved session.
      * @returns {Promise<void>}

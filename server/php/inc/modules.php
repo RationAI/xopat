@@ -59,6 +59,10 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 $data["styleSheet"] = $data["path"] . "style.css";
             }
 
+            if (!isset($data['requires']) || !is_array($data['requires'])) {
+                $data['requires'] = [];
+            }
+
             try {
                 global $ENV, $MODULES;
                 if (is_array($ENV)) {
@@ -84,6 +88,7 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             }
 
         } catch (Exception $e) {
+            // todo only log error, do not shut down everything
             trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
         }
     }

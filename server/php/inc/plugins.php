@@ -65,6 +65,10 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     $data["styleSheet"] = $data["path"] . "style.css";
                 }
 
+                if (!isset($data['modules']) || !is_array($data['modules'])) {
+                    $data['modules'] = [];
+                }
+
                 foreach ($data["modules"] as $modId) {
                     if (!isset($MODULES[$modId])) {
                         $data["error"] = $i18n->t('php.pluginUnknownDeps');

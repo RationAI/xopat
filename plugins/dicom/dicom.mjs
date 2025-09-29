@@ -1,5 +1,3 @@
-import * as cs from '@cornerstonejs/core';
-
 import { DICOMWebTileSource } from "./tileSource.mjs";
 addPlugin('dicom', class extends XOpatPlugin {
     constructor(id) { 

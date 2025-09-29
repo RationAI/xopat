@@ -15,7 +15,7 @@ also tun a tailwind watcher. This is necessary to register new styles automatica
 You can specify watched entities by providing ``WATCH_PATTERN`` variable, the task will 
 watch your chosen files.
 
-``WATCH_PATTERN=plugins/my_plugin/**/*.{js,mjs,css} npm run dev``
+``WATCH_PATTERN=plugins/my_plugin/**/*.{js,mjs,css,ts} npm run dev``
 
 You can of course use all things independently:
 

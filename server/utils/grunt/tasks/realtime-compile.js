@@ -22,6 +22,7 @@ const postcss = require("postcss");
 const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
+const esbuildArgs = require("../../esbuild-args");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -115,7 +116,7 @@ module.exports = function (grunt) {
                         // }
                         if (workspace["main"]) {
                             return new Promise((resolve, reject) => {
-                                const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm",
+                                const child = spawn("npx", ["esbuild", ...esbuildArgs,
                                         `--outfile=${itemPath}/index.workspace.js`, `${itemPath}/${workspace["main"]}`],
                                     {stdio: "inherit", shell: process.platform === "win32"});
                                 child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));

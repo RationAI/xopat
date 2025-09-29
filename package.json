@@ -21,9 +21,9 @@
     "dev-ui": "grunt connect watch",
     "dev": "node server/utils/node/dev-mode.js",
     "watch-ui": "cross-env WATCH_PATTERN=ui/**/*.mjs grunt twinc",
-    "watch-core": "cross-env WATCH_PATTERN=src/**/*.{html,js,mjs} grunt twinc",
-    "watch-plugins": "cross-env WATCH_PATTERN=plugins/**/*.{html,js,mjs} grunt twinc",
-    "watch-modules": "cross-env WATCH_PATTERN=modules/**/*.{html,js,mjs} grunt twinc"
+    "watch-core": "cross-env WATCH_PATTERN=src/**/*.{html,js,mjs,ts} grunt twinc",
+    "watch-plugins": "cross-env WATCH_PATTERN=plugins/**/*.{html,js,mjs,ts} grunt twinc",
+    "watch-modules": "cross-env WATCH_PATTERN=modules/**/*.{html,js,mjs,ts} grunt twinc"
   },
   "repository": {
     "type": "git",

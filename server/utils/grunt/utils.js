@@ -72,7 +72,6 @@ module.exports = function(grunt) {
                 const content = grunt.file.read(workspaceFile).toString().trim();
                 const packageData = parse(content);
 
-                if (log) grunt.log.write(`${data["id"] || packageData["name"] || contextName} is a workspace: ${workspaceFile}`);
                 if (!packageData["main"]) {
                     grunt.log.errorlns(`${contextName} ${item} has no main entry! package.json must define main file to compile!`);
                     data = null;
@@ -89,6 +88,7 @@ module.exports = function(grunt) {
 
                     data["__workspace_item_entry__"] = `${itemDirectory}/${packageData["main"]}`;
                 }
+                if (log) grunt.log.write(`${data["id"] || packageData["name"] || contextName} is a workspace: ${workspaceFile}`);
             }
 
             if (data) {

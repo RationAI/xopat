@@ -41,10 +41,11 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
             }
 
             if (data) {
-                let data = parse(readFile(modConfig));
                 data["directory"] = dir;
                 data["path"] = `${core.MODULES_FOLDER}${dir}/`;
                 data["loaded"] = false;
+                data["requires"] = data["requires"] || [];
+
                 if (fileExists(fullPath + "style.css")) {
                     data["styleSheet"] = data["path"] + "style.css";
                 }
@@ -76,6 +77,7 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 }
             }
         } catch (e) {
+            // todo only log error, do not shut down everything
             core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
             console.error(core.exception, e);
         }

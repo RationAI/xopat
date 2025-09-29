@@ -1,4 +1,5 @@
 const {execSync: exec} = require("child_process");
+const esbuildArgs = require("./server/utils/esbuild-args");
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
@@ -86,7 +87,7 @@ module.exports = function(grunt) {
                     module.includes.map(i => `modules/${folder}/${i}`);
                 if (module.__workspace_item_entry__) {
                     const mainFile = module.__workspace_item_entry__;
-                    exec(`npx esbuild --bundle --sourcemap --format=esm --outfile=modules/${folder}/index.workspace.js ${mainFile}`);
+                    exec(`npx esbuild ${esbuildArgs.join(" ")} --outfile=modules/${folder}/index.workspace.js ${mainFile}`);
                     acc.modules.files[`modules/${folder}/index.min.js`].unshift(`modules/${folder}/index.workspace.js`);
                 }
                 return acc;
@@ -103,7 +104,7 @@ module.exports = function(grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 if (plugin.__workspace_item_entry__) {
                     const mainFile = plugin.__workspace_item_entry__;
-                    exec(`npx esbuild --bundle --sourcemap --format=esm --outfile=plugins/${folder}/index.workspace.js ${mainFile}`);
+                    exec(`npx esbuild ${esbuildArgs.join(" ")} --outfile=plugins/${folder}/index.workspace.js ${mainFile}`);
                     acc.plugins.files[`plugins/${folder}/index.min.js`].unshift(`plugins/${folder}/index.workspace.js`);
                 }
                 return acc;

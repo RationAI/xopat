@@ -67,7 +67,7 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
                 for (let modId of data["modules"]) {
                     if (!MODULES[modId]) {
-                        data["error"] = i18n.t('php.pluginUnknownDeps');
+                        data["error"] = i18n.t('php.pluginUnknownDeps') + ": " + modId + ". Was it disabled?";
                     } else if (MODULES[modId].error) {
                         data["error"] = i18n.t('php.pluginInvalidDeps', {error: MODULES[modId].error});
                     }
