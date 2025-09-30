@@ -175,7 +175,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		return enable;
 	}
 
-	_setStrokeStyling(enable) {
+	_toggleStrokeStyling(enable) {
 		const authorButton = $("#author-list-button-mp");
 		const isAuthorsTabActive = authorButton.attr('aria-selected') === 'true';
 		
@@ -377,8 +377,8 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
 
-		this.context.addHandler('annotations-toggle-stroke-styling', e => this._setStrokeStyling(e.enable))
-		this._setStrokeStyling(this.context.strokeStyling);
+		this.context.addHandler('annotations-toggle-stroke-styling', e => this._toggleStrokeStyling(e.enable))
+		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
 	getIOFormatRadioButton(format) {
