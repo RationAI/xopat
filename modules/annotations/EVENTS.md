@@ -60,6 +60,9 @@ type AnnotationComment = {
 ##### annotation-delete-comment | ``{object: fabric.Object, commentId: string}``
 This event is fired when a comment is deleted, one by one.
 
+##### annotations-toggle-stroke-styling | ``{enable: boolean}``
+This event is fired when preference for styling per-author borders changes
+
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
 ##### preset-create | ``{preset: OSDAnnotations.Preset}``
