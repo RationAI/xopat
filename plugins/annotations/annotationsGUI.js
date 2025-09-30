@@ -175,6 +175,21 @@ class AnnotationsGUI extends XOpatPlugin {
 		return enable;
 	}
 
+	_setStrokeStyling(enable) {
+		const authorButton = $("#author-list-button-mp");
+		const isAuthorsTabActive = authorButton.attr('aria-selected') === 'true';
+		
+		if (enable) {
+			authorButton.show();
+		} else {
+			authorButton.hide();
+			
+			if (isAuthorsTabActive) {
+				this.switchMenuList('preset');
+			}
+		}
+	}
+
 	initHTML() {
 
 		USER_INTERFACE.addHtml(
@@ -268,7 +283,7 @@ ${UIComponents.Elements.checkBox({
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
-<button id="author-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
+<button id="author-list-button-mp" class="btn rounded-0" style="display: none;" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
 </div>
 <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
@@ -361,6 +376,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		//trigger UI refreshes
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
+
+		this.context.addHandler('annotations-toggle-stroke-styling', e => this._setStrokeStyling(e.enable))
+		this._setStrokeStyling(this.context.strokeStyling);
 	}
 
 	getIOFormatRadioButton(format) {

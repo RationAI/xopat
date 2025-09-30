@@ -1438,6 +1438,24 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	/********************* AUTHOR CONFIGURATION **********************/
 
 	/**
+	 * Set a callback to get author ID in form matching XOpatUser.id
+	 * @param {(authorId, authorType) => string} callback Function used to return expected author ID
+	 */
+	setAuthorGetter(callback) {
+		this.mapAuthorCallback = callback;
+	}
+
+	/**
+	 * Enable or disable per author styling
+	 * @param {boolean} enable 
+	 */
+	useStrokeStyling(enable) {
+		this.strokeStyling = enable;
+		this.raiseEvent('annotations-toggle-stroke-styling', {enable});
+		this.canvas.requestRenderAll();
+	}
+
+	/**
 	 * Get all authors configuration from cache
 	 * @return {Record<string, AuthorConfig>} authors configuration object
 	 */
@@ -1574,6 +1592,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		const __renderStroke = fabric.Object.prototype._renderStroke;
 		fabric.Object.prototype._renderStroke = function(ctx) {
+			if (!_this.strokeStyling) {
+				return __renderStroke.call(this, ctx);
+			}
 			const oDash = this.strokeDashArray;
 			const oColor = this.stroke;
 			const oWidth = this.strokeWidth;
@@ -1610,6 +1631,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
 		};
+		this.strokeStyling = false;
 
 		let refTileImage = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
 		this.overlay = VIEWER.fabricjsOverlay({
@@ -1674,14 +1696,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._layers = {};
 		if (Object.keys(this._layers).length < 1) this.createLayer();
 		this.setMouseOSDInteractive(true, false);
-	}
-
-	/**
-	 * Set a callback to get author ID in form matching XOpatUser.id
-	 * @param {(authorId, authorType) => string} callback Function used to return expected author ID
-	 */
-	setAuthorGetter(callback) {
-		this.mapAuthorCallback = callback;
 	}
 
 	_requireAnnotationObjectPresence(type) {
