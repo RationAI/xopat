@@ -901,33 +901,40 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchMenuList(type) {
-		// reset buttons
-		$("#preset-list-button-mp").attr('aria-selected', false);
-		$("#annotation-list-button-mp").attr('aria-selected', false);
-		$("#author-list-button-mp").attr('aria-selected', false);
+		const presetListButton = $("#preset-list-button-mp");
+		const annotListButton = $("#annotation-list-button-mp");
+		const authorListButton = $("#author-list-button-mp");
+
+		presetListButton.attr('aria-selected', false);
+		annotListButton.attr('aria-selected', false);
+		authorListButton.attr('aria-selected', false);
 		
 		// hide panels
-		$("#preset-list-mp").css('display', 'none');
-		$("#annotation-list-mp").css('display', 'none');
-		$("#author-list-mp").css('display', 'none');
+		const presetList = $("#preset-list-mp");
+		const annotList = $("#annotation-list-mp");
+		const authorList = $("#author-list-mp");
+
+		presetList.css('display', 'none');
+		annotList.css('display', 'none');
+		authorList.css('display', 'none');
 
 		if (type === "preset") {
-			$("#preset-list-button-mp").attr('aria-selected', true);
-			$("#preset-list-mp").css('display', 'block');
+			presetListButton.attr('aria-selected', true);
+			presetList.css('display', 'block');
 		} else if (type === "authors") {
-			$("#author-list-button-mp").attr('aria-selected', true);
-			$("#author-list-mp").css('display', 'block');
+			authorListButton.attr('aria-selected', true);
+			authorList.css('display', 'block');
 			this._populateAuthorsList();
 		} else { // annot
 			if (!this.isModalHistory) {
-				$("#annotation-list-mp").css('display', 'block');
+				annotList.css('display', 'block');
 			}
 			if (this._preventOpenHistoryWindowOnce) {
 				this._preventOpenHistoryWindowOnce = false;
 			} else {
 				this.openHistoryWindow(this.isModalHistory);
 			}
-			$("#annotation-list-button-mp").attr('aria-selected', true);
+			annotListButton.attr('aria-selected', true);
 		}
 	}
 
