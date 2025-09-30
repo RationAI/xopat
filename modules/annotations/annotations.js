@@ -1439,7 +1439,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Set a callback to get author ID in form matching XOpatUser.id
-	 * @param {(authorId, authorType) => string} callback Function used to return expected author ID
+	 * @param {(authorId: string, authorType?: string) => string} callback Function used to return expected author ID
 	 */
 	setAuthorGetter(callback) {
 		this.mapAuthorCallback = callback;
