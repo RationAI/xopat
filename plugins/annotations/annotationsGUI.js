@@ -796,7 +796,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	 */
 	commentsHide() {
 		const menu = document.getElementById("annotation-comments-menu");
-		menu.style.display = 'none';
+        if (menu) {
+            menu.style.display = 'none';
+        }
 	}
 
 	/**
@@ -804,7 +806,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	 */
 	commentsShow() {
 		const menu = document.getElementById("annotation-comments-menu");
-		menu.style.display = 'flex';
+        if (menu) {
+            menu.style.display = 'flex';
+        }
 	}
 
 	_annotationSelected(object) {
