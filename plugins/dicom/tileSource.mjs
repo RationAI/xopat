@@ -177,27 +177,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.tileHeight = this.tileHeight || topLevel.tileHeight || 512;
     }
 
-    async _resolveByInstanceUID() {
-        if (this.studyUID && this.seriesUID) {
-            // Single instance path should still ingest and be able to find preview/macro if present.
-            const meta = await this._wadoMetadata(this.studyUID, this.seriesUID, this.instanceUID);
-            this._ingestInstanceMetadata(this.instanceUID, meta);
-            return { studyUID: this.studyUID, seriesUID: this.seriesUID, instanceUID: this.instanceUID };
-        }
-        const inst = await this._qido("/instances", { SOPInstanceUID: this.instanceUID });
-        const i = this._first(inst);
-        if (!i) throw new Error(`Instance not found by QIDO: ${this.instanceUID}`);
-        this.studyUID = i["0020000D"].Value[0];
-        this.seriesUID = i["0020000E"].Value[0];
-        const meta = await this._wadoMetadata(this.studyUID, this.seriesUID, this.instanceUID);
-        this._ingestInstanceMetadata(this.instanceUID, meta);
-        return { studyUID: this.studyUID, seriesUID: this.seriesUID, instanceUID: this.instanceUID };
-    }
-
     async _resolveTarget() {
-        if (this.seriesUID && this.studyUID && !this.instanceUID) return this._resolveBySeries();
-        if (this.instanceUID && (!this.seriesUID || !this.studyUID)) return this._resolveByInstanceUID();
-        if (this.instanceUID && this.seriesUID && this.studyUID) return this._resolveByInstanceUID();
+        if (this.seriesUID && this.studyUID) return this._resolveBySeries();
         if (this.studyUID && !this.seriesUID) return this._resolveByStudy();
         if (this.patientID) return this._resolveByPatient();
         throw new Error("No access path provided. Supply one of: patientID | studyUID | (studyUID+seriesUID) | instanceUID.");
@@ -252,15 +233,26 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         const perFrameFG = attrs["52009230"]?.Value || null; // Per‑Frame Functional Groups
 
+        let spacingArr = attrs["00280030"]?.Value;
+        if (!spacingArr) {
+            // Enhanced/WSI: Shared Functional Groups -> Pixel Measures -> PixelSpacing
+            const sfg = attrs["52009229"]?.Value?.[0];
+            const pms = sfg?.["00289110"]?.Value?.[0];
+            spacingArr = pms?.["00280030"]?.Value;                 // PixelSpacing
+        }
+
         if (perFrameFG && numberOfFrames) {
             for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
                 const fg = perFrameFG[frameIndex];
-                const pixelMeasures = fg["00289110"]?.Value?.[0]; // PixelMeasuresSequence
                 const planePos      = fg["0048021A"]?.Value?.[0]; // PlanePositionSlideSequence
-                if (!pixelMeasures || !planePos) continue;
-
-                // todo unused spacing information
-                // const spacingArr = pixelMeasures["00280030"].Value; // [rowSpacing, colSpacing]
+                if (!planePos) continue;
+                const pixelMeasures = fg["00289110"]?.Value?.[0]; // PixelMeasuresSequence
+                let measures = pixelMeasures?.["00280030"]?.Value || spacingArr;
+                if (!measures) {
+                    console.warn("No pixel measures found for frame", frameIndex);
+                    const pixelSpacing = this._fv(attrs["00181164"]?.Value);  // or ImagerPixelSpacing at worst
+                    measures = [pixelSpacing, pixelSpacing];
+                }
 
                 let levelIdx = this._ensureLevelByDims(totalWidth, totalHeight, tileWidth, tileHeight);
 
@@ -270,7 +262,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 const tileX = Math.floor((col ?? 0) / (tileWidth || 1));
                 const tileY = Math.floor((row ?? 0) / (tileHeight || 1));
                 if (!this.framesByLevel[levelIdx]) this.framesByLevel[levelIdx] = {};
-                this.framesByLevel[levelIdx][`${tileX}_${tileY}`] = { frameNumber: frameIndex + 1, instanceUID };
+                this.framesByLevel[levelIdx][`${tileX}_${tileY}`] = { frameNumber: frameIndex + 1, instanceUID, micronsX: measures[0], micronsY: measures[1] };
             }
 
             // remember tile sizes if not set yet
@@ -336,6 +328,24 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.levels.splice(insertIdx, 0, newLevel);
         this.framesByLevel.splice(insertIdx, 0, {});
         return insertIdx;
+    }
+
+    getMetadata() {
+        // todo if error return error data
+        return {
+            imageInfo: {
+                studyUID: this.studyUID,
+                seriesUID: this.seriesUID,
+                previewInstanceUID: this.previewInstanceUID,
+                macroInstanceUID: this.macroInstanceUID,
+                levels: this.levels,
+                tileWidth: this.tileWidth,
+                tileHeight: this.tileHeight,
+                micronsX: this.framesByLevel[0].micronsX,
+                micronsY: this.framesByLevel[0].micronsY,
+            },
+            patientInfo: this.patientDetails
+        }
     }
 
     /* ------------------------------ OSD hooks ------------------------------ */

@@ -1,0 +1,8 @@
+{
+  "name": "web-worker-manager",
+  "version": "1.0.0",
+  "description": "Web Worker Manager",
+  "author": "Aiosa",
+  "license": "MIT",
+  "main": "manager.ts"
+}
