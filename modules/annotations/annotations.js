@@ -1419,7 +1419,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			obj.authorType
 		);
 		
-		if (author === this.user.id) return;
+		if (
+			!author ||
+			author === this.user.id
+		) return;
 
 		const authorConfig = this.getAuthorConfig(author);
 
@@ -1439,7 +1442,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Set a callback to get author ID in form matching XOpatUser.id
-	 * @param {(authorId: string, authorType?: string) => string} callback Function used to return expected author ID
+	 * @param {(authorId: string, authorType?: string) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
 	 */
 	setAuthorGetter(callback) {
 		this.mapAuthorCallback = callback;
