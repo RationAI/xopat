@@ -164,7 +164,9 @@ oidc.xOpatUser = class extends XOpatModuleSingleton {;
             this._signinProgress = false;
             USER_INTERFACE.Loading.text("Login not successful! Waiting...");
             if (typeof error === "string") error = {message: error};
-            error.message = error.message || "";
+            if (!error.message) {
+                error.message = "";
+            }
             if (error.message.includes('Failed to fetch')) {
                 console.debug('OIDC: Signin failed due to connection issues. Retrying in 20 seconds.');
                 return await this._safeRetrySignIn('Failed to login, retrying in 20 seconds.',
@@ -380,3 +382,4 @@ oidc.xOpatUser.SignInUserInteraction = {
     ALWAYS: 'ALWAYS'
 }
 oidc.xOpatUser.instance(); //todo consider just executing private code...
+;
