@@ -477,7 +477,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const comments = this._selectedAnnot.comments;
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) {
-			console.warn('annotationsGUI: comments list element not found');
 			return;
 		}
 		this._clearComments();
