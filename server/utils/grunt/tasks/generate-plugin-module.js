@@ -130,15 +130,15 @@ module.exports = function(grunt) {
 
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your plugin", x => x.trim(), "Name is required!");
-      name = name.replace(/[^'"]/g, "");
+      name = name.replace(/['"]/g, "");
 
       // ask for author and check
       let author = await askWithValidation("Enter the plugin author", x => x.trim(), "Author required!");
-      author = author.replace(/[^'"]/g, "");
+      author = author.replace(/['"]/g, "");
 
       // ask for description (optional)
       let description = await askWithValidation("Enter the plugin description", false);
-      description = description.replace(/[^'"]/g, "");
+      description = description.replace(/['"]/g, "");
 
       let modules = [];
       if (await askYesNo("Do you want to add modules?")) {
@@ -202,15 +202,15 @@ addPlugin('${pluginId}', class extends XOpatPlugin {
       const folderPath = path.join(basePath, moduleId);
       // ask for full name and check
       let name = await askWithValidation("Enter the full name for your module", x => x.trim(), "Name is required!");
-      name = name.replace(/[^'"]/g, "");
+      name = name.replace(/['"]/g, "");
 
       // ask for author and check
       let author = await askWithValidation("Enter the module author", x => x.trim(), "Author required!");
-      author = author.replace(/[^'"]/g, "");
+      author = author.replace(/['"]/g, "");
 
       // ask for description (optional)
       let description = await askWithValidation("Enter the module description", false);
-      description = description.replace(/[^'"]/g, "");
+      description = description.replace(/['"]/g, "");
 
       let requirements = [];
       if (await askYesNo("Do you want to add any required modules?")) {
