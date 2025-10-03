@@ -37,6 +37,7 @@ import { Toast } from "./classes/components/toast.mjs";
 import { MenuTabBanner } from "./classes/components/menuTabBanner.mjs";
 import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mjs";
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
+import { Explorer } from "./classes/components/explorer.mjs";
 
 import GlobalTooltip from "./services/globalTooltip.mjs";
 
@@ -50,6 +51,7 @@ const UI = {
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
     Toolbar, ShaderLayer, ShaderSideMenu, FloatingWindow,
     MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
+    Explorer,
 
     // Services
     GlobalTooltip

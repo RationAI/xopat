@@ -4,7 +4,7 @@ import { Div } from "../elements/div.mjs";
 import { TabsMenu } from "./tabsMenu.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
 
-const { div, h1, p, br, img } = van.tags;
+const { div } = van.tags;
 
 /**
  * MainLayout

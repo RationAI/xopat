@@ -182,6 +182,7 @@ requireLossless(value) {
 /**
  * Slide Metadata
  * @typedef {Object} SlideMetadata
+ * @property {object} [info=undefined] - info object that is used to store all information about the slide a user should see, if not provided, the whole return value is treated also as user info.
  * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
  * @property {number} [microns=undefined] - The microns in average.
  * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.

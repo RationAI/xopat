@@ -150,16 +150,39 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     }
 
     async function initializePlugin(plugin) {
-        if (!plugin) return false;
-        if (!plugin.pluginReady) return true;
+        if (!plugin) {
+            console.warn("Attempt to initialize undefined plugin.");
+            return false;
+        }
+
         try {
-            await plugin.pluginReady();
+            if (typeof plugin.pluginReady === "function") {
+                await plugin.pluginReady();
+            }
+
+            /**
+             * Plugin was loaded dynamically at runtime.
+             * @property {string} id plugin id
+             * @memberof VIEWER_MANAGER
+             * @event plugin-loaded
+             */
+            VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: plugin.id, plugin: plugin});
             return true;
         } catch (e) {
+            /**
+             * @property {string} id plugin id
+             * @property {string} message
+             * @memberof VIEWER_MANAGER
+             * @event plugin-failed
+             */
+            VIEWER_MANAGER.raiseEvent('plugin-failed', {
+                id: plugin.id,
+                message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[plugin.id].name}),
+            });
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
+            return false;
         }
-        return false;
     }
 
     /**
@@ -1314,32 +1337,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
                 if (pluginsWereInitialized()) {
                     initializePlugin(PLUGINS[id].instance).then(success => {
-                        if (!success) {
-                            /**
-                             * @property {string} id plugin id
-                             * @property {string} message
-                             * @memberof VIEWER_MANAGER
-                             * @event plugin-failed
-                             */
-                            VIEWER_MANAGER.raiseEvent('plugin-failed', {
-                                id: plugin.id,
-                                message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[id].name}),
-                            });
-                            return;
+                        if (success) {
+                            finishPluginLoad();
                         }
-
-                        finishPluginLoad();
-
-                        /**
-                         * Plugin was loaded dynamically at runtime.
-                         * @property {string} id plugin id
-                         * @memberof VIEWER_MANAGER
-                         * @event plugin-loaded
-                         */
-                        VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: id, plugin: PLUGINS[id].instance});
                         onload();
-                    }).catch(e => {
-                        console.error(e);
                     });
                     return;
                 }
@@ -1899,6 +1900,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         /**
          *
          * @param viewerOrId any viewer ID or viewer instance itself
+         * @return {RightSideViewerMenu|undefined} menu instance or undefined if not found
          */
         getMenu(viewerOrId) {
             let viewer = null;

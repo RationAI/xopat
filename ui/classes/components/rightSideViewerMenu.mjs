@@ -96,11 +96,11 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     append(title, titleHtml, html, id, pluginId) {
-        this.menu.append(title, titleHtml, html, id, pluginId, "glass");
+        this.menu.append(title, titleHtml, html, id, pluginId);
     }
 
     appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-        this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId, "glass");
+        this.menu.appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId);
     }
 
     createShadersMenu() {

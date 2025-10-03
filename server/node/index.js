@@ -261,7 +261,6 @@ const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
-
         // Treat suffix paths as attempt to access existing files
         if (url.pathname.match(/.+\..{2,5}$/g)) {
             const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
@@ -286,7 +285,9 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
+
+const port = process.env.XOPAT_NODE_PORT || 9000;
+server.listen(port, '0.0.0.0', () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
@@ -297,10 +298,10 @@ server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
     } else {
         console.log("Using default ENV (no overrides).");
     }
-    console.log(`The server is listening on localhost:9000 ...`);
-    console.log(`  To manually create and run a session, open http://localhost:9000/dev_setup`);
-    console.log(`  To open using GET, provide http://localhost:9000?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide http://localhost:9000#urlEncodedSessionJSONHere`);
+    console.log(`The server is listening on localhost:${port} ...`);
+    console.log(`  To manually create and run a session, open http://localhost:${port}/dev_setup`);
+    console.log(`  To open using GET, provide http://localhost:${port}?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide http://localhost:${port}#urlEncodedSessionJSONHere`);
     console.log(`                                      or sent the data using HTTP POST`);
     console.log(`  The session description is available in src/README.md`);
 });

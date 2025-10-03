@@ -74,14 +74,26 @@ window.AdvancedMenuPages = class {
     }
 
     /**
+     * @typedef JSONHtmlConfig
+     * @type object
+     * @property {string} id - id to reference the menu with
+     * @property {string} title
+     * @property {[object]} page
+     * @property {boolean} main
+     * todo docs
+     */
+
+    /**
      * Allowed types of config[i].page[] are either 'vega', 'columns', 'newline', 'html'
      *   or types that map to the compiled UI system.
      *
-     * @param {object} config
+     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
      * @param {boolean|object} sanitizeConfig configuration for sanitize-html,
      *   or simple on/off flag for default behaviour
      */
     buildMetaDataMenu(config, sanitizeConfig=false) {
+        if (!config) return;
+
         const build = (config, sanitizer) => {
             let parent, parentUnique;
 
@@ -122,6 +134,11 @@ window.AdvancedMenuPages = class {
             this.loadVega();
         };
 
+
+        if (!Array.isArray(config)) {
+            config = [config];
+        }
+
         if (typeof sanitizeConfig === "object") {
             const _this = this;
             UTILITIES.loadModules(() => {
@@ -140,11 +157,12 @@ window.AdvancedMenuPages = class {
     /**
      * Allowed types of config[i].page[] are either 'vega', 'columns', 'newline', 'html'
      *   or types that map to the compiled UI system. Instead of menu, buids a custom content at desired place
-     * @param config
+     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
      * @param selector
      * @param sanitizeConfig
      */
     buildCustom(config, selector, sanitizeConfig=false) {
+        if (!config) return;
         const build = (config, sanitizer, selector=undefined) => {
             const html = [];
             if (Array.isArray(config)) {
@@ -187,12 +205,13 @@ window.AdvancedMenuPages = class {
     /**
      *
      * @param {OpenSeadragon.Viewer|string} viewerOrId
-     * @param config
+     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
      * @param sanitizeConfig
      */
     buildViewerMenu(viewerOrId, config, sanitizeConfig=false) {
-        const build = (config, sanitizer) => {
+        if (!config) return;
 
+        const build = (config, sanitizer) => {
             for (let data of config) {
                 const html = [];
 
@@ -205,6 +224,7 @@ window.AdvancedMenuPages = class {
                     html.push(this.strategy(element, sanitizer));
                 }
 
+                // todo replacement must work
                 VIEWER_MANAGER.getMenu(viewerOrId).append(
                     data.title,
                     undefined,
@@ -216,6 +236,10 @@ window.AdvancedMenuPages = class {
             this._count += config.length;
             this.loadVega();
         };
+
+        if (!Array.isArray(config)) {
+            config = [config];
+        }
 
         if (typeof sanitizeConfig === "object") {
             const _this = this;
@@ -520,19 +544,30 @@ window.AdvancedMenuPages = class {
                 nodes.push(this._buildChipRow(label, value, opts.maxArrayItems));
                 return nodes;
             }
-            nodes.push({ type: "title", text: label, level: Math.min(4, depth + 2), separator: true });
+            nodes.push({ type: "title", text: label, level: Math.min(4, depth + 2), separator: false });
+
+            const children = [];
             const items = value.slice(0, opts.maxArrayItems);
             items.forEach((item, i) => {
-                const title = { type: "title", text: `${label} – Item #${i+1}`, level: Math.min(4, depth + 3) };
-                nodes.push(title);
                 if (depth >= opts.maxDepth) {
-                    nodes.push(this._buildLabeledValue("Value", this._fmtValue(item)));
+                    children.push(this._buildLabeledValue("", this._fmtValue(item)));
                 } else {
-                    nodes.push(...this._guessObjectSpec(item, depth + 1, opts));
+                    children.push(...this._guessSpecForValue(i, item, depth + 1, opts));
                 }
             });
             if (value.length > opts.maxArrayItems) {
-                nodes.push(this._buildLabeledValue("Note", `+${value.length - opts.maxArrayItems} more items truncated`));
+                children.push(this._buildLabeledValue("Note", `+${value.length - opts.maxArrayItems} more items truncated`));
+            }
+
+            if (children.length > 3) {
+                nodes.push({
+                    type: "collapse",
+                    label: `Items (${value.length})`,
+                    children,
+                    startOpen: false
+                });
+            } else {
+                nodes.push(...children);
             }
             return nodes;
         }
@@ -540,40 +575,27 @@ window.AdvancedMenuPages = class {
         if (this._isPlainObject(value)) {
             if (value.type && this.resolveUIClass(value.type)) {
                 if (Array.isArray(value.children)) {
-                    value.children = value.children.map(ch => this._guessObjectSpec(ch, depth + 1, opts));
+                    value.children = value.children.map(ch => this._guessSpecForValue("", ch, depth + 1, opts));
                 }
                 nodes.push(value);
                 return nodes;
             }
 
-            nodes.push({ type: "title", text: label || "Object", level: Math.min(4, depth + 2), separator: !!label });
+            if (label) {
+                nodes.push({ type: "title", text: label || "Object", level: Math.min(4, depth + 2), separator: false });
+            }
             if (depth >= opts.maxDepth) {
                 nodes.push(this._buildLabeledValue("Value", this._fmtValue(value)));
                 return nodes;
             }
-            nodes.push(...this._guessObjectSpec(value, depth + 1, opts));
+            for (let chKey in value) {
+                nodes.push(...this._guessSpecForValue(chKey, value[chKey], depth + 1, opts));
+            }
             return nodes;
         }
 
         // Fallback
         nodes.push(this._buildLabeledValue(label || "Value", this._fmtValue(value)));
-        return nodes;
-    }
-
-    /** Build specs for all properties of an object */
-    _guessObjectSpec(obj, depth, opts) {
-        if (obj.type && this.resolveUIClass(obj.type)) {
-            if (Array.isArray(obj.children)) {
-                obj.children = obj.children.map(ch => this._guessObjectSpec(ch, depth + 1, opts)).flat();
-            }
-            return [obj];
-        }
-
-        const nodes = [];
-        const keys = Object.keys(obj);
-        for (const k of keys) {
-            nodes.push(...this._guessSpecForValue(k, obj[k], depth, opts));
-        }
         return nodes;
     }
 
@@ -590,20 +612,8 @@ window.AdvancedMenuPages = class {
         options.maxDepth = Math.max(1, options.maxDepth ?? 3);
         options.maxArrayItems = Math.max(1, options.maxArrayItems ?? 25);
 
-        const spec = [];
-
-        // Root title
-        if (options.title) {
-            spec.push({ type: "title", text: options.title, level: 2, separator: true });
-        }
-
-        if (Array.isArray(json)) {
-            spec.push(...this._guessSpecForValue("Items", json, 1, options));
-        } else if (this._isPlainObject(json)) {
-            spec.push(...this._guessObjectSpec(json, 1, options));
-        } else {
-            spec.push(...this._guessSpecForValue("Value", json, 1, options));
-        }
+        const spec = this._guessSpecForValue("", json, 1, options);
+        console.log(spec);
 
         const htmlParts = spec.map(node => this.renderUIFromJson(node, sanitizer));
         return htmlParts.join("");

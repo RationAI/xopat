@@ -41,11 +41,6 @@ class Menu extends BaseComponent {
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
         for (let i of this._children) {
-            // todo require ID
-            if (i.class === Dropdown) {
-                this.addDropdown(i);
-                continue;
-            }
             this.addTab(i);
         }
         
@@ -103,6 +98,7 @@ class Menu extends BaseComponent {
      *     { id: "xopat", section: "recent",  label: "xopat", icon: "widgets", selected: true },
      *   ],
      * @description adds a dropdown type item to the menu
+     * @return {Dropdown}
      */
     addDropdown(item){
         if (item.class !== Dropdown || !item.id){
@@ -114,7 +110,6 @@ class Menu extends BaseComponent {
         const tab = new Dropdown(item);
 
         this.tabs[id] = tab;
-
 
         tab.headerButton.setClass("join", "join-item");
         switch (this._design) {
@@ -138,8 +133,14 @@ class Menu extends BaseComponent {
     /**
      *
      * @param {*} item dictionary with id, icon, title, body which will be added to the menu
+     * // todo both should have common interface
+     * @return {MenuTab|Dropdown}
      */
     addTab(item) {
+        if (item.class === Dropdown) {
+            return this.addDropdown(item);
+        }
+
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
@@ -236,7 +237,7 @@ class Menu extends BaseComponent {
 
     append(title, titleItem, item, id, pluginId, bg=undefined) {
         let content =
-            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
+            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
                 div(
                     h3({class: "d-inline-block h3 btn-pointer ml-2"}, title),
                     this.toNode(titleItem),

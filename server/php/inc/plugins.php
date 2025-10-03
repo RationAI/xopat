@@ -100,20 +100,19 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 if (!isset($data["enabled"]) || $data["enabled"] != false) {
                     $PLUGINS[$data["id"]] = $data;
                 }
-
-            } catch (Exception $e) {
-                $id = $dir;
-                $PLUGINS[$id] = array(
-                    "id" => $dir,
-                    "name" => $dir,
-                    "error" => $i18n->t('php.pluginInvalid', array("error" => $e->getMessage())),
-                    "author" => "-",
-                    "version" => "-",
-                    "icon" => "",
-                    "includes" => array(),
-                    "modules" => array(),
-                );
             }
+        } catch (Exception $e) {
+            $id = $dir;
+            $PLUGINS[$id] = array(
+                "id" => $dir,
+                "name" => $dir,
+                "error" => $i18n->t('php.pluginInvalid', array("error" => $e->getMessage())),
+                "author" => "-",
+                "version" => "-",
+                "icon" => "",
+                "includes" => array(),
+                "modules" => array(),
+            );
         }
     }
 }

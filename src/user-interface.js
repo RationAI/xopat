@@ -1026,7 +1026,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             menu: "",
 
             init: function () {
-                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addDropdown({ id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'), body: [], class: UI.Dropdown});
+                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addTab({ id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'), body: [], class: UI.Dropdown});
             },
 
             // should add submenus to plugin menu

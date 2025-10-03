@@ -17,6 +17,7 @@
 !/modules/vega-secure
 !/modules/webgl
 !/modules/sam-segmentation-experimental
+!/modules/web-worker-manager
 
 /plugins/**
 !/plugins/annotations

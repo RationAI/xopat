@@ -86,11 +86,10 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             if (!isset($data["enabled"]) || $data["enabled"] != false) {
                 $MODULES[$data["id"]] = $data;
             }
-
-        } catch (Exception $e) {
-            // todo only log error, do not shut down everything
-            trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
         }
+    } catch (Exception $e) {
+            // todo only log error, do not shut down everything
+        trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
     }
 }
 

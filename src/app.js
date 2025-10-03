@@ -826,6 +826,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     function handleSyntheticEventFinishWithValidData(viewer, referenceImage, layerPosition) {
+        const eventOpts = {};
+
         try {
             //Todo once rewritten, treat always low level item as the reference layer (index == 0)
 
@@ -868,8 +870,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
             viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
-
-            const eventOpts = {};
 
             if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
                 let layerWorldItem = viewer.world.getItemAt(layerPosition);
