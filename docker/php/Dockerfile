@@ -169,6 +169,7 @@ COPY src/ /var/www/html/xopat/src
 COPY server/ /var/www/html/xopat/server
 COPY plugins/ /var/www/html/xopat/plugins
 COPY modules/ /var/www/html/xopat/modules
+COPY ui/ /var/www/html/xopat/ui
 COPY env/ /var/www/html/xopat/env
 COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
 
