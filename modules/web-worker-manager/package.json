@@ -4,5 +4,8 @@
   "description": "Web Worker Manager",
   "author": "Aiosa",
   "license": "MIT",
-  "main": "manager.ts"
+  "main": "manager.ts",
+  "dependencies": {
+    "comlink": "^4.4.2"
+  }
 }
