@@ -28,6 +28,7 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         ca-certificates \
         vim \
         nano \
+        tini \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \

@@ -331,7 +331,7 @@ class AsyncAPIProxy extends APIProxy {
 
     /**
      * Get a list of keys
-     * @return {Promise<Awaited<string>[]>}
+     * @returns {Promise<Array<string>>}
      */
     async keys() {
         const store = this.__storage;

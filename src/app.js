@@ -579,7 +579,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      *
      * @param {Number|Array<number>|undefined|null} [bgSpec=undefined]
      * @param {Number|Array<number>|undefined|null} [vizSpec=undefined]
-     * @param {{deriveOverlayFromBackgroundGoals?: boolean}} opts
+     * @param {Object} [opts]
+     * @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
      *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex
      *        (array in non-stacked; single number in stacked).
      * @return {boolean} true if something needed change
@@ -1046,12 +1047,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * - In non-stacked mode with multiple backgrounds selected, creates multiple viewers (one per bg).
      * - In stacked mode (or single bg) uses a single viewer.
      *
-     * @param {Array|undefined} data
-     * @param {Array|undefined} background
-     * @param {Array|undefined} visualizations
-     * @param {number|number[]|undefined|null} bgSpec
-     * @param {number|number[]|undefined|null} vizSpec
-     * @param {{deriveOverlayFromBackgroundGoals?: boolean}} [opts]
+     @param {Array|undefined} data
+     @param {Array|undefined} background
+     @param {Array|undefined} visualizations
+     @param {number|number[]|undefined|null} bgSpec
+     @param {number|number[]|undefined|null} vizSpec
+     @param {Object} [opts]
+     @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
      */
     APPLICATION_CONTEXT.openViewerWith = async function (
         data = undefined,

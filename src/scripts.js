@@ -482,7 +482,7 @@ ${await UTILITIES.getForm()}
 
     /**
      * Open a file picker and read the selected file, then call the provided callback with the result.
-     * @param {(result: string|ArrayBuffer) => void} onUploaded - Callback invoked with file contents or rejected error.
+     * @param {function((string|ArrayBuffer)): void} onUploaded - Callback invoked with file contents.
      * @param {string} [accept=".json"] - Accept attribute (e.g., "image/png, image/jpeg").
      *   See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
      * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.

@@ -24,6 +24,18 @@ window.HTTPError = class extends Error {
 };
 
 /**
+ * @typedef {Object} XOpatElementRecord
+ * @property {string} id
+ * @property {string} [name]
+ * @property {string} [directory]
+ * @property {Array<string>} [includes]
+ * @property {boolean} [permaLoad]
+ * @property {*} [instance]
+ * @property {boolean} [loaded]
+ * @property {*} [error]
+ */
+
+/**
  * Initialize the xOpat loading system. This sets up the runtime environment for
  * loading modules and plugins and returns an initializer you call when the host
  * application (e.g., the viewer) is ready.
@@ -34,15 +46,15 @@ window.HTTPError = class extends Error {
  *   const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
  *   await initPlugins();
  *
- * @param {Object.<string, {id:string, name?:string, directory?:string, includes?:string[], permaLoad?:boolean, instance?:any, loaded?:boolean, error?:any}>} PLUGINS
- *        Registry object of plugins keyed by plugin id (from include.json).
- * @param {Object.<string, {id:string, name?:string, directory?:string, includes?:string[], permaLoad?:boolean, instance?:any, loaded?:boolean, error?:any}>} MODULES
- *        Registry object of modules keyed by module id (from include.json).
+ * @param {Object<string, XOpatElementRecord>} PLUGINS
+ *   Registry object of plugins keyed by plugin id (from include.json).
+ * @param {Object<string, XOpatElementRecord>} MODULES
+ *   Registry object of modules keyed by module id (from include.json).
  * @param {string} PLUGINS_FOLDER - Base URL or path where plugin folders reside (trailing slash optional).
  * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
  * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
  * @param {string} version - Version string of the running build.
- * @returns {(() => Promise<void>)} A function to be called once the host app is ready. You can await the handler if you like.
+ * @returns {function(): Promise<void>} A function to be called once the host app is ready. You can await the handler if you like.
  */
 function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";

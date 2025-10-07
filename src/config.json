@@ -25,7 +25,7 @@
      *   js_cookie_same_site: ?string,
      *   js_cookie_secure: ?boolean,
      *   secureMode: ?boolean,
-     *   redirectUrl: ?string
+     *   redirectUrl: ?string,
      *   production: ?boolean
      * }} xoClientSetup
      */
@@ -116,7 +116,7 @@
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
-     *   disablePluginsUi: ?boolean,
+     *   disablePluginsUi: ?boolean
      * }} xoParams
      */
     "setup": {
