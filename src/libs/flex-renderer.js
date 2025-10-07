@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-09-23
-//! Git commit: --34711ad-dirty
+//! Built on 2025-10-07
+//! Git commit: --7e9a2d8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -1003,7 +1003,7 @@
      */
     $.BlankTileSource = class extends $.TileSource {
         supports(data, url) {
-            return data.type === "_blank" || url.type === "_blank";
+            return (data && data.type === "_blank") || (url && url.type === "_blank");
         }
         configure(options, dataUrl, postData) {
             return $.extend(options, {
@@ -7871,8 +7871,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-09-23
-//! Git commit: --34711ad-dirty
+//! Built on 2025-10-07
+//! Git commit: --7e9a2d8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8044,8 +8044,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-09-23
-//! Git commit: --34711ad-dirty
+//! Built on 2025-10-07
+//! Git commit: --7e9a2d8-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
