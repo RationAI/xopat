@@ -10,7 +10,7 @@ created by using
 Directives for developing modules and plugins are in README files in respective directories. 
 
 General development can furthermore use the ``npm run dev`` task. The tasks starts a node server
-(you need to provide `./env/.env` file or `XO_ENV` variable with configuration of the viewer), and
+(you need to provide `./env/.env` file or `XOPAT_ENV` variable with configuration of the viewer), and
 also tun a tailwind watcher. This is necessary to register new styles automatically using tailwind.
 You can specify watched entities by providing ``WATCH_PATTERN`` variable, the task will 
 watch your chosen files.

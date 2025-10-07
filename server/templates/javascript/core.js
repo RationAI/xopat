@@ -172,7 +172,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     * Parse CORE Env
     */
 
-    const envRegex = /<%\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*%>/;
+    const envRegex = /<%\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*%>/g;
 
     function parseEnvConfig(data, err) {
         try {
