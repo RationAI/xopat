@@ -1,9 +1,10 @@
 import { DICOMWebTileSource } from "./tileSource.mjs";
+import vanjs from "../../ui/vanjs.mjs";
 
 /*
   DICOM plugin: unified workflow for Patient/Study/Series selection
 
-  Behaviour requested:
+  Behaviour:
   - A series, study or patient can be provided via options/configuration.
   - If a *series* is given -> open it immediately.
   - If a *study* is given -> prepare all series from that study as background configurations (do not open UI yet).
@@ -126,9 +127,8 @@ addPlugin('dicom', class extends XOpatPlugin {
                 evt.data = [];
                 evt.background = [];
             } else {
-                // Nothing given: fetch all patients (or derive from studies). No background yet.
-                const patients = await this.fetchAllPatientsOrDerive(this.serviceUrl, token);
-                this.state.patients = patients;
+                // Nothing given: no prefetch. UI will call the lazy loaders below.
+                this.state.patients = [];
                 // Leave everything else empty for now; UI will subsequently pick a patient/study/series
                 evt.data = [];
                 evt.background = [];
@@ -150,6 +150,99 @@ addPlugin('dicom', class extends XOpatPlugin {
                     bg.name = data.seriesUID;
                 }
             }
+        });
+
+        this.integrateWithPlugin('slide-info', async info => {
+            const {span, div} = vanjs.tags;
+
+            const patientsSupported = await this._supportsPatients(this.serviceUrl, XOpatUser.instance().getSecret());
+
+            const studiesLevel = {
+                id: "studies",
+                title: "Studies",
+                mode: "page",
+                pageSize: 20,
+                getChildren: async (patient, ctx) => {
+                    const pid = patient?.patientID || patient?.PatientID;
+                    const res = pid ?
+                        await this.listStudiesForPatient(this.serviceUrl, XOpatUser.instance().getSecret(), pid, { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page }) :
+                        await this.listStudiesPagedAll(this.serviceUrl, XOpatUser.instance().getSecret(), { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
+                    if ((res.total === 0) || (res.items.length === 0 && ctx.page === 0)) {
+                        info.warn?.("No studies available for this patient.");
+                    }
+                    return { total: res.total, items: res.items };
+                },
+                renderItem: (s) => div({ class: "flex items-center gap-2" },
+                    span({ class: "fa-auto fa-flask" }),
+                    span(s.desc || s.StudyDescription || s.studyUID)
+                ),
+                onOpen: () => true,
+            };
+
+            const imagesLevel = {
+                id: "images",
+                title: "Images",
+                mode: "virtual",
+                pageSize: 20,
+                getChildren: async (seriesOrStudy, ctx) => {
+                    // If your UI opens images per *series*, supply series + study UIDs here.
+                    const studyUID = seriesOrStudy.studyUID || seriesOrStudy.StudyInstanceUID;
+
+                    const series = await this.listSeriesForStudy(this.serviceUrl, XOpatUser.instance().getSecret(), studyUID, { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
+                    const data = {
+                        total: 0,
+                        items: [],
+                    };
+
+                    // Usually one WSI per series, but if there are multiple series in a single WSI, try to detect them
+                    for (const s of series.items) {
+                        const instances = await this.listInstancesForSeries(this.serviceUrl, XOpatUser.instance().getSecret(), studyUID, s.seriesUID, { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
+                        const wsiInstances = this.groupSeriesInstances(instances.items);
+                        data.items.push(...wsiInstances);
+                    }
+                    // todo preview... create one
+
+                    data.total = data.items.length;
+                    return data;
+                },
+                renderItem: (img) => {
+                    const instanceUID = img["00080018"]?.Value?.[0] || img.SOPInstanceUID || "Unknown";
+                    const seriesDesc = img["0008103E"]?.Value?.[0] || img.SeriesDescription || "";
+                    const modality   = img["00080060"]?.Value?.[0] || img.Modality || "";
+                    return div({ class: "flex flex-col gap-1" },
+                        span({ class: "fa-auto fa-image" }, `${seriesDesc} (${modality})`),
+                        span({ class: "text-xs text-gray-500" }, `Instance: ${instanceUID.slice(-8)}`)
+                    );
+                },
+                onOpen: () => {
+                    // todo: open a wsi APPLICATION_CONTEXT.openViewerWith();
+                    return false;
+                },
+            };
+
+            // If /patients is not supported, you can:
+            //  - drop the Patients level and start from Studies (requiring a PatientID input), or
+            //  - keep Patients but present the derived list (already handled in listPatientsPaged()).
+            const levels = patientsSupported ? [{
+                id: "patients",
+                title: "Patients",
+                mode: "page",
+                pageSize: 20,
+                getChildren: async (_parent, ctx) => {
+                    const res = await this.listPatientsPaged(this.serviceUrl, XOpatUser.instance().getSecret(), { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
+                    // Show a gentle warning if we got no rows (either truly empty or server doesn’t give totals)
+                    if ((res.total === 0) || (res.items.length === 0 && ctx.page === 0)) {
+                        info.warn?.("No patients found (server may not support /patients; showing derived view if possible).");
+                    }
+                    return { total: res.total, items: res.items };
+                },
+                renderItem: (p, { open }) => div({ class: "flex items-center gap-2" },
+                    span({ class: "fa-auto fa-user" }),
+                    span(p.name || p.PatientName || p.patientID || "Unknown")
+                ),
+                onOpen: () => true,
+            }, studiesLevel, imagesLevel] : [studiesLevel, imagesLevel];
+            info.initBrowser({ id: "dicom-browser", levels });
         });
     }
 
@@ -184,6 +277,121 @@ addPlugin('dicom', class extends XOpatPlugin {
             }
             throw e;
         }
+    }
+
+    async qidoSafeWithMeta(baseUrl, authToken, includefield) {
+        const make = (withFields) => {
+            const u = new URL(baseUrl);
+            if (withFields && includefield) u.searchParams.set('includefield', includefield);
+            return u;
+        };
+
+        // First try with includefield
+        let url = make(true);
+        let res = await fetch(url.toString(), {
+            headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
+        });
+        if (!res.ok) {
+            // Retry without includefield if the server rejects it (e.g., GCP)
+            const msg = await res.text();
+            if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
+                url = make(false);
+                res = await fetch(url.toString(), {
+                    headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
+                });
+            } else {
+                throw new Error(`QIDO ${url.pathname} failed: ${res.status} ${msg}`);
+            }
+        }
+        const total = this._readTotalHeader(res.headers);
+        const text = await res.text();
+        let rows;
+        try { rows = JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        return { rows, total };
+    }
+
+    _readTotalHeader(h) {
+        // Lower-case header names – fetch() Headers is case-insensitive
+        return ['x-total-count', 'total-count', 'dicom-total', 'x-total']
+            .map(k => h.get(k))
+            .filter(Boolean)
+            .map(x => Number(x))
+            .find(n => Number.isFinite(n)) ?? null;
+    }
+
+    async _supportsPatients(serviceUrl, authToken) {
+        try {
+            const url = new URL(`${serviceUrl}/patients`);
+            url.searchParams.set('limit', '1');
+            const res = await fetch(url.toString(), {
+                headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
+            });
+            // GCP will 404/400 here; DICOMweb servers that implement /patients should 200
+            return res.ok;
+        } catch {
+            return false;
+        }
+    }
+
+    // Patients list (derived from /studies if /patients is not supported)
+    async listPatientsPaged(serviceUrl, authToken, { limit = 50, offset = 0 } = {}) {
+        if (await this._supportsPatients(serviceUrl, authToken)) {
+            const base = `${serviceUrl}/patients?limit=${limit}&offset=${offset}`;
+            const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00100020,00100010,00100030,00100040');
+            const items = rows.map(ds => this.parsePatient(ds));
+            return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'patients' };
+        } else {
+            // Derive unique PatientIDs from /studies page
+            const base = `${serviceUrl}/studies?limit=${limit}&offset=${offset}`;
+            const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00100020,00100010,00100030,00100040');
+            const seen = new Map();
+            for (const r of rows) {
+                const p = this.parsePatient(r);
+                if (p.patientID && !seen.has(p.patientID)) seen.set(p.patientID, p);
+            }
+            const items = Array.from(seen.values());
+            // total here is studies-total (not distinct patients). We still return it for UI pagination hints.
+            return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'patients-derived' };
+        }
+    }
+
+    async listStudiesForPatient(serviceUrl, authToken, patientID, { limit = 50, offset = 0 } = {}) {
+        const base = `${serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}&limit=${limit}&offset=${offset}`;
+        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '0020000D,00080020,00081030,00100020');
+        const items = rows.map(ds => this.parseStudy(ds));
+        return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'studies' };
+    }
+
+    async listStudiesPagedAll(serviceUrl, authToken, { limit = 50, offset = 0, filters = {} } = {}) {
+        const url = new URL(`${serviceUrl}/studies`);
+        url.searchParams.set('limit', String(limit));
+        url.searchParams.set('offset', String(offset));
+
+        // Optional filters you pass from UI (any QIDO matching keys)
+        if (filters.StudyDate) url.searchParams.set('StudyDate', filters.StudyDate);     // e.g. 20240101-20241231
+        if (filters.PatientName) url.searchParams.set('PatientName', filters.PatientName);
+        if (filters.AccessionNumber) url.searchParams.set('AccessionNumber', filters.AccessionNumber);
+        if (filters.Modality) url.searchParams.set('Modality', filters.Modality);
+
+        const { rows, total } = await this.qidoSafeWithMeta(url.toString(), authToken,
+            '0020000D,00080020,00081030,00100020'); // StudyUID, StudyDate, StudyDesc, PatientID
+
+        const items = rows.map(ds => this.parseStudy(ds));
+        return { items, total, nextOffset: rows.length < limit ? null : offset + limit };
+    }
+
+    async listSeriesForStudy(serviceUrl, authToken, studyUID, { limit = 50, offset = 0 } = {}) {
+        const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series?limit=${limit}&offset=${offset}`;
+        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '0020000E,00080060,0008103E,00201209');
+        const items = rows.map(ds => this.parseSeries(ds));
+        return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'series' };
+    }
+
+    async listInstancesForSeries(serviceUrl, authToken, studyUID, seriesUID, { limit = 100, offset = 0 } = {}) {
+        const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances?limit=${limit}&offset=${offset}`;
+        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00080018'); // SOPInstanceUID
+        // rows are already instance objects; pass through or normalize if needed
+        return { items: rows, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'instances' };
     }
 
     // WADO-RS metadata fetch for richer details when QIDO filters are blocked
@@ -248,26 +456,18 @@ addPlugin('dicom', class extends XOpatPlugin {
     async seriesConfigForStudy(serviceUrl, studyUID, authToken) {
         const v = this._v;
         const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series`;
-        const json = await this.qidoSafe(base, authToken, '0020000D,0020000E');
+        const json = await this.qidoSafe(base, authToken, '0020000D,0020000E'); // minimal
         return json
             .map(ds => ({ studyUID: v(ds, '0020000D') || studyUID, seriesUID: v(ds, '0020000E') }))
             .filter(x => x.seriesUID);
     }
 
     // Return studies + series for a patient
-    async seriesForPatient(serviceUrl, patientID, authToken) {
-        const sBase = `${serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}`;
-        const studyRows = await this.qidoSafe(sBase, authToken, '0020000D,00080020,00080030,00081030,00080050,00080090,00100020');
-        const studies = studyRows.map(ds => this.parseStudy(ds));
-
-        const seriesByStudy = new Map();
-        for (const st of studies) {
-            const base = `${serviceUrl}/studies/${encodeURIComponent(st.studyUID)}/series`;
-            const rows = await this.qidoSafe(base, authToken, '0020000D,0020000E,00200011,0008103E,00080060,00180015,00201209');
-            const series = rows.map(ds => this.parseSeries(ds));
-            seriesByStudy.set(st.studyUID, series);
-        }
-        return { studies, seriesByStudy };
+    async seriesForPatient(serviceUrl, patientID, authToken, { limit = 50, offset = 0 } = {}) {
+        const base = `${serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}&limit=${limit}&offset=${offset}`;
+        const rows = await this.qidoSafe(base, authToken, '0020000D,00080020,00081030,00100020');
+        const studies = rows.map(ds => this.parseStudy(ds));
+        return { studies, nextOffset: rows.length < limit ? null : offset + limit };
     }
 
     async populateStudyDetails(studyUID, authToken) {
@@ -312,6 +512,53 @@ addPlugin('dicom', class extends XOpatPlugin {
             }
         }
         return Array.from(byID.values());
+    }
+
+    groupSeriesInstances(instances) {
+        const groups = new Map();
+        for (const ds of instances) {
+            const container = this._v(ds, "00400512") || "UNKNOWN_CONTAINER"; // ContainerIdentifier
+            const imageType = (ds?.["00080008"]?.Value || []).join("\\");  // ImageType
+            const pathId    = this._v(ds, "00480106") || "DEFAULT_PATH";       // OpticalPathIdentifier
+            const tpmC      = this._v(ds, "00480006"); // TotalPixelMatrixColumns
+            const tpmR      = this._v(ds, "00480007"); // TotalPixelMatrixRows
+            const key = `${container}|${tpmC}x${tpmR}|${pathId}`;
+            if (!groups.has(key)) {
+                groups.set(key, {
+                    containerIdentifier: container,
+                    opticalPathId: pathId,
+                    totalPixelMatrix: (tpmC && tpmR) ? `${tpmC}×${tpmR}` : null,
+                    label: null, overview: null, volume: [],
+                });
+            }
+            const g = groups.get(key);
+            if (/LABEL/i.test(imageType))      g.label = ds;
+            else if (/OVERVIEW/i.test(imageType)) g.overview = ds;
+            else                                g.volume.push(ds); // pyramid levels
+        }
+        return Array.from(groups.values());
+    }
+
+    async listPatients(serviceUrl, authToken, { limit = 50, offset = 0 } = {}) {
+        const base = `${serviceUrl}/studies?limit=${limit}&offset=${offset}`;
+        const rows = await this.qidoSafe(base, authToken, '00100020,00100010,00100030,00100040');
+        const seen = new Map();
+        for (const r of rows) {
+            const p = this.parsePatient(r);
+            if (p.patientID && !seen.has(p.patientID)) seen.set(p.patientID, p);
+        }
+        return { patients: Array.from(seen.values()), nextOffset: rows.length < limit ? null : offset + limit };
+    }
+
+    async studyExists(serviceUrl, studyUID, authToken) {
+        const base = `${serviceUrl}/studies?StudyInstanceUID=${encodeURIComponent(studyUID)}&limit=1`;
+        try {
+            const rows = await this.qidoSafe(base, authToken, '0020000D');
+            return Array.isArray(rows) && rows.length > 0;
+        } catch (e) {
+            console.warn('studyExists check failed', e);
+            return false;
+        }
     }
 
     async fetchAllPatientsOrDerive(serviceUrl, authToken) {

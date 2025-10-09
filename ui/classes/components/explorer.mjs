@@ -24,7 +24,7 @@
 //       // Heavy renderer (only called when item enters viewport); falls back to renderItem
 //       renderHeavy?: (item, helpers) => Node|BaseComponent,
 //       // Whether clicking an item drills down to the next level (default: true except on last level)
-//       canOpen?: (item) => boolean,
+//       onOpen?: (item) => boolean,  called when user selects a button, if returns true the hierarchy nests one level
 //       // Optional unique key extractor (default uses item.id || index)
 //       keyOf?: (item, index, parent) => string,
 //     },
@@ -131,7 +131,7 @@ export class Explorer extends BaseComponent {
     }
 
     _canOpen(lvl, item, idx) {
-        if (typeof lvl?.canOpen === "function") return !!lvl.canOpen(item, idx);
+        if (typeof lvl?.onOpen === "function") return !!lvl.onOpen(item, idx);
         // default: can open if not last level
         return this.levels.indexOf(lvl) < this.levels.length - 1;
     }
@@ -441,7 +441,6 @@ export class Explorer extends BaseComponent {
     _renderItemLi(levelIndex, item, idx, { heavy = false, pageNo = 0 } = {}) {
         const lvl = this.levels[levelIndex];
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
-        const canOpen = this._canOpen(lvl, item, idx);
         const helpers = {
             open: () => this._navigate(levelIndex, item),
             levelIndex,
@@ -454,12 +453,12 @@ export class Explorer extends BaseComponent {
             class: [
                 "flex items-center gap-2 rounded-md px-2 py-2",
                 "hover:bg-base-300 focus:bg-base-300",
-                canOpen ? "cursor-pointer" : "",
             ].join(" ")
         }, node);
 
-        if (canOpen) {
-            row.onclick = () => this._navigate(levelIndex, item);
+        row.onclick = () => {
+            const navigate = this._canOpen(lvl, item, idx);
+            if (navigate) this._navigate(levelIndex, item);
         }
         // mark for IO (helpful when swapping placeholder)
         row.setAttribute("data-key", key);
