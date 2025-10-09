@@ -87,13 +87,10 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     onUserSelect() {
-        if (this.isLogged) {
-            //todo show some user info!! now it just logs out!
-            this.logout();
-            Dialogs.show('User logged out!');
-        } else {
-            Dialogs.show($.t('user.notConfigured'))
-        }
+        this.raiseEvent('user-select', {
+            userId: id,
+            userName: name
+        });
     }
 
     /**

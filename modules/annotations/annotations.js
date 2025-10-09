@@ -1900,25 +1900,19 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			Object.values(_this.Modes).forEach(mode => mode.onZoomEnd());
 		});
 
+        // OSD Blocks event when such event is taken care of (e.g. navigation) -> relay it to fabric
 		VIEWER.addHandler("canvas-press", function (e) {
-			if (_this.disabledInteraction) return;
-			handleLeftClickDown(e.originalEvent);
-		});
-
+            _this.canvas._onMouseDown(e.originalEvent);
+        });
 		VIEWER.addHandler("canvas-release", function (e) {
-			if (_this.disabledInteraction) return;
-			handleLeftClickUp(e.originalEvent);
-		});
-
+            _this.canvas._onMouseUp(e.originalEvent);
+        });
 		VIEWER.addHandler("canvas-nonprimary-press", function (e) {
-			if (_this.disabledInteraction) return;
-			handleRightClickDown(e.originalEvent);
+            _this.canvas._onMouseDown(e.originalEvent);
 		});
-
 		VIEWER.addHandler("canvas-nonprimary-release", function (e) {
-			if (_this.disabledInteraction) return;
-			handleRightClickUp(e.originalEvent);
-		});
+            _this.canvas._onMouseUp(e.originalEvent);
+        });
 
 		// Wheel while viewer runs not enabled because this already performs zoom.
 		// VIEWER.addHandler("canvas-scroll", function (e) { ... });
