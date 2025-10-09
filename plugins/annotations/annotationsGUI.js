@@ -377,7 +377,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
 
-		this.context.addHandler('annotations-toggle-stroke-styling', e => this._toggleStrokeStyling(e.enable))
+		this.context.addHandler('author-annotation-styling-toggle', e => this._toggleStrokeStyling(e.enable))
 		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
 		this._toggleStrokeStyling(this.context.strokeStyling);
 	}

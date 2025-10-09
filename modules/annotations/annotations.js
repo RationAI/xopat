@@ -1454,7 +1454,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	toggleStrokeStyling(enable) {
 		this.strokeStyling = enable;
-		this.raiseEvent('annotations-toggle-stroke-styling', {enable});
+		this.raiseEvent('author-annotation-styling-toggle', {enable});
 		this.canvas.requestRenderAll();
 	}
 
