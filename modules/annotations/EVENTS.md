@@ -64,7 +64,7 @@ This event is fired when a comment is deleted, one by one.
 This event is fired when user clicks the control for comments
 
 ##### author-annotation-styling-toggle | ``{enable: boolean}``
-This event is fired when preference for styling per-author borders changes
+This event is fired when preference for per-author property styling changes
 
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
