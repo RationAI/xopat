@@ -394,9 +394,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 'comment',
                 (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
                 () => { // TODO doesnt work yet, controls are not clickable
-                    this.integrateWithPlugin("gui_annotations", (plugin) => {
-                        plugin.commentsShow();
-                    });
+                    this._context.raiseEvent('comments-control-clicked')
                 },
                 1,
             ),

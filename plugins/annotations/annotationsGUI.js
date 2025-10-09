@@ -198,7 +198,7 @@ class AnnotationsGUI extends XOpatPlugin {
 					id: "annotation-comments-menu",
 					title: "Comments",
 					closable: false,
-					onClose: () => {this.commentsHide()},
+					onClose: () => {this.commentsToggleWindow(false)},
 				}, new UI.RawHtml({},
 				`
 					<div class="flex-1 overflow-y-auto space-y-3 p-2" id="comments-list" style="min-height: 0;">
@@ -378,6 +378,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.updatePresetsHTML();
 
 		this.context.addHandler('annotations-toggle-stroke-styling', e => this._toggleStrokeStyling(e.enable))
+		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
 		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
@@ -791,28 +792,24 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	/**
-	 * Hide comments window
+	 * Toggle comments window
+     * @param {boolean} enabled Optionally specify state 
 	 */
-	commentsHide() {
+	commentsToggleWindow(enabled = undefined) {
 		const menu = document.getElementById("annotation-comments-menu");
         if (menu) {
-            menu.style.display = 'none';
-        }
-	}
-
-	/**
-	 * Show comments window
-	 */
-	commentsShow() {
-		const menu = document.getElementById("annotation-comments-menu");
-        if (menu) {
-            menu.style.display = 'flex';
+            if (enabled !== undefined) {
+                menu.style.display = enabled ? 'flex' : 'none';
+                return;
+            }
+            const newState = menu.style.display === 'flex' ? 'none' : 'flex';
+            menu.style.display = newState;
         }
 	}
 
 	_annotationSelected(object) {
 		this._selectedAnnot = object;
-		this.commentsShow();
+		this.commentsToggleWindow(true);
 		this._renderComments(object.comments);
 		
 		this._startCommentsRefresh();
@@ -820,7 +817,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 	_annotationDeselected() {
 		this._selectedAnnot = null;
-		this.commentsHide();
+		this.commentsToggleWindow(false);
 		this._clearComments();
 		
 		this._stopCommentsRefresh();
