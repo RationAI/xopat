@@ -60,6 +60,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "layerID",
         "id",
         "author",
+        "authorType",
         "created",
         "private",
         "comments",
@@ -288,13 +289,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(iconRenderer, valueRenderer, index) {
-        return new fabric.Control({
+    /**
+     * 
+     * @param {string | (fabric.Object) => string} iconRenderer Either a plain icon string, or a callback that returns it
+     * @param {string | (fabric.Object) => string | undefined} valueRenderer Either a plain value string, or a callback that returns it. undefined for no value.
+     * @param {((event: any, transform: any, mouseX: any, mouseY: any) => any) | undefined} onClick mouseUpHandler of the control
+     * @param {number} index Index of the control in list of all controls
+     * @returns 
+     */
+    renderIcon(iconRenderer, valueRenderer, onClick, index) {
+        const control = new fabric.Control({
             x: 0.5,
             y: -0.5,
             offsetX: 25,
             offsetY: 20 + 45 * index,
-            cursorStyle: 'grab',
+            cursorStyle: 'pointer',
+            sizeX: 40,
+            sizeY: 40,
+            touchSizeX: 40,
+            touchSizeY: 40,
+            enabled: true,
             render: (ctx, left, top, styleOverride, fabricObject) => {
                 const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
                 const value = valueRenderer ? (
@@ -355,7 +369,17 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 ctx.restore();
             },
-        })
+        });
+
+        if (onClick) {
+            control.mouseUpHandler = function(eventData, transform, x, y) {
+                onClick(eventData, transform, x, y);
+                return true;
+            };
+        }
+
+        return control;
+
     }
 
     renderAllControls(ofObject) {
@@ -363,11 +387,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
             private: this.renderIcon(
                 (obj) => obj.private ? 'visibility_lock' : 'visibility',
                 undefined,
+                undefined,
                 0,
             ),
             comments: this.renderIcon(
                 'comment',
                 (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+                () => { // TODO doesnt work yet, controls are not clickable
+                    this._context.raiseEvent('comments-control-clicked')
+                },
                 1,
             ),
         };

@@ -23,7 +23,7 @@ $replacer = function($match) use ($i18n) {
             require_lib("primer");
             require_lib("jquery");
             require_lib("render");
-            require_ui();  // TODO Jirka: do we need this?
+            require_ui();
             require_core("env");
             require_core("deps");
             include_once(PHP_INCLUDES . "plugins.php");

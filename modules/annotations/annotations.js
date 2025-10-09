@@ -15,6 +15,13 @@
  *  replyTo?: string,
  * 	removed?: boolean,
  * }} AnnotationComment
+ * 
+ * @typedef {{
+ * 	shown: boolean,
+ * 	borderColor: string,
+ * 	borderDashing: number,
+ * 	ignoreCustomStyling: boolean
+ * }} AuthorConfig
  *
  * Consider https://alimozdemir.com/posts/fabric-js-history-operations-undo-redo-and-useful-tips/
  *    - blending ?
@@ -28,6 +35,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.registerAsEventSource();
 		this._init();
 		this._setListeners();
+		this.user = XOpatUser.instance();
 	}
 
 	/**
@@ -1398,6 +1406,168 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 	}
 
+	_computeObjectStroke(obj) {
+		if (
+			!obj.id ||
+			!this.user
+		) return;
+
+		if (this.user.id === obj.author) return;
+
+		const author = this.mapAuthorCallback?.(
+			obj.author,
+			obj.authorType
+		);
+		
+		if (
+			!author ||
+			author === this.user.id
+		) return;
+
+		const authorConfig = this.getAuthorConfig(author);
+
+		if (authorConfig.ignoreCustomStyling) return;
+
+		return {
+			dash: [
+				authorConfig.borderDashing * 10,
+				Math.min(authorConfig.borderDashing * 5, 200)
+			],
+			color: authorConfig.borderColor,
+			width: Math.max(obj.strokeWidth, 3)
+		};
+	}
+
+	/********************* AUTHOR CONFIGURATION **********************/
+
+	/**
+	 * Set a callback to get author ID in form matching XOpatUser.id
+	 * @param {(authorId: string, authorType?: string) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
+	 */
+	setAuthorGetter(callback) {
+		this.mapAuthorCallback = callback;
+	}
+
+	/**
+	 * Enable or disable per author styling
+	 * @param {boolean} enable 
+	 */
+	toggleStrokeStyling(enable) {
+		this.strokeStyling = enable;
+		this.raiseEvent('author-annotation-styling-toggle', {enable});
+		this.canvas.requestRenderAll();
+	}
+
+	/**
+	 * Get all authors configuration from cache
+	 * @return {Record<string, AuthorConfig>} authors configuration object
+	 */
+	getAuthorsConfig() {
+		try {
+			const stored = this.cache.get('authors-config');
+			return stored ? JSON.parse(stored) : {};
+		} catch (e) {
+			console.warn('Failed to parse authors config:', e);
+			return {};
+		}
+	}
+
+	/**
+	 * Set all authors configuration to cache
+	 * @param {Record<string, AuthorConfig>} authorsConfig authors configuration object
+	 */
+	setAuthorsConfig(authorsConfig) {
+		this.cache.set('authors-config', JSON.stringify(authorsConfig));
+		this.canvas.requestRenderAll();
+	}
+
+	/**
+	 * Generate a truly random hex color
+	 * @return {string} random hex color
+	 */
+	generateRandomColor() {
+		return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+	}
+
+	/**
+	 * Get author configuration with defaults
+	 * @param {string} authorId author identifier
+	 * @return {AuthorConfig} author configuration
+	 */
+	getAuthorConfig(authorId) {
+		const authorsConfig = this.getAuthorsConfig();
+		let config = authorsConfig[authorId];
+		
+		if (!config) {
+			config = {
+				shown: true,
+				borderColor: this.generateRandomColor(),
+				borderDashing: 10,
+				ignoreCustomStyling: false
+			};
+			// Save the new config immediately to prevent regeneration
+			this.setAuthorConfig(authorId, config);
+		}
+		
+		return {
+			shown: true,
+			borderColor: this.generateRandomColor(),
+			borderDashing: 10,
+			ignoreCustomStyling: false,
+			...config
+		};
+	}
+
+	/**
+	 * Set author configuration
+	 * @param {string} authorId author identifier
+	 * @param {Partial<AuthorConfig>} config configuration to merge
+	 */
+	setAuthorConfig(authorId, config) {
+		const authorsConfig = this.getAuthorsConfig();
+		const currentConfig = authorsConfig[authorId] || {};
+		const newConfig = { ...currentConfig, ...config };
+		authorsConfig[authorId] = newConfig;
+		this.setAuthorsConfig(authorsConfig);
+	}
+
+	/**
+	 * Toggle author shown/hidden state
+	 * @param {string} authorId author identifier
+	 */
+	toggleAuthorShown(authorId) {
+		const config = this.getAuthorConfig(authorId);
+		config.shown = !config.shown;
+		this.setAuthorConfig(authorId, config);
+	}
+
+	/**
+	 * Update author border color
+	 * @param {string} authorId author identifier
+	 * @param {string} color hex color string
+	 */
+	updateAuthorBorderColor(authorId, color) {
+		this.setAuthorConfig(authorId, { borderColor: color });
+	}
+
+	/**
+	 * Update author border dashing
+	 * @param {string} authorId author identifier
+	 * @param {number} dashing dashing value (1-50)
+	 */
+	updateAuthorBorderDashing(authorId, dashing) {
+		this.setAuthorConfig(authorId, { borderDashing: Math.max(1, Math.min(50, parseInt(dashing) || 10)) });
+	}
+
+	/**
+	 * Update author ignore custom styling setting
+	 * @param {string} authorId author identifier
+	 * @param {boolean} ignoreCustomStyling whether to ignore custom styling
+	 */
+	updateAuthorIgnoreCustomStyling(authorId, ignoreCustomStyling) {
+		this.setAuthorConfig(authorId, { ignoreCustomStyling: !!ignoreCustomStyling });
+	}
+
 	/********************* PRIVATE **********************/
 
 	_init() {
@@ -1423,6 +1593,30 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
 
+		const __renderStroke = fabric.Object.prototype._renderStroke;
+		fabric.Object.prototype._renderStroke = function(ctx) {
+			if (!_this.strokeStyling) {
+				return __renderStroke.call(this, ctx);
+			}
+			const oDash = this.strokeDashArray;
+			const oColor = this.stroke;
+			const oWidth = this.strokeWidth;
+
+			const { dash, color, width } = _this._computeObjectStroke(this) || {};
+			if (dash !== undefined)  this.strokeDashArray = dash;
+			if (color !== undefined) this.stroke  = color;
+			if (width !== undefined) this.strokeWidth = width;
+
+			try {
+				return __renderStroke.call(this, ctx);
+			} finally {
+				this.strokeDashArray = oDash;
+				this.stroke = oColor;
+				this.strokeWidth = oWidth;
+			}
+		};
+
+
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
@@ -1440,6 +1634,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
 		};
+		this.strokeStyling = false;
 
 		let refTileImage = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
 		this.overlay = VIEWER.fabricjsOverlay({
