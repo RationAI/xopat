@@ -176,7 +176,10 @@ addPlugin('dicom', class extends XOpatPlugin {
                     span({ class: "fa-auto fa-flask" }),
                     span(s.desc || s.StudyDescription || s.studyUID)
                 ),
-                onOpen: () => true,
+                onOpen: (item) => {
+                    this.state.activeStudy = item.studyUID;
+                    return true;
+                },
             };
 
             const imagesLevel = {
@@ -197,7 +200,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                     // Usually one WSI per series, but if there are multiple series in a single WSI, try to detect them
                     for (const s of series.items) {
                         const instances = await this.listInstancesForSeries(this.serviceUrl, XOpatUser.instance().getSecret(), studyUID, s.seriesUID, { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
-                        const wsiInstances = this.groupSeriesInstances(instances.items);
+                        const wsiInstances = this.groupSeriesInstances(instances, s);
                         data.items.push(...wsiInstances);
                     }
                     // todo preview... create one
@@ -214,10 +217,35 @@ addPlugin('dicom', class extends XOpatPlugin {
                         span({ class: "text-xs text-gray-500" }, `Instance: ${instanceUID.slice(-8)}`)
                     );
                 },
-                onOpen: () => {
-                    // todo: open a wsi APPLICATION_CONTEXT.openViewerWith();
+                onOpen: (img) => {
+                    try {
+                        const seriesUID = img.seriesUID;
+                        const studyUID  = img.studyUID || this.state.activeStudy;
+                        if (!seriesUID || !studyUID) {
+                            Dialogs.show('Could not open the image: missing study identification!', 5000, Dialogs.MSG_ERR);
+                            console.error("Missing seriesUID or studyUID for image:", img);
+                            return false;
+                        }
+
+                        // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
+                        // Example using DICOMWebTileSource:
+                        const tileSource = new DICOMWebTileSource({
+                            baseUrl: this.serviceUrl,
+                            studyUID,
+                            seriesUID,
+                            useRendered: this.useRendered,
+                            patientDetails: this.state.activePatientDetails,
+                        });
+                        APPLICATION_CONTEXT.openViewerWith([{ studyUID, seriesUID }], [{ tileSource, dataReference: [0] }]);
+
+                        // store current active series
+                        this.state.activeSeries = seriesUID;
+                        this.state.activeStudy  = studyUID;
+                    } catch (err) {
+                        console.error("Failed to open WSI viewer:", err);
+                    }
                     return false;
-                },
+                }
             };
 
             // If /patients is not supported, you can:
@@ -394,6 +422,27 @@ addPlugin('dicom', class extends XOpatPlugin {
         return { items: rows, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'instances' };
     }
 
+    isWSIInstance(ds) {
+        const modality = ds["00080060"]?.Value?.[0];
+        const sopClass = ds["00080016"]?.Value?.[0];
+        const imageType = (ds["00080008"]?.Value || []).join("\\");
+
+        // 1) Modality present
+        if (modality === "SM") return true;
+
+        // todo try: 1.2.840.10008.5.1.4.1.1.77 prefix for all, see https://dicom.nema.org/medical/dicom/current/output/chtml/part04/sect_b.5.html
+        // 2) SOP Class UID matches known WSI SOPs
+        const wsiSOPs = [
+            "1.2.840.10008.5.1.4.1.1.77.1.6"
+        ];
+        if (wsiSOPs.includes(sopClass)) return true;
+
+        // 3) ImageType contains WSI keyword
+        if (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType)) return true;
+
+        return false;
+    }
+
     // WADO-RS metadata fetch for richer details when QIDO filters are blocked
     async wadoMetadata(urlPath, authToken) {
         const url = new URL(urlPath);
@@ -514,28 +563,39 @@ addPlugin('dicom', class extends XOpatPlugin {
         return Array.from(byID.values());
     }
 
-    groupSeriesInstances(instances) {
+    groupSeriesInstances(instancesObject, seriesObject) {
         const groups = new Map();
-        for (const ds of instances) {
+        for (const ds of instancesObject.items) {
+            if (!this.isWSIInstance(ds)) continue;
+
             const container = this._v(ds, "00400512") || "UNKNOWN_CONTAINER"; // ContainerIdentifier
-            const imageType = (ds?.["00080008"]?.Value || []).join("\\");  // ImageType
-            const pathId    = this._v(ds, "00480106") || "DEFAULT_PATH";       // OpticalPathIdentifier
+            const pathId    = this._v(ds, "00480106") || "DEFAULT_PATH";      // OpticalPathIdentifier
             const tpmC      = this._v(ds, "00480006"); // TotalPixelMatrixColumns
             const tpmR      = this._v(ds, "00480007"); // TotalPixelMatrixRows
-            const key = `${container}|${tpmC}x${tpmR}|${pathId}`;
+            const key       = `${container}|${tpmC}x${tpmR}|${pathId}`;
+
             if (!groups.has(key)) {
                 groups.set(key, {
                     containerIdentifier: container,
                     opticalPathId: pathId,
                     totalPixelMatrix: (tpmC && tpmR) ? `${tpmC}×${tpmR}` : null,
-                    label: null, overview: null, volume: [],
+                    label: null,
+                    overview: null,
+                    volume: [],
+                    studyUID: seriesObject.studyUID,
+                    seriesUID: seriesObject.seriesUID,
                 });
             }
+
             const g = groups.get(key);
-            if (/LABEL/i.test(imageType))      g.label = ds;
+
+            const imageType = (ds?.["00080008"]?.Value || []).join("\\");  // ImageType
+
+            if (/LABEL/i.test(imageType)) g.label = ds;
             else if (/OVERVIEW/i.test(imageType)) g.overview = ds;
-            else                                g.volume.push(ds); // pyramid levels
+            else g.volume.push(ds); // pyramid levels
         }
+
         return Array.from(groups.values());
     }
 
