@@ -209,59 +209,14 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             )
         );
 
-        // --- Preview URL fetch (unchanged) ---
-        const imagePath = this.data[bg.dataReference];
-        const eventArgs = {
-            // todo also support viz server ...
-            server: APPLICATION_CONTEXT.env.client.image_group_server,
-            usesCustomProtocol: !!bg.protocolPreview,
-            image: imagePath,
-            imagePreview: null,
-        };
-
         const viewer = this._getViewerForBg(idx);
-        VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs).then(() => {
-
-            if (eventArgs.imagePreview instanceof Image) {
-                const imageEl = eventArgs.imagePreview;
-                imageEl.classList.add("max-w-[86%]", "max-h-[86%]", "object-contain", "select-none");
-                imageEl.id = `${this.windowId}-thumb-${idx}`;
-                document.getElementById(`${this.windowId}-thumb-${idx}`).replaceWith(imageEl);
-                return;
-            }
-
-            const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
-            if (imageEl) {
-                imageEl.onload = () => URL.revokeObjectURL(eventArgs.imagePreview);
-                imageEl.onerror = e => {
-                    e.target.classList.add("opacity-30");
-                    e.target.removeAttribute("src");
-                    if (eventArgs.needsRevoke) {
-                        URL.revokeObjectURL(eventArgs.imagePreview);
-                    }
-                };
-
-                if (!eventArgs.imagePreview) {
-                    viewer.tools.navigatorThumbnail(bg, {
-                        width: 250, height: 250,
-                    }).then(ctx => {
-                        imageEl.src = ctx.canvas.toDataURL();
-                    }).catch(e => {
-                        console.error(e);
-                        // todo better preview
-                        const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
-                        imageEl.src = "unknown";
-                    });
-                } else if (typeof eventArgs.imagePreview === "string") {
-                    imageEl.src = eventArgs.imagePreview;
-                } else {
-                    // todo not very smart fallback
-                    eventArgs.needsRevoke = true;
-                    eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
-                    imageEl.src = eventArgs.imagePreview;
-                }
-            }
-        });
+        const imageEl = document.getElementById(`${this.windowId}-thumb-${idx}`);
+        if (imageEl) {
+            viewer.tools.createImagePreview(bg).then(image => {
+                image.id = imageEl.id;
+                imageEl.replaceWith(image);
+            });
+        }
 
         const linked = this._isLinked(viewer);
 
@@ -323,11 +278,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     // --- Viewer plumbing (default context=0) ---
-    _getVM() {
-        return globalThis.VIEWER_MANAGER || APPLICATION_CONTEXT?._vm || null;
-    }
     _getViewerForBg(idx) {
-        const vm = this._getVM();
+        const vm = globalThis.VIEWER_MANAGER;
         if (!vm || !vm.viewers || !vm.viewers.length) return null;
 
         const stacked = !!APPLICATION_CONTEXT.getOption("stackedBackground");

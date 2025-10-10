@@ -276,6 +276,72 @@ OpenSeadragon.Tools = class {
         });
     }
 
+    /**
+     * Create Image Object for a desired background
+     * @param bgSpec
+     * @param width
+     * @param height
+     * @return {Promise<Image|HTMLImageElement>}
+     */
+    async createImagePreview(bgSpec, width=250, height=250) {
+        // --- Preview URL fetch (unchanged) ---
+        const data = APPLICATION_CONTEXT.config.data;
+        const imagePath = data[bgSpec.dataReference];
+        const eventArgs = {
+            // todo also support viz server ...
+            server: APPLICATION_CONTEXT.env.client.image_group_server,
+            usesCustomProtocol: !!bgSpec.protocolPreview,
+            image: imagePath,
+            imagePreview: null,
+        };
+
+        await VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs);
+
+        if (eventArgs.imagePreview instanceof Image) {
+            const imageEl = eventArgs.imagePreview;
+            imageEl.classList.add("max-w-[86%]", "max-h-[86%]", "object-contain", "select-none");
+            // imageEl.id = `${this.windowId}-thumb-${idx}`;
+            // document.getElementById(`${this.windowId}-thumb-${idx}`).replaceWith(imageEl);
+            return imageEl;
+        }
+
+        const image = document.createElement("img");
+        image.onerror = e => {
+            e.target.classList.add("opacity-30");
+            e.target.removeAttribute("src");
+            if (eventArgs.needsRevoke) {
+                URL.revokeObjectURL(eventArgs.imagePreview);
+            }
+        };
+
+        if (!eventArgs.imagePreview) {
+            this.viewer.tools.navigatorThumbnail(bgSpec, {
+                width, height,
+            }).then(ctx => {
+                image.src = ctx.canvas.toDataURL();
+            }).catch(e => {
+                console.error(e);
+                image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`
+                  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 120'>
+                    <rect width='160' height='120' fill='hsl(0, 0%, 93%)'/>
+                    <path d='M20 88l30-34 24 22 18-20 28 32' fill='none' stroke='hsl(0,0%,60%)' stroke-width='8' stroke-linecap='round'/>
+                    <circle cx='54' cy='42' r='10' fill='hsl(0,0%,70%)'/>
+                  </svg>
+                `);
+            });
+        } else if (typeof eventArgs.imagePreview === "string") {
+            i.src = eventArgs.imagePreview;
+        } else {
+            // todo not very smart fallback
+            eventArgs.needsRevoke = true;
+            eventArgs.imagePreview = URL.createObjectURL(eventArgs.imagePreview);
+            image.onload = () => URL.revokeObjectURL(eventArgs.imagePreview);
+
+            image.src = eventArgs.imagePreview;
+        }
+        return image;
+    }
+
     // /**
     //  * Create region screenshot, the screenshot CAN BE ANYWHERE
     //  * @param {object} region region of interest in the image pixel space
