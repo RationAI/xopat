@@ -1261,7 +1261,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
 
         /**
          * Parse BG Item Name Safely
-         * @param {BackgroundItem|number} indexOrItem
+         * @param {BackgroundItem|number|StandaloneBackgroundItem} indexOrItem
          * @param stripSuffix
          */
         nameFromBGOrIndex: function (indexOrItem, stripSuffix) {
@@ -1270,6 +1270,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             if (item?.name) return name;
             const path = APPLICATION_CONTEXT.config.data[item?.dataReference];
             if (!path || typeof path !== "string") {
+                if (typeof item.dataReference !== "number") {
+                    return item.dataReference;
+                }
                 console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
                 return "undefined";
             }

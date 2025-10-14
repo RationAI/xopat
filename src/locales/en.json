@@ -21,7 +21,8 @@
         "404": "The data you are trying to open does not exist!",
         "401": "Your login session has expired: please refresh the window to log in.",
         "403": "You do not have necessary permission to access this data!",
-        "pending": "The loading seems to be stuck: an image server might be unresponsive."
+        "pending": "The loading seems to be stuck: an image server might be unresponsive.",
+        "failed": "The loading of the image failed. Please, try again later."
       }
     },
     "user": {

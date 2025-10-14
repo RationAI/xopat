@@ -150,6 +150,37 @@ export class FloatingWindow extends BaseComponent {
         }
     }
 
+    // --- add to class FloatingWindow ---
+    /** Returns the DOM element that holds the window body. */
+    getBodyEl() {
+        return this._bodyEl || null;
+    }
+
+    /** Replace the whole body node (accepts a Node or an HTML string). */
+    setBody(content) {
+        if (!this._bodyEl) return;
+        let newNode = null;
+        if (content instanceof Node) {
+            newNode = content;
+        } else if (typeof content === "string") {
+            const wrap = document.createElement("div");
+            wrap.innerHTML = content;
+            newNode = wrap.firstElementChild || wrap;
+        } else if (content?.create) {
+            // support BaseComponent-like children
+            newNode = content.create();
+        } else {
+            newNode = document.createElement("div");
+        }
+        this._bodyEl.replaceWith(newNode);
+        this._bodyEl = newNode;
+    }
+
+    /** Clear body content (keep body node). */
+    clearBody() {
+        if (this._bodyEl) this._bodyEl.innerHTML = "";
+    }
+
     opened() {
         if (this._external) {
             return isWindowOpened(this._childWindow);

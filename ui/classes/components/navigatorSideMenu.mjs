@@ -51,7 +51,7 @@ export class NavigatorSideMenu extends BaseComponent {
         this.title = new Div({
             id: this.id + "-title",
             class: "",
-            extraClasses: {btn: "btn btn-primary btn-sm"},
+            extraClasses: {btn: "btn btn-neutral btn-sm"},
             extraProperties: {style: "flex-grow: 1; box-sizing: border-box; vertical-align: center", title: "Copy"},
             onClick: function () {
                 UTILITIES.copyToClipboard(this.textContent);

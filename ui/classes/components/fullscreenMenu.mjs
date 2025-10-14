@@ -42,7 +42,7 @@ export class FullscreenMenu extends BaseComponent{
         options = super(options, ...args).options;
         this.tabs = {};
 
-        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full", color: "bg-base-100"} });
+        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full"} });
         this.closeBtn = new Button({
             size: Button.SIZE.TINY,
             type: Button.TYPE.NONE,

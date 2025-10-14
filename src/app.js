@@ -15,6 +15,18 @@
  * @property {?string} id unique ID for the background, created automatically from data path if not defined
  */
 /**
+ * @typedef DataID
+ * Arbitrary Data identifier such that image server can understand it (most often UUID4 or file paths, but might be an object
+ * if certain `TileSource` uses multiple values or needs more advanced configuration).
+ * @type {string|object}
+ */
+/**
+ * @typedef StandaloneBackgroundItem
+ * @type {BackgroundItem}
+ * @property {DataID} dataReference actual value of the data item. Used when processing offscreen data for
+ * session-unrelated things (such as thumbnail preview for custom data).
+ */
+/**
  * @typedef VisualizationItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
@@ -472,7 +484,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
     VIEWER_MANAGER.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
@@ -1028,7 +1039,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     console.error(e);
                 }
             );
-            this.openViewerWith(event.data, event.background || [], event.visualizations || []);
+            await this.openViewerWith(event.data, event.background || [], event.visualizations || []);
+            // Only after: before, auto-load would trigger many messages..
+            VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1391,16 +1404,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             handleSyntheticOpenEvent(viewer, successOpened);
         };
 
-        // 3) Drive all viewers according to plan
-        const tasks = bgPlan.map((entry, i) => openIntoViewer(entry, i));
-
         // Show a gentle “loading too long” message if it drags on
         const loadTooLongTimeout = setTimeout(
             () => Dialogs.show($.t("error.slide.pending"), 15000, Dialogs.MSG_WARN),
             8000
         );
 
-        await Promise.allSettled(tasks).then(() => {
+        await Promise.allSettled(bgPlan.map(openIntoViewer)).then(e => {
+            for (let promise of e) {
+                if (promise.status === "rejected") {
+                    // todo how to deal with this within UI?
+                    console.error("Failed to open viewer item", promise.reason);
+                    Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
+                }
+            }
+
             clearTimeout(loadTooLongTimeout);
             USER_INTERFACE.Loading.show(false);
             // todo: maybe dont do this, only if no active viewer is set
@@ -1416,11 +1434,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     VIEWER_MANAGER.raiseEvent('after-open');
                 }
             });
-        }).catch((e) => {
-            console.error("Open failed:", e);
-            clearTimeout(loadTooLongTimeout);
-            USER_INTERFACE.Loading.show(false);
-        }).then(() => {
+        }).then(e => {
+            console.log("Open done:", e);
             if (USER_INTERFACE.Errors.active) {
                 $("#viewer-container").addClass("disabled"); //preventive
             }

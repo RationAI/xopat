@@ -1,54 +1,167 @@
-// ui/classes/components/Explorer.mjs
-// Generic hierarchy/browser component with per-level paging and lazy rendering
-// Works with the library style shown in the compiled bundle (BaseComponent + vanjs + Tailwind + DaisyUI)
-// Export class name: Explorer
-//
-// High-level API
-// new UI.Explorer({
-//   id?: string,
-//   class?: string,
-//   levels: [
-//     {
-//       id: "patients",                           // unique id for the level
-//       title?: "Patients",                       // optional title shown in header/breadcrumb
-//       mode: "page" | "virtual",                 // "page" => classic paging controls; "virtual" => infinite windowed list
-//       pageSize?: 20,                            // page size for "page" (or fetch batch size for virtual)
-//       getChildren: async (parent, ctx: Explorer.FetchContext) => ({    // provider that returns items lazily
-//         items: Array<Item>,
-//         total?: number                           // optional (used by pager)
-//       }),
-//       // Optional: search function override; if omitted, getChildren(ctx.search) is used
-//       search?: async (parent, ctx: Explorer.FetchContext) => ({ items, total }),
-//       // Render a single item (lightweight!)
-//       renderItem: (item, helpers) => Node|BaseComponent,
-//       // Heavy renderer (only called when item enters viewport); falls back to renderItem
-//       renderHeavy?: (item, helpers) => Node|BaseComponent,
-//       // Whether clicking an item drills down to the next level (default: true except on last level)
-//       onOpen?: (item) => boolean,  called when user selects a button, if returns true the hierarchy nests one level
-//       // Optional unique key extractor (default uses item.id || index)
-//       keyOf?: (item, index, parent) => string,
-//     },
-//     ...
-//   ],
-//   // Invoked when an item becomes selected at any level (before navigation)
-//   onSelect?: (levelIndex, item, path) => void,
-//   // Invoked whenever navigation path changes (after content renders)
-//   onPathChange?: (path /* array of {levelId, item} */) => void,
-// })
-//
-// @typedef {{
-//  page: number,
-//  pageSize: number,
-//  search?: string,
-//  levelIndex: number,
-//  offset: number
-// }} Explorer.FetchContext
-
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
 
-const { div, ul, li, span, a, input } = van.tags;
+/**
+ * @namespace UI.Explorer
+ */
 
+/**
+ * Root options for {@link UI.Explorer}.
+ * @typedef {Object} UI.Explorer.Options
+ * @property {string} [id]            - Element id for the root container.
+ * @property {string} [class]         - Extra CSS class(es) for the root container.
+ * @property {Array<UI.Explorer.Level>} levels  - Hierarchy definition (from top to bottom).
+ * @property {UI.Explorer.PathChangeHandler} [onPathChange]
+ *   Invoked whenever the navigation path changes (after content renders).
+ */
+
+/**
+ * One hierarchy level configuration.
+ * @typedef {Object} UI.Explorer.Level
+ * @property {string} id                        - Unique id for this level.
+ * @property {string} [title]                   - Optional title shown in header/breadcrumbs.
+ * @property {"page" | "virtual"} mode          - "page" => classic paging controls; "virtual" => infinite/windowed list.
+ * @property {number} [pageSize=20]             - Page size (or fetch batch size for "virtual").
+ * @property {UI.Explorer.GetChildren} getChildren - Provider that returns items lazily.
+ * @property {UI.Explorer.Search} [search]
+ *   Optional search override; if omitted, the implementation may call {@link UI.Explorer.Level.getChildren}
+ *   with {@link UI.Explorer.FetchContext.search}.
+ * @property {UI.Explorer.RenderItem} renderItem   - Lightweight renderer for a single row/card.
+ * @property {UI.Explorer.RenderItem} [renderHeavy]
+ *   Heavy renderer for when the item enters viewport; falls back to {@link UI.Explorer.Level.renderItem}.
+ * @property {UI.Explorer.CanOpen} canOpen
+ *   Required. Whether clicking an item drills down to the next level (default: true except on the last level).
+ * @property {UI.Explorer.onClick} [onClick]         - Called when user selects/opens an item.
+ * @property {UI.Explorer.KeyOf} [keyOf]
+ *   Unique key extractor (default uses item.id || index).
+ */
+
+/**
+ * Fetch-time context passed to providers.
+ * @typedef {Object} UI.Explorer.FetchContext
+ * @property {number} page          - Zero-based page number (or batch index).
+ * @property {number} pageSize      - Page/batch size.
+ * @property {string} [search]      - Current search string (if any).
+ * @property {number} levelIndex    - Zero-based index of the current level.
+ * @property {number} offset        - Absolute item offset (page * pageSize).
+ */
+
+/**
+ * Result of a fetch/search call.
+ * @typedef {Object} UI.Explorer.FetchResult
+ * @property {Array<*>} items       - Items to render.
+ * @property {number} [total]       - Optional total item count (used by pager if provided).
+ */
+
+/**
+ * Node on the current navigation path.
+ * @typedef {Object} UI.Explorer.PathNode
+ * @property {string} levelId
+ * @property {*} item
+ */
+
+/**
+ * Helper functions passed to renderers.
+ * (Shape is up to your implementation; below is a common minimal set.)
+ * @typedef {Object} UI.Explorer.RenderHelpers
+ * @property {UI.Explorer.PathNode[]} path the current navigation state
+ * @property {number} itemIndex of the current item
+ * @property {number} levelIndex of the parent level
+ * @property {() => void} open    - Drill down into the next level.
+ */
+
+/* ── Callbacks ──────────────────────────────────────────────────────── */
+
+/**
+ * Provider that returns children lazily for a level.
+ * @callback UI.Explorer.GetChildrenc
+ * @param {*} parent
+ * @param {UI.Explorer.FetchContext} ctx
+ * @returns {Promise<UI.Explorer.FetchResult> | UI.Explorer.FetchResult}
+ */
+
+/**
+ * Optional search override for a level.
+ * @callback UI.Explorer.Search
+ * @param {*} parent
+ * @param {UI.Explorer.FetchContext} ctx
+ * @returns {Promise<UI.Explorer.FetchResult> | UI.Explorer.FetchResult}
+ */
+
+/**
+ * Render a single item (lightweight).
+ * @callback UI.Explorer.RenderItem
+ * @param {*} item
+ * @param {UI.Explorer.RenderHelpers} helpers
+ * @returns {Node | import('./BaseComponent').default | HTMLElement}
+ */
+
+/**
+ * Whether the item can open the next level.
+ * @callback UI.Explorer.CanOpen
+ * @param {*} item
+ * @returns {boolean}
+ */
+
+/**
+ * Called when user selects/opens an item.
+ * @callback UI.Explorer.OnClick
+ * @param {*} item
+ * @param {number} index - item index
+ * @returns {void}
+ */
+
+/**
+ * Unique key for React/van list reuse; defaults to item.id || index.
+ * @callback UI.Explorer.KeyOf
+ * @param {*} item
+ * @param {number} index
+ * @param {*} parent
+ * @returns {string}
+ */
+
+/**
+ * Notifies about navigation changes.
+ * @callback UI.Explorer.PathChangeHandler
+ * @param {Array<UI.Explorer.PathNode>} path
+ * @returns {void}
+ */
+
+const { div, ul, li, span, a, input } = van.tags;
+/**
+ * Generic hierarchy/browser component with per-level paging and lazy rendering.
+ * Works with BaseComponent + vanjs + Tailwind + DaisyUI.
+ * Exported class name: {@link UI.Explorer}.
+ *
+ * @example
+ * const explorer = new UI.Explorer({
+ *   id: "wsi-browser",
+ *   class: "h-full",
+ *   levels: [
+ *     /** @type {UI.Explorer.Level} *\/ ({
+ *       id: "patients",
+ *       title: "Patients",
+ *       mode: "page",
+ *       pageSize: 20,
+ *       async getChildren(parent, ctx) {
+ *         const res = await api.fetchPatients({ page: ctx.page, pageSize: ctx.pageSize, q: ctx.search });
+ *         return { items: res.items, total: res.total }; // total optional
+ *       },
+ *       renderItem(item, h) { return h.li(item.name); },
+ *       onClick(item, index) { console.log("opened patient", item.id); },
+ *       keyOf(item) { return item.id; },
+ *     }),
+ *     /** @type {UI.Explorer.Level} *\/ ({
+ *       id: "studies",
+ *       mode: "virtual",
+ *       async getChildren(parent, ctx) { /* ... *\/ return { items: [] }; },
+ *       renderItem(item, h) { return h.li(item.description); },
+ *     }),
+ *   ],
+ *   onPathChange(path) { console.log("path:", path.map(p => p.levelId)); },
+ * });
+ * document.body.appendChild(explorer.create());
+ */
 export class Explorer extends BaseComponent {
     constructor(opts = undefined) {
         opts = super(opts).options;
@@ -69,7 +182,6 @@ export class Explorer extends BaseComponent {
             console.warn("Explorer created with no levels.");
         }
 
-        this.onSelect = typeof opts.onSelect === "function" ? opts.onSelect : null;
         this.onPathChange = typeof opts.onPathChange === "function" ? opts.onPathChange : null;
 
         // Internal state
@@ -87,6 +199,15 @@ export class Explorer extends BaseComponent {
         this._loadAndRender = this._loadAndRender.bind(this);
         this._renderLevelView = this._renderLevelView.bind(this);
         this._debouncedSearch = this._debouncedSearch.bind(this);
+    }
+
+    /**
+     * Get item by index from the current position
+     * @param index
+     * @return {*}
+     */
+    getItem(index) {
+        return this._path[this._path.length - 1]?.item?.items?.[index];
     }
 
     /** Public: reset the browser to root */
@@ -131,7 +252,7 @@ export class Explorer extends BaseComponent {
     }
 
     _canOpen(lvl, item, idx) {
-        if (typeof lvl?.onOpen === "function") return !!lvl.onOpen(item, idx);
+        if (typeof lvl?.canOpen === "function") return !!lvl.canOpen(item);
         // default: can open if not last level
         return this.levels.indexOf(lvl) < this.levels.length - 1;
     }
@@ -149,8 +270,6 @@ export class Explorer extends BaseComponent {
     async _navigate(levelIndex, item) {
         const lvl = this.levels[levelIndex];
         if (!lvl) return;
-        this.onSelect?.(levelIndex, item, this._path.slice());
-        // trim path at this level and push
         this._path = this._path.filter(p => p.levelIndex < levelIndex);
         this._path.push({ levelIndex, levelId: lvl.id, item });
         await this._loadAndRender(levelIndex + 1, { replace: true });
@@ -165,10 +284,7 @@ export class Explorer extends BaseComponent {
         const host = document.getElementById(this.id);
         if (!host) return;
 
-        // Prepare bucket
         const bucket = this._ensureBucket(levelIndex, parent, this._search);
-
-        // First time load for first page/segment (page 1 or offset 0)
         if (!bucket._init) {
             bucket._init = true;
             if (lvl?.mode === "virtual") {
@@ -178,7 +294,6 @@ export class Explorer extends BaseComponent {
             }
         }
 
-        // Render
         const view = this._renderLevelView(levelIndex, parent, bucket);
         if (replace) {
             host.innerHTML = "";
@@ -220,26 +335,25 @@ export class Explorer extends BaseComponent {
 
     /* ---------- RENDERING ---------- */
     _renderHeader(levelIndex) {
-        const crumbs = [];
-        // Breadcrumb root
-        const rootBtn = div({ class: "breadcrumbs text-sm px-2 pt-1" },
-            ul(
-                li(
-                    a({ class: "link", onclick: () => { this._path = []; this._store.clear(); this._loadAndRender(0, { replace: true }); } },
-                        span({ class: "fa-auto fa-house" }),
-                        span(" Root")
-                    )
+        // Build crumbs from path
+        const cList = ul(
+            li(
+                a({ class: "link", onclick: () => { this._path = []; this._store.clear(); this._loadAndRender(0, { replace: true }); } },
+                    span({ class: "fa-auto fa-house" }),
+                    span(" Root")
                 )
             )
         );
-
-        // Build crumbs from path
-        const cList = ul();
         this._path.forEach((p, i) => {
+            i = i+1; // root is implicit 0
             const lvl = this.levels[p.levelIndex];
             const label = this._labelFor(lvl, p.item) || `Level ${lvl?.title || lvl?.id || i}`;
-            cList.appendChild(li(a({ class: "link", onclick: () => { this._path = this._path.slice(0, i); this._loadAndRender(i, { replace: true }); } }, label)));
+            const isLast = this._path.length >= i;
+            const onclick = isLast ? undefined : () => { this._path = this._path.slice(0, i); this._loadAndRender(i, { replace: true }); };
+            cList.appendChild(li(a({ class: "link", onclick }, label)));
         });
+
+        const rootBtn = div({ class: "breadcrumbs text-sm px-2 pt-1" }, cList);
 
         const searchBox = div({ class: "px-2 pb-1" },
             input({
@@ -262,7 +376,7 @@ export class Explorer extends BaseComponent {
         // connect to element for value read (closure above)
         const cSearch = searchBox.firstChild;
 
-        return div({ class: "border-b border-base-300/70" }, rootBtn, cList, searchBox);
+        return div({ class: "border-b border-base-300/70" }, rootBtn, searchBox);
     }
 
     _labelFor(lvl, item) {
@@ -305,6 +419,10 @@ export class Explorer extends BaseComponent {
         const host = div({ class: "flex flex-col h-full" });
         const listEl = ul({ class: "menu p-1 gap-1" });
 
+        const pageState = van.state(currentPage + 1);
+        const totalState = van.state(bucket.total ?? null);
+        const canNextState = van.state(true);
+
         const renderPage = (pNo) => {
             const seg = bucket.pages.get(pNo);
             listEl.innerHTML = "";
@@ -317,6 +435,7 @@ export class Explorer extends BaseComponent {
 
         const total = bucket.total;
         const totalPages = total ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
+        if (totalPages && totalState.val == null) totalState.val = totalPages;
 
         // Controls
         const controls = div({ class: "flex items-center justify-between p-2 border-t border-base-300/70 gap-2" },
@@ -327,18 +446,30 @@ export class Explorer extends BaseComponent {
                     currentPage -= 1;
                     if (!bucket.pages.has(currentPage)) await this._fetchPage(levelIndex, parent, bucket, currentPage);
                     renderPage(currentPage);
+                    pageState.val = (currentPage + 1);
+                    // if we moved left, next is allowed again
+                    canNextState.val = true;
                     updateMeta();
                 }),
-                span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${currentPage + 1}${totalPages ? ` / ${totalPages}` : ""}`),
+                span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
                 this._btn("fa-angle-right", async () => {
                     // if total is unknown, try load next until empty
                     if (totalPages && currentPage >= totalPages) return;
                     currentPage += 1;
                     if (!bucket.pages.has(currentPage)) {
                         const seg = await this._fetchPage(levelIndex, parent, bucket, currentPage);
-                        if (!seg.items.length) { currentPage -= 1; return; }
+                        if (bucket.total != null && totalState.val == null) {
+                            totalState.val = Math.max(1, Math.ceil(bucket.total / pageSize));
+                        }
+                        if (!seg.items.length) {
+                            // we reached the end when total was unknown; freeze next
+                            currentPage -= 1;
+                            canNextState.val = false;
+                            return;
+                        }
                     }
                     renderPage(currentPage);
+                    pageState.val = (currentPage + 1);
                     updateMeta();
                 })
             ),
@@ -426,6 +557,26 @@ export class Explorer extends BaseComponent {
         return listEl;
     }
 
+    reconfigure({ levels, search = "" } = {}) {
+        if (levels && Array.isArray(levels)) {
+            this.levels = levels.slice();
+        }
+        this._search = (typeof search === "string" ? search : "");
+        this._path = [];
+        this._store.clear();
+        this._loadAndRender(0, { replace: true });
+    }
+
+    /** Soft refresh current level (same config), keeping path */
+    refresh() {
+        const levelIndex = Math.min(this._path.length, this.levels.length - 1);
+        const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
+        // purge bucket for current search + parent so a fresh fetch happens
+        const key = this._bucketKey(levelIndex, parent, this._search);
+        this._store.delete(key);
+        this._loadAndRender(levelIndex, { replace: true });
+    }
+
     _renderItemPlaceholder(levelIndex, item, idx, pageNo) {
         const lvl = this.levels[levelIndex];
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
@@ -442,8 +593,9 @@ export class Explorer extends BaseComponent {
         const lvl = this.levels[levelIndex];
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
         const helpers = {
-            open: () => this._navigate(levelIndex, item),
+            open: () => this._navigate(levelIndex, item, idx),
             levelIndex,
+            itemIndex: idx,
             path: this._path.slice(),
         };
         const contentComp = (heavy && typeof lvl.renderHeavy === "function") ? lvl.renderHeavy(item, helpers) : (lvl.renderItem?.(item, helpers) ?? span(String(this._labelFor(lvl, item))));
@@ -458,7 +610,8 @@ export class Explorer extends BaseComponent {
 
         row.onclick = () => {
             const navigate = this._canOpen(lvl, item, idx);
-            if (navigate) this._navigate(levelIndex, item);
+            if (typeof lvl?.onClick === "function") lvl.onClick(item, idx);
+            if (navigate) this._navigate(levelIndex, item, idx);
         }
         // mark for IO (helpful when swapping placeholder)
         row.setAttribute("data-key", key);

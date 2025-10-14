@@ -146,16 +146,17 @@ OpenSeadragon.Tools = class {
 
     /**
      * Create thumbnail screenshot
-     * @param {BackgroundItem} config bg config
+     * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
      * @param {object} size the output size
+     * @param {number} timeout
      * @param {number} size.width
      * @param {number} size.height
      * @return {Promise<CanvasRenderingContext2D>}
      */
-    navigatorThumbnail(config, size = {}) {
+    navigatorThumbnail(config, size = {}, timeout=30000) {
         return this.constructor.navigatorThumbnail(this.viewer, config, size);
     }
-    static navigatorThumbnail(viewer, bgConfig, size = {}) {
+    static navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
         if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
         // todo works for background right now only -> check how we can extend for also viz layers
         if (!bgConfig.id) {
@@ -169,13 +170,18 @@ OpenSeadragon.Tools = class {
         if (viewer.navigator) {
             viewer = viewer.navigator;
         }
-        
+
+        let dataRef = APPLICATION_CONTEXT.config.data[bgConfig.dataReference];
+        if (typeof bgConfig.dataReference !== "number" && !dataRef) {
+            dataRef = bgConfig.dataReference; // use the value as actual data
+        }
+
         drawer.renderer.setDimensions(0, 0, viewer.drawer.canvas.width, viewer.drawer.canvas.height, 1);
         let config = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id) || {
             id: bgConfig.id,
             type: "identity",
             tiledImages: [-1],
-            name: bgConfig.name || APPLICATION_CONTEXT.config.data[bgConfig.dataReference]
+            name: bgConfig.name || dataRef
         };
         drawer.overrideConfigureAll({[bgConfig.id]: config});
 
@@ -185,33 +191,38 @@ OpenSeadragon.Tools = class {
             }
             const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
-            const d = APPLICATION_CONTEXT.config.data[bgEntry.dataReference];
-            return make(APPLICATION_CONTEXT.env.client.image_group_server, d);
+            return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
         };
 
         return new Promise((resolve, reject) => {
             let exited = false;
-            let timeout;
+            let timeoutRef;
 
             let loadCount = 0;
             const images = [];
             for (let idx of config.tiledImages) {
-                loadCount++;
                 if (idx === -1) {
                     loadCount++;
-                    viewer.createTiledImage({tileSource: bgUrlFromEntry(bgConfig),
+                    viewer.instantiateTileImageClass({tileSource: bgUrlFromEntry(bgConfig),
                         success: e => {
                             if (exited) return;
                             e.item.__sshotIndex = images.length;
                             e.item.__synthetic = true;
                             // simply download the current tiles
                             e.item.update(true);
+                            const updateReminder = setInterval(() => {
+                                if (exited) clearInterval(updateReminder);
+                                e.item.update(false);
+                            }, 500);
+                            images.push(e.item);
+
                             e.item.whenFullyLoaded(() => {
-                                images.push(e.item);
+                                if (exited) return;
+                                clearInterval(updateReminder);
+                                loadCount--;
 
                                 if (loadCount < 1) {
-                                    loadCount--;
-                                    clearTimeout(timeout);
+                                    clearTimeout(timeoutRef);
                                     resolve(images);
                                 }
                             });
@@ -221,7 +232,7 @@ OpenSeadragon.Tools = class {
                             images.error = e;
 
                             if (loadCount < 1) {
-                                clearTimeout(timeout);
+                                clearTimeout(timeoutRef);
                                 resolve(images);
                             }
                         }}
@@ -234,7 +245,7 @@ OpenSeadragon.Tools = class {
                         item.__sshotIndex = images.length;
 
                         if (loadCount < 1) {
-                            clearTimeout(timeout);
+                            clearTimeout(timeoutRef);
                             resolve(images);
                         }
                     });
@@ -244,10 +255,11 @@ OpenSeadragon.Tools = class {
             if (loadCount < 1) {
                 resolve(images);
             } else {
-                timeout = setTimeout(() => {
+                timeoutRef = setTimeout(() => {
                     exited = true;
+                    images.forEach(i => i.destroy());
                     reject("Failed to retrieve tiled images and their tiles before timeout.");
-                }, 30000);
+                }, timeout);
             }
         }).then(async images => {
             // todo check images are properly freed if created...
@@ -277,21 +289,24 @@ OpenSeadragon.Tools = class {
     }
 
     /**
-     * Create Image Object for a desired background
-     * @param bgSpec
+     * Create Image Object for a desired background.
+     * This method must be used to generate the image previews shown in menus - otherwise they are not accurate.
+     * @param {BackgroundItem|StandaloneBackgroundItem} bgSpec bg config
      * @param width
      * @param height
      * @return {Promise<Image|HTMLImageElement>}
      */
     async createImagePreview(bgSpec, width=250, height=250) {
         // --- Preview URL fetch (unchanged) ---
-        const data = APPLICATION_CONTEXT.config.data;
-        const imagePath = data[bgSpec.dataReference];
+        let dataRef = APPLICATION_CONTEXT.config.data[bgSpec.dataReference];
+        if (typeof bgSpec.dataReference !== "number" && !dataRef) {
+            dataRef = bgSpec.dataReference; // use the value as actual data
+        }
+
         const eventArgs = {
-            // todo also support viz server ...
             server: APPLICATION_CONTEXT.env.client.image_group_server,
             usesCustomProtocol: !!bgSpec.protocolPreview,
-            image: imagePath,
+            image: dataRef,
             imagePreview: null,
         };
 
@@ -316,7 +331,7 @@ OpenSeadragon.Tools = class {
 
         if (!eventArgs.imagePreview) {
             this.viewer.tools.navigatorThumbnail(bgSpec, {
-                width, height,
+                width, height, timeout: 60000
             }).then(ctx => {
                 image.src = ctx.canvas.toDataURL();
             }).catch(e => {
@@ -330,7 +345,7 @@ OpenSeadragon.Tools = class {
                 `);
             });
         } else if (typeof eventArgs.imagePreview === "string") {
-            i.src = eventArgs.imagePreview;
+            image.src = eventArgs.imagePreview;
         } else {
             // todo not very smart fallback
             eventArgs.needsRevoke = true;

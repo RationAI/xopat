@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-10-07
-//! Git commit: --7e9a2d8-dirty
+//! Built on 2025-10-13
+//! Git commit: --3205840-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -4090,7 +4090,7 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
         /**
          *
          * @param context
-         * @param gl {WebGLRenderingContext} Rendering program.
+         * @param gl {WebGLRenderingContext|WebGL2RenderingContext} Rendering program.
          * @param atlas {OpenSeadragon.FlexRenderer.TextureAtlas} Shared texture atlas.
          */
         constructor(context, gl, atlas) {
@@ -4747,6 +4747,12 @@ void main() {
 
 $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgram {
 
+    /**
+     *
+     * @param {OpenSeadragon.FlexRenderer} context
+     * @param {WebGL2RenderingContext} gl
+     * @param {OpenSeadragon.FlexRenderer.TextureAtlas} atlas
+     */
     constructor(context, gl, atlas) {
         super(context, gl, atlas);
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
@@ -4762,8 +4768,9 @@ precision mediump int;
 precision mediump float;
 
 layout(location = 0) in mat3 a_transform_matrix;
-layout(location = 4) in vec2 a_texture_coords;
-layout(location = 5) in vec4 a_vecColor;
+// Generic payload args. Used for texture positions, vector positions and colors.
+layout(location = 4) in vec4 a_payload0; // first 4 texture coords or positions
+layout(location = 5) in vec4 a_payload1; // second 4 texture coords or colors
 
 uniform vec2 u_renderClippingParams;
 uniform mat3 u_geomMatrix;
@@ -4779,18 +4786,19 @@ const vec3 viewport[4] = vec3[4] (
     vec3(1.0, 0.0, 1.0)
 );
 
-in vec2 a_positions;
-
 void main() {
-    v_texture_coords = a_texture_coords;
+    int vid = gl_VertexID & 3;
+    v_texture_coords = (vid == 0) ? a_payload0.xy :
+        (vid == 1) ? a_payload0.zw :
+             (vid == 2) ? a_payload1.xy : a_payload1.zw;
 
     mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
 
     vec3 space_2d = u_renderClippingParams.x > 0.5 ?
-        matrix * vec3(a_positions, 1.0) :
+        matrix * vec3(a_payload0.xy, 1.0) :
         matrix * viewport[gl_VertexID];
 
-    v_vecColor = a_vecColor;
+    v_vecColor = a_payload1;
 
     gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
     instance_id = gl_InstanceID;
@@ -4863,38 +4871,47 @@ void main() {
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
 
+        // Alias names to avoid confusion
+        this._positionsBuffer = gl.getAttribLocation(program, "a_payload0");
+        this._colorAttrib = gl.getAttribLocation(program, "a_payload1");
+        this._payload1 = gl.getAttribLocation(program, "a_payload1");
+        this._payload0 = gl.getAttribLocation(program, "a_payload0");
 
-        // Setup all rendering props once beforehand: geometry
+        /*
+         * Rendering Geometry. Colors are issued per vertex, set up during actual draw calls (changes
+         * properties, has custom buffers). Positions are issued per vertex, also changes per draw call
+         * (custom buffers preloaded at initialization).
+         */
         gl.bindVertexArray(this.firstPassVaoGeom);
-        // Colors for geometry
-        this._colorAttrib = 5; // matches 'layout(location=5)'
+        // Colors for geometry, set up actually during drawing as each tile delivers its own buffer
         gl.enableVertexAttribArray(this._colorAttrib);
         gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-
         // a_positions (dynamic buffer, we may re-bind/retarget per primitive)
-        this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferGeom);
         gl.enableVertexAttribArray(this._positionsBuffer);
         gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
         this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
 
 
 
-
-        // Setup all rendering props once beforehand: raster
+        /*
+         * Rendering vector tiles. Positions of tiles are always rectangular (stretched and moved by the matrix),
+         * not computed but read on-vertex-shader. Texture coords might be customized (e.g. overlap), and
+         * need to be explicitly set to each vertex. Need 2x vec4 to read 8 values for 4 vertices.
+         * NOTE! Divisor 0 not usable, since it reads from the beginning of a buffer for all instances.
+         */
         gl.bindVertexArray(vao);
         // Texture coords are vec2 * 4 coords for the textures, needs to be passed since textures can have offset
-        this._texCoordsBuffer = gl.getAttribLocation(program, "a_texture_coords");
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-        gl.enableVertexAttribArray(this._texCoordsBuffer);
-        gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
-        gl.vertexAttribDivisor(this._texCoordsBuffer, 0);
-        // We call bufferData once, then we just call subData
         const maxTexCoordBytes = this._maxTextures * 8 * Float32Array.BYTES_PER_ELEMENT;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, maxTexCoordBytes, gl.DYNAMIC_DRAW);
-        // To be able to use the clipping along with tile render, we pass points explicitly
-        this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
+        const stride = 8 * Float32Array.BYTES_PER_ELEMENT;
+        gl.enableVertexAttribArray(this._payload0);
+        gl.vertexAttribPointer(this._payload0, 4, gl.FLOAT, false, stride, 0);
+        gl.vertexAttribDivisor(this._payload0, 1);
+        gl.enableVertexAttribArray(this._payload1);
+        gl.vertexAttribPointer(this._payload1, 4, gl.FLOAT, false, stride, 4 * Float32Array.BYTES_PER_ELEMENT);
+        gl.vertexAttribDivisor(this._payload1, 1);
+
         // Matrices position tiles, 3*3 matrix per tile sent as 3 attributes in
         // Share the same per-instance transform setup as the raster VAO
         this._matrixBuffer = gl.getAttribLocation(program, "a_transform_matrix");
@@ -4914,14 +4931,12 @@ void main() {
         gl.bufferData(gl.ARRAY_BUFFER, maxMatrixBytes, gl.STREAM_DRAW);
 
 
-        // Clipping stage
+        /*
+         * Rendering clipping. This prevents data to show outside the clipping areas. Only positions are needed.
+         */
         vao = this.firstPassVaoClip;
         gl.bindVertexArray(vao);
-        // We don't care about texture and we re-use the positions, we discard this data
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferClip);  // we really need positionsBufferClip here!
-        gl.enableVertexAttribArray(this._texCoordsBuffer);
-        gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
-        // To be able to use the clipping along with tile render, we pass points explicitly
+        // We use only one of the two vec4 payload arguments, the other remains uninitialized here.
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferClip);
         gl.enableVertexAttribArray(this._positionsBuffer);
         gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
@@ -7871,8 +7886,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-10-07
-//! Git commit: --7e9a2d8-dirty
+//! Built on 2025-10-13
+//! Git commit: --3205840-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8044,8 +8059,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-10-07
-//! Git commit: --7e9a2d8-dirty
+//! Built on 2025-10-13
+//! Git commit: --3205840-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

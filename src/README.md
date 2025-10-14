@@ -69,7 +69,7 @@ Example configuration:
 ````
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
-- [R]`data` - an array of strings, defines the data, identifiers such that image server can understand it (most usually paths)
+- [R]`data` - an array OF `DataID` types (strings, objects...), identifiers such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
 - [O]`params` - an object, visualization parameters, supported:
     - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
     - [O]`locale` - language locale, default `en`

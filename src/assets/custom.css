@@ -117,7 +117,7 @@ button div {
     position: absolute; 
     pointer-events: auto; 
     z-index: 5; 
-    background-color: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));
+    background-color: var(--fallback-b1,oklch(var(--b2)/var(--tw-bg-opacity, 1)));
     max-width: 800px; 
     width: calc(-65px + 100vw);
     height: calc(100% - 45px);
@@ -163,7 +163,7 @@ button div {
 .boxed {
     border-radius: var(--rounded-btn, 0.5rem);
     --tw-bg-opacity: 1;
-    background-color: var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)));
+    background-color: var(--fallback-b2,oklch(var(--b1)/var(--tw-bg-opacity)));
     padding: 0.25rem;
     margin: 0.25rem;
 }

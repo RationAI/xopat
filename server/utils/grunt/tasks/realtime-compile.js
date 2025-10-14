@@ -23,6 +23,7 @@ const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
 const esbuildArgs = require("../../esbuild-args");
+const {pathsEqual} = require("./pathsEqual");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -100,7 +101,9 @@ module.exports = function (grunt) {
         async function detectAndRebuildWorkspaceElements(files) {
             async function rebuildWorkspaceItem(childPath) {
                 let itemPath = path.dirname(childPath);
-                while (itemPath !== root && itemPath && itemPath.length > 4) {
+                while (itemPath && itemPath.length > 4) {
+                    // todo: coverts always, consider optimizing
+                    if (pathsEqual(itemPath, root)) break;
                     const workspaceItem = path.join(itemPath, "package.json");
                     if (exists(workspaceItem)) {
                         // todo avoid parsing unless the file itself changed? cache somehow
