@@ -383,22 +383,25 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     renderAllControls(ofObject) {
-        ofObject.controls = {
-            private: this.renderIcon(
-                (obj) => obj.private ? 'visibility_lock' : 'visibility',
-                undefined,
-                undefined,
-                0,
-            ),
-            comments: this.renderIcon(
-                'comment',
-                (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-                () => { // TODO doesnt work yet, controls are not clickable
-                    this._context.raiseEvent('comments-control-clicked')
-                },
-                1,
-            ),
-        };
+        const controls = {};
+        let i = 0;
+
+        controls.private = this.renderIcon(
+            (obj) => obj.private ? 'visibility_lock' : 'visibility',
+            undefined,
+            undefined,
+            i++,
+        );
+        if (this._context.getCommentsEnabled()) controls.comments = this.renderIcon(
+            'comment',
+            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+            () => {
+                this._context.raiseEvent('comments-control-clicked')
+            },
+            i++,
+        );
+
+        ofObject.controls = controls;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {

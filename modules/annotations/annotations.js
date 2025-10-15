@@ -912,6 +912,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+	 * Check if comments were declared as enabled
+	 * @returns {boolean}
+	 */
+	getCommentsEnabled() {
+		return this.commentsEnabled;
+	}
+
+	/**
 	 * Add comment to annotation
 	 * @param {fabric.Object} annotation Any annotation
 	 * @param {AnnotationComment} comment Comment to add

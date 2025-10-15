@@ -79,6 +79,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
+        this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
+        this.context.commentsEnabled = this._commentsEnabled;
+		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
+		this._commentsOpened = true;
+
 		await this.setupFromParams();
 
 		this.context.initPostIO();
@@ -249,7 +254,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		commentsMenu.style.minHeight = "370px";
 
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
-		this.context.addHandler('annotation-deselected', () => this._annotationDeselected());
+		this.context.addHandler('annotation-deselected', e => this._annotationDeselected(e.object));
 
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
@@ -370,7 +375,23 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	&emsp;&emsp;
 	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
-</div>`);
+</div>
+<h4 class="f3-light header-sep">Comments</h4><br>
+${UIComponents.Elements.checkBox({label: "Enable comments",
+onchange: this.THIS + ".enableComments(!!this.checked)", default: this._commentsEnabled})}
+<div class="flex gap-2 justify-between">
+<span>Remember comments window opened/closed state</span>
+${UIComponents.Elements.select({
+    default: this._commentsClosedMethod,
+    options: {
+        'none': 'Always keep open',
+        'global': 'Keep open globally',
+        'individual': 'Keep open per-annotation',
+    },
+    changed: this.THIS + ".switchCommentsClosedMethod(value)",
+})}
+</div>
+`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 
 		//trigger UI refreshes
@@ -400,6 +421,77 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		$("#annotation-convertor-options").html(
 			Object.values(convertor.options).map(option => UIComponents.Elements[option.type]?.(option)).join("<br>")
 		);
+	}
+
+    /**
+     * Enable/disable comments UI
+     * @param {boolean} enabled 
+     */
+    enableComments(enabled) {
+        if (this._commentsEnabled === enabled) return;
+        this._commentsEnabled = enabled;
+        this.context.commentsEnabled = enabled;
+        this.setOption("commentsEnabled", enabled);
+				if (!enabled) {
+					this.commentsToggleWindow(false, true);
+				} else if (this._selectedAnnot) {
+					this.commentsToggleWindow(true, true);
+				}
+        this.context.canvas.requestRenderAll();
+    }
+
+    /**
+     * Set strategy for closing comments
+     * @param {'none' | 'global' | 'individual'} method 
+     */
+    switchCommentsClosedMethod(method) {
+        if (this._commentsClosedMethod === method) return;
+        this._commentsClosedMethod = method;
+        this.setOption("commentsClosedMethod", method);
+    }
+
+    /**
+     * Get opened state cache for object
+     * @param {string} objectId 
+     */
+    _getCommentOpenedCache(objectId) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', '{}');
+            return true;
+        }
+        const cache = JSON.parse(cacheRaw)[objectId];
+        if (cache === undefined) {
+            this._setCommentOpenedCache(objectId, true);
+            return true;
+        }
+        return cache;
+    }
+    /**
+     * Set opened state cache for object
+     * @param {string} objectId 
+     * @param {boolean} opened
+     */
+    _setCommentOpenedCache(objectId, opened) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', JSON.stringify({ objectId: opened }));
+            return;
+        }
+        const cache = JSON.parse(cacheRaw);
+        cache[objectId] = opened;
+        this.cache.set('comments-opened-states', JSON.stringify(cache));
+    }
+
+	/**
+	 * Check whether comments should be opened for this object
+	 * @param {string} objectId object this was called on
+	 */
+	_shouldOpenComments(objectId) {
+		if (!this._commentsEnabled) return false;
+        if (this._commentsClosedMethod === 'none') return true;
+		if (this._commentsClosedMethod === 'global') return this._commentsOpened;
+        return this._getCommentOpenedCache(objectId);
 	}
 
 	/**
@@ -794,30 +886,40 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	/**
 	 * Toggle comments window
      * @param {boolean} enabled Optionally specify state 
+     * @param {boolean} [stopPropagation=false] Dont propagate this toggle to the comment window opened state
 	 */
-	commentsToggleWindow(enabled = undefined) {
+	commentsToggleWindow(enabled = undefined, stopPropagation = false) {
 		const menu = document.getElementById("annotation-comments-menu");
-        if (menu) {
-            if (enabled !== undefined) {
-                menu.style.display = enabled ? 'flex' : 'none';
-                return;
-            }
-            const newState = menu.style.display === 'flex' ? 'none' : 'flex';
-            menu.style.display = newState;
+        if (!menu) return;
+
+		if (!this._commentsEnabled) {
+            if (menu.style.display === 'flex') menu.style.display = 'none';
+            return;
         }
+
+        if (enabled === undefined) enabled = menu.style.display !== 'flex';
+        menu.style.display = enabled ? 'flex' : 'none';
+        if (!stopPropagation) {
+            const objectId = this._selectedAnnot?.id ?? this._previousAnnotId;
+            this._commentsOpened = enabled;
+            this._setCommentOpenedCache(objectId, enabled);
+        };
 	}
 
 	_annotationSelected(object) {
 		this._selectedAnnot = object;
-		this.commentsToggleWindow(true);
 		this._renderComments(object.comments);
-		
 		this._startCommentsRefresh();
+
+        if (
+            this._shouldOpenComments(object.id)
+        ) this.commentsToggleWindow(true);
 	}
 
-	_annotationDeselected() {
+	_annotationDeselected(object) {
 		this._selectedAnnot = null;
-		this.commentsToggleWindow(false);
+        this._previousAnnotId = object.id;
+		this.commentsToggleWindow(false, true);
 		this._clearComments();
 		
 		this._stopCommentsRefresh();
