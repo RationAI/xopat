@@ -1888,23 +1888,38 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 		/****** E V E N T  L I S T E N E R S: FABRIC (called when not navigating) **********/
 
-			//todo better handling - either add events to the viewer or...
+        // annotationCanvas.addEventListener("mousedown", function (event) {
+        this.canvas.on('mouse:down', function(e) {
+            console.log("mouse:down", e);
+            if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
+            const event = e.e;
+            if (event.which === 1) handleLeftClickDown(event);
+            else if (event.which === 3) handleRightClickDown(event);
+        });
 
-		let annotationCanvas = this.canvas.upperCanvasEl;
+        // annotationCanvas.addEventListener('mouseup', function (event) {
+        this.canvas.on('mouse:up', function(e) {
+            console.log("mouse:up", e);
+            if (_this.disabledInteraction) return;
+            const event = e.e;
+            if (event.which === 1) handleLeftClickUp(event);
+            else if (event.which === 3) handleRightClickUp(event);
+        });
 
-		annotationCanvas.addEventListener("mousedown", function (event) {
-			if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
-
-			if (event.which === 1) handleLeftClickDown(event);
-			else if (event.which === 3) handleRightClickDown(event);
-		});
-
-		annotationCanvas.addEventListener('mouseup', function (event) {
-			if (_this.disabledInteraction) return;
-
-			if (event.which === 1) handleLeftClickUp(event);
-			else if (event.which === 3) handleRightClickUp(event);
-		});
+        // let annotationCanvas = this.canvas.upperCanvasEl;
+		// annotationCanvas.addEventListener("mousedown", function (event) {
+		// 	if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
+        //
+		// 	if (event.which === 1) handleLeftClickDown(event);
+		// 	else if (event.which === 3) handleRightClickDown(event);
+		// });
+        //
+		// annotationCanvas.addEventListener('mouseup', function (event) {
+		// 	if (_this.disabledInteraction) return;
+        //
+		// 	if (event.which === 1) handleLeftClickUp(event);
+		// 	else if (event.which === 3) handleRightClickUp(event);
+		// });
 
 		this.canvas.on('mouse:move', function (o) {
 			if (_this.disabledInteraction) return;
@@ -2576,7 +2591,7 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		if (active) {
 			active.sendToBack();
 		}
-		const object = canvas.findNextObjectUnderMouse(o, active);
+		const object = canvas.findNextObjectUnderMouse(point, active);
 		if (object) {
 			canvas.setActiveObject(object, o);
 		}

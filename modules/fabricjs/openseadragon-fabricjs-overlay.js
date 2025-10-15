@@ -66,13 +66,12 @@
 
     /**
      * Find object under mouse by iterating
-     * @param e mouse event
+     * @param pointer image coords
      * @param objectToAvoid (usually active) object to avoid
      * @return {number}
      * @memberOf fabric.Canvas
      */
-    fabric.Canvas.prototype.findNextObjectUnderMouse = function(e, objectToAvoid) {
-        const pointer = this.getPointer(e, true);
+    fabric.Canvas.prototype.findNextObjectUnderMouse = function(pointer, objectToAvoid) {
         //necessary only for groups
             // normalizedPointer = this._normalizePointer(this, pointer);
         let i = this._objects.length;
@@ -138,6 +137,7 @@
             this.resize();
             this._fabricCanvas = new fabric.Canvas(this._canvas, {
                 imageSmoothingEnabled: false,
+                fireRightClick: true,
             });
             // disable fabric selection because default click is tracked by OSD
             this._fabricCanvas.selection = false;
