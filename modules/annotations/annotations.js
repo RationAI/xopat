@@ -1890,7 +1890,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
         // annotationCanvas.addEventListener("mousedown", function (event) {
         this.canvas.on('mouse:down', function(e) {
-            console.log("mouse:down", e);
             if (_this.disabledInteraction || (!_this.mode.supportsZoomAnimation() && _this.mode.isZooming)) return;
             const event = e.e;
             if (event.which === 1) handleLeftClickDown(event);
@@ -1899,7 +1898,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
         // annotationCanvas.addEventListener('mouseup', function (event) {
         this.canvas.on('mouse:up', function(e) {
-            console.log("mouse:up", e);
             if (_this.disabledInteraction) return;
             const event = e.e;
             if (event.which === 1) handleLeftClickUp(event);
