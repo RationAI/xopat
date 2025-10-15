@@ -991,8 +991,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.canvas.renderAll();
 		
 		if (_raise) {
-			this.raiseEvent('annotation-delete', {object: annotation});
-			if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
+			let tries = 0;
+			const tryRaise = () => {
+				const stillOnCanvas = this.canvas.getObjects().includes(annotation);
+				if (!stillOnCanvas) {
+					this.raiseEvent('annotation-delete', {object: annotation});
+					if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
+				} else if (tries++ < 20) {
+					setTimeout(tryRaise, 20);
+				}
+			};
+			tryRaise();
 		}
 	}
 
@@ -1592,6 +1601,27 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
+
+		const __canvasRemove = fabric.Canvas.prototype.remove;
+		fabric.Canvas.prototype.remove = function(object) {
+			const canvas = this;
+			const ctx = _this;
+			(async () => {
+				try {
+					if (object) await ctx.raiseAwaitEvent('annotation-before-delete', {
+						object,
+						isCancelled: () => this.cancelDeletion,
+						setCancelled: (cancelled) => {this.cancelDeletion = cancelled},
+					});
+				} catch (e) {} finally {
+					const cancelDeletion = this.cancelDeletion;
+					this.cancelDeletion = undefined;
+					if (cancelDeletion !== true)
+						__canvasRemove.call(canvas, object);
+				}
+			})();
+			return this;
+		};
 
 		const __renderStroke = fabric.Object.prototype._renderStroke;
 		fabric.Object.prototype._renderStroke = function(ctx) {
