@@ -79,10 +79,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
-        this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
-        this.context.commentsEnabled = this._commentsEnabled;
+    this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
+    this.context.commentsEnabled = this._commentsEnabled;
 		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
-		this._commentsOpened = true;
+		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
+		this._commentsOpened = this.commentsDefaultOpened;
 
 		await this.setupFromParams();
 
@@ -379,6 +380,8 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 <h4 class="f3-light header-sep">Comments</h4><br>
 ${UIComponents.Elements.checkBox({label: "Enable comments",
 onchange: this.THIS + ".enableComments(!!this.checked)", default: this._commentsEnabled})}
+${UIComponents.Elements.checkBox({label: "Automatically open comments on initial click",
+onchange: this.THIS + ".commentsDefaultOpen(!!this.checked)", default: this._commentsDefaultOpened})}
 <div class="flex gap-2 justify-between">
 <span>Remember comments window opened/closed state</span>
 ${UIComponents.Elements.select({
@@ -440,6 +443,12 @@ ${UIComponents.Elements.select({
         this.context.canvas.requestRenderAll();
     }
 
+		commentsDefaultOpen(enabled) {
+			if (this._commentsDefaultOpened === enabled) return;
+			this._commentsDefaultOpened = enabled;
+			this.setOption("commentsDefaultOpened", enabled);
+		}
+
     /**
      * Set strategy for closing comments
      * @param {'none' | 'global' | 'individual'} method 
@@ -458,13 +467,9 @@ ${UIComponents.Elements.select({
         const cacheRaw = this.cache.get('comments-opened-states')
         if (!cacheRaw) {
             this.cache.set('comments-opened-states', '{}');
-            return true;
+            return undefined;
         }
         const cache = JSON.parse(cacheRaw)[objectId];
-        if (cache === undefined) {
-            this._setCommentOpenedCache(objectId, true);
-            return true;
-        }
         return cache;
     }
     /**
@@ -489,9 +494,11 @@ ${UIComponents.Elements.select({
 	 */
 	_shouldOpenComments(objectId) {
 		if (!this._commentsEnabled) return false;
-        if (this._commentsClosedMethod === 'none') return true;
+    if (this._commentsClosedMethod === 'none') return true;
 		if (this._commentsClosedMethod === 'global') return this._commentsOpened;
-        return this._getCommentOpenedCache(objectId);
+    const shouldOpen = this._getCommentOpenedCache(objectId);
+		if (shouldOpen === undefined) return this._commentsDefaultOpened;
+		return shouldOpen;
 	}
 
 	/**
@@ -911,14 +918,16 @@ ${UIComponents.Elements.select({
 		this._renderComments(object.comments);
 		this._startCommentsRefresh();
 
-        if (
-            this._shouldOpenComments(object.id)
-        ) this.commentsToggleWindow(true);
+		if (
+				this._shouldOpenComments(object.id)
+		) {
+			this.commentsToggleWindow(true, true);
+		}
 	}
 
 	_annotationDeselected(object) {
 		this._selectedAnnot = null;
-        this._previousAnnotId = object.id;
+    this._previousAnnotId = object.id;
 		this.commentsToggleWindow(false, true);
 		this._clearComments();
 		
