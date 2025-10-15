@@ -966,6 +966,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise
 	 */
 	changeAnnotationPreset(annotation, presetID, _raise=true) {
+		let cancelAction = false;
+		try {
+			if (annotation) this.raiseEvent('annotation-before-preset-change', {
+				object: annotation,
+				isCancelled: () => cancelAction,
+				setCancelled: (cancelled) => {cancelAction = cancelled},
+			});
+		} catch {}
+		if (cancelAction) return;
+
 		let factory = annotation._factory();
 		if (factory !== undefined) {
 			const oldPresetID = annotation.presetID;
@@ -990,26 +1000,29 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param _raise @private
 	 */
 	deleteAnnotation(annotation, _raise=true) {
+		let cancelAction = false;
+		try {
+			if (annotation) {
+				this.raiseEvent('annotation-before-delete', {
+					object: annotation,
+					isCancelled: () => cancelAction,
+					setCancelled: (cancelled) => {cancelAction = cancelled},
+				});
+			}
+		} catch {}
+		if (cancelAction) return;
+
 		const wasSelected = this.canvas.getActiveObject() === annotation;
 		
 		annotation.off('selected');
-        annotation.off('deselected');
-        this.canvas.remove(annotation);
+    annotation.off('deselected');
+    this.canvas.remove(annotation);
 		this.history.push(null, annotation);
 		this.canvas.renderAll();
-		
+
 		if (_raise) {
-			let tries = 0;
-			const tryRaise = () => {
-				const stillOnCanvas = this.canvas.getObjects().includes(annotation);
-				if (!stillOnCanvas) {
-					this.raiseEvent('annotation-delete', {object: annotation});
-					if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
-				} else if (tries++ < 20) {
-					setTimeout(tryRaise, 20);
-				}
-			};
-			tryRaise();
+			this.raiseEvent('annotation-delete', {object: annotation});
+			if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
 		}
 	}
 
@@ -1085,6 +1098,26 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	replaceAnnotation(previous, next, isDoppelganger=false) {
 		// We have to skip history since we will add these to history anyway, avoid duplicate entries
 
+		let cancelAction = false;
+		if (isDoppelganger) {
+			try {
+				if (previous) this.raiseEvent('annotation-before-replace', {
+					object: previous,
+					isCancelled: () => cancelAction,
+					setCancelled: (cancelled) => {cancelAction = cancelled},
+				});
+			} catch {}
+		} else {
+			try {
+				if (previous) this.raiseEvent('annotation-before-replace-doppelganger', {
+					object: previous,
+					isCancelled: () => cancelAction,
+					setCancelled: (cancelled) => {cancelAction = cancelled},
+				});
+			} catch {}
+		}
+		if (cancelAction) return;
+
 		if (isDoppelganger) {
 			// Uses instance ID to track helper annotations on canvas
 			const prevIsBeingReplaced = !!previous.internalID;
@@ -1124,13 +1157,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 
-        const wasActive = (this.canvas.getActiveObject() === previous);
-        if (wasActive) {
-            this.canvas.discardActiveObject();
-        }
-        this.canvas.remove(previous);
-        previous.off('selected');
-        previous.off('deselected');
+		const wasActive = (this.canvas.getActiveObject() === previous);
+		if (wasActive) {
+				this.canvas.discardActiveObject();
+		}
+		this.canvas.remove(previous);
+		previous.off('selected');
+		previous.off('deselected');
 
 		this.canvas.add(next);
 		this.canvas.renderAll();
@@ -1609,27 +1642,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
-
-		const __canvasRemove = fabric.Canvas.prototype.remove;
-		fabric.Canvas.prototype.remove = function(object) {
-			const canvas = this;
-			const ctx = _this;
-			(async () => {
-				try {
-					if (object) await ctx.raiseAwaitEvent('annotation-before-delete', {
-						object,
-						isCancelled: () => this.cancelDeletion,
-						setCancelled: (cancelled) => {this.cancelDeletion = cancelled},
-					});
-				} catch (e) {} finally {
-					const cancelDeletion = this.cancelDeletion;
-					this.cancelDeletion = undefined;
-					if (cancelDeletion !== true)
-						__canvasRemove.call(canvas, object);
-				}
-			})();
-			return this;
-		};
 
 		const __renderStroke = fabric.Object.prototype._renderStroke;
 		fabric.Object.prototype._renderStroke = function(ctx) {

@@ -645,6 +645,16 @@ ${editIcon}
     }
 
     _boardItemEdit(self, focusBBox, object) {
+        let cancelAction = false;
+		try {
+			if (object) this._context.raiseEvent('annotation-before-edit', {
+				object,
+				isCancelled: () => cancelAction,
+				setCancelled: (cancelled) => {cancelAction = cancelled},
+			});
+		} catch {}
+		if (cancelAction) return;
+
         let updateUI = false;
         if (this._editSelection) {
             this._boardItemSave(true);

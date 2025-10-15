@@ -31,12 +31,21 @@ in fact replace annotation with a new one, although the annotation identity as p
 by the user remains the same. This event is called only once per update, 
 at the end.
 
+##### annotation-before-replace
+This event is fired prior to replacing annotation. Same usage as `annotation-before-delete`
+
 ##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
 It can be called several times during one edit action.
 
+##### annotation-before-replace-doppelganger
+This event is fired prior to replacing doppelganger annotation. Same usage as `annotation-before-delete`
+
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
+
+##### annotation-before-edit
+This event is fired prior to editing annotation. Same usage as `annotation-before-delete`
 
 ##### annotation-selected | ``{object: fabric.Object}``
 This event is fired when user selects an annotation.
@@ -84,6 +93,9 @@ This event is fired when preference for per-author property styling changes
 ##### preset-meta-add | ``{preset: OSDAnnotations.Preset, key: string}``
 
 ##### annotation-preset-change | ``{object: fabric.Object, presetID: string, oldPresetID: string}``
+
+##### annotation-before-preset-change
+This event is fired prior to changing annotation preset. Same usage as `annotation-before-delete`
 
 ##### history-select | ``{incrementId: number, originalEvent: MouseEvent}``
 
