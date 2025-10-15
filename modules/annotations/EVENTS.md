@@ -20,6 +20,11 @@ considered as the creation.
 
 ##### annotation-delete | ``{object: fabric.Object}``
 
+##### annotation-before-delete | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
+This event is fired prior to deleting any annotation.
+`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
+`setCancelled` can be used to request to cancel the deletion
+
 ##### annotation-replace | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotation is replaced, e.g. free-form-tool edit. Such edits
 in fact replace annotation with a new one, although the annotation identity as perceived
