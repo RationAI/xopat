@@ -359,7 +359,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
       ${close}
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
-      <div class="Box-body pr-2" style="padding-bottom: 5px; min-height: 100%">
+      <div class="Box-body px-2" style="padding-bottom: 5px; min-height: 100%">
 	  ${content}
 	  </div>
     </div>

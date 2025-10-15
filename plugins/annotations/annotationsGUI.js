@@ -55,7 +55,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	async setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.getStaticMeta("factories") || ["polygon"];
-		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+		this.context.historyManager.focusWithZoom = this.getOption("focusWithZoom", true);
 		const convertOpts = this.getOption('convertors');
 		this._ioArgs.serialize = true;
 		this._ioArgs.imageCoordinatesOffset = convertOpts?.imageCoordinatesOffset || this._ioArgs.imageCoordinatesOffset;
@@ -153,7 +153,7 @@ ${UIComponents.Elements.checkBox({
 </div>
 <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
+<div id="annotation-list-mp" class="mr-2" style="display: none;"></div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -320,9 +320,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 	openHistoryWindow(asModal = this.isModalHistory) {
 		if (asModal) {
-			this.context.history.openHistoryWindow();
+			this.context.historyManager.openHistoryWindow();
 		} else {
-			this.context.history.openHistoryWindow(this._annotationsDomRenderer);
+			this.context.historyManager.openHistoryWindow(this._annotationsDomRenderer);
 		}
 		this._afterHistoryWindowOpen(asModal);
 	}
@@ -346,7 +346,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 
 	_createHistoryInAdvancedMenu(focus = false) {
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
-		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+		this.context.historyManager.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		this._openedHistoryMenu = true;
 		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
@@ -396,7 +396,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.createPresetsCookieSnapshot();
 			this._updateMainMenuPresetList();
 		});
-		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
+		this.context.historyManager.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
@@ -694,8 +694,11 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 	}
 
 	_annotationsDomRenderer(history, containerId) {
+		let headHtml = history.getHistoryWindowHeadHtml();
+		headHtml = headHtml.replace(/<span[^>]*>Annotation List<\/span>\s*/, '');
+
 		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">
-${history.getWindowSwapButtonHtml(2)}${history.getHistoryWindowBodyHtml()}</div>`);
+		${headHtml}${history.getHistoryWindowBodyHtml()}</div>`);
 	}
 
 	/******************** Free Form Tool ***********************/
@@ -956,7 +959,7 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
 		if (this._fireBoardUpdate) {
-			this.context.history.refresh();
+			this.context.historyManager.refresh();
 		}
 		this._fireBoardUpdate = true;
 	}
