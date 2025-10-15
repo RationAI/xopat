@@ -484,6 +484,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
+        object.hasBorders = true;
         options.autoScale = object.autoScale || options.autoScale || false;
         if (options.autoScale) {
             $.extend(object, options, {
@@ -529,6 +530,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         delete visualProperties["fill"];
         delete visualProperties["strokeWidth"];
         delete visualProperties["originalStrokeWidth"];
+        visualProperties.hasBorders = true;
         // no support for internal logics, text driven its own scaling, just set the rest
         ofObject.set(visualProperties);
     }
@@ -922,7 +924,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     edit(theObject) {
         this._origPoints = [...theObject.points];
-        this._context.canvas.setActiveObject(theObject);
+        //this._context.canvas.setActiveObject(theObject); //TODO - check if needed for edit mode
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
@@ -1246,7 +1248,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     edit(theObject) {
         this._origPoints = [theObject.x1, theObject.y1, theObject.x2, theObject.y2];
-        this._context.canvas.setActiveObject(theObject);
+        //this._context.canvas.setActiveObject(theObject); //TODO - check if needed for edit mode
 
         const _this = this,
             rightSkew = theObject.x1 > theObject.x2;
