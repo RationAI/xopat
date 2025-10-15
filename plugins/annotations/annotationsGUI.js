@@ -219,6 +219,7 @@ class AnnotationsGUI extends XOpatPlugin {
 								id="comment-input"
 								rows="2"
 								onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
+								${!this.user ? 'disabled' : ''}
 							></textarea>
 							<button 
 								class="px-3 py-2 btn btn-pointer material-icons"
@@ -506,19 +507,17 @@ ${UIComponents.Elements.select({
 	 */
 	_addComment() {
 		if (!this._selectedAnnot) return;
+		if (!this.user) return;
 		const input = document.getElementById('comment-input');
 		const commentText = input.value.trim();
 		
 		if (!commentText) return;
-		
-		const user = XOpatUser.instance();
-		// TODO fix for anon user
-		
+				
 		const comment = {
 			id: crypto.randomUUID(),
 			author: {
-				id: user.id,
-				name: user.name,
+				id: this.user.id,
+				name: this.user.name,
 			},
 			content: commentText,
 			createdAt: new Date(),
@@ -682,8 +681,7 @@ ${UIComponents.Elements.select({
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
-		const user = XOpatUser.instance();
-		const isAuthor = user.id === comment.author.id;
+		const isAuthor = this.user.id === comment.author.id;
 		const deleteButtonHtml = isAuthor ? 
 			`<button class="relative" title="Delete comment" data-confirmed="false">
 				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
@@ -693,7 +691,7 @@ ${UIComponents.Elements.select({
 			</button>` : '';
 
 		let replyButtonHtml = '';
-		if (!comment.replyTo) {
+		if (!comment.replyTo && this.user) {
 			replyButtonHtml = `
 				<button class="relative" title="Reply to comment" data-reply="${comment.id}">
 					<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);">reply</span>
@@ -744,6 +742,7 @@ ${UIComponents.Elements.select({
 							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
 							rows="2"
 							placeholder="Add a reply..."
+							${!this.user ? 'disabled' : ''}
 						></textarea>
 						<div class="flex gap-2 justify-end">
 							<button class="reply-cancel-btn btn px-2 py-1 rounded text-xs text-[var(--color-text-primary)] hover:text-black" type="button" aria-selected="true">Cancel</button>
@@ -790,11 +789,10 @@ ${UIComponents.Elements.select({
 	 * @param {*} text - Contents of reply
 	 */
 	_addReplyComment(parentId, text) {
-		const user = XOpatUser.instance();
 		const id = crypto.randomUUID();
 		const newComment = {
 			id,
-			author: { id: user.id, name: user.name },
+			author: { id: this.user.id, name: this.user.name },
 			content: text,
 			createdAt: new Date(),
 			replyTo: parentId,
