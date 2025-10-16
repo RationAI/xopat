@@ -18,6 +18,11 @@ Fires when annotation object is created. This does not apply when
 ``annotation-replace`` is called - in that case, the replacement is
 considered as the creation.
 
+##### annotation-before-create | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
+This event is fired prior to inserting any annotation, including promotion (simple helper annotation creation is not affected).
+`isCancelled` can be called to check if the deletion was already requested to be cancelled (by another plugin/module for example)
+`setCancelled` can be used to request to cancel the deletion
+
 ##### annotation-delete | ``{object: fabric.Object}``
 
 ##### annotation-before-delete | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
@@ -31,20 +36,20 @@ in fact replace annotation with a new one, although the annotation identity as p
 by the user remains the same. This event is called only once per update, 
 at the end.
 
-##### annotation-before-replace
+##### annotation-before-replace | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
 This event is fired prior to replacing annotation. Same usage as `annotation-before-delete`
 
 ##### annotation-replace-doppelganger | ``{previous: fabric.Object, next: fabric.Object}``
 This event is fired when annotations are replaced, but only temporarily (e.g. via free form tool).
 It can be called several times during one edit action.
 
-##### annotation-before-replace-doppelganger
+##### annotation-before-replace-doppelganger | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
 This event is fired prior to replacing doppelganger annotation. Same usage as `annotation-before-delete`
 
 ##### annotation-edit | ``{object: fabric.Object}``
 This event is fired when user performs direct annotation editing.
 
-##### annotation-before-edit
+##### annotation-before-edit | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
 This event is fired prior to editing annotation. Same usage as `annotation-before-delete`
 
 ##### annotation-selected | ``{object: fabric.Object}``

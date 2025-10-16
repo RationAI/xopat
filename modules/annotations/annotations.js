@@ -878,12 +878,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {fabric.Object} annotation helper annotation
 	 * @param _raise @private
 	 * @param _dangerousSkipHistory @private, do not touch!
+     * @return {boolean} true if annotation was promoted
 	 */
 	promoteHelperAnnotation(annotation, _raise=true, _dangerousSkipHistory=false) {
 		annotation.off('selected');
-		annotation.on('selected', this._objectClicked.bind(this));
 		annotation.off('deselected');
-		annotation.on('deselected', this._objectDeselected.bind(this));
 		delete annotation.excludeFromExport;
 		if (Array.isArray(annotation._objects)) {
 			for (let child of annotation._objects) delete child.excludeFromExport;
@@ -892,12 +891,30 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		annotation.author = XOpatUser.instance().id;
 		annotation.created = Date.now();
 		annotation.internalID = annotation.instaceID || annotation.created;
+
+        if (!_dangerousSkipHistory) {
+            // skip event if skipping history - internal logics
+            let cancelFlag = false;
+            try {
+                this.raiseEvent('annotation-before-create', {
+                    object: annotation,
+                    isCancelled: () => cancelFlag,
+                    setCancelled: (cancelled) => {cancelFlag = cancelled},
+                });
+            } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
+            if (cancelFlag) return false;
+        }
+
+        annotation.on('selected', this._objectClicked.bind(this));
+        annotation.on('deselected', this._objectDeselected.bind(this));
+
         if (!_dangerousSkipHistory) this.history.push(annotation);
         this.canvas.discardActiveObject();
         this.canvas.setActiveObject(annotation);
 
 		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 		this.canvas.renderAll();
+        return true;
 	}
 
 	/**
@@ -953,10 +970,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * you must use replaceAnnotation() instead!
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
+     * @return {boolean} true if annotation was added
 	 */
 	addAnnotation(annotation, _raise=true) {
 		this.addHelperAnnotation(annotation);
-		this.promoteHelperAnnotation(annotation, _raise);
+		return this.promoteHelperAnnotation(annotation, _raise);
 	}
 
 	/**
@@ -964,17 +982,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param annotation
 	 * @param presetID
 	 * @param _raise
+     * @return {boolean} true if preset updated
 	 */
 	changeAnnotationPreset(annotation, presetID, _raise=true) {
-		let cancelAction = false;
+		let cancelFlag = false;
 		try {
 			if (annotation) this.raiseEvent('annotation-before-preset-change', {
 				object: annotation,
-				isCancelled: () => cancelAction,
-				setCancelled: (cancelled) => {cancelAction = cancelled},
+				isCancelled: () => cancelFlag,
+				setCancelled: (cancelled) => {cancelFlag = cancelled},
 			});
-		} catch {}
-		if (cancelAction) return;
+		} catch (e) { console.error("Error in annotation-before-preset-change handler:", e); }
+		if (cancelFlag) return false;
 
 		let factory = annotation._factory();
 		if (factory !== undefined) {
@@ -982,7 +1001,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			const options = this.presets.getAnnotationOptionsFromInstance(this.presets.get(presetID));
 			factory.configure(annotation, options);
 			if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID, oldPresetID: oldPresetID});
-		}
+		    return true;
+        }
+        return false;
 	}
 
 	/**
@@ -998,25 +1019,26 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Delete annotation
 	 * @param {fabric.Object} annotation
 	 * @param _raise @private
+     * @return {boolean} true if annotation was deleted
 	 */
 	deleteAnnotation(annotation, _raise=true) {
-		let cancelAction = false;
+		let cancelFlag = false;
 		try {
 			if (annotation) {
 				this.raiseEvent('annotation-before-delete', {
 					object: annotation,
-					isCancelled: () => cancelAction,
-					setCancelled: (cancelled) => {cancelAction = cancelled},
+					isCancelled: () => cancelFlag,
+					setCancelled: (cancelled) => {cancelFlag = cancelled},
 				});
 			}
-		} catch {}
-		if (cancelAction) return;
+		} catch (e) { console.error("Error in annotation-before-delete handler:", e); }
+		if (cancelFlag) return false;
 
 		const wasSelected = this.canvas.getActiveObject() === annotation;
 		
 		annotation.off('selected');
-    annotation.off('deselected');
-    this.canvas.remove(annotation);
+        annotation.off('deselected');
+        this.canvas.remove(annotation);
 		this.history.push(null, annotation);
 		this.canvas.renderAll();
 
@@ -1024,6 +1046,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this.raiseEvent('annotation-delete', {object: annotation});
 			if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
 		}
+        return true;
 	}
 
 	/**
@@ -1094,29 +1117,30 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 *  It is possible to also perform full exchange circle:
 	 *  replaceAnnotation(x, y, false)  replaceAnnotation(y, z, false) replaceAnnotation(z, x, false)
 	 *  and furthermore use z annotation to e.g. add it back to the canvas.
+     * @return {boolean} true if annotation replacemed succeeded
 	 */
 	replaceAnnotation(previous, next, isDoppelganger=false) {
 		// We have to skip history since we will add these to history anyway, avoid duplicate entries
 
-		let cancelAction = false;
+		let cancelFlag = false;
 		if (isDoppelganger) {
 			try {
 				if (previous) this.raiseEvent('annotation-before-replace', {
 					object: previous,
-					isCancelled: () => cancelAction,
-					setCancelled: (cancelled) => {cancelAction = cancelled},
+					isCancelled: () => cancelFlag,
+					setCancelled: (cancelled) => {cancelFlag = cancelled},
 				});
-			} catch {}
+			} catch(e) { console.error('Error in annotation-before-replace event handler: ', e); }
 		} else {
 			try {
 				if (previous) this.raiseEvent('annotation-before-replace-doppelganger', {
 					object: previous,
-					isCancelled: () => cancelAction,
-					setCancelled: (cancelled) => {cancelAction = cancelled},
+					isCancelled: () => cancelFlag,
+					setCancelled: (cancelled) => {cancelFlag = cancelled},
 				});
-			} catch {}
+			} catch (e) { console.error('Error in annotation-before-replace-doppelganger event handler: ', e); }
 		}
-		if (cancelAction) return;
+		if (cancelFlag) return false;
 
 		if (isDoppelganger) {
 			// Uses instance ID to track helper annotations on canvas
@@ -1159,7 +1183,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		const wasActive = (this.canvas.getActiveObject() === previous);
 		if (wasActive) {
-				this.canvas.discardActiveObject();
+            this.canvas.discardActiveObject();
 		}
 		this.canvas.remove(previous);
 		previous.off('selected');
@@ -1174,6 +1198,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			this.history.push(next, previous);
 			this.raiseEvent('annotation-replace', {previous, next});
 		}
+        return true;
 	}
 
 	/**
