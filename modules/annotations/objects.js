@@ -288,13 +288,25 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(iconRenderer, valueRenderer, index) {
-        return new fabric.Control({
+    /**
+     * 
+     * @param {string | (fabric.Object) => string} iconRenderer Either a plain icon string, or a callback that returns it
+     * @param {string | (fabric.Object) => string | undefined} valueRenderer Either a plain value string, or a callback that returns it. undefined for no value.
+     * @param {((event: any, transform: any, mouseX: any, mouseY: any) => any) | undefined} onClick mouseUpHandler of the control
+     * @returns 
+     */
+    renderIcon(iconRenderer, valueRenderer, onClick) {
+        const control = new fabric.Control({
             x: 0.5,
             y: -0.5,
             offsetX: 25,
-            offsetY: 20 + 45 * index,
-            cursorStyle: 'grab',
+            offsetY: 20,
+            cursorStyle: 'pointer',
+            sizeX: 40,
+            sizeY: 40,
+            touchSizeX: 40,
+            touchSizeY: 40,
+            enabled: true,
             render: (ctx, left, top, styleOverride, fabricObject) => {
                 const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
                 const value = valueRenderer ? (
@@ -355,22 +367,65 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 ctx.restore();
             },
-        })
+        });
+
+        control.positionHandler = (dim, finalMatrix, fabricObject) => {
+            let visibleBefore = 0;
+            const controls = fabricObject?.controls || {};
+            for (const name of Object.keys(controls)) {
+                const ctrl = controls[name];
+                if (ctrl === control) break;
+                let isVisible = true;
+                try {
+                    if (typeof ctrl.getVisibility === 'function') {
+                        isVisible = !!ctrl.getVisibility(fabricObject, name);
+                    } else if (fabricObject._controlsVisibility && name in fabricObject._controlsVisibility) {
+                        isVisible = !!fabricObject._controlsVisibility[name];
+                    } else if ('visible' in ctrl) {
+                        isVisible = !!ctrl.visible;
+                    }
+                } catch {}
+                if (isVisible) visibleBefore++;
+            }
+
+            const spacing = 45;
+            const baseOffsetY = 20;
+            const dynamicOffsetY = baseOffsetY + spacing * visibleBefore;
+
+            const pt = { x: control.x * dim.x + control.offsetX, y: control.y * dim.y + dynamicOffsetY };
+            return fabric.util.transformPoint(pt, finalMatrix);
+        };
+
+        if (onClick) {
+            control.mouseUpHandler = function(eventData, transform, x, y) {
+                onClick(eventData, transform, x, y);
+                return true;
+            };
+        }
+
+        return control;
+
     }
 
     renderAllControls(ofObject) {
-        ofObject.controls = {
-            private: this.renderIcon(
-                (obj) => obj.private ? 'visibility_lock' : 'visibility',
-                undefined,
-                0,
-            ),
-            comments: this.renderIcon(
-                'comment',
-                (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-                1,
-            ),
-        };
+        const controls = {};
+
+        controls.private = this.renderIcon(
+            (obj) => obj.private ? 'visibility_lock' : 'visibility',
+            undefined,
+            undefined,
+        );
+        const commentsControl = this.renderIcon(
+            'comment',
+            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+            () => {
+                this._context.raiseEvent('comments-control-clicked')
+            },
+        );
+        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
+        controls.comments = commentsControl;
+
+        ofObject.controls = controls;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {

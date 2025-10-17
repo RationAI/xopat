@@ -59,7 +59,7 @@ class BVSelect {
                 item.style.backgroundColor = "transparent";
             });
 
-            document.getElementById("main_" + randomID).innerHTML = first_option_text + "<i id='arrow_" + randomID + "' class='arrows_bv arrow down'></i>";
+            document.getElementById("main_" + randomID).innerHTML = first_option_text + "<i id='arrow_" + randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
         }
 
         // ** ADD OPTIONS TO LIST **
@@ -149,7 +149,7 @@ class BVSelect {
 
 
                             // Adds the texto o the main DIV
-                            document.getElementById("main_" + randomID).innerHTML = SelectedNames + "<i id='arrow_" + randomID + "' class='arrows_bv arrow down'></i>";
+                            document.getElementById("main_" + randomID).innerHTML = SelectedNames + "<i id='arrow_" + randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
 
                         } else {
                             const selector = document.getElementById(this.selector);
@@ -163,7 +163,7 @@ class BVSelect {
                                 this.onChange(selector);
                             }
                             // Updates main div
-                            document.getElementById("main_" + randomID).innerHTML = item.textContent + "<i id='arrow_" + randomID + "' class='arrows_bv arrow down'></i>";
+                            document.getElementById("main_" + randomID).innerHTML = item.textContent + "<i id='arrow_" + randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
                             document.getElementById("ul_" + randomID).style.display = "none";
 
                             // Remove class so Body has Scroll Again
@@ -230,7 +230,7 @@ class BVSelect {
                 first_option_text = MainPlaceholder;
             }
 
-            document.getElementById("main_" + randomID).innerHTML = first_option_text + "<i id='arrow_" + randomID + "' class='arrows_bv arrow down'></i>";
+            document.getElementById("main_" + randomID).innerHTML = first_option_text + "<i id='arrow_" + randomID + "' class='autocomplete-arrow down'></i>";
 
             // Add event Listener on click main div
             document.getElementById("main_" + randomID).addEventListener("click", function() {
@@ -257,10 +257,10 @@ class BVSelect {
                 if (document.getElementById('ul_' + randomID).style.display == 'block') {
 
                     document.getElementById('ul_' + randomID).style.display = 'none';
-                    Array.from(document.querySelectorAll(".arrows_bv"))
+                    Array.from(document.querySelectorAll(".autocomplete-arrow"))
                         .forEach(function(val) {
-                            val.classList.remove("up");
-                            val.classList.add("down");
+                            val.classList.remove("autocomplete-up");
+                            val.classList.add("autocomplete-down");
                         });
 
                 } else {
@@ -270,13 +270,13 @@ class BVSelect {
                             val.style.display = 'none';
                         });
                     BVfadeIn(document.getElementById('ul_' + randomID));
-                    Array.from(document.querySelectorAll(".arrows_bv"))
+                    Array.from(document.querySelectorAll(".autocomplete-arrow"))
                         .forEach(function(val) {
-                            val.classList.remove("up");
-                            val.classList.add("down");
+                            val.classList.remove("autocomplete-up");
+                            val.classList.add("autocomplete-down");
                         });
-                    document.querySelector("#arrow_" + randomID).classList.remove("down");
-                    document.querySelector("#arrow_" + randomID).classList.add("up");
+                    document.querySelector("#arrow_" + randomID).classList.remove("autocomplete-down");
+                    document.querySelector("#arrow_" + randomID).classList.add("autocomplete-up");
                 }
 
                 // Call function at end of the dropdown movement
@@ -405,10 +405,10 @@ class BVSelect {
                             .forEach(function(val) {
                                 val.style.display = 'none';
                             });
-                        Array.from(document.querySelectorAll(".arrows_bv"))
+                        Array.from(document.querySelectorAll(".autocomplete-arrow"))
                             .forEach(function(val) {
-                                val.classList.remove("up");
-                                val.classList.add("down");
+                                val.classList.remove("autocomplete-up");
+                                val.classList.add("autocomplete-down");
                             });
 
                         // When click outside, resets search filter
@@ -465,7 +465,7 @@ class BVSelect {
 
         if(properties.placeholder)
         {
-            document.getElementById("main_" + this.randomID).innerHTML = properties.placeholder + "<i id='arrow_" + this.randomID + "' class='arrows_bv arrow down'></i>";
+            document.getElementById("main_" + this.randomID).innerHTML = properties.placeholder + "<i id='arrow_" + this.randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
         }
         if(properties.search_placeholder)
         {
@@ -505,7 +505,7 @@ class BVSelect {
 
             // Trigger onchange function
             if (selectorIndex.getAttribute("onchange") != null) { document.getElementById(this.selector).onchange(); }
-            document.getElementById("main_" + this.randomID).innerHTML = selectorIndex.options[selectorIndex.selectedIndex].text + "<i id='arrow_" + this.randomID + "' class='arrows_bv arrow down'></i>";
+            document.getElementById("main_" + this.randomID).innerHTML = selectorIndex.options[selectorIndex.selectedIndex].text + "<i id='arrow_" + this.randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
 
             // if is set by value
         } else if(properties.type == "byValue")
@@ -518,7 +518,7 @@ class BVSelect {
 
                     // Trigger onchange function
                     if (selectorIndex.getAttribute("onchange") != null) { document.getElementById(this.selector).onchange(); }
-                    document.getElementById("main_" + this.randomID).innerHTML = selectorIndex[i].innerText + "<i id='arrow_" + this.randomID + "' class='arrows_bv arrow down'></i>";
+                    document.getElementById("main_" + this.randomID).innerHTML = selectorIndex[i].innerText + "<i id='arrow_" + this.randomID + "' class='autocomplete-arrow autocomplete-down'></i>";
                 }
             }
         }
