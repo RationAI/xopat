@@ -1100,10 +1100,7 @@ ${UIComponents.Elements.select({
 
 		objects.forEach(obj => {
 			if (this.context.isAnnotation(obj) && obj.author) {
-				const author = this.context.mapAuthorCallback?.(
-					obj.author,
-					obj.authorType,
-				) ?? obj.author;
+				const author = this.context.mapAuthorCallback?.(obj) ?? obj.author;
 				
 				// skip current user
 				if (author === this.user.id) return;

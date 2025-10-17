@@ -60,7 +60,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "layerID",
         "id",
         "author",
-        "authorType",
         "created",
         "private",
         "comments",

@@ -1123,7 +1123,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// We have to skip history since we will add these to history anyway, avoid duplicate entries
 
 		let cancelFlag = false;
-		if (isDoppelganger) {
+		if (!isDoppelganger) {
 			try {
 				if (previous) this.raiseEvent('annotation-before-replace', {
 					object: previous,
@@ -1489,10 +1489,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (this.user.id === obj.author) return;
 
-		const author = this.mapAuthorCallback?.(
-			obj.author,
-			obj.authorType
-		);
+		const author = this.mapAuthorCallback?.(obj);
 		
 		if (
 			!author ||
@@ -1517,7 +1514,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Set a callback to get author ID in form matching XOpatUser.id
-	 * @param {(authorId: string, authorType?: string) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
+	 * @param {(fabricjs.Object) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
 	 */
 	setAuthorGetter(callback) {
 		this.mapAuthorCallback = callback;
