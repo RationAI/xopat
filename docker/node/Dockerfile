@@ -50,6 +50,7 @@ WORKDIR /app
 ###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
+ENV XO_REPO_ROOT=/app
 COPY --chown=node:1000 . /app
 RUN cd /app && npm install && npm run build
 
