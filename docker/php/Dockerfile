@@ -51,6 +51,7 @@ COPY .htaccess /tmp/xopat/
 COPY *.html /tmp/xopat/
 COPY *.php /tmp/xopat/
 COPY *.json /tmp/xopat/
+COPY *.js /tmp/xopat/
 COPY *.md /tmp/xopat/
 COPY docs/assets/ /tmp/xopat/docs/assets
 COPY src/ /tmp/xopat/src
