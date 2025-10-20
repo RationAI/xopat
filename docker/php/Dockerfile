@@ -40,28 +40,14 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
 # VIEWER: BUILD###
 ##################
 FROM viewer-build-deps AS viewer-build
-WORKDIR /tmp
-RUN git clone https://github.com/RationAI/openseadragon.git \
+RUN cd /tmp \
+    && git clone https://github.com/RationAI/openseadragon.git \
     && cd openseadragon \
     && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
-    && npm i \
-    && cd ..
+    && npm ci
 
-COPY .htaccess /tmp/xopat/
-COPY *.html /tmp/xopat/
-COPY *.php /tmp/xopat/
-COPY *.json /tmp/xopat/
-COPY *.js /tmp/xopat/
-COPY *.md /tmp/xopat/
-COPY docs/assets/ /tmp/xopat/docs/assets
-COPY src/ /tmp/xopat/src
-COPY server/ /tmp/xopat/server
-COPY plugins/ /tmp/xopat/plugins
-COPY modules/ /tmp/xopat/modules
-COPY ui/ /tmp/xopat/ui
-COPY env/ /tmp/xopat/env
-
-RUN cd /tmp/xopat && npm install && npm run build
+COPY . /tmp/xopat
+RUN cd /tmp/xopat && npm ci && npm run build
 
 ##################
 # VIEWER: DEV  ###
@@ -175,7 +161,19 @@ CMD ["apache2ctl", "-D", "FOREGROUND"]
 ###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
-COPY --from=viewer-build --chown=www-data:www-data /tmp/xopat /var/www/html/xopat
-COPY --from=viewer-build --chown=www-data:www-data /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
+COPY --from=viewer-build /tmp/xopat/.htaccess /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/*.html /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/*.php /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/*.js /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/*.json /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/*.md /var/www/html/xopat/
+COPY --from=viewer-build /tmp/xopat/docs/assets/ /var/www/html/xopat/docs/assets
+COPY --from=viewer-build /tmp/xopat/src/ /var/www/html/xopat/src
+COPY --from=viewer-build /tmp/xopat/server/ /var/www/html/xopat/server
+COPY --from=viewer-build /tmp/xopat/plugins/ /var/www/html/xopat/plugins
+COPY --from=viewer-build /tmp/xopat/modules/ /var/www/html/xopat/modules
+COPY --from=viewer-build /tmp/xopat/ui/ /var/www/html/xopat/ui
+COPY --from=viewer-build /tmp/xopat/env/ /var/www/html/xopat/env
+COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
 
 LABEL org.opencontainers.image.source="https://github.com/rationAI/xopat"
