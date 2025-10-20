@@ -4,6 +4,8 @@
 !*.json
 !*.md
 !*.php
+# Build needs to recognize git
+!.git/
 !docs/assets
 !docs/*.js
 !src
