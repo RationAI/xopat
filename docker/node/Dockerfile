@@ -28,6 +28,7 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         ca-certificates \
         vim \
         nano \
+        tini \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
@@ -50,3 +51,5 @@ WORKDIR /app
 FROM viewer-git AS viewer-standalone
 COPY --chown=node:1000 . /app
 RUN cd /app && npm install
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
