@@ -92,6 +92,12 @@ module.exports = function(grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 return acc;
             }, uglification, true, true),
+
+            ...grunt.util.reduceUI((acc, ui, folder) => {
+                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"];
+                return acc;
+            }, uglification, true, true),
         },
         // Custom twinc task
         twinc: {
@@ -118,7 +124,7 @@ module.exports = function(grunt) {
     });
 
     grunt.registerTask('default', []);
-    grunt.registerTask('all', ["uglify"]);
+    grunt.registerTask('all', ["uglify", "css"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
