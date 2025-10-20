@@ -47,6 +47,20 @@ RUN git clone https://github.com/RationAI/openseadragon.git \
     && npm i \
     && cd ..
 
+COPY .htaccess /tmp/xopat/
+COPY *.html /tmp/xopat/
+COPY *.php /tmp/xopat/
+COPY *.json /tmp/xopat/
+COPY *.md /tmp/xopat/
+COPY docs/assets/ /tmp/xopat/docs/assets
+COPY src/ /tmp/xopat/src
+COPY server/ /tmp/xopat/server
+COPY plugins/ /tmp/xopat/plugins
+COPY modules/ /tmp/xopat/modules
+COPY ui/ /tmp/xopat/ui
+COPY env/ /tmp/xopat/env
+
+RUN cd /tmp/xopat && npm install && npm run build
 
 ##################
 # VIEWER: DEV  ###
@@ -98,6 +112,7 @@ CMD apache2ctl -D FOREGROUND
 # VIEWER: PROD GIT       ####
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
+# Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
 FROM ubuntu:jammy AS viewer-git
 
 ENV LANG=en_US.UTF-8
@@ -159,18 +174,7 @@ CMD ["apache2ctl", "-D", "FOREGROUND"]
 ###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
-COPY .htaccess /var/www/html/xopat/
-COPY *.html /var/www/html/xopat/
-COPY *.php /var/www/html/xopat/
-COPY *.json /var/www/html/xopat/
-COPY *.md /var/www/html/xopat/
-COPY docs/assets/ /var/www/html/xopat/docs/assets
-COPY src/ /var/www/html/xopat/src
-COPY server/ /var/www/html/xopat/server
-COPY plugins/ /var/www/html/xopat/plugins
-COPY modules/ /var/www/html/xopat/modules
-COPY ui/ /var/www/html/xopat/ui
-COPY env/ /var/www/html/xopat/env
-COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
+COPY --from=viewer-build --chown=www-data:www-data /tmp/xopat /var/www/html/xopat
+COPY --from=viewer-build --chown=www-data:www-data /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
 
 LABEL org.opencontainers.image.source="https://github.com/rationAI/xopat"
