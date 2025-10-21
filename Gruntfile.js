@@ -41,6 +41,9 @@ module.exports = function(grunt) {
         },
         modules: {
             files: {},
+        },
+        ui: {
+            files: {},
         }
     };
 
