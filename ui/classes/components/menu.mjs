@@ -146,6 +146,12 @@ class Menu extends BaseComponent {
         }
         const tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
 
+        const prevTab = this.tabs[item.id];
+        if (prevTab) {
+            tab.headerButton?.removeFrom(this.header);
+            tab.contentDiv?.removeFrom(this.body);
+        }
+
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");

@@ -40,7 +40,7 @@ function computePosition(anchorRect, tipRect, placement, gap = 8) {
     return { top, left, side };
 }
 
-class GlobalTooltip {
+export class GlobalTooltip {
     constructor() {
         this.surface = null;
         this.arrow = null;
@@ -189,5 +189,3 @@ class GlobalTooltip {
         }
     }
 }
-
-export default GlobalTooltip;

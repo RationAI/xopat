@@ -75,7 +75,7 @@ export class MainPanel extends Menu {
     _sync() {
         this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
         let width = this.opened ? "calc(100% - 400px)" : "100%";
-        USER_INTERFACE.TopPluginsMenu.selfContext.context.style['max-width'] = width;
+        USER_INTERFACE.AppBar.Plugins.selfContext.context.style['max-width'] = width;
         if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
         if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
     }

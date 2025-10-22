@@ -66,11 +66,11 @@ window.AdvancedMenuPages = class {
     }
 
     openMenu(id) {
-        USER_INTERFACE.TopPluginsMenu.openMenu(this.getMenuId(id));
+        USER_INTERFACE.AppBar.Plugins.openMenu(this.getMenuId(id));
     }
 
     openSubMenu(id) {
-        USER_INTERFACE.TopPluginsMenu.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
+        USER_INTERFACE.AppBar.Plugins.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
     }
 
     /**
@@ -116,7 +116,7 @@ window.AdvancedMenuPages = class {
                 }
 
                 const unique = this.getSubMenuId(data.id, this._count++);
-                USER_INTERFACE.TopPluginsMenu._buildMenu(
+                USER_INTERFACE.AppBar.Plugins._buildMenu(
                     this,
                     parent,
                     parentUnique,
@@ -613,8 +613,6 @@ window.AdvancedMenuPages = class {
         options.maxArrayItems = Math.max(1, options.maxArrayItems ?? 25);
 
         const spec = this._guessSpecForValue("", json, 1, options);
-        console.log(spec);
-
         const htmlParts = spec.map(node => this.renderUIFromJson(node, sanitizer));
         return htmlParts.join("");
     }

@@ -226,7 +226,7 @@ class AnnotationsGUI extends XOpatPlugin {
 // <i class="fa-auto fa-eye p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on"
 // onclick="${this.THIS}._toggleEnabled(this)"></i>
 // <button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><i class="fa-auto fa-floppy-disk pl-0 pr-1 v-align-text-top" style="font-size: 19px;"></i>Save</button>
-// <button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.TopPluginsMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
+// <button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AppBar.Plugins.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
 // </div>`,
 // 			'',
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
@@ -321,7 +321,7 @@ title="${customMode.getDescription()}: ${factory.title()}">
 		//status bar
 		USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations", modeOptions.join(""), 'draw');
 
-		USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "annotations-shared", "Export/Import",
+		USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-shared", "Export/Import",
 			`<h3 class="f2-light">Annotations <span class="text-small" id="gui-annotations-io-tissue-name">for slide ${this.activeTissue}</span></h3><br>
 <span class="text-small">Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.</span>
 <div id="annotations-shared-head"></div><div id="available-annotations"></div>
@@ -1009,10 +1009,10 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	_createHistoryInTopPluginsMenu(focus = false) {
-		USER_INTERFACE.TopPluginsMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+		USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
 		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		this._openedHistoryMenu = true;
-		if (focus) USER_INTERFACE.TopPluginsMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+		if (focus) USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
 
 	initHandlers() {

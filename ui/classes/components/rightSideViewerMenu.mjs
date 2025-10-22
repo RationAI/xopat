@@ -39,7 +39,7 @@ export class RightSideViewerMenu extends BaseComponent {
         const originalAddTab = this.menu.addTab;
         this.menu.addTab = (item) => {
             const tabItem = originalAddTab.call(this.menu, item);
-            USER_INTERFACE.TopVisualMenu.registerRightMenuTab(tabItem);
+            USER_INTERFACE.AppBar.View.registerRightMenuTab(tabItem);
         };
 
         this.menu.addTab(

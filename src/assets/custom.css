@@ -168,6 +168,15 @@ button div {
     margin: 0.25rem;
 }
 
+/*TODO: think of a better way/name*/
+.boxed2 {
+    border-radius: var(--rounded-btn, 0.5rem);
+    --tw-bg-opacity: 1;
+    background-color: var(--fallback-b2,oklch(var(--b2)/var(--tw-bg-opacity)));
+    padding: 0.25rem;
+    margin: 0.25rem;
+}
+
 .draggable {
     border-radius: var(--rounded-btn, 0.5rem);;
     cursor: grab; 

@@ -173,7 +173,8 @@ export class Explorer extends BaseComponent {
             "gap-2",
             "h-full",
             "w-full",
-            "overflow-hidden"
+            "overflow-hidden",
+            "relative"
         ].join(" ");
 
         // Data/config
@@ -184,14 +185,19 @@ export class Explorer extends BaseComponent {
 
         this.onPathChange = typeof opts.onPathChange === "function" ? opts.onPathChange : null;
 
+        // ⬅️ Remember page per levelId (only used for mode:"page")
+        this._viewState = new Map(); // levelId -> { pageNo:number }
+
         // Internal state
         this._path = []; // [{ levelIndex, levelId, item }]
-        this._search = ""; // current search string (applies to current level)
+        this._search = "";
+        this._objKeyMaps = [];        // Array<WeakMap<object,string>> per level
+        this._objKeyCounters = [];
+        this._lastIndexMaps = [];     // Array<WeakMap<object,number>> per level
 
-        // Cache per level+parentKey+search => { pages: Map<number,{items,total,done}>, virtualOffset }
+        // Cache per level+parentKey+search => { pages: Map<number,{items,total,done}>, virtualOffset, mode, currentPage }
         this._store = new Map();
 
-        // IO for heavy/lazy item rendering
         this._io = null;
 
         // bind
@@ -201,24 +207,18 @@ export class Explorer extends BaseComponent {
         this._debouncedSearch = this._debouncedSearch.bind(this);
     }
 
-    /**
-     * Get item by index from the current position
-     * @param index
-     * @return {*}
-     */
     getItem(index) {
         return this._path[this._path.length - 1]?.item?.items?.[index];
     }
 
-    /** Public: reset the browser to root */
     reset() {
         this._path = [];
         this._search = "";
         this._store.clear();
+        this._viewState.clear(); // ⬅️ also clear remembered pages
         this._loadAndRender(0, { replace: true });
     }
 
-    /** Public: jump to a concrete path of items (pre-fetched) */
     setPath(itemsPerLevel /* array of items or null */) {
         this._path = [];
         itemsPerLevel.forEach((item, idx) => {
@@ -229,18 +229,60 @@ export class Explorer extends BaseComponent {
         this._loadAndRender(this._path.length, { replace: true });
     }
 
-    /** Key used for cache bucket */
     _bucketKey(levelIndex, parentItem, search) {
         const lvl = this.levels[levelIndex];
-        const parentKey = levelIndex === 0 ? "ROOT" : this._keyOf(this.levels[levelIndex - 1], parentItem, 0, null);
+        const parentKey = this._parentKey(levelIndex, parentItem);
         return `${lvl?.id || levelIndex}::${parentKey}::${search || ""}`;
+    }
+
+    _parentKey(levelIndex, parentItem) {
+        if (levelIndex === 0) return "ROOT";
+        const prevLvl = this.levels[levelIndex - 1];
+        if (!parentItem) return "NULLPARENT";
+
+        // 1) Prefer custom keyOf if available
+        if (typeof prevLvl?.keyOf === "function") {
+            const idxMap = this._lastIndexMaps[levelIndex - 1] || (this._lastIndexMaps[levelIndex - 1] = new WeakMap());
+            const seenIdx = idxMap.get(parentItem);
+            try {
+                const k = prevLvl.keyOf(parentItem, Number.isFinite(seenIdx) ? seenIdx : 0, this._path[levelIndex - 2]?.item ?? null);
+                if (k != null) return String(k);
+            } catch {}
+        }
+
+        // 2) Then parentItem.id if present
+        if (parentItem?.id != null) return String(parentItem.id);
+
+        // 3a) If parent is a primitive (string/number/boolean/etc.), build a stable primitive key
+        const t = typeof parentItem;
+        if (t !== "object" || parentItem === null) {
+            return `PRIM#${t}#${String(parentItem)}`;
+        }
+
+        // 3b) Stable object identity fallback via WeakMapper-level counter
+        let wm = this._objKeyMaps[levelIndex - 1];
+        if (!wm) wm = (this._objKeyMaps[levelIndex - 1] = new WeakMap());
+        let key = wm.get(parentItem);
+        if (!key) {
+            const next = (this._objKeyCounters[levelIndex - 1] ?? 0) + 1;
+            this._objKeyCounters[levelIndex - 1] = next;
+            key = `OBJ#${next}`;
+            wm.set(parentItem, key);
+        }
+        return key;
     }
 
     _ensureBucket(levelIndex, parentItem, search) {
         const k = this._bucketKey(levelIndex, parentItem, search);
         let b = this._store.get(k);
         if (!b) {
-            b = { pages: new Map(), total: undefined, virtualOffset: 0, mode: this.levels[levelIndex]?.mode || "page" };
+            b = {
+                pages: new Map(),
+                total: undefined,
+                virtualOffset: 0,
+                mode: this.levels[levelIndex]?.mode || "page",
+                currentPage: 0,            // ⬅️ single source of truth for current page
+            };
             this._store.set(k, b);
         }
         return b;
@@ -253,11 +295,9 @@ export class Explorer extends BaseComponent {
 
     _canOpen(lvl, item, idx) {
         if (typeof lvl?.canOpen === "function") return !!lvl.canOpen(item);
-        // default: can open if not last level
         return this.levels.indexOf(lvl) < this.levels.length - 1;
     }
 
-    /** Debounce helper without external libs */
     _makeDebounce(fn, delay = 250) {
         let t = null;
         return (...args) => {
@@ -266,31 +306,56 @@ export class Explorer extends BaseComponent {
         };
     }
 
-    /** Navigate: open item at levelIndex and move to next level */
+    /** Navigate into next level; before leaving, remember the page of the current level (if paged). */
     async _navigate(levelIndex, item) {
         const lvl = this.levels[levelIndex];
         if (!lvl) return;
+
+        // ⬅️ Snapshot current page for this level (only matters for mode:"page")
+        if (lvl.mode === "page") {
+            const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
+            const bucket = this._ensureBucket(levelIndex, parent, this._search);
+            this._viewState.set(lvl.id, { pageNo: bucket.currentPage });
+        }
+
+        // Update path and go deeper
         this._path = this._path.filter(p => p.levelIndex < levelIndex);
         this._path.push({ levelIndex, levelId: lvl.id, item });
+
         await this._loadAndRender(levelIndex + 1, { replace: true });
         this.onPathChange?.(this._path.slice());
     }
 
-    /** Load data for level and render the component */
+    /** Load and render the requested level, restoring remembered page when applicable. */
     async _loadAndRender(levelIndex, { replace = false } = {}) {
-        // levelIndex points to the level to show. parent is previous item
         const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
         const lvl = this.levels[levelIndex];
         const host = document.getElementById(this.id);
-        if (!host) return;
+        if (!host || !lvl) return;
 
         const bucket = this._ensureBucket(levelIndex, parent, this._search);
+
+        // ⬅️ On first init for this bucket, pick the starting page.
         if (!bucket._init) {
             bucket._init = true;
-            if (lvl?.mode === "virtual") {
-                await this._fetchVirtualBatch(levelIndex, parent, bucket, /*append*/ true);
+            // If this is a paged level and we have a remembered page, use it
+            if (lvl.mode === "page") {
+                const remembered = this._viewState.get(lvl.id)?.pageNo ?? 0;
+                bucket.currentPage = Math.max(0, remembered | 0);
+                // Ensure that page is fetched
+                await this._fetchPage(levelIndex, parent, bucket, bucket.currentPage);
             } else {
-                await this._fetchPage(levelIndex, parent, bucket, 0);
+                // virtual mode: just fetch the first batch
+                await this._fetchVirtualBatch(levelIndex, parent, bucket, /*append*/ true);
+            }
+        } else if (lvl.mode === "page") {
+            // Bucket already exists; if user remembered a different page (e.g., coming back), make sure it’s fetched
+            const remembered = this._viewState.get(lvl.id)?.pageNo;
+            if (Number.isInteger(remembered) && remembered >= 0) {
+                bucket.currentPage = remembered;
+                if (!bucket.pages.has(bucket.currentPage)) {
+                    await this._fetchPage(levelIndex, parent, bucket, bucket.currentPage);
+                }
             }
         }
 
@@ -307,7 +372,13 @@ export class Explorer extends BaseComponent {
         const lvl = this.levels[levelIndex];
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
         const provider = this._pickProvider(lvl);
-        const { items, total } = await provider(parent, { page: pageNo, pageSize, search: this._search, levelIndex });
+
+        // ⬇️ DELAYED LOADING WRAP (300ms)
+        const { items, total } = await this._asyncWithScopedSpinner(
+            () => provider(parent, { page: pageNo, pageSize, search: this._search, levelIndex }),
+            300
+        );
+
         bucket.pages.set(pageNo, { items: items || [], total: total ?? bucket.total, done: items?.length < pageSize });
         if (total != null) bucket.total = total;
         return bucket.pages.get(pageNo);
@@ -319,9 +390,13 @@ export class Explorer extends BaseComponent {
         const provider = this._pickProvider(lvl);
         const offset = append ? bucket.virtualOffset : 0;
         const pageNo = Math.floor(offset / pageSize);
-        const { items, total } = await provider(parent, { page: pageNo, pageSize, search: this._search, levelIndex, offset });
+
+        const { items, total } = await this._asyncWithScopedSpinner(
+            () => provider(parent, { page: pageNo, pageSize, search: this._search, levelIndex, offset }),
+            300
+        );
+
         const seg = { items: items || [], total: total ?? bucket.total, done: (items?.length || 0) < pageSize };
-        // store under pageNo for uniformity
         bucket.pages.set(pageNo, seg);
         if (append) bucket.virtualOffset += seg.items.length;
         if (total != null) bucket.total = total;
@@ -333,23 +408,100 @@ export class Explorer extends BaseComponent {
         return (parent, ctx) => lvl.getChildren(parent, ctx);
     }
 
+    // ---- Scoped loader (Explorer-level) ---------------------------------
+    _pendingLoads = 0;
+    _loaderTimer = null;
+
+    _getLoaderEl() {
+        const root = document.getElementById(this.id);
+        if (!root) return null;
+
+        let el = root.querySelector(`#${this.id}-scoped-loader`);
+        if (!el) {
+            el = document.createElement("div");
+            el.id = `${this.id}-scoped-loader`;
+            el.style.cssText = [
+                "position:absolute",
+                "inset:0",
+                "z-index:9999",
+                "background-color:rgba(0,0,0,0.53)",
+                "display:none",
+            ].join(";");
+            el.innerHTML = `
+      <span class="absolute loading loading-spinner"
+            style="top:50%;left:50%;width:62px;transform:translate(-50%,-50%)"></span>
+      <div class="absolute"
+           style="top: calc(50% + 120px); left: 50%; transform: translate(-50%, -50%); width: 450px; max-width: 85%;">
+        <div id="${this.id}-loader-title" class="h3 text-center" style="display:none"></div>
+        <div id="${this.id}-loader-desc" class="h4 text-center" style="display:none"></div>
+      </div>
+    `;
+            root.appendChild(el);
+        }
+        return el;
+    }
+
+    _showScopedLoader({ title = "", description = "" } = {}) {
+        const el = this._getLoaderEl(); if (!el) return;
+        const t = el.querySelector(`#${this.id}-loader-title`);
+        const d = el.querySelector(`#${this.id}-loader-desc`);
+        if (t) { t.textContent = title; t.style.display = title ? "" : "none"; }
+        if (d) { d.textContent = description; d.style.display = description ? "" : "none"; }
+        el.style.display = "";
+    }
+
+    _hideScopedLoader() {
+        const el = this._getLoaderEl(); if (!el) return;
+        el.style.display = "none";
+    }
+
+    _asyncWithScopedSpinner(fn, delayMs = 300, info = {}) {
+        this._pendingLoads++;
+        if (this._pendingLoads === 1) {
+            // first task: arm the timer
+            this._loaderTimer = setTimeout(() => {
+                this._showScopedLoader(info);
+                this._loaderTimer = null;
+            }, delayMs);
+        }
+
+        const finalize = () => {
+            this._pendingLoads = Math.max(0, this._pendingLoads - 1);
+            if (this._pendingLoads === 0) {
+                // last task finished: clear timer and hide overlay
+                if (this._loaderTimer) { clearTimeout(this._loaderTimer); this._loaderTimer = null; }
+                this._hideScopedLoader();
+            }
+        };
+
+        return Promise.resolve().then(fn).finally(finalize);
+    }
+
     /* ---------- RENDERING ---------- */
     _renderHeader(levelIndex) {
-        // Build crumbs from path
         const cList = ul(
             li(
-                a({ class: "link", onclick: () => { this._path = []; this._store.clear(); this._loadAndRender(0, { replace: true }); } },
+                a({
+                        class: "link",
+                        onclick: () => {
+                            this._loadAndRender(0, { replace: true });
+                        }
+                    },
                     span({ class: "fa-auto fa-house" }),
-                    span(" Root")
-                )
+                    span(" Root"))
             )
         );
+
         this._path.forEach((p, i) => {
-            i = i+1; // root is implicit 0
+            i = i + 1; // root is implicit 0
             const lvl = this.levels[p.levelIndex];
             const label = this._labelFor(lvl, p.item) || `Level ${lvl?.title || lvl?.id || i}`;
             const isLast = this._path.length >= i;
-            const onclick = isLast ? undefined : () => { this._path = this._path.slice(0, i); this._loadAndRender(i, { replace: true }); };
+            const onclick = isLast ? undefined : () => {
+                // Truncate path and render that level; remembered page for that level will be used
+                this._path = this._path.slice(0, i);
+                this._loadAndRender(i, { replace: true });
+            };
             cList.appendChild(li(a({ class: "link", onclick }, label)));
         });
 
@@ -363,17 +515,17 @@ export class Explorer extends BaseComponent {
                 oninput: this._debouncedSearch(() => {
                     const val = cSearch.value.trim();
                     this._search = val;
-                    // Reset store for current level and reload
+                    // Reset cache for current level + parent; also forget remembered page (search changes the dataset)
                     const levelIndex = Math.min(this._path.length, this.levels.length - 1);
                     const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
                     const key = this._bucketKey(levelIndex, parent, this._search);
-                    const old = this._store.get(key);
-                    if (old) this._store.delete(key);
+                    this._store.delete(key);
+                    const lvl = this.levels[levelIndex];
+                    if (lvl?.id) this._viewState.delete(lvl.id); // ⬅️ forget page on new search
                     this._loadAndRender(levelIndex, { replace: true });
                 }, 250)
             })
         );
-        // connect to element for value read (closure above)
         const cSearch = searchBox.firstChild;
 
         return div({ class: "border-b border-base-300/70" }, rootBtn, searchBox);
@@ -388,23 +540,18 @@ export class Explorer extends BaseComponent {
     _renderLevelView(levelIndex, parent, bucket) {
         const lvl = this.levels[levelIndex];
         if (!lvl) {
-            // no more levels: optionally show a message
             return div({ class: "p-4 text-base-content/60" }, "No further levels.");
         }
 
-        // teardown previous IO
         if (this._io) { try { this._io.disconnect(); } catch {} this._io = null; }
 
         const header = this._renderHeader(levelIndex);
-
-        // Container
         const listWrap = div({ class: "flex-1 overflow-auto" });
 
-        // Create list content by mode
         if (lvl.mode === "virtual") {
             listWrap.appendChild(this._renderVirtualList(levelIndex, parent, bucket));
         } else {
-            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket));
+            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket)); // ⬅️ uses bucket.currentPage
         }
 
         return div({ class: this.classMap.base, id: this.id }, header, listWrap);
@@ -413,31 +560,113 @@ export class Explorer extends BaseComponent {
     _renderPagedList(levelIndex, parent, bucket) {
         const lvl = this.levels[levelIndex];
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
-        let currentPage = Math.min(...Array.from(bucket.pages.keys()));
-        if (!Number.isFinite(currentPage)) currentPage = 0;
 
+        // Source of truth: bucket.currentPage
+        let currentPage = Number.isFinite(bucket.currentPage) ? bucket.currentPage : 0;
+        if (!bucket.pages.has(currentPage)) currentPage = 0; // safety
+
+        const seg = bucket.pages.get(currentPage) || { items: [] };
+        const items = seg.items || [];
+
+        // --- UI scaffold (keeps your look & feel) ---
         const host = div({ class: "flex flex-col h-full" });
+
+        // scrollable viewport
+        const viewport = div({ class: "flex-1 overflow-auto" });
+
+        // UL we’ll reuse; we’ll put spacers + visible items into it
         const listEl = ul({ class: "menu p-1 gap-1" });
 
-        const pageState = van.state(currentPage + 1);
+        // footer controls (prev/next) – unchanged behavior
+        const pageState = van.state((currentPage || 0) + 1);
         const totalState = van.state(bucket.total ?? null);
         const canNextState = van.state(true);
 
-        const renderPage = (pNo) => {
-            const seg = bucket.pages.get(pNo);
-            listEl.innerHTML = "";
-            seg?.items.forEach((item, idx) => {
-                listEl.appendChild(this._renderItemLi(levelIndex, item, idx));
-            });
-        };
-
-        renderPage(currentPage);
-
+        // Calculate total pages if known
         const total = bucket.total;
         const totalPages = total ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
         if (totalPages && totalState.val == null) totalState.val = totalPages;
 
-        // Controls
+        // ------- Windowed rendering for paged lists -------
+        // Config
+        const OVERSCAN = 8;        // render a few extra rows above/below for smoothness
+        let rowH = 0;              // measured row height
+        let start = 0, end = -1;   // current rendered window [start, end)
+
+        // Spacers to simulate full height without mounting all rows
+        const topSpacer = div({ style: "height:0px" });
+        const bottomSpacer = div({ style: "height:0px" });
+
+        // Simple pool: we fully re-render the window on changes (keeps code small & robust)
+        const renderWindow = (force=false) => {
+            const vpH = viewport.clientHeight || 0;
+            const scrollTop = viewport.scrollTop || 0;
+            if (!rowH) {
+                // if we don't know row height yet, delay until measured
+                return;
+            }
+            const maxIdx = items.length;
+            // compute indexes
+            const visStart = Math.max(0, Math.floor(scrollTop / rowH));
+            const visEnd = Math.min(maxIdx, Math.ceil((scrollTop + vpH) / rowH));
+            const nextStart = Math.max(0, visStart - OVERSCAN);
+            const nextEnd = Math.min(maxIdx, visEnd + OVERSCAN);
+            if (!force && nextStart === start && nextEnd === end) return;
+
+            start = nextStart; end = nextEnd;
+
+            // update spacers
+            const topH = start * rowH;
+            const bottomH = (maxIdx - end) * rowH;
+            topSpacer.style.height = `${topH}px`;
+            bottomSpacer.style.height = `${bottomH}px`;
+
+            // replace visible chunk
+            // keep ONLY top spacer at first position; wipe middle; keep bottom spacer at end
+            // structure: [topSpacer, ...rows..., bottomSpacer]
+            // clear previous rows (keep first and last children if they are our spacers)
+            while (listEl.childNodes.length > 0) listEl.removeChild(listEl.lastChild);
+            listEl.appendChild(topSpacer);
+
+            for (let i = start; i < end; i++) {
+                listEl.appendChild(this._renderItemLi(levelIndex, items[i], i));
+            }
+
+            listEl.appendChild(bottomSpacer);
+        };
+
+        // Initial draw: we need a measured row height
+        // Render one probe row off-DOM to measure natural height
+        const probeRow = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
+        probeRow.style.visibility = "hidden";
+        probeRow.style.position = "absolute";
+        // mount probe temporarily to measure
+        const probeWrap = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow);
+        viewport.appendChild(probeWrap);
+
+        // After browser paints, measure and kick first window render
+        queueMicrotask(() => {
+            rowH = Math.max(1, probeRow.getBoundingClientRect().height || 40);
+            // clean probe
+            try { viewport.removeChild(probeWrap); } catch {}
+
+            // initialize spacers + first window
+            listEl.appendChild(topSpacer);
+            listEl.appendChild(bottomSpacer);
+
+            // ensure viewport height is known
+            renderWindow(true);
+        });
+
+        // Scroll handler to update the window
+        const onScroll = () => renderWindow(false);
+        viewport.addEventListener("scroll", onScroll);
+
+        // Re-compute on resize as well
+        const ro = new ResizeObserver(() => renderWindow(true));
+        ro.observe(viewport);
+
+        // Navigation controls
         const controls = div({ class: "flex items-center justify-between p-2 border-t border-base-300/70 gap-2" },
             div(
                 { class: "join" },
@@ -445,62 +674,107 @@ export class Explorer extends BaseComponent {
                     if (currentPage <= 0) return;
                     currentPage -= 1;
                     if (!bucket.pages.has(currentPage)) await this._fetchPage(levelIndex, parent, bucket, currentPage);
-                    renderPage(currentPage);
-                    pageState.val = (currentPage + 1);
-                    // if we moved left, next is allowed again
-                    canNextState.val = true;
-                    updateMeta();
+                    bucket.currentPage = currentPage;
+                    this._viewState.set(lvl.id, { pageNo: currentPage });
+
+                    // swap to new items and reset measurement
+                    const seg = bucket.pages.get(currentPage) || { items: [] };
+                    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+                    items.splice(0, items.length, ...(seg.items || [])); // mutate array contents to keep references stable
+                    rowH = 0; start = 0; end = -1;
+                    // re-probe
+                    const probeRow2 = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
+                    probeRow2.style.visibility = "hidden";
+                    probeRow2.style.position = "absolute";
+                    const probeWrap2 = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow2);
+                    viewport.appendChild(probeWrap2);
+                    queueMicrotask(() => {
+                        rowH = Math.max(1, probeRow2.getBoundingClientRect().height || 40);
+                        try { viewport.removeChild(probeWrap2); } catch {}
+                        listEl.appendChild(topSpacer);
+                        listEl.appendChild(bottomSpacer);
+                        viewport.scrollTop = 0; // reset scroll for new page
+                        pageState.val = (currentPage + 1);
+                        canNextState.val = true;
+                        renderWindow(true);
+                    });
                 }),
                 span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
                 this._btn("fa-angle-right", async () => {
-                    // if total is unknown, try load next until empty
                     if (totalPages && currentPage >= totalPages) return;
                     currentPage += 1;
                     if (!bucket.pages.has(currentPage)) {
-                        const seg = await this._fetchPage(levelIndex, parent, bucket, currentPage);
+                        const segN = await this._fetchPage(levelIndex, parent, bucket, currentPage);
                         if (bucket.total != null && totalState.val == null) {
                             totalState.val = Math.max(1, Math.ceil(bucket.total / pageSize));
                         }
-                        if (!seg.items.length) {
-                            // we reached the end when total was unknown; freeze next
+                        if (!segN.items.length) {
                             currentPage -= 1;
                             canNextState.val = false;
                             return;
                         }
                     }
-                    renderPage(currentPage);
-                    pageState.val = (currentPage + 1);
-                    updateMeta();
+                    bucket.currentPage = currentPage;
+                    this._viewState.set(lvl.id, { pageNo: currentPage });
+
+                    const seg = bucket.pages.get(currentPage) || { items: [] };
+                    while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+                    items.splice(0, items.length, ...(seg.items || []));
+                    rowH = 0; start = 0; end = -1;
+                    const probeRow2 = this._renderItemLi(levelIndex, items[0] ?? {}, 0);
+                    probeRow2.style.visibility = "hidden";
+                    probeRow2.style.position = "absolute";
+                    const probeWrap2 = div({ class: "absolute opacity-0 pointer-events-none" }, probeRow2);
+                    viewport.appendChild(probeWrap2);
+                    queueMicrotask(() => {
+                        rowH = Math.max(1, probeRow2.getBoundingClientRect().height || 40);
+                        try { viewport.removeChild(probeWrap2); } catch {}
+                        listEl.appendChild(topSpacer);
+                        listEl.appendChild(bottomSpacer);
+                        viewport.scrollTop = 0;
+                        pageState.val = (currentPage + 1);
+                        renderWindow(true);
+                    });
                 })
             ),
             div({ class: "text-xs opacity-70" }, () => total != null ? `${total} items` : "")
         );
 
-        const updateMeta = () => {
-            // nothing extra for now; placeholder hook
-        };
+        // Mount subtree
+        viewport.appendChild(listEl);
+        host.append(viewport, controls);
 
-        host.append(listEl, controls);
+        // Cleanup when this view is discarded
+        // (your framework likely recreates nodes on re-render; safeguard observers)
+        const disconnect = () => {
+            viewport.removeEventListener("scroll", onScroll);
+            try { ro.disconnect(); } catch {}
+        };
+        // Attach a simple mutation-aware hook
+        new MutationObserver((muts, obs) => {
+            const attached = document.body.contains(viewport);
+            if (!attached) { disconnect(); obs.disconnect(); }
+        }).observe(host, { childList: true, subtree: true });
+
         return host;
     }
+
 
     _renderVirtualList(levelIndex, parent, bucket) {
         const lvl = this.levels[levelIndex];
         const listEl = ul({ class: "menu p-1 gap-1" });
 
-        // Create IO that upgrades placeholders to heavy renderers when visible
+        // Virtual mode: no remembering required
         this._io = new IntersectionObserver(entries => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     const target = entry.target;
-                    const key = target.getAttribute("data-key");
                     const itemIdx = +target.getAttribute("data-idx");
                     const pageNo = +target.getAttribute("data-page");
                     const seg = bucket.pages.get(pageNo);
                     const item = seg?.items[itemIdx];
                     if (!item) return;
 
-                    // swap placeholder with heavy content
                     const node = this._renderItemLi(levelIndex, item, itemIdx, { heavy: true, pageNo });
                     target.replaceWith(node);
                     this._io.unobserve(target);
@@ -508,7 +782,6 @@ export class Explorer extends BaseComponent {
             });
         }, { root: listEl, rootMargin: "256px 0px", threshold: 0.01 });
 
-        // Render currently loaded segments as placeholders first
         const renderSegments = () => {
             listEl.innerHTML = "";
             const pages = Array.from(bucket.pages.keys()).sort((a,b)=>a-b);
@@ -520,7 +793,6 @@ export class Explorer extends BaseComponent {
                     this._io.observe(ph);
                 });
             });
-            // add an infinite-scroll sentinel
             const sentinel = div({ class: "w-full text-center text-xs opacity-60 p-2" }, segDone() ? "— end —" : "Loading…");
             sentinel.setAttribute("data-sentinel", "1");
             listEl.appendChild(sentinel);
@@ -530,8 +802,7 @@ export class Explorer extends BaseComponent {
                     if (segDone()) return;
                     const before = bucket.virtualOffset;
                     const seg = await this._fetchVirtualBatch(levelIndex, parent, bucket, true);
-                    if ((seg?.items?.length || 0) === 0) return; // no more
-                    // append new placeholders for new page
+                    if ((seg?.items?.length || 0) === 0) return;
                     const pNo = Math.floor(before / (lvl.pageSize || 64));
                     seg.items.forEach((item, i) => {
                         const idx = i;
@@ -546,7 +817,6 @@ export class Explorer extends BaseComponent {
         };
 
         const segDone = () => {
-            // done if any last loaded segment has less than pageSize or stated done
             const pages = Array.from(bucket.pages.keys());
             if (!pages.length) return false;
             const last = bucket.pages.get(Math.max(...pages));
@@ -564,6 +834,7 @@ export class Explorer extends BaseComponent {
         this._search = (typeof search === "string" ? search : "");
         this._path = [];
         this._store.clear();
+        this._viewState.clear(); // ⬅️ reset remembered pages when reconfiguring
         this._loadAndRender(0, { replace: true });
     }
 
@@ -571,9 +842,9 @@ export class Explorer extends BaseComponent {
     refresh() {
         const levelIndex = Math.min(this._path.length, this.levels.length - 1);
         const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
-        // purge bucket for current search + parent so a fresh fetch happens
         const key = this._bucketKey(levelIndex, parent, this._search);
         this._store.delete(key);
+        // keep _viewState as-is so the remembered page still applies
         this._loadAndRender(levelIndex, { replace: true });
     }
 
@@ -591,6 +862,8 @@ export class Explorer extends BaseComponent {
 
     _renderItemLi(levelIndex, item, idx, { heavy = false, pageNo = 0 } = {}) {
         const lvl = this.levels[levelIndex];
+        const idxMap = this._lastIndexMaps[levelIndex] || (this._lastIndexMaps[levelIndex] = new WeakMap());
+        try { idxMap.set(item, idx); } catch {}
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
         const helpers = {
             open: () => this._navigate(levelIndex, item, idx),
@@ -613,7 +886,6 @@ export class Explorer extends BaseComponent {
             if (typeof lvl?.onClick === "function") lvl.onClick(item, idx);
             if (navigate) this._navigate(levelIndex, item, idx);
         }
-        // mark for IO (helpful when swapping placeholder)
         row.setAttribute("data-key", key);
         row.setAttribute("data-idx", String(idx));
         row.setAttribute("data-page", String(pageNo));
@@ -625,11 +897,9 @@ export class Explorer extends BaseComponent {
         return b;
     }
 
-    /* ---------- BaseComponent ---------- */
     create() {
         if (!this._debouncedSearchWrapped) this._debouncedSearchWrapped = this._makeDebounce((fn) => fn(), 250);
         if (!document.getElementById(this.id)) {
-            // initial mount => render the first level
             setTimeout(() => this._loadAndRender(0, { replace: true }), 0);
         }
         return div({ id: this.id, class: this.classMap.base, ...this.extraProperties });
@@ -638,11 +908,6 @@ export class Explorer extends BaseComponent {
     _debouncedSearch(fn, delay=250) {
         let t=null; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), delay); };
     }
-}
-
-// Attach to UI namespace when included by a plugin
-if (globalThis && globalThis.UI) {
-    globalThis.UI.Explorer = Explorer;
 }
 
 /* --------------------------

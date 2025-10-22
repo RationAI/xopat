@@ -39,7 +39,8 @@ import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mj
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
 
-import GlobalTooltip from "./services/globalTooltip.mjs";
+import { GlobalTooltip } from "./services/globalTooltip.mjs";
+import { AppBar } from "./services/appBar.mjs";
 
 const UI = {
     // Elements
@@ -54,7 +55,7 @@ const UI = {
     Explorer,
 
     // Services
-    GlobalTooltip
+    GlobalTooltip, AppBar
 };
 
 globalThis.UI = UI;

@@ -14,7 +14,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
         this._id = id;
         this._name = name;
         this._secret = {};
-        USER_INTERFACE.TopUserMenu.menu.getTab('user').setTitle(name);
+        USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(name);
 
         this.icon = icon;
         this.raiseEvent('login', {
@@ -28,7 +28,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
         this._id = null;
         this._name = $.t('user.anonymous');
         this._secret = {};
-        USER_INTERFACE.TopUserMenu.menu.getTab('user').setTitle(this.name);
+        USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this.name);
         this.icon = null;
         this.secret = null;
         this.raiseEvent('logout', null);

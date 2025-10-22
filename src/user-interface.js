@@ -740,7 +740,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     div({class: "flex flex-col-reverse"},
                         button({
                             onclick: function () {
-                                USER_INTERFACE.TopPluginsMenu.refreshPageWithSelectedPlugins()
+                                USER_INTERFACE.AppBar.Plugins.refreshPageWithSelectedPlugins()
                             }, class: "btn"
                         }, "Load with selected"),
                     ),
@@ -793,284 +793,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
-         * Application TopFullscreenButton
-         * @namespace USER_INTERFACE.TopFullscreenButton
-         */
-        TopFullscreenButton:{
-            context: $("#top-fullscreen"),
-            button: "",
-            fullscreen: false,
-
-            init: function () {
-                this.button = new Button({
-                    id: "fullscreen-button",
-                    size: Button.SIZE.SMALL,
-                    onClick: function () {
-
-                        // add components which you want to be hidden on fullscreen here:
-                        document.getElementById("top-user").classList.toggle("hidden");
-                        document.getElementById("top-side-left").classList.toggle("hidden");
-
-                        // cannot hide whole top-side, because it contains also fullscreen button
-                        document.getElementById("top-side").classList.toggle("opaque-bg");
-                        const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                        if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
-                            toolbarDivs.forEach((el) => el.classList.remove("hidden"));
-                        } else{
-                            toolbarDivs.forEach((el) => el.classList.add("hidden"));
-                        }
-
-                        USER_INTERFACE.TopFullscreenButton.fullscreen = !USER_INTERFACE.TopFullscreenButton.fullscreen;
-                    }
-                },
-                new UI.FAIcon("fa-up-right-and-down-left-from-center"),);
-                this.button.attachTo(this.context);
-            }
-        },
-        /**
-         * Application TopUserMenu
-         * @namespace USER_INTERFACE.TopUserMenu
-         */
-        TopUserMenu:{
-            context: $("#top-user"),
-            menu: "",
-
-            init: function () {
-                this.menu = new UI.MainPanel({
-                    id: "top-user-buttons-menu",
-                    orientation: UI.Menu.ORIENTATION.TOP,
-                    buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                    rounded: UI.Menu.ROUNDED.ENABLE,
-                    extraClasses: { bg: "bg-transparent" }
-                },
-                    { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: UI.MenuTabBanner },
-                    { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
-                    { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
-                    { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-                    { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
-                            {
-                                id: "global-export",
-                                domID: true,
-                                label: $.t("main.bar.exportFile"),
-                                hint: $.t("main.bar.explainExportFile"),
-                                onClick: () => {
-                                    UTILITIES.export();
-                                    this.menu.closeTab("share");
-                                },
-                                icon: "fa-download"
-                            },
-                            {
-                                id: "copy-url-inner",
-                                domID: true,
-                                label: $.t("main.bar.exportUrl"),
-                                hint: $.t("main.bar.explainExportUrl"),
-                                onClick: () => {
-                                    UTILITIES.copyUrlToClipboard();
-                                    this.menu.closeTab("share");
-                                },
-                                icon: "fa-link"
-                            }
-                        ], class: UI.Dropdown},
-                    { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
-                );
-
-                this.menu.attachTo(this.context);
-                this.menu.set(UI.Menu.DESIGN.ICONONLY);
-            },
-
-            // todo better api
-            setBanner: function (banner) {
-                const bItem = this.menu.getTab("banner");
-                if (banner) {
-                    bItem.toggleHiden();
-                    bItem.setVisuals(banner);
-                } else {
-                    //todo might dissinc
-                    bItem.toggleHiden();
-                }
-            }
-        },
-
-        /**
          * Application Top Middle Menu
-         * @namespace USER_INTERFACE.TopVisualMenu
+         * @namespace USER_INTERFACE.AppBar
          */
-        TopVisualMenu:{
-            context: $("#top-visual"),
-            menu: "",
-            rightMenuTabs: {},
-            otherWindows: {},
-            _visualMenuNeedsRefresh: false,
-
-            init: function () {
-                this.menu = new UI.MainPanel({
-                        id: "visual-menu",
-                        orientation: UI.Menu.ORIENTATION.TOP,
-                        buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                        rounded: UI.Menu.ROUNDED.ENABLE,
-                        extraClasses: { bg: "bg-transparent" },
-                    }, {
-                        id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: UI.Dropdown,
-                        onClick: e => USER_INTERFACE.TopVisualMenu._refreshVisualDropdown()
-                    },
-                );
-
-                this.menu.attachTo(this.context);
-                this.menu.set(UI.Menu.DESIGN.TITLEICON);
-            },
-
-
-
-            _refreshVisualDropdown: function () {
-                if (!this._visualMenuNeedsRefresh) return;
-
-                const tab = this.menu.getTab('view');
-                tab.clear();
-
-                // TODO: allow custom windows here
-                // tab.addItem({
-                //     id: 'preview',
-                //     onClick: () => USER_INTERFACE.SlidesMenu.open(),
-                //     icon: "fa-rectangle-list",
-                //     label: $.t('main.global.preview'),
-                // });
-                tab.addItem({
-                    id: 'clone-viewer',
-                    onClick: () => UTILITIES.clone(),
-                    icon: "fa-clone",
-                    label: $.t('main.global.clone'),
-                });
-
-                // todo consider sort
-                for (let id in this.otherWindows) {
-                    const item = this.otherWindows[id];
-                    tab.addItem({
-                        icon: item.icon,
-                        label: item.label,
-                        selected: item.selected,
-                        onClick: () => {
-                            item.selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
-                            APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
-                            item.onClick?.(item.selected);
-                        },
-                        section: 'global-windows',
-                    });
-                }
-
-
-                for (let id in this.rightMenuTabs) {
-                    const item = this.rightMenuTabs[id][0];
-                    if (item) {
-                        tab.addItem({
-                            icon: item.iconName,
-                            label: item.title,
-                            selected: !APPLICATION_CONTEXT.getOption(`${id}-hidden`, false),
-                            onClick: () => {
-                                for (let child of this.rightMenuTabs[id]) {
-                                    // todo support toggle with t/f
-                                    child.toggleHiden();
-                                }
-                                //todo taking item.hidden value is problematic, first element controls all
-                                item.selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
-                                APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
-                            },
-                            section: 'right-menu',
-                        });
-                    }
-                }
-            },
-
-            /**
-             * Register a window tab
-             */
-            registerWindowTab(id, icon, label, onClick) {
-                const selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, false);
-                if (selected) {
-                    onClick?.(selected);
-                }
-                this.otherWindows[id] = {
-                    id, icon, label, onClick, selected
-                };
-                this._visualMenuNeedsRefresh = true;
-            },
-
-            /**
-             * Register menu tab that is driven by the core right menu for each viewer.
-             * Not advised to use manually, used in core UI.
-             * @param tab
-             */
-            registerRightMenuTab(tab) {
-                // todo support removal
-                let parent = this.rightMenuTabs[tab.id];
-                if (!parent) {
-                    this.rightMenuTabs[tab.id] = parent = [tab];
-                    this._visualMenuNeedsRefresh = true;
-                } else {
-                    parent.push(tab)
-                    parent.sort((a, b) => a.title.localeCompare(b.title));
-                }
-            },
-
-            setTabSelected: function (id, selected) {
-                APPLICATION_CONTEXT.setOption(`${id}-hidden`, !!selected);
-                this._visualMenuNeedsRefresh = true; // todo consider just updataing tab state
-            },
-        },
-
-        /**
-         * Application Vertical Menu (right side)
-         * @namespace USER_INTERFACE.TopPluginsMenu
-         */
-        TopPluginsMenu: {
-            context: $("#top-plugins"),
-            menu: "",
-
-            init: function () {
-                this.pluginListMenu = USER_INTERFACE.TopVisualMenu.menu.addTab({ id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'), body: [], class: UI.Dropdown});
-            },
-
-            // should add submenus to plugin menu
-            setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
-
-                if(!this.pluginListMenu.getItem(ownerPluginId)){
-                    this.pluginListMenu.addItem({
-                        id: ownerPluginId,
-                        icon: pluginMeta(ownerPluginId, "icon"),
-                        label: pluginMeta(ownerPluginId, "name"),
-                        pluginRootClass: `plugin-${ownerPluginId}-root`,
-                        onClick: () => USER_INTERFACE.TopPluginsMenu.openSubmenu(`${ownerPluginId}`),
-                    });
-
-                    const InsideMenu = new UI.TabsMenu({
-                        id: `${ownerPluginId}-submenu`,
-                        orientation: UI.Menu.ORIENTATION.TOP,
-                        buttonSide: UI.Menu.BUTTONSIDE.LEFT,
-                        rounded: UI.Menu.ROUNDED.ENABLE,
-                        extraClasses: { bg: "bg-transparent" }
-                    },);
-
-                    const d = new UI.Div({ id: `${ownerPluginId}-menu`, extraClasses: `flex flex-col plugin-${ownerPluginId}-root` }, InsideMenu);
-
-                    USER_INTERFACE.FullscreenMenu.menu.addTab(d);
-                }
-
-                const insideMenu = USER_INTERFACE.FullscreenMenu.menu.tabs[`${ownerPluginId}-menu`]._children[0];
-                const d = van.tags.div();
-                d.innerHTML = html;
-                insideMenu.addTab({id: toolsMenuId, icon: icon, title: title, body: [d]});
-
-            },
-            openSubmenu(atPluginId, atSubId=undefined, toggle=true) {
-                // TODO move to mainPanel class and solve toggle
-                USER_INTERFACE.FullscreenMenu.menu.focus(`${atPluginId}-menu`);
-
-                if (USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focused === undefined && atSubId === undefined){
-                    const stTabId = Object.keys(USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].tabs)[0];
-                    USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(stTabId);
-                }
-
-            },
-        },
+        AppBar: new UI.AppBar(),
 
         /**
          * Tools menu by default invisible (top)
@@ -1321,6 +1047,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         Loading: {
             _visible: $("#fullscreen-loader").css('display') !== 'none',
             _allowDescription: false,
+            _textTimeout: null,
             isVisible: function () {
                 return this._visible;
             },
@@ -1333,7 +1060,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (this._visible === loading) return;
                 if (loading) {
                     loader.css('display', 'block');
+                    // Make loading show
+                    this._textTimeout = setTimeout(() => {
+                        this._textTimeout = null;
+                        this._allowDescription = true;
+                        if (loader.isVisible()) loader.text(true);
+                    }, 3000);
                 } else {
+                    if (this._textTimeout) {
+                        clearTimeout(this._textTimeout);
+                        this._textTimeout = null;
+                    }
                     loader.css('display', 'none');
                     this.text(false);
                 }
@@ -1492,12 +1229,4 @@ ${label}
             }
         },
     };
-
-    // Make loading show
-    setTimeout(() => {
-        const loader = USER_INTERFACE.Loading;
-        // Only after some time show texts to users - taking too long time
-        loader._allowDescription = true;
-        if (loader.isVisible()) loader.text(true);
-    }, 3000);
 }

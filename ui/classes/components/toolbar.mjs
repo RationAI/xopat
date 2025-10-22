@@ -41,7 +41,7 @@ class Toolbar extends BaseComponent {
             extraClasses: {
                 height: "h-full",
                 width: "w-full",
-                style: "boxed",
+                style: "boxed2",
                 margin: "m-0",
                 events: "pointer-events-auto"
             }

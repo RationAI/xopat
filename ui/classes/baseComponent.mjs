@@ -105,7 +105,7 @@ export class BaseComponent {
 
         if (element instanceof BaseComponent) {
             const mount = document.getElementById(element.id);
-            if (document.getElementById(element.id) === null) {
+            if (mount === null) {
                 element._children.push(this);
             } else {
                 mount.append(this.create());
@@ -151,7 +151,47 @@ export class BaseComponent {
                 mount.prepend(this.create());
             }
         }
+    }
 
+    /**
+     * Remove this component from a container if it exists in the DOM.
+     * @param {BaseComponent|string|Element} element - parent container (component, id, or node)
+     * @returns {boolean} true if something was removed, false otherwise
+     */
+    removeFrom(element) {
+        let mount = element;
+        if (element instanceof BaseComponent) {
+            mount = document.getElementById(element.id) || null;
+        }
+        if (typeof element === "string") {
+            mount = document.getElementById(element);
+        }
+        if (!mount) return false;
+
+        // Prefer the stored root. Fallback to lookup by id/data-attr inside mount.
+        let root = document.getElementById(this.id);
+        if (!root) return false;
+
+        if (root && mount.contains(root)) {
+            root.remove();
+
+            // Not in DOM: if element is a component, also drop the child reference if queued
+            if (element instanceof BaseComponent && Array.isArray(element._children)) {
+                // todo: if not a BaseComponent, we would still want to check
+                let i = element._children.findIndex(c => c.id === this.id);
+                if (i !== -1) {
+                    element._children.splice(i, 1);
+                }
+                i = element._children.indexOf(this);
+                if (i !== -1) {
+                    element._children.splice(i, 1);
+                }
+                return true;
+            }
+
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -333,6 +373,7 @@ export class BaseComponent {
                 child.remove();
             }
         });
+        // todo: instead of forced ID, keep internal reference from create(..)
         const self = document.getElementById(this.id);
         if (self) {
             self.remove();

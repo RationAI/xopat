@@ -1268,15 +1268,20 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             // todo some error if not a string, that name must be provided etc...
             const item = typeof indexOrItem === "number" ? APPLICATION_CONTEXT.config.background[indexOrItem] : indexOrItem;
             if (item?.name) return name;
-            const path = APPLICATION_CONTEXT.config.data[item?.dataReference];
-            if (!path || typeof path !== "string") {
-                if (typeof item.dataReference !== "number") {
-                    return item.dataReference;
-                }
-                console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
-                return "undefined";
+            let path = APPLICATION_CONTEXT.config.data[item?.dataReference];
+            if (!path && typeof item.dataReference !== "number") {
+                path = item.dataReference;
             }
-            return this.fileNameFromPath(path, stripSuffix);
+
+            if (typeof path === "string") {
+                return this.fileNameFromPath(path, stripSuffix);
+            }
+            if (typeof path === "object") {
+                // todo some stragtegy?
+                return path.name || path.label || path.title || path[Object.keys(path)[0]];
+            }
+            console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
+            return "undefined";
         },
 
         /**

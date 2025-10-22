@@ -106,19 +106,6 @@
     <div id="tutorials"></div>
     <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();" data-i18n="common.Exit">Exit</button>
 </div>
-
-<!-- Main Panel -->
-<!--<div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 45px; pointer-events: none;">-->
-<!--    <div id="top-menus" class="flex flex-row w-full" style="justify-content: flex-end;">-->
-<!--        <div id = "top-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>-->
-<!--        <div id = "top-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>-->
-<!--    </div>-->
-<!--    <div id="top-side-left" class="flex flex-row" style="position: absolute; left: 0; top: 0; height: 100%; align-items: center; pointer-events: auto;">-->
-<!--        <div id = "top-visual" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>-->
-<!--        <div id = "top-plugins" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px;"></div>-->
-<!--    </div>-->
-<!--</div>-->
-
 <!--<div id="fullscreen-menu" class="bg-base-100"></div>-->
 
 <!--<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">-->
@@ -127,15 +114,6 @@
 <!--    <div id="bottom-menu-right"></div>-->
 <!--</div>-->
 <!-- Appended controls for other plugins -->
-
-
-<div id="fullscreen-loader" class="fixed w-full h-full" style="z-index: 999; background-color: #00000087;">
-    <span class="fixed loading loading-spinner" style="top: 50%; left: 50%; width: 62px;"></span>
-    <div class="fixed" style="top: calc(50% + 120px); left: calc(50% + 30px); transform: translate(-50%, -50%); width: 450px; max-width: 85vw;">
-        <div id="fullscreen-loader-title" class="h3 text-center" style="display: none"></div>
-        <div id="fullscreen-loader-description" class="h4 text-center" style="display: none;"></div>
-    </div>
-</div>
     <script>
 //preventive error message, that will be discarded after the full initialization, no translation
 window.onerror = function (message, file, line, col, error) {
@@ -209,5 +187,12 @@ window.onerror = function (message, file, line, col, error) {
         );
     });
 </script>
+    <div id="fullscreen-loader" class="fixed w-full h-full" style="z-index: 999999; background-color: #00000087;">
+        <span class="fixed loading loading-spinner" style="top: 50%; left: 50%; width: 62px;"></span>
+        <div class="fixed" style="top: calc(50% + 120px); left: calc(50% + 30px); transform: translate(-50%, -50%); width: 450px; max-width: 85vw;">
+            <div id="fullscreen-loader-title" class="h3 text-center" style="display: none"></div>
+            <div id="fullscreen-loader-description" class="h4 text-center" style="display: none;"></div>
+        </div>
+    </div>
 </body>
 </html>

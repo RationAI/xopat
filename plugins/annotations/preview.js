@@ -6,7 +6,7 @@ AnnotationsGUI.Previewer = class {
     constructor(selfName, context) {
         this.context = context;
         this.self = `plugin('${context.id}').${selfName}`;
-        USER_INTERFACE.TopPluginsMenu.setMenu(this.context.id, "annotations-preview", "Preview",
+        USER_INTERFACE.AppBar.Plugins.setMenu(this.context.id, "annotations-preview", "Preview",
             `<h3 class="f2-light">Fast Previews</h3><button class="btn float-right" onclick="${this.self}.load();">Reload previews</button><br>
 <p>Inspect existing annotations one by one on a single page. Note that the annotation itself is not drawn (defaults to the whole image rectangle).</p>
 <div id="preview-of-annotations" class="p-2">No previews were loaded yet.</div>`);

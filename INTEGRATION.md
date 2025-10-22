@@ -180,16 +180,6 @@ requireLossless(value) {
 }
 
 /**
- * Slide Metadata
- * @typedef {Object} SlideMetadata
- * @property {object} [info=undefined] - info object that is used to store all information about the slide a user should see, if not provided, the whole return value is treated also as user info.
- * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
- * @property {number} [microns=undefined] - The microns in average.
- * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.
- * @property {number} [micronsY=undefined] - The pixel size in Y direction, can be used instead of microns.
- */
-
-/**
  * Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meagning. These are documented in the 
  * return function.
@@ -199,7 +189,15 @@ getMetadata() {
     return undefined;
 }
 
-TODO... also probably attach them to the prorotype to trigger docs or at least force the docs by using @function and @memberof
+/**
+ * Retrieve slide thumbnail. This can simplify the
+ * slide preview generation, instead of trying to re-construct it from the lowest-resolution level.
+ * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
+ */
+async getThumbnail() {
+    return undefined;
+}
+
 ````
 
 # FIXME update docs

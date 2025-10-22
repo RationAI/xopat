@@ -62,7 +62,7 @@ class MultiPanelMenuTab extends MenuTab {
                     pinIcon.changeIcon("fa-thumbtack");
                 }
 
-                if(USER_INTERFACE.TopFullscreenButton.fullscreen){
+                if (USER_INTERFACE.AppBar.isFullScreen()) {
                     this.hide();
                 }
 

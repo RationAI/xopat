@@ -407,16 +407,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     /*--------------------------------------------------------------*/
 
     // todo make some cascading + registration strategy..
-    USER_INTERFACE.TopVisualMenu.init();
-    USER_INTERFACE.TopPluginsMenu.init();
-    USER_INTERFACE.TopUserMenu.init();
-    USER_INTERFACE.TopFullscreenButton.init();
+    USER_INTERFACE.AppBar.init();
     USER_INTERFACE.FullscreenMenu.init();
     /**
      * Replace share button in static preview mode
      */
     if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
-        USER_INTERFACE.TopUserMenu.setBanner(new UI.Badge({
+        USER_INTERFACE.AppBar.setBanner(new UI.Badge({
             style: UI.Badge.STYLE.SOFT,
             color: UI.Badge.COLOR.WARNING,
         }, "Exported Session"));
@@ -430,6 +427,35 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         window.location = `./src/error.php?title=${encodeURIComponent('Your browser is not supported.')}
     &description=${encodeURIComponent('ERROR: The visualization requires canvasses in order to work.')}`;
     }
+
+    /**
+     * Slide Metadata
+     * @typedef {Object} SlideMetadata
+     * @property {object} [info=undefined] - info object that is used to store all information about the slide a user should see, if not provided, the whole return value is treated also as user info.
+     * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
+     * @property {number} [microns=undefined] - The microns in average.
+     * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.
+     * @property {number} [micronsY=undefined] - The pixel size in Y direction, can be used instead of microns.
+     */
+
+    /**
+     * Extension of OpenSeadragon: Retrieve slide metadata. Can be arbitrary key-value list, even nested.
+     * Some properties, hovewer, have a special meaning. These are documented in the return function.
+     * @memberOf OpenSeadragon.TileSource
+     * @function getMetadata
+     * @return {SlideMetadata|undefined}
+     */
+    OpenSeadragon.TileSource.prototype.getMetadata = function () { };
+
+    /**
+     * Extension of OpenSeadragon: Retrieve slide thumbnail. This can simplify the
+     * slide preview generation, instead of trying to re-construct it from the lowest-resolution level.
+     * Returns a promise that resolves to an image-like object.
+     * @memberOf OpenSeadragon.TileSource
+     * @function getThumbnail
+     * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
+     */
+    OpenSeadragon.TileSource.prototype.getThumbnail = function () { };
 
     /**
      * Viewer manager for multi-view support
@@ -826,6 +852,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     index++;
                 }
                 // Set lossless if required
+                if (item.getConfig === undefined) {
+                    console.warn(`Item ${item} was specified without a config getter - this is a bug!`);
+                    item.getConfig = type => undefined;
+                }
+
                 const conf = item.getConfig("background");
                 if (item.source.hasOwnProperty("requireLossless") && conf?.hasOwnProperty("lossless")) {
                     item.source.requireLossless(conf.lossless);
