@@ -28,6 +28,40 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 }
             }
         });
+
+        // TODO proper slide switching
+        VIEWER_MANAGER.addHandler('viewer-create', e => {
+            if (APPLICATION_CONTEXT.config.background.length <= 1) return;
+            USER_INTERFACE.addViewerHtml(
+                new UI.Div({class: "absolute", id:"my-test-item"},
+                    new UI.Button({onClick: this.changeSlide.bind(this, false)}, '<<'),
+                    new UI.Button({onClick: this.changeSlide.bind(this, true)}, '>>')
+                ), this.id, e.viewer.id);
+        });
+        VIEWER_MANAGER.addHandler('viewer-destroy', e => {
+            document.getElementById("my-test-item")?.remove();
+        });
+    }
+
+    changeSlide(forward) {
+        const currentIndex = Number.parseInt(APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0));
+        const nextIndex = forward ? currentIndex + 1 : currentIndex - 1;
+        const bgSize = APPLICATION_CONTEXT.config.background.length;
+        if (nextIndex >= bgSize) {
+            Dialogs.show("This is the last slide.", 5000, Dialogs.MSG_OK);
+            return;
+        }
+        if (nextIndex < 0) {
+            Dialogs.show("This is the first slide.", 5000, Dialogs.MSG_OK);
+            return;
+        }
+        console.log(`Switching to slide index ${nextIndex} out of ${bgSize}`);
+        APPLICATION_CONTEXT.openViewerWith(
+            APPLICATION_CONTEXT.config.data,
+            APPLICATION_CONTEXT.config.background,
+            APPLICATION_CONTEXT.config.visualizations,
+            nextIndex
+        );
     }
 
     pluginReady() {
@@ -65,20 +99,5 @@ addPlugin('slide-info', class extends XOpatPlugin {
     setCustomBrowser(config) {
         this.menu.refresh(config);
         this.hasCustomBrowser = !!config;
-
-        // todo consider support for layout positioning (globally, not here)
-        // if (!this.explorer) {
-        //     this.explorer = new UI.Explorer(config);
-        //     // LAYOUT.addTab({
-        //     //     id: 'browser',
-        //     //     title: 'Slide Browser',
-        //     //     icon: 'fa-list-ul',
-        //     //     body: [
-        //     //         this.explorer.create()
-        //     //     ]
-        //     // });
-        // } else {
-        //     console.error("Slide browser can show only single explorer instance: collision of use in modules or plugins!");
-        // }
     }
 });

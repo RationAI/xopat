@@ -10,6 +10,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this.selected = new Set();
         this._indexMap = new Map();
         this._suspendUpdates = false;
+        this._cachedPreviews = {};
+        this._cachedLabels = {};
     }
 
     // ---------- public ----------
@@ -24,7 +26,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
             const body = document.createElement("div");
             body.className = "flex-1 min-h-0 overflow-hidden flex flex-col";
-            const toolbar = this._renderToolbar(); // your original toolbar (stacked toggle, clear, etc.)
+            const toolbar = this._renderToolbar();
             const contentHost = document.createElement("div");
             contentHost.className = "flex-1 min-h-0 overflow-auto";
             body.append(toolbar, contentHost);
@@ -40,12 +42,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 onClose: () => this.options.onClose?.(),
             }, body);
 
-            // mount initial content
-            const levels = this._buildLevels();
-            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer", levels });
+            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer" });
             contentHost.appendChild(this.explorer.create());
         }
 
+        // Ensure we don't keep re-initializing the explorer
         if (!this._fw.opened()) this._fw.attachTo(document.body);
         else this._fw.focus();
     }
@@ -63,10 +64,27 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             originalItem: b,
             __bgIndex: i,
         }));
+
+        if (items.length === 0) {
+            return this._wrapLevelsWithDefaults([
+                {
+                    id: "no-slides",
+                    label: "No Slides Available",
+                    canOpen: () => false,
+                    getChildren: async () => ({items: [{ label: "No slides available to display" }], total: 0}),
+                },
+            ]);
+        }
+
         return this._wrapLevelsWithDefaults([
             { id: "slides", label: "Slides",
                 canOpen: () => false,
-                getChildren: async (parent, ctx) => items.slice(ctx.pageSize * ctx.page, Math.min(items.length, ctx.pageSize * (ctx.page + 1))),
+                getChildren: async (parent, ctx) => {
+                    return {
+                        items: items.slice(ctx.pageSize * ctx.page, Math.min(items.length, ctx.pageSize * (ctx.page + 1))),
+                        total: items.length
+                    };
+                },
             }
         ]);
     }
@@ -172,22 +190,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             if (!this.configGetter) throw new Error("bgItemGetter is required for retrieving custom bg configurations!");
         }
 
-        if (!this.opened()) { this._needsRefresh = true; return; }
+        if (!this.opened()) return;
 
-        const host = this._fw.getBodyEl()?.querySelector(":scope > .flex-1.min-h-0.overflow-hidden > .flex-1.min-h-0.overflow-auto")
-            || this._fw.getBodyEl()?.lastElementChild;
         const levels = this._buildLevels();
-        if (!this.explorer) {
-            if (host) host.innerHTML = "";
-            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer", levels });
-            host?.appendChild(this.explorer.create());
-        } else {
-            this.explorer.reconfigure({ levels });
-        }
+        this.explorer.reconfigure({ levels });
 
         // preserve original post-render sync
         this._refreshAllLinkIcons();
-        this._needsRefresh = false;
     }
 
     // ---------- internals ----------}
@@ -220,7 +229,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this.selected.add(idx);
             this._indexMap.set(idx, item);
         } else {
-            delete this._indexMap[idx];
+            this._indexMap.delete(idx)
             this.selected.delete(idx);
         }
         this._toggleCardRing(idx, checked);
@@ -332,37 +341,47 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _renderSlideCard(idx, item) {
+        console.warn("Rendering slide card", idx, item);
         const bg = this.configGetter(item);
         const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
         const checkboxId = `${this.windowId}-chk-${idx}`;
         const checked = this.selected.has(idx);
         const viewer = this._getViewerForBg(idx) || VIEWER_MANAGER.viewers[0] || null;
 
-        const imageEl = img({
+        const WRAP_CLASS  = "relative overflow-hidden aspect-[4/3] w-[250px]";
+        const HOST_CLASS  = "relative flex items-center justify-center";
+        const THUMBNAIL_CLASS = "block w-[86%] h-[86%] object-contain select-none pointer-events-none";
+        const LABEL_CLASS = "block w-[120px] absolute bottom-0 right-0";
+
+        console.log("Creating preview with id ", `${this.windowId}-thumb-${idx}`)
+        const previewImage = img({
             id: `${this.windowId}-thumb-${idx}`,
-            class: "max-w-[86%] max-h-[86%] object-contain select-none pointer-events-none",
+            class: THUMBNAIL_CLASS,
             alt: name,
             draggable: "false",
-            width: 250,
-            height: 250
+            src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
-        // thumbnail wrapper (no click handler here anymore)
+        const labelImage = img({
+            id: `${this.windowId}-label-${idx}`,
+            class: LABEL_CLASS,
+            alt: name,
+            draggable: "false",
+            src: APPLICATION_CONTEXT.url + "src/assets/image.png"
+        });
+
         const thumbWrap = div(
-            {
-                class: "relative overflow-hidden",
-                style: "aspect-ratio: 4/3;"
-            },
-            div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-black/60 text-white rounded" }, name),
-            div({ class: "absolute inset-0 grid place-items-center" }, imageEl)
+            { class: WRAP_CLASS },
+            div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage, labelImage),
+            div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
         );
 
-        viewer?.tools.createImagePreview(bg).then(image => {
-            image.id = imageEl.id;
-            image.width = imageEl.width;
-            image.height = imageEl.height;
-            imageEl.replaceWith(image);
-        }).catch(err => console.error("Failed to create image preview", err));
+        // start loading image previews
+
+        if (bg?.id) {
+            this._loadSlideComplementaryImage(this._cachedPreviews, viewer, bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
+            this._loadSlideComplementaryImage(this._cachedLabels, viewer, bg, thumbWrap, labelImage, LABEL_CLASS);
+        }
 
         const linked = this._isLinked(viewer);
 
@@ -374,7 +393,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 type: "checkbox",
                 class: "checkbox checkbox-xs",
                 checked,
-                onclick: (e) => e.stopPropagation(), // keep
+                onclick: (e) => e.stopPropagation(),
                 onchange: (e) => this._onCheck(item, idx, e.target.checked),
                 title: "Add/remove from view"
             }),
@@ -382,38 +401,83 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 id: `${this.windowId}-lnk-${idx}`,
                 class: "btn btn-ghost btn-xs",
                 disabled: !viewer,
-                title: viewer
-                    ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
-                    : "Not open",
-                onclick: (e) => { e.stopPropagation(); this._onToggleLink(idx, e); } // stop propagation
+                title: viewer ? (linked ? "Synced — click to unsync" : "Not synced — click to sync") : "Not open",
+                onclick: (e) => { e.stopPropagation(); this._onToggleLink(idx, e); }
             }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
         );
 
-        // Action bar buttons must NOT open slides on click
-        const actionBar = div(
-            {
-                class: "absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-gradient-to-t from-black/60 to-transparent flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition"
-            },
-            button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); VIEWER_MANAGER.centerSlide?.(idx); } }, "Center"),
-            button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); VIEWER_MANAGER.fitSlide?.(idx); } }, "Fit"),
-            button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); VIEWER_MANAGER.removeSlide?.(idx); } }, "Remove"),
-        );
+        // Consider actions, but this needs to find the viewer ref first
+        // const actionBar = div(
+        //     {
+        //         class: "absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-gradient-to-t from-black/60 to-transparent flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition"
+        //     },
+        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Center"),
+        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Fit"),
+        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Remove"),
+        // );
 
-        // make the entire card clickable (except controls)
         return div(
             {
                 id: `${this.windowId}-card-${idx}`,
                 class:
                     "slide-card group bg-base-200 border border-base-300 transition " +
                     (checked ? "ring ring-primary ring-offset-1 " : "") +
-                    "flex flex-col relative",
-                onclick: (e) => this._onCardRootClick(e, item, idx)   // <— key change
+                    "flex flex-row relative",
+                onclick: (e) => this._onCardRootClick(e, item, idx)
             },
             controls,
             thumbWrap,
-            actionBar,
-            imageEl
+            // actionBar
         );
+    }
+
+    _loadSlideComplementaryImage(cacheMap, viewer, bg, parentNode, replacedImageNode, imageClasses) {
+        setTimeout(() => {
+            const cached = cacheMap[bg.id];
+            const availablePreview = !!cached && !(cached instanceof Promise);
+
+            const applyPreview = (node) => {
+                if (!node) return;
+
+                // still the same placeholder?
+                const current = parentNode.querySelector(`#${replacedImageNode.id}`);
+                if (!current) {
+                    console.warn("Failed to find placeholder node", replacedImageNode);
+                    return;
+                }
+
+                node.id = replacedImageNode.id;
+                node.className = imageClasses;
+                node.alt = replacedImageNode.alt || name;
+                node.draggable = "false";
+
+                // IMPORTANT: remove intrinsic size attrs that can fight the container
+                node.removeAttribute?.("width");
+                node.removeAttribute?.("height");
+
+                cacheMap[bg.id] = node;
+                replacedImageNode.replaceWith(node);
+                return node;
+            };
+
+            if (availablePreview) {
+                // use the resolved node right away
+                applyPreview(cached);
+            } else if (cached && typeof cached.then === "function") {
+                // promise in flight
+                cached.then(applyPreview)
+                    .catch(err => console.error("Failed to reuse image preview", err));
+            } else {
+                // start loading and cache the promise
+                cacheMap[bg.id] = viewer.tools.createImagePreview(bg)
+                    .then(applyPreview)
+                    .catch(err => {
+                        console.error("Failed to create image preview", err);
+                        // keep placeholder; clear bad cache
+                        delete cacheMap[bg.id];
+                    });
+            }
+        })
     }
 
     // --- Viewer plumbing (default context=0) ---
@@ -456,7 +520,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
     _refreshAllLinkIcons() {
         // Call this after list render, after selection changes, and after viewer open
-        const n = (this.background || []).length;
+        const n = APPLICATION_CONTEXT.config.background?.length ?? 0;
         for (let i = 0; i < n; i++) this._updateLinkIcon(i);
     }
 

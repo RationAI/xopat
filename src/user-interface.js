@@ -1214,7 +1214,7 @@ ${label}
 
         /**
          * Add custom HTML to the DOM selector
-         * @param {string|Node|BaseComponent} html to append
+         * @param {UIElement} html to append
          * @param {string} pluginId owner plugin ID
          * @param {string} selector jquery selector where to append, default 'body'
          */
@@ -1222,6 +1222,42 @@ ${label}
             try {
                 const jqNode = $(UI.BaseComponent.parseDomLikeItem(html));
                 jqNode.appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                return true;
+            } catch (e) {
+                console.error("Could not attach custom HTML.", e);
+                return false;
+            }
+        },
+
+        /**
+         * Add custom HTML to the viewer-dependent context - it will be contained within the viewer area.
+         * This HTML IS NOT GUARANTEED TO BE PRESERVED when changing viewers.
+         * Plugins must listen to change in viewer events to update the UI if necessary,
+         * and should not rely on this HTML being persistent - when a viewer is gone, so is the HTML.
+         *
+         * @param {UIElement} html
+         * @param {string} pluginId
+         * @param {OpenSeadragon.Viewer|string} uniqueViewerId
+         * @return {boolean}
+         */
+        addViewerHtml: function (html, pluginId, uniqueViewerId) {
+            try {
+                const jqNode = $(UI.BaseComponent.parseDomLikeItem(html));
+                const viewer = (uniqueViewerId instanceof OpenSeadragon.Viewer) ?
+                    uniqueViewerId : VIEWER_MANAGER.getViewer(uniqueViewerId);
+                const cell = VIEWER_MANAGER.layout.findCellById(viewer?.id);
+
+                if (!cell) {
+                    console.error("Could not find cell to attach to.");
+                    return false;
+                }
+
+                if (!cell.firstChild) {
+                    cell.appendChild(van.tags.div({class: "absolute"}));
+                }
+
+                // todo: viewer might get re-initialized, reusing the same cell - ensure we replace
+                jqNode.appendTo(cell.firstChild).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

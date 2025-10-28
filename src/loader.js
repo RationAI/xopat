@@ -43,9 +43,10 @@ window.HTTPError = class extends Error {
  * Notes:
  * - Do not call this inside the viewer; use it if you want to reuse plugins/modules elsewhere.
  * - Example usage:
- *   const initPlugins = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
+ *   const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
  *   await initPlugins();
  *
+ * @param ENV
  * @param {Object<string, XOpatElementRecord>} PLUGINS
  *   Registry object of plugins keyed by plugin id (from include.json).
  * @param {Object<string, XOpatElementRecord>} MODULES
@@ -56,7 +57,7 @@ window.HTTPError = class extends Error {
  * @param {string} version - Version string of the running build.
  * @returns {function(): Promise<void>} A function to be called once the host app is ready. You can await the handler if you like.
  */
-function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
+function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
@@ -1198,7 +1199,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             let method = postData ? "POST" : "GET";
             headers = $.extend({
                 'Access-Control-Allow-Origin': '*'
-            }, headers);
+            }, ENV.client.osdOptions?.ajaxHeaders, headers);
 
             const response = await fetch(url, {
                 method: method,
@@ -1267,8 +1268,9 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         nameFromBGOrIndex: function (indexOrItem, stripSuffix) {
             // todo some error if not a string, that name must be provided etc...
             const item = typeof indexOrItem === "number" ? APPLICATION_CONTEXT.config.background[indexOrItem] : indexOrItem;
-            if (item?.name) return name;
-            let path = APPLICATION_CONTEXT.config.data[item?.dataReference];
+            if (!item) return "unknown";
+            if (item.name) return name;
+            let path = APPLICATION_CONTEXT.config.data[item.dataReference];
             if (!path && typeof item.dataReference !== "number") {
                 path = item.dataReference;
             }
@@ -1411,7 +1413,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             /**
              * Event to export your data within the viewer lifecycle
              * Event handler can by <i>asynchronous</i>, the event can wait.
-             * todo OSD v5.0 will support also async events
              *
              * @property {function} setSerializedData callback to call,
              *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
@@ -1518,8 +1519,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
      *
      * @class ViewerManager
      * @extends OpenSeadragon.EventSource
-     * @property {object} ENV - Runtime environment object used for initializing viewers.
-     * @property {object} CONFIG - Application configuration used for initializing viewers.
+     * @property {object} CONFIG - Application configuration.
      * @property {OpenSeadragon.Viewer[]} viewers - Ordered list of instantiated viewer instances.
      * @property {Record<string, Record<Function, any[]>>} broadcastEvents - Map of eventName to handlers+args registered for broadcasting.
      * @property {OpenSeadragon.Viewer|null} active - Currently active viewer or null if none.
@@ -1528,12 +1528,10 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     window.ViewerManager = class extends OpenSeadragon.EventSource {
         /**
          * Create a ViewerManager.
-         * @param {object} ENV - Environment bag; must contain openSeadragonPrefix and other viewer-related settings.
          * @param {object} CONFIG - Configuration bag; must contain params.headers etc. used to configure viewers.
          */
-        constructor(ENV, CONFIG) {
+        constructor(CONFIG) {
             super();
-            this.ENV = ENV;
             this.CONFIG = CONFIG;
             this.viewers = [];
             this.viewerMenus = {};
@@ -1647,48 +1645,37 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             cell.append(menu.create());
             this.viewerMenus[cellId] = menu;
 
-            const headers = $.extend(
-                {},
-                this.ENV.client.headers,
-                this.CONFIG.params.headers
-            );
-
-            const viewer = OpenSeadragon({
-                id: cellId, // mount into that grid cell
-                navigatorId: navigatorId,
-                prefixUrl: this.ENV.openSeadragonPrefix + "images",
-                showNavigator: true,
-                maxZoomPixelRatio: 2,
-                zoomPerClick: 2,
-                zoomPerScroll: 1.7,
-                blendTime: 0,
-                // This is due to annotations (multipolygon brush) that are disabled during animations
-                // ease out behavior makes user think they can already start drawing and slows them down
-                animationTime: 0,
-                showNavigationControl: false,
-                loadTilesWithAjax: true,
-                drawer: 'flex-renderer',
-                drawerOptions: {
-                    'flex-renderer': {
-                        webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                        // todo: support debug in some reasonable way
-                        // debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
-                        interactive: true,
-                        htmlHandler: (shaderLayer, shaderConfig) => {
-                            viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
-                        },
-                        htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
-                    }
-                },
-                ajaxHeaders: headers,
-                splitHashDataForPost: true,
-                subPixelRoundingForTransparency:
-                    navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
-                        OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
-                        OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
-                debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
-                maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
-            });
+            const viewer = OpenSeadragon($.extend(
+                true,
+                ENV.openSeadragonConfiguration,
+                ENV.client.osdOptions,
+                {
+                    id: cellId, // mount into that grid cell
+                    navigatorId: navigatorId,
+                    prefixUrl: ENV.openSeadragonPrefix + "images",
+                    loadTilesWithAjax: true,
+                    drawer: 'flex-renderer',
+                    drawerOptions: {
+                        'flex-renderer': {
+                            webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
+                            // todo: support debug in some reasonable way
+                            // debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
+                            interactive: true,
+                            htmlHandler: (shaderLayer, shaderConfig) => {
+                                viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
+                            },
+                            htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
+                        }
+                    },
+                    splitHashDataForPost: true,
+                    subPixelRoundingForTransparency:
+                        navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
+                            OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
+                            OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
+                    debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
+                    maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
+                }
+            ));
             
             for (let event in this.broadcastEvents) {
                 const eventList = this.broadcastEvents[event];

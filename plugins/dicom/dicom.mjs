@@ -1,5 +1,7 @@
-import { DICOMWebTileSource } from "./tileSource.mjs";
 import vanjs from "../../ui/vanjs.mjs";
+
+import { DICOMWebTileSource } from "./tile-source.mjs";
+import DicomTools from "./dicom-query.mjs";
 
 /*
   DICOM plugin: unified workflow for Patient/Study/Series selection
@@ -53,15 +55,25 @@ addPlugin('dicom', class extends XOpatPlugin {
             activeStudyDetails: null     // normalized study metadata
         };
 
-        /**
-         * Helper to extract DICOM JSON tag values.
-         */
-        const v = (ds, tag) => {
-            const x = ds?.[tag]?.Value;
-            return Array.isArray(x) ? x[0] : (x ?? null);
-        };
-
-        this._v = v; // keep for reuse in instance methods
+        this.STUDY_PROJECTION =
+            '0020000D,' + // StudyInstanceUID
+            '00080020,' + // StudyDate
+            '00080030,' + // StudyTime
+            '00081030,' + // StudyDescription
+            '00100020,' + // PatientID
+            '00200010,' + // StudyID
+            '00080050,' + // AccessionNumber
+            '00080061,' + // ModalitiesInStudy
+            '00201206,' + // NumberOfStudyRelatedSeries
+            '00201208,' + // NumberOfStudyRelatedInstances
+            '00080080,' + // InstitutionName
+            '00081010,' + // StationName
+            '00080090,' + // ReferringPhysicianName
+            '00081050,' + // PerformingPhysicianName
+            '00180015,' + // BodyPartExamined
+            '00321060,' + // RequestedProcedureDescription
+            '00401012,' + // ReasonForPerformedProcedure
+            '00324000';   // StudyComments
 
         // === PRE-OPEN LOGIC ===
         // We decide what to fetch/prepare *before first open* based on provided defaults.
@@ -170,15 +182,82 @@ addPlugin('dicom', class extends XOpatPlugin {
                     if ((res.total === 0) || (res.items.length === 0 && ctx.page === 0)) {
                         info.warn?.("No studies available for this patient.");
                     }
+                    // Set visual properties:
+                    for (let item of res.items) {
+                        item.label = item.description || item.studyUID;
+                    }
                     return { total: res.total, items: res.items };
                 },
-                renderItem: (s) => div({ class: "flex items-center gap-2" },
-                    span({ class: "fa-auto fa-flask" }),
-                    span(s.desc || s.StudyDescription || s.studyUID)
-                ),
-                onOpen: (item) => {
+                renderItem: (item, { itemIndex }) => {
+                    const { div, span } = van.tags;
+                    // --- helpers (local, no external deps) ---
+                    const fmtWhen = (it) => {
+                        if (it.whenISO) return it.whenISO.replace('T', ' ').slice(0, 16); // "YYYY-MM-DD HH:MM"
+                        const d = it.date || ''; const t = it.time || '';
+                        const yyyy = d.slice(0,4), mm = d.slice(4,6), dd = d.slice(6,8);
+                        const HH = t.slice(0,2), MM = t.slice(2,4);
+                        if (!yyyy || !mm || !dd) return '';
+                        return `${yyyy}-${mm}-${dd}${(HH && MM) ? ` ${HH}:${MM}` : ''}`;
+                    };
+                    const chips = [];
+                    const addChip = (text) => { if (text) chips.push(span({ class: "badge badge-ghost badge-xs" }, String(text))); };
+
+                    // --- title line ---
+                    const title = item.label || item.description || item.studyID || item.studyUID || "Study";
+                    const when  = fmtWhen(item);
+
+                    // --- chips line (compact) ---
+                    // Accession, StudyID
+                    addChip(item.accession && `Acc# ${item.accession}`);
+                    addChip(item.studyID && `ID ${item.studyID}`);
+
+                    // Modalities (e.g., ["SM","CT"]) → badges
+                    const mods = Array.isArray(item.modalities) ? item.modalities : (item.modalities ? [item.modalities] : []);
+                    if (mods.length) {
+                        for (const m of mods) addChip(m);
+                    }
+
+                    // Series × Instances
+                    const s = Number.isFinite(item.seriesCount) ? item.seriesCount : null;
+                    const i = Number.isFinite(item.instanceCount) ? item.instanceCount : null;
+                    if (s != null || i != null) addChip(`${s ?? "?"} S | ${i ?? "?"} I`);
+
+                    // Institution / site
+                    addChip(item.institution);
+
+                    // trailing UID tail (debug)
+                    addChip(item.uidTail && `…${item.uidTail}`);
+
+                    // Tooltip with extra detail (optional)
+                    const tooltip = [
+                        item.referringPhysician && `Referring: ${item.referringPhysician}`,
+                        item.performingPhysician && `Performing: ${item.performingPhysician}`,
+                        item.bodyPartExamined && `Body Part: ${item.bodyPartExamined}`,
+                        item.requestedProcedureDescription && `Requested: ${item.requestedProcedureDescription}`,
+                        item.reasonForPerformedProcedure && `Reason: ${item.reasonForPerformedProcedure}`,
+                        item.comments && `Comments: ${String(item.comments).slice(0, 256)}${String(item.comments).length > 256 ? "…" : ""}`,
+                    ].filter(Boolean).join("\n");
+
+                    return div(
+                        {
+                            class: "flex items-start justify-between px-2 py-2 hover:bg-base-200 cursor-pointer width-full",
+                            title: tooltip || undefined
+                        },
+                        // left: small icon + title/date
+                        div({ class: "flex items-start gap-2 min-w-0" },
+                            span({ class: "fa-auto fa-flask shrink-0" }),
+                            div({ class: "flex flex-col min-w-0" },
+                                div({ class: "text-sm font-medium truncate" }, title),
+                                when ? div({ class: "text-xs text-base-content/70 truncate" }, when) : null
+                            )
+                        ),
+                        // right: chips
+                        div({ class: "flex items-center gap-1 flex-wrap justify-end pl-2" }, ...chips)
+                    );
+                },
+                canOpen: (img) => true,
+                onClick: (item) => {
                     this.state.activeStudy = item.studyUID;
-                    return true;
                 },
             };
 
@@ -197,46 +276,25 @@ addPlugin('dicom', class extends XOpatPlugin {
                         items: [],
                     };
 
-                    // Usually one WSI per series, but if there are multiple series in a single WSI, try to detect them
                     for (const s of series.items) {
-                        const instances = await this.listInstancesForSeries(this.serviceUrl, XOpatUser.instance().getSecret(), studyUID, s.seriesUID, { limit: ctx.pageSize, offset: ctx.pageSize * ctx.page });
-                        const wsiInstances = this.groupSeriesInstances(instances, s);
+                        const wsiInstances = await DicomTools.findWSIItems(this.serviceUrl, XOpatUser.instance().getSecret(), studyUID, s.seriesUID);
                         data.items.push(...wsiInstances);
                     }
-                    // todo preview... create one
-
                     data.total = data.items.length;
                     return data;
                 },
-                renderItem: (img) => {
-                    const instanceUID = img["00080018"]?.Value?.[0] || img.SOPInstanceUID || "Unknown";
-                    const seriesDesc = img["0008103E"]?.Value?.[0] || img.SeriesDescription || "";
-                    const modality   = img["00080060"]?.Value?.[0] || img.Modality || "";
-                    return div({ class: "flex flex-col gap-1" },
-                        span({ class: "fa-auto fa-image" }, `${seriesDesc} (${modality})`),
-                        span({ class: "text-xs text-gray-500" }, `Instance: ${instanceUID.slice(-8)}`)
-                    );
-                },
-                onOpen: (img) => {
+                canOpen: (img) => false,
+                onClick: (img) => {
                     try {
                         const seriesUID = img.seriesUID;
                         const studyUID  = img.studyUID || this.state.activeStudy;
                         if (!seriesUID || !studyUID) {
                             Dialogs.show('Could not open the image: missing study identification!', 5000, Dialogs.MSG_ERR);
                             console.error("Missing seriesUID or studyUID for image:", img);
-                            return false;
+                            return;
                         }
-
-                        // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
-                        // Example using DICOMWebTileSource:
-                        const tileSource = new DICOMWebTileSource({
-                            baseUrl: this.serviceUrl,
-                            studyUID,
-                            seriesUID,
-                            useRendered: this.useRendered,
-                            patientDetails: this.state.activePatientDetails,
-                        });
-                        APPLICATION_CONTEXT.openViewerWith([{ studyUID, seriesUID }], [{ tileSource, dataReference: [0] }]);
+                        // todo somehow prevent opening the item -> this is not supported in the slide switcher
+                        //   maybe consider using onOpen to create the standalone bg conf
 
                         // store current active series
                         this.state.activeSeries = seriesUID;
@@ -244,7 +302,6 @@ addPlugin('dicom', class extends XOpatPlugin {
                     } catch (err) {
                         console.error("Failed to open WSI viewer:", err);
                     }
-                    return false;
                 }
             };
 
@@ -262,15 +319,29 @@ addPlugin('dicom', class extends XOpatPlugin {
                     if ((res.total === 0) || (res.items.length === 0 && ctx.page === 0)) {
                         info.warn?.("No patients found (server may not support /patients; showing derived view if possible).");
                     }
+                    for (let item of res.items) {
+                        item.label = item.name || item.PatientName || item.patientID;
+                    }
                     return { total: res.total, items: res.items };
                 },
-                renderItem: (p, { open }) => div({ class: "flex items-center gap-2" },
-                    span({ class: "fa-auto fa-user" }),
-                    span(p.name || p.PatientName || p.patientID || "Unknown")
-                ),
-                onOpen: () => true,
+                canOpen: () => true,
             }, studiesLevel, imagesLevel] : [studiesLevel, imagesLevel];
-            info.initBrowser({ id: "dicom-browser", levels });
+            info.setCustomBrowser({ id: "dicom-browser", levels, bgItemGetter: (item) => {
+                    const seriesUID = item.seriesUID;
+                    const studyUID  = item.studyUID || this.state.activeStudy;
+                    console.log("USING", studyUID, this.state.activeStudy, seriesUID);
+                    // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
+                    // Example using DICOMWebTileSource:
+                    const tileSource = new DICOMWebTileSource({
+                        baseUrl: this.serviceUrl,
+                        studyUID,
+                        seriesUID,
+                        useRendered: this.useRendered,
+                        patientDetails: this.state.activePatientDetails,
+                    });
+                    return { id: seriesUID, tileSource, dataReference: { studyUID, seriesUID } };
+                }
+            });
         });
     }
 
@@ -279,73 +350,6 @@ addPlugin('dicom', class extends XOpatPlugin {
     // ────────────────────────────────────────────────────────────────────────────
 
     // Base QIDO fetch (kept as-is)
-    async qido(url, authToken) {
-        const res = await fetch(url.toString(), {
-            headers: {
-                Accept: 'application/dicom+json',
-                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-            }
-        });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`QIDO ${url.pathname} failed: ${res.status} ${text}`);
-        try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-    }
-
-    // Safe QIDO wrapper: try with includefield, retry without if server rejects that param
-    async qidoSafe(baseUrl, authToken, includefield) {
-        const withParams = new URL(baseUrl);
-        if (includefield) withParams.searchParams.set('includefield', includefield);
-        try {
-            return await this.qido(withParams, authToken);
-        } catch (e) {
-            const msg = String(e?.message || '');
-            if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                const noParams = new URL(baseUrl);
-                return await this.qido(noParams, authToken);
-            }
-            throw e;
-        }
-    }
-
-    async qidoSafeWithMeta(baseUrl, authToken, includefield) {
-        const make = (withFields) => {
-            const u = new URL(baseUrl);
-            if (withFields && includefield) u.searchParams.set('includefield', includefield);
-            return u;
-        };
-
-        // First try with includefield
-        let url = make(true);
-        let res = await fetch(url.toString(), {
-            headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
-        });
-        if (!res.ok) {
-            // Retry without includefield if the server rejects it (e.g., GCP)
-            const msg = await res.text();
-            if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                url = make(false);
-                res = await fetch(url.toString(), {
-                    headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
-                });
-            } else {
-                throw new Error(`QIDO ${url.pathname} failed: ${res.status} ${msg}`);
-            }
-        }
-        const total = this._readTotalHeader(res.headers);
-        const text = await res.text();
-        let rows;
-        try { rows = JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-        return { rows, total };
-    }
-
-    _readTotalHeader(h) {
-        // Lower-case header names – fetch() Headers is case-insensitive
-        return ['x-total-count', 'total-count', 'dicom-total', 'x-total']
-            .map(k => h.get(k))
-            .filter(Boolean)
-            .map(x => Number(x))
-            .find(n => Number.isFinite(n)) ?? null;
-    }
 
     async _supportsPatients(serviceUrl, authToken) {
         try {
@@ -365,13 +369,13 @@ addPlugin('dicom', class extends XOpatPlugin {
     async listPatientsPaged(serviceUrl, authToken, { limit = 50, offset = 0 } = {}) {
         if (await this._supportsPatients(serviceUrl, authToken)) {
             const base = `${serviceUrl}/patients?limit=${limit}&offset=${offset}`;
-            const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00100020,00100010,00100030,00100040');
+            const { rows, total } = await DicomTools.qidoSafeWithMeta(base, authToken, this.STUDY_PROJECTION);
             const items = rows.map(ds => this.parsePatient(ds));
-            return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'patients' };
+            return { items, total, level: 'patients' };
         } else {
             // Derive unique PatientIDs from /studies page
             const base = `${serviceUrl}/studies?limit=${limit}&offset=${offset}`;
-            const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00100020,00100010,00100030,00100040');
+            const { rows, total } = await DicomTools.qidoSafeWithMeta(base, authToken, this.STUDY_PROJECTION);
             const seen = new Map();
             for (const r of rows) {
                 const p = this.parsePatient(r);
@@ -379,20 +383,21 @@ addPlugin('dicom', class extends XOpatPlugin {
             }
             const items = Array.from(seen.values());
             // total here is studies-total (not distinct patients). We still return it for UI pagination hints.
-            return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'patients-derived' };
+            return { items, total, level: 'patients-derived' };
         }
     }
 
     async listStudiesForPatient(serviceUrl, authToken, patientID, { limit = 50, offset = 0 } = {}) {
         const base = `${serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}&limit=${limit}&offset=${offset}`;
-        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '0020000D,00080020,00081030,00100020');
+        const { rows, total } = await DicomTools.qidoSafeWithMeta(base, authToken, '0020000D,00080020,00081030,00100020');
         const items = rows.map(ds => this.parseStudy(ds));
-        return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'studies' };
+        return { items, total, level: 'studies' };
     }
 
     async listStudiesPagedAll(serviceUrl, authToken, { limit = 50, offset = 0, filters = {} } = {}) {
         const url = new URL(`${serviceUrl}/studies`);
         url.searchParams.set('limit', String(limit));
+        url.searchParams.set('offset', String(offset));
         url.searchParams.set('offset', String(offset));
 
         // Optional filters you pass from UI (any QIDO matching keys)
@@ -401,93 +406,99 @@ addPlugin('dicom', class extends XOpatPlugin {
         if (filters.AccessionNumber) url.searchParams.set('AccessionNumber', filters.AccessionNumber);
         if (filters.Modality) url.searchParams.set('Modality', filters.Modality);
 
-        const { rows, total } = await this.qidoSafeWithMeta(url.toString(), authToken,
+        const { rows, total } = await DicomTools.qidoSafeWithMeta(url.toString(), authToken,
             '0020000D,00080020,00081030,00100020'); // StudyUID, StudyDate, StudyDesc, PatientID
 
         const items = rows.map(ds => this.parseStudy(ds));
-        return { items, total, nextOffset: rows.length < limit ? null : offset + limit };
+        return { items, total, level: 'studies' };
     }
 
     async listSeriesForStudy(serviceUrl, authToken, studyUID, { limit = 50, offset = 0 } = {}) {
         const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series?limit=${limit}&offset=${offset}`;
-        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '0020000E,00080060,0008103E,00201209');
+        const { rows, total } = await DicomTools.qidoSafeWithMeta(base, authToken, '0020000E,00080060,0008103E,00201209');
         const items = rows.map(ds => this.parseSeries(ds));
-        return { items, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'series' };
-    }
-
-    async listInstancesForSeries(serviceUrl, authToken, studyUID, seriesUID, { limit = 100, offset = 0 } = {}) {
-        const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances?limit=${limit}&offset=${offset}`;
-        const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00080018'); // SOPInstanceUID
-        // rows are already instance objects; pass through or normalize if needed
-        return { items: rows, total, nextOffset: rows.length < limit ? null : offset + limit, level: 'instances' };
-    }
-
-    isWSIInstance(ds) {
-        const modality = ds["00080060"]?.Value?.[0];
-        const sopClass = ds["00080016"]?.Value?.[0];
-        const imageType = (ds["00080008"]?.Value || []).join("\\");
-
-        // 1) Modality present
-        if (modality === "SM") return true;
-
-        // todo try: 1.2.840.10008.5.1.4.1.1.77 prefix for all, see https://dicom.nema.org/medical/dicom/current/output/chtml/part04/sect_b.5.html
-        // 2) SOP Class UID matches known WSI SOPs
-        const wsiSOPs = [
-            "1.2.840.10008.5.1.4.1.1.77.1.6"
-        ];
-        if (wsiSOPs.includes(sopClass)) return true;
-
-        // 3) ImageType contains WSI keyword
-        if (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType)) return true;
-
-        return false;
-    }
-
-    // WADO-RS metadata fetch for richer details when QIDO filters are blocked
-    async wadoMetadata(urlPath, authToken) {
-        const url = new URL(urlPath);
-        const res = await fetch(url.toString(), {
-            headers: {
-                Accept: 'application/dicom+json',
-                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-            }
-        });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`WADO ${url.pathname} failed: ${res.status} ${text}`);
-        try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        return { items, total, level: 'series' };
     }
 
     parsePatient(ds) {
-        const v = this._v;
-        const id  = v(ds, '00100020'); // PatientID
-        const name= v(ds, '00100010'); // PatientName (PN)
-        const sex = v(ds, '00100040'); // PatientSex
-        const dob = v(ds, '00100030'); // PatientBirthDate
+        const id  = DicomTools.v(ds, '00100020'); // PatientID
+        const name= DicomTools.v(ds, '00100010'); // PatientName (PN)
+        const sex = DicomTools.v(ds, '00100040'); // PatientSex
+        const dob = DicomTools.v(ds, '00100030'); // PatientBirthDate
         return { patientID: id, name, sex, birthDate: dob };
     }
 
     parseStudy(ds) {
-        const v = this._v;
-        const studyUID = v(ds, '0020000D'); // StudyInstanceUID
-        const date     = v(ds, '00080020'); // StudyDate
-        const time     = v(ds, '00080030'); // StudyTime
-        const desc     = v(ds, '00081030'); // StudyDescription
-        const accession= v(ds, '00080050'); // AccessionNumber
-        const referring= v(ds, '00080090'); // ReferringPhysicianName
-        const patientID= v(ds, '00100020'); // PatientID
-        return { studyUID, date, time, desc, accession, referring, patientID };
+        const studyUID   = DicomTools.v(ds, '0020000D');   // StudyInstanceUID
+        const studyDate  = DicomTools.v(ds, '00080020');   // StudyDate (YYYYMMDD)
+        const studyTime  = DicomTools.v(ds, '00080030');   // StudyTime (HHMMSS.frac)
+        const desc       = DicomTools.v(ds, '00081030');   // StudyDescription
+        const patientID  = DicomTools.v(ds, '00100020');   // PatientID
+        const studyID    = DicomTools.v(ds, '00200010');   // StudyID
+        const accession  = DicomTools.v(ds, '00080050');   // AccessionNumber
+        const mods     = ds?.['00080061']?.Value || []; // ModalitiesInStudy (array)
+        const nSeries    = Number(DicomTools.v(ds, '00201206') ?? 0);    // NumberOfStudyRelatedSeries
+        const nInst      = Number(DicomTools.v(ds, '00201208') ?? 0);    // NumberOfStudyRelatedInstances
+        const institution= DicomTools.v(ds, '00080080');   // InstitutionName
+        const station    = DicomTools.v(ds, '00081010');   // StationName
+        const referring  = DicomTools.v(ds, '00080090');   // ReferringPhysicianName
+        const performing = DicomTools.v(ds, '00081050');   // PerformingPhysicianName
+        const bodyPart   = DicomTools.v(ds, '00180015');   // BodyPartExamined
+        const reqProc    = DicomTools.v(ds, '00321060');   // RequestedProcedureDescription
+        const reasonPerf = DicomTools.v(ds, '00401012');   // ReasonForPerformedProcedure
+        const comments   = DicomTools.v(ds, '00324000');   // StudyComments
+
+        // Friendly label + when
+        const whenISO = (studyDate || studyTime)
+            ? DicomTools.toISODateTime(studyDate, studyTime) : null;
+
+        const label = desc || (whenISO ? `Study ${whenISO.slice(0,10)}` : `Study ${tail(studyUID, 6)}`);
+
+        // Chips you may show in UI (optional)
+        const chips = {
+            accession,
+            studyID,
+            modalities: mods,
+            counts: { series: nSeries, instances: nInst },
+            institution,
+        };
+
+        return {
+            level: 'study',
+            studyUID,
+            studyID,
+            patientID,
+            accession,
+            description: desc,
+            date: studyDate,
+            time: studyTime,
+            whenISO,
+            modalities: mods,
+            seriesCount: nSeries,
+            instanceCount: nInst,
+            institution,
+            station,
+            referringPhysician: referring,
+            performingPhysician: performing,
+            bodyPartExamined: bodyPart,
+            requestedProcedureDescription: reqProc,
+            reasonForPerformedProcedure: reasonPerf,
+            comments,
+            uidTail: (studyUID && studyUID.length > 8) ? studyUID.slice(-8) : (studyUID || ''),
+            label,         // used by your list render
+            chips,         // handy bundle for compact line
+        };
     }
 
     parseSeries(ds) {
-        const v = this._v;
-        const studyUID   = v(ds, '0020000D');
-        const seriesUID  = v(ds, '0020000E');
-        const number     = v(ds, '00200011'); // SeriesNumber
-        const desc       = v(ds, '0008103E'); // SeriesDescription
-        const modality   = v(ds, '00080060'); // Modality
-        const bodyPart   = v(ds, '00180015'); // BodyPartExamined
-        const instanceCt = v(ds, '00201209'); // NumberOfSeriesRelatedInstances (may be absent)
-        return { studyUID, seriesUID, number, desc, modality, bodyPart, instanceCount: instanceCt };
+        const studyUID   = DicomTools.v(ds, '0020000D');
+        const seriesUID  = DicomTools.v(ds, '0020000E');
+        const number     = DicomTools.v(ds, '00200011'); // SeriesNumber
+        const desc       = DicomTools.v(ds, '0008103E'); // SeriesDescription
+        const modality   = DicomTools.v(ds, '00080060'); // Modality
+        const bodyPart   = DicomTools.v(ds, '00180015'); // BodyPartExamined
+        const instanceCt = DicomTools.v(ds, '00201209'); // NumberOfSeriesRelatedInstances (may be absent)
+        return { studyUID, seriesUID, number, description: desc, modality, bodyPart, instanceCount: instanceCt };
     }
 
     // If you only know Series UID, discover its Study UID (QIDO /series?SeriesInstanceUID=)
@@ -495,17 +506,17 @@ addPlugin('dicom', class extends XOpatPlugin {
         const url = new URL(`${serviceUrl}/series`);
         url.searchParams.set('SeriesInstanceUID', seriesUID);
         // Avoid includefield to support servers that don't allow it here (e.g., GCP)
-        const arr = await this.qido(url, authToken);
+        const arr = await DicomTools.qido(url, authToken);
         const row = arr?.[0];
         if (!row) return null;
-        const v = this._v;
+        const v = DicomTools.v;
         return { studyUID: v(row, '0020000D'), seriesUID: v(row, '0020000E') };
     }
 
     async seriesConfigForStudy(serviceUrl, studyUID, authToken) {
-        const v = this._v;
+        const v = DicomTools.v;
         const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series`;
-        const json = await this.qidoSafe(base, authToken, '0020000D,0020000E'); // minimal
+        const json = await DicomTools.qidoSafe(base, authToken, '0020000D,0020000E'); // minimal
         return json
             .map(ds => ({ studyUID: v(ds, '0020000D') || studyUID, seriesUID: v(ds, '0020000E') }))
             .filter(x => x.seriesUID);
@@ -514,14 +525,14 @@ addPlugin('dicom', class extends XOpatPlugin {
     // Return studies + series for a patient
     async seriesForPatient(serviceUrl, patientID, authToken, { limit = 50, offset = 0 } = {}) {
         const base = `${serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}&limit=${limit}&offset=${offset}`;
-        const rows = await this.qidoSafe(base, authToken, '0020000D,00080020,00081030,00100020');
+        const rows = await DicomTools.qidoSafe(base, authToken, '0020000D,00080020,00081030,00100020');
         const studies = rows.map(ds => this.parseStudy(ds));
-        return { studies, nextOffset: rows.length < limit ? null : offset + limit };
+        return { studies };
     }
 
     async populateStudyDetails(studyUID, authToken) {
         // Use WADO-RS metadata endpoint instead of QIDO with includefield — works on GCP
-        const meta = await this.wadoMetadata(`${this.serviceUrl}/studies/${encodeURIComponent(studyUID)}/metadata`, authToken);
+        const meta = await DicomTools.wadoMetadata(`${this.serviceUrl}/studies/${encodeURIComponent(studyUID)}/metadata`, authToken);
         const row = meta?.[0];
         if (row) {
             this.state.activeStudyDetails = this.parseStudy(row);
@@ -533,7 +544,7 @@ addPlugin('dicom', class extends XOpatPlugin {
     async populatePatientDetails(patientID, authToken) {
         // GCP Healthcare API does not expose /patients; derive from first study
         const sBase = `${this.serviceUrl}/studies?PatientID=${encodeURIComponent(patientID)}`;
-        const rows = await this.qidoSafe(sBase, authToken, '00100020,00100010,00100030,00100040');
+        const rows = await DicomTools.qidoSafe(sBase, authToken, '00100020,00100010,00100030,00100040');
         const row = rows?.[0];
         if (row) this.state.activePatientDetails = this.parsePatient(row);
     }
@@ -561,73 +572,6 @@ addPlugin('dicom', class extends XOpatPlugin {
             }
         }
         return Array.from(byID.values());
-    }
-
-    groupSeriesInstances(instancesObject, seriesObject) {
-        const groups = new Map();
-        for (const ds of instancesObject.items) {
-            if (!this.isWSIInstance(ds)) continue;
-
-            const container = this._v(ds, "00400512") || "UNKNOWN_CONTAINER"; // ContainerIdentifier
-            const pathId    = this._v(ds, "00480106") || "DEFAULT_PATH";      // OpticalPathIdentifier
-            const tpmC      = this._v(ds, "00480006"); // TotalPixelMatrixColumns
-            const tpmR      = this._v(ds, "00480007"); // TotalPixelMatrixRows
-            const key       = `${container}|${tpmC}x${tpmR}|${pathId}`;
-
-            if (!groups.has(key)) {
-                groups.set(key, {
-                    containerIdentifier: container,
-                    opticalPathId: pathId,
-                    totalPixelMatrix: (tpmC && tpmR) ? `${tpmC}×${tpmR}` : null,
-                    label: null,
-                    overview: null,
-                    volume: [],
-                    studyUID: seriesObject.studyUID,
-                    seriesUID: seriesObject.seriesUID,
-                });
-            }
-
-            const g = groups.get(key);
-
-            const imageType = (ds?.["00080008"]?.Value || []).join("\\");  // ImageType
-
-            if (/LABEL/i.test(imageType)) g.label = ds;
-            else if (/OVERVIEW/i.test(imageType)) g.overview = ds;
-            else g.volume.push(ds); // pyramid levels
-        }
-
-        return Array.from(groups.values());
-    }
-
-    async listPatients(serviceUrl, authToken, { limit = 50, offset = 0 } = {}) {
-        const base = `${serviceUrl}/studies?limit=${limit}&offset=${offset}`;
-        const rows = await this.qidoSafe(base, authToken, '00100020,00100010,00100030,00100040');
-        const seen = new Map();
-        for (const r of rows) {
-            const p = this.parsePatient(r);
-            if (p.patientID && !seen.has(p.patientID)) seen.set(p.patientID, p);
-        }
-        return { patients: Array.from(seen.values()), nextOffset: rows.length < limit ? null : offset + limit };
-    }
-
-    async studyExists(serviceUrl, studyUID, authToken) {
-        const base = `${serviceUrl}/studies?StudyInstanceUID=${encodeURIComponent(studyUID)}&limit=1`;
-        try {
-            const rows = await this.qidoSafe(base, authToken, '0020000D');
-            return Array.isArray(rows) && rows.length > 0;
-        } catch (e) {
-            console.warn('studyExists check failed', e);
-            return false;
-        }
-    }
-
-    async fetchAllPatientsOrDerive(serviceUrl, authToken) {
-        // Derive patients from studies (portable across servers)
-        const base = `${serviceUrl}/studies`;
-        const rows = await this.qidoSafe(base, authToken, '00100020,00100010,00100030,00100040,0020000D');
-        const studies = rows.map(r => this.parseStudy(r));
-        const list = await this.materializePatientsFromStudies(studies, authToken);
-        return list;
     }
 
     // Called by host when plugin is ready; keep for future UI hooks

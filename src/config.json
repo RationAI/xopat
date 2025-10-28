@@ -19,7 +19,7 @@
      *   image_group_protocol: string,
      *   data_group_server: string,
      *   data_group_protocol: string,
-     *   headers: ?Object,
+     *   osdOptions: ?Object,
      *   js_cookie_expire: ?number,
      *   js_cookie_path: ?string,
      *   js_cookie_same_site: ?string,
@@ -56,8 +56,6 @@
              */
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`", //one-liner expression
-            // Can be overridden by params.headers
-            "headers": {},
             /* Cookie Setup */
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
@@ -68,7 +66,11 @@
             /* Production mode (serve minified files if available) */
             "production": false,
             /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "redirectUrl": "redirect.php"
+            "redirectUrl": "redirect.php",
+            /* OpenSeadragon.Options to pass, some values are overridden as necessary. */
+            "osdOptions": {
+              "crossOriginPolicy": "Anonymous"
+            }
         },
         // We can keep multiple configurations within the file and switch between them...
         "prod": {
@@ -78,7 +80,6 @@
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
-            "headers": {},
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
             "js_cookie_same_site": "strict",
@@ -86,7 +87,10 @@
             "js_cookie_domain": null,
             "secureMode": true,
             "production": true,
-            "redirectUrl": "redirect.php"
+            "redirectUrl": "redirect.php",
+            "osdOptions": {
+              "crossOriginPolicy": "Anonymous"
+            }
         }
     },
     /**
@@ -110,7 +114,6 @@
      *   stackedBackground: ?boolean,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
-     *   headers: ?Object,
      *   preferredFormat: ?string,
      *   fetchAsync: ?boolean,
      *   bypassCache: ?boolean,
@@ -150,8 +153,6 @@
         "maxImageCacheCount": 1200,
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
-        // custom headers for image fetching
-        "headers": {},
         // can be anything that supports the protocol of your choice,
         // ExtendedDZI supports "png", "zip", "jpg"
         "preferredFormat": "zip",
@@ -182,7 +183,18 @@
     "monaco": "src/libs/monaco/",
     "openSeadragonPrefix": "openseadragon/build/openseadragon/",
     "openSeadragon": "openseadragon.js",
-
+    "openSeadragonConfiguration": {
+      "showNavigator": true,
+      "maxZoomPixelRatio": 2,
+      "zoomPerClick": 2,
+      "zoomPerScroll": 1.7,
+      "blendTime": 0,
+      // This is due to annotations (multipolygon brush) that are disabled during animations
+      // ease out behavior makes user think they can already start drawing and slows them down
+      "animationTime": 0,
+      "showNavigationControl": false,
+      "crossOriginPolicy": "Anonymous"
+    },
     /**
      * JS Source files. Each group conforms to pre-determined folder path.
      */
@@ -200,7 +212,8 @@
         "external": {
             "protocols": [
                 "dziexttilesource.js",
-                "emptytilesource.js"
+                "emptytilesource.js",
+                "previewsource.js"
             ],
             "common": [
                 "enjoyhint.js",

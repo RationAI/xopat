@@ -217,6 +217,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
     } catch (e) {
         core.exception = e;
+        console.error(e);  // todo better handling
         //core uses default values
     }
 

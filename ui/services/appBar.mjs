@@ -78,15 +78,15 @@ export class AppBar {
 
                     // todo through API, remove usage of the IDs!
                     // add components which you want to be hidden on fullscreen here:
-                    document.getElementById("top-side-left-user").classList.toggle("hidden");
-                    document.getElementById("top-side-left").classList.toggle("hidden");
+                    document.getElementById("top-side-left-user").classList.toggle("invisible");
+                    document.getElementById("top-side-left").classList.toggle("invisible");
 
                     // cannot hide whole top-side, because it contains also fullscreen button
                     document.getElementById("top-side").classList.toggle("opaque-bg");
                     const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
                     if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
                         toolbarDivs.forEach((el) => el.classList.remove("hidden"));
-                    } else{
+                    } else {
                         toolbarDivs.forEach((el) => el.classList.add("hidden"));
                     }
 
@@ -169,7 +169,7 @@ export class AppBar {
                     selected: item.selected,
                     onClick: () => {
                         // todo is necessary this doublechecking?
-                        item.selected = APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
+                        item.selected = APPLICATION_CONTEXT.getOption(`${id}-selected`, item.selected);
                         item.onClick?.(item.selected);
                     },
                     section: 'global-windows',
@@ -183,15 +183,15 @@ export class AppBar {
                     this.subMenu.addItem({
                         icon: item.iconName,
                         label: item.title,
-                        selected: !APPLICATION_CONTEXT.getOption(`${id}-hidden`, false),
+                        selected: APPLICATION_CONTEXT.getOption(`${id}-selected`, false),
                         onClick: () => {
                             for (let child of this.rightMenuTabs[id]) {
                                 // todo support toggle with t/f
                                 child.toggleHiden();
                             }
                             //todo taking item.hidden value is problematic, first element controls all
-                            item.selected = !APPLICATION_CONTEXT.getOption(`${id}-hidden`, item.selected);
-                            APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
+                            item.selected = !APPLICATION_CONTEXT.getOption(`${id}-selected`, item.selected);
+                            APPLICATION_CONTEXT.setOption(`${id}-selected`, item.selected);
                         },
                         section: 'right-menu',
                     });
@@ -207,10 +207,7 @@ export class AppBar {
          * @return {boolean} true if the selection is currently active.
          */
         registerViewItem(ownerPluginId, icon, label, onClick) {
-            const selected = !APPLICATION_CONTEXT.getOption(`${ownerPluginId}-hidden`, false);
-            if (selected) {
-                onClick?.(selected);
-            }
+            const selected = APPLICATION_CONTEXT.getOption(`${ownerPluginId}-selected`, false);
             this.otherWindows[ownerPluginId] = {
                 ownerPluginId, icon, label, onClick, selected
             };
@@ -240,8 +237,8 @@ export class AppBar {
             const item = this.otherWindows[id];
             if (!item) return;
             item.selected = !!selected;
-            APPLICATION_CONTEXT.setOption(`${id}-hidden`, item.selected);
-            this._visualMenuNeedsRefresh = true; // todo consider just updataing tab state
+            APPLICATION_CONTEXT.setOption(`${id}-selected`, item.selected);
+            this._visualMenuNeedsRefresh = true;
         },
     }
 

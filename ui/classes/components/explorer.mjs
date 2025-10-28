@@ -589,50 +589,55 @@ export class Explorer extends BaseComponent {
 
         // ------- Windowed rendering for paged lists -------
         // Config
-        const OVERSCAN = 8;        // render a few extra rows above/below for smoothness
-        let rowH = 0;              // measured row height
-        let start = 0, end = -1;   // current rendered window [start, end)
-
-        // Spacers to simulate full height without mounting all rows
+        // ------- Windowed rendering (cached) -------
+        const OVERSCAN = 8;
+        let rowH = 0;
+        let start = 0, end = -1;
         const topSpacer = div({ style: "height:0px" });
         const bottomSpacer = div({ style: "height:0px" });
+        const renderedItems = new Map(); // index -> li Node
 
-        // Simple pool: we fully re-render the window on changes (keeps code small & robust)
-        const renderWindow = (force=false) => {
+        const renderWindow = (force = false) => {
             const vpH = viewport.clientHeight || 0;
             const scrollTop = viewport.scrollTop || 0;
-            if (!rowH) {
-                // if we don't know row height yet, delay until measured
-                return;
-            }
+            if (!rowH) return;
+
             const maxIdx = items.length;
-            // compute indexes
             const visStart = Math.max(0, Math.floor(scrollTop / rowH));
             const visEnd = Math.min(maxIdx, Math.ceil((scrollTop + vpH) / rowH));
             const nextStart = Math.max(0, visStart - OVERSCAN);
             const nextEnd = Math.min(maxIdx, visEnd + OVERSCAN);
             if (!force && nextStart === start && nextEnd === end) return;
 
-            start = nextStart; end = nextEnd;
+            start = nextStart;
+            end = nextEnd;
 
-            // update spacers
-            const topH = start * rowH;
-            const bottomH = (maxIdx - end) * rowH;
-            topSpacer.style.height = `${topH}px`;
-            bottomSpacer.style.height = `${bottomH}px`;
+            // Update spacer heights
+            topSpacer.style.height = `${start * rowH}px`;
+            bottomSpacer.style.height = `${(maxIdx - end) * rowH}px`;
 
-            // replace visible chunk
-            // keep ONLY top spacer at first position; wipe middle; keep bottom spacer at end
-            // structure: [topSpacer, ...rows..., bottomSpacer]
-            // clear previous rows (keep first and last children if they are our spacers)
-            while (listEl.childNodes.length > 0) listEl.removeChild(listEl.lastChild);
-            listEl.appendChild(topSpacer);
-
-            for (let i = start; i < end; i++) {
-                listEl.appendChild(this._renderItemLi(levelIndex, items[i], i));
+            // Keep order: topSpacer, [items in window], bottomSpacer
+            // Remove old nodes not in range
+            for (const [i, node] of renderedItems) {
+                if (i < start - OVERSCAN * 2 || i > end + OVERSCAN * 2) {
+                    renderedItems.delete(i);
+                    node.remove();
+                }
             }
 
-            listEl.appendChild(bottomSpacer);
+            // Ensure in-range nodes exist in correct order
+            const frag = document.createDocumentFragment();
+            for (let i = start; i < end; i++) {
+                let node = renderedItems.get(i);
+                if (!node) {
+                    node = this._renderItemLi(levelIndex, items[i], i);
+                    renderedItems.set(i, node);
+                }
+                frag.appendChild(node);
+            }
+
+            // Rebuild listEl children (cheap because we re-append spacers + fragment)
+            listEl.replaceChildren(topSpacer, frag, bottomSpacer);
         };
 
         // Initial draw: we need a measured row height
@@ -663,7 +668,17 @@ export class Explorer extends BaseComponent {
         viewport.addEventListener("scroll", onScroll);
 
         // Re-compute on resize as well
-        const ro = new ResizeObserver(() => renderWindow(true));
+        const ro = new ResizeObserver(() => {
+            // Only adjust spacers, don’t rebuild all items
+            if (rowH) {
+                const vpH = viewport.clientHeight || 0;
+                const scrollTop = viewport.scrollTop || 0;
+                const visStart = Math.max(0, Math.floor(scrollTop / rowH));
+                const visEnd = Math.min(items.length, Math.ceil((scrollTop + vpH) / rowH));
+                topSpacer.style.height = `${visStart * rowH}px`;
+                bottomSpacer.style.height = `${(items.length - visEnd) * rowH}px`;
+            }
+        });
         ro.observe(viewport);
 
         // Navigation controls

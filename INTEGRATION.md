@@ -1,7 +1,7 @@
 # xOpat Integration Within Your System
 
 The docker image pretty much shows all basics necessary to set up the viewer.
-Here we discuss further possibilities and corner cases.
+Here we discuss further possibilities and customizations.
 
 
 ## Cloning & Building
@@ -29,7 +29,7 @@ In order to install the library you have to clone it and generate the source cod
 >
 > you should see `build/` folder. For more info on building see [the guide](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
 
-Optionally, you can get the OpenSeadragon code from somewhere (**v 4.1.0+**) and place it under
+Optionally, you can get the OpenSeadragon code from somewhere (**v 6.0.0+**) and place it under
 a custom folder - just update the path to the library.
 
 
@@ -37,7 +37,8 @@ a custom folder - just update the path to the library.
 ## Plugins&Modules API
 Each plugin can perform custom tasks that might depend on some service. After you manage to successfully run
 the viewer and some plugin feature does not work properly, please check the generated ENV example files. There might be
-configurations you need to adjust.
+configurations you need to adjust. Base configuration come from ``include.json`` files from
+within the modules and plugins, so you can check there for more details.
 
 
 ## Setting up the viewer: client server
@@ -141,9 +142,12 @@ implemented for the desired protocol, please follow the log directions in browse
 
 ### Custom Authentication
 For authentication through headers, please set-up headers in the viewer configuration (
-either parameters or ENV file - run `grunt build` to create example ENV file).
+either parameters or ENV file - run `grunt build` to create example ENV file). Cookies for headers
+and other things can be globally configured using ``osdOptions`` options - refer to OpenSeadragon.Options.
+This allows you to only set global headers when fetching resources, but does not allow you to update them
+or create them dynamically.
 
-For other authentication methods, please adjust existing protocol or use a custom one - see below.
+For advanced authentication methods, please adjust existing protocol or use a custom one - see below.
 
 ### Custom Image Protocols
 You do not have to use our protocol and image server, 
@@ -198,6 +202,13 @@ async getThumbnail() {
     return undefined;
 }
 
+/**
+ * Retrieve slide label.
+ * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
+ */
+async getLabel() {
+    return undefined;
+}
 ````
 
 # FIXME update docs

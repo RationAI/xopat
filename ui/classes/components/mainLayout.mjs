@@ -228,7 +228,7 @@ export class MainLayout extends BaseComponent {
 <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 40px; pointer-events: none;">
     <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
         <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
-        <div>
+        <div class="flex flex-row">
             <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
             <div id="top-side-left-fullscreen" style="margin-left: 5px; margin-right: 5px; margin-top: 3px; margin-bottom: 3px; pointer-events: auto;"></div>
         </div>

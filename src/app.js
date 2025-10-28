@@ -186,7 +186,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     //Prepare xopat core loading utilities and interfaces
-    let runLoader = initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
+    let runLoader = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
     /**
      * @namespace APPLICATION_CONTEXT
@@ -458,6 +458,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     OpenSeadragon.TileSource.prototype.getThumbnail = function () { };
 
     /**
+     * Extension of OpenSeadragon: Retrieve slide label.
+     * @memberOf OpenSeadragon.TileSource
+     * @function getLabel
+     * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
+     */
+    OpenSeadragon.TileSource.prototype.getLabel = function () { };
+
+    /**
      * Viewer manager for multi-view support
      * @type {Window.ViewerManager}
      */
@@ -628,9 +636,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         { deriveOverlayFromBackgroundGoals = false } = {}
     ) {
         const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
-        const cfg = APPLICATION_CONTEXT.config || {};
+        const cfg = APPLICATION_CONTEXT.config;
+        const data = Array.isArray(cfg.data) ? cfg.data : [];
         const backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
         const vizCount = Array.isArray(cfg.visualizations) ? cfg.visualizations.length : 0;
+
+        // Ensure background items have IDs
+        for (let bg of backgrounds) {
+            if (!bg.id) {
+                bg.id = UTILITIES.generateID(data[bg.dataReference]);
+            } else {
+                bg.id = UTILITIES.sanitizeID(bg.id);
+            }
+        }
 
         const clampIndex = (i, max) =>
             Number.isInteger(i) && i >= 0 && i < max ? i : undefined;
@@ -810,7 +828,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             }
         }
-
         return updated;
     };
 
@@ -1280,12 +1297,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 for (const bgi of entry.bgIndices) {
                     const bg = bgs[bgi];
                     if (!bg) continue;
-                    if (!bg.id) {
-                        bg.id = UTILITIES.generateID(data[bg.dataReference]);
-                    } else {
-                        bg.id = UTILITIES.sanitizeID(bg.id);
-                    }
-
                     toOpen.push(bgUrlFromEntry(bg));
                     openedBase.push(bg);
                 }
@@ -1294,11 +1305,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 if (Number.isInteger(bgi)) {
                     const bg = bgs[bgi];
                     if (bg) {
-                        if (!bg.id) {
-                            bg.id = UTILITIES.generateID(data[bg.dataReference]);
-                        } else {
-                            bg.id = UTILITIES.sanitizeID(bg.id);
-                        }
                         toOpen.push(bgUrlFromEntry(bg));
                         openedBase.push(bg);
                     }

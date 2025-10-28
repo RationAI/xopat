@@ -284,6 +284,7 @@ require_core("loader");
 async function() {
     // loader needs this data from the plugins.php
     const runLoader = initXOpatLoader(
+        <?php echo json_encode((object)$CORE) ?>,
         <?php echo json_encode($PLUGINS) ?>,
         <?php echo json_encode($MODULES) ?>,
         '<?php echo PLUGINS_FOLDER ?>',

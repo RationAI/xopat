@@ -151,12 +151,13 @@ OpenSeadragon.Tools = class {
      * @param {number} timeout
      * @param {number} size.width
      * @param {number} size.height
+     * @param {boolean} [size.preserveAspectRatio=true]
      * @return {Promise<CanvasRenderingContext2D>}
      */
-    navigatorThumbnail(config, size = {}, timeout=30000) {
+    async navigatorThumbnail(config, size = {}, timeout=30000) {
         return this.constructor.navigatorThumbnail(this.viewer, config, size);
     }
-    static navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
+    static async navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
         if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
         // todo works for background right now only -> check how we can extend for also viz layers
         if (!bgConfig.id) {
@@ -176,15 +177,6 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        drawer.renderer.setDimensions(0, 0, viewer.drawer.canvas.width, viewer.drawer.canvas.height, 1);
-        let config = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id) || {
-            id: bgConfig.id,
-            type: "identity",
-            tiledImages: [-1],
-            name: bgConfig.name || dataRef
-        };
-        drawer.overrideConfigureAll({[bgConfig.id]: config});
-
         const bgUrlFromEntry = (bgEntry) => {
             if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
                 return bgEntry.tileSource;
@@ -194,62 +186,82 @@ OpenSeadragon.Tools = class {
             return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
         };
 
-        return new Promise((resolve, reject) => {
+        // todo multiple data images? how to retrieve existing configurations?
+        const tiledImages = [-1];
+
+        // First prepare images
+        const imageSources = await Promise.all(tiledImages.map(async idx => {
+            let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
+            if (!source) {
+                // todo: might not carry over all OSD properties such as ajax headers
+                source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+                source = source.source;
+            }
+            if (source.getThumbnail) {
+                // if we have a thumbnail, replace the source with single-image thumbnail
+                let thumb = await source.getThumbnail();
+                if (thumb) {
+                    thumb = await UTILITIES.imageLikeToImage(thumb);
+                    if (thumb) source = new OpenSeadragon.PreviewSlideSource({image: thumb});
+                }
+            }
+            return source;
+        })).catch(e => {
+            // todo - consider: if some parts of the image were downloaded, try to continue with what is available
+            console.error("Failed to instantiate background config, image not valid.", e);
+            return undefined;
+        });
+
+        if (!imageSources) return false;
+
+        // Use prepared sources to render the image thumbnail
+        return new Promise(async (resolve, reject) => {
             let exited = false;
             let timeoutRef;
 
             let loadCount = 0;
             const images = [];
-            for (let idx of config.tiledImages) {
-                if (idx === -1) {
-                    loadCount++;
-                    viewer.instantiateTileImageClass({tileSource: bgUrlFromEntry(bgConfig),
-                        success: e => {
-                            if (exited) return;
-                            e.item.__sshotIndex = images.length;
-                            e.item.__synthetic = true;
-                            // simply download the current tiles
-                            e.item.update(true);
-                            const updateReminder = setInterval(() => {
-                                if (exited) clearInterval(updateReminder);
-                                e.item.update(false);
-                            }, 500);
-                            images.push(e.item);
+            for (let source of imageSources) {
+                loadCount++;
+                viewer.instantiateTileImageClass({
+                    tileSource: source,
+                    success: async e => {
+                        if (exited) return;
 
-                            e.item.whenFullyLoaded(() => {
-                                if (exited) return;
-                                clearInterval(updateReminder);
-                                loadCount--;
+                        const ti = e.item;
+                        // override drawer to ensure correct drawer is used
+                        ti.getDrawer = () => drawer;
+                        ti.__synthetic = true;
 
-                                if (loadCount < 1) {
-                                    clearTimeout(timeoutRef);
-                                    resolve(images);
-                                }
-                            });
-                        }, error: e => {
+                        // simply download the current tiles, in case of thumbnail we just load the thumbnail
+                        ti.update(true);
+                        const updateReminder = setInterval(() => {
+                            if (exited) clearInterval(updateReminder);
+                            ti.update(false);
+                        }, 500);
+                        images.push(ti);
+
+                        ti.whenFullyLoaded(() => {
                             if (exited) return;
+                            clearInterval(updateReminder);
                             loadCount--;
-                            images.error = e;
 
                             if (loadCount < 1) {
                                 clearTimeout(timeoutRef);
                                 resolve(images);
                             }
-                        }}
-                    );
-                } else {
-                    const item = viewer.world.getItemAt(idx);
-                    item.whenFullyLoaded(() => {
-                        images.push(item);
+                        });
+                    }, error: e => {
+                        if (exited) return;
                         loadCount--;
-                        item.__sshotIndex = images.length;
+                        images.error = e;
 
                         if (loadCount < 1) {
                             clearTimeout(timeoutRef);
                             resolve(images);
                         }
-                    });
-                }
+                    }}
+                );
             }
 
             if (loadCount < 1) {
@@ -267,25 +279,78 @@ OpenSeadragon.Tools = class {
                 throw images.error;
             }
 
-            const originalTiledImages = config.tiledImages;
-            config.tiledImages = images.map(i => i.__sshotIndex);
+            const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id);
 
+            let config = existingConfig ? {...existingConfig} : {
+                id: bgConfig.id,
+                type: "identity",
+                tiledImages: null,
+                name: bgConfig.name || dataRef
+            };
+            config.tiledImages = images.map((_, idx) => idx);
+            await drawer.overrideConfigureAll({[bgConfig.id]: config});
+
+            const originalTiledImages = config.tiledImages;
             const bounds = viewer.viewport.getHomeBounds();
-            await drawer.draw(images, {
+            const context = await drawer.draw(images, size, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: 0,
                 zoom: 1.0 / bounds.width,
             });
             config.tiledImages = originalTiledImages;
-
-            let canvas = document.createElement('canvas'),
-                ctx = canvas.getContext('2d');
-            canvas.width = size.width;
-            canvas.height = size.height;
-            ctx.drawImage(drawer.canvas, 0, 0, drawer.canvas.width, drawer.canvas.height, 0, 0, size.width, size.height);
-            return ctx;
+            images.forEach(i => i.destroy());
+            return context;
         });
+    }
+
+    /**
+     * Retrieve label
+     * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
+     * @param {number} timeout
+     * @return {Promise<Image>}
+     */
+    async retrieveLabel(config, timeout=30000) {
+        return this.constructor.retrieveLabel(this.viewer, config, size);
+    }
+    static async retrieveLabel(viewer, bgConfig, size = {}, timeout=30000) {
+        if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
+        if (!bgConfig.id) {
+            console.error("Thumbnail can be created for now only from background configurations!");
+            return Promise.reject("No background configuration provided!");
+        }
+
+        let dataRef = APPLICATION_CONTEXT.config.data[bgConfig.dataReference];
+        if (typeof bgConfig.dataReference !== "number" && !dataRef) {
+            dataRef = bgConfig.dataReference; // use the value as actual data
+        }
+
+        const bgUrlFromEntry = (bgEntry) => {
+            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
+                return bgEntry.tileSource;
+            }
+            const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const make = new Function("path,data", "return " + proto);
+            return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
+        };
+
+        // todo find existing item index if bg config is loaded
+        const idx = -1;
+        let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
+        if (!source) {
+            // todo: might not carry over all OSD properties such as ajax headers
+            source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+            source = source.source;
+        }
+        if (source.getLabel) {
+            // if we have a thumbnail, replace the source with single-image thumbnail
+            let label = await source.getLabel();
+            if (label) {
+                label = await UTILITIES.imageLikeToImage(thumb);
+                return label;
+            }
+        }
+        return undefined;
     }
 
     /**
@@ -333,16 +398,15 @@ OpenSeadragon.Tools = class {
             this.viewer.tools.navigatorThumbnail(bgSpec, {
                 width, height, timeout: 60000
             }).then(ctx => {
-                image.src = ctx.canvas.toDataURL();
+                let data = ctx.canvas.toDataURL();
+                if (data.length < 1000) {
+                    console.warn("Image preview is too small, probably missing data - replacing with preview.");
+                    data = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
+                }
+                image.src = data;
             }).catch(e => {
                 console.error(e);
-                image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`
-                  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 120'>
-                    <rect width='160' height='120' fill='hsl(0, 0%, 93%)'/>
-                    <path d='M20 88l30-34 24 22 18-20 28 32' fill='none' stroke='hsl(0,0%,60%)' stroke-width='8' stroke-linecap='round'/>
-                    <circle cx='54' cy='42' r='10' fill='hsl(0,0%,70%)'/>
-                  </svg>
-                `);
+                image.src = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
             });
         } else if (typeof eventArgs.imagePreview === "string") {
             image.src = eventArgs.imagePreview;

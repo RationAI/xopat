@@ -81,22 +81,6 @@ export class StretchGrid extends BaseComponent {
         return div({textContent: i + 1});
     }
 
-    createCell(id, index = this.items.length) {
-        // Double-nested cells are intentional: this grid is used to
-        // host OSD viewers, and viewer menu lives in the parent cell.
-        const el = div(
-            {
-                class: "relative stretch-grid__item"
-            },
-            div(
-            {
-                id
-            }
-        ));
-        this.insertAt(index, el);
-        return el;
-    }
-
     insertAt(idx, node) {
         const el = node || this._defaultItem(idx);
         el.classList.add("stretch-grid__item", "relative");
@@ -114,8 +98,15 @@ export class StretchGrid extends BaseComponent {
     _host() { return document.getElementById(this.id); }
 
     attachCell(id, index = this.items.length) {
-        // createCell already inserts into DOM at index
-        return this.createCell(id, index);
+        // Double-nested cells are intentional: this grid is used to
+        // host OSD viewers, and viewer menu lives in the parent cell.
+        const el = div({ id, class: "relative stretch-grid__item" });
+        this.insertAt(index, el);
+        return el;
+    }
+
+    findCellById(id) {
+        return this.items.find(el => el.id === id);
     }
 
     _layout() {

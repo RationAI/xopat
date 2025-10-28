@@ -1,8 +1,0 @@
-{
-  "name": "dicom",
-  "version": "1.0.0",
-  "description": "",
-  "author": "Aiosa",
-  "license": "MIT",
-  "main": "dicom.mjs"
-}

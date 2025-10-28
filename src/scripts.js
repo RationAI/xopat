@@ -597,6 +597,57 @@ ${await UTILITIES.getForm()}
         return window;
     };
 
+    /**
+     * Convert image-like object to an HTMLImageElement or HTMLCanvasElement for DOM rendering.
+     * @param imageLike {string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob}
+     * @return {Promise<HTMLImageElement|HTMLCanvasElement>}
+     */
+    window.UTILITIES.imageLikeToImage = async function(imageLike) {
+        if (imageLike instanceof HTMLImageElement) return Promise.resolve(imageLike);
+        if (imageLike instanceof HTMLCanvasElement) return Promise.resolve(imageLike);
+        if (imageLike instanceof CanvasRenderingContext2D) return Promise.resolve(imageLike.canvas);
+        let type;
+        if (imageLike instanceof Blob) {
+            type = "rasterBlob";
+        } else if (typeof imageLike === 'string') {
+            type = "imageUrl";
+        } else {
+            throw "Invalid imageLike type";
+        }
+        return OpenSeadragon.converter.convert({}, imageLike, type, "image");
+    };
+
+    /**
+     * WeakMap implementation with weakly held values
+     * @class InvertedWeakMap
+     */
+    class InvertedWeakMap {
+        _map = new Map();
+        _registry = null;
+
+        constructor() {
+            this._registry = new FinalizationRegistry((key) => {
+                this._map.delete(key)
+            });
+        }
+
+        set(key, value) {
+            this._map.set(key, new WeakRef(value))
+            this._registry.register(value, key)
+        }
+
+        get(key) {
+            const ref = this._map.get(key)
+            if (ref) {
+                return ref.deref()
+            }
+        }
+
+        has(key) {
+            return this._map.has(key) && this.get(key) !== undefined
+        }
+    }
+
     $("body")
         .append("<a id='link-download-helper' class='hidden'></a>")
         .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
