@@ -541,8 +541,9 @@ OSDAnnotations.PresetManager = class {
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
+        const layerID = this._context.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: undefined,
+            layerID: layerID,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
@@ -670,6 +671,9 @@ OSDAnnotations.Layer = class {
                 this._objects.push(object);
             }
             object.layerID = this.id;
+            object.visible = this.visible;
+
+            this._context.canvas.requestRenderAll();
         }
     }
 
@@ -680,7 +684,10 @@ OSDAnnotations.Layer = class {
     removeObject(object) {
         if (!object || object.internalID === undefined || object.internalID === null) return;
 
-        this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);        
+        object.visible = true;
+        this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);
+
+        this._context.canvas.requestRenderAll();
     }
 
     /**
@@ -710,8 +717,17 @@ OSDAnnotations.Layer = class {
      * Set objects for this layer
      * @param {fabric.Object[]} objects array of objects
      */
-    setObjects(objects) {
+    setObjects(objects, changeLayerID = false) {
+        this._objects.forEach(object => {object.visible = true});
         this._objects = objects;
+        this._objects.forEach(object => {object.visible = this.visible});
+        if (changeLayerID) {
+            this._objects.forEach(obj => {
+                obj.layerID = this.id;
+            });
+        }
+
+        this._context.canvas.requestRenderAll();
     }
 
     /**
@@ -720,7 +736,8 @@ OSDAnnotations.Layer = class {
     clear() {
        this._objects.forEach(object => {
            if (object.layerID === this.id) {
-               delete object.layerID;
+                object.layerID = undefined;
+                object.visible = true;
            }
        });
        this._objects = [];
