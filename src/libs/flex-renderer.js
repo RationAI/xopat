@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
 //! Built on 2025-10-28
-//! Git commit: --3205840-dirty
+//! Git commit: --bbf4f99-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -204,7 +204,6 @@
         /**
          * Call to first-pass draw using WebGLProgram.
          * @param {FPRenderPackage[]} source
-         * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
          * @instance
          * @memberof FlexRenderer
@@ -229,7 +228,7 @@
          * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
          */
-        secondPassProcessData(renderArray, options) {
+        secondPassProcessData(renderArray, options = undefined) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
@@ -4174,7 +4173,7 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
          * Use program. Arbitrary arguments.
          * @param {RenderOutput} renderOutput the object passed between first and second pass
          * @param {FPRenderPackage[]|SPRenderPackage[]} renderArray
-         * @param {RenderOptions} options
+         * @param {RenderOptions|undefined} options used for now only for second pass, to specify which FBO to render to
          */
         use(renderOutput, renderArray, options) {
         }
@@ -4604,7 +4603,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     use(renderOutput, renderArray, options) {
         //todo flatten render array :/
         const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, options.framebuffer || null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
         gl.bindVertexArray(this.vao);
 
         const shaderVariables = [];
@@ -4979,9 +4978,6 @@ void main() {
 
     /**
      * Use program. Arbitrary arguments.
-     * @param {RenderOutput} renderOutput
-     * @param {FPRenderPackage[]} sourceArray
-     * @param {RenderOptions} options
      */
     use(renderOutput, sourceArray, options) {
         const gl = this.gl;
@@ -5679,7 +5675,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
          * Override the default configuration: the renderer will use given shaders,
          * supplied with data from collection of TiledImages, to render.
          * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
-         * @param {object} shaders map of id -> shader config value
+         * @param {Object.<string, ShaderConfig>} shaders map of id -> shader config value
          * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
          * @return {OpenSeadragon.Promise} promise resolved when the renderer gets rebuilt
          */
@@ -5697,7 +5693,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                     this._configuredExternally = false;
                     // If we changed render style, recompile everything
                     this.renderer.deleteShaders();
-                    this.viewer.world._items.map(item => this.tiledImageCreated(item).id);
+                    return $.Promise.all(this.viewer.world._items.map(item => this.tiledImageCreated(item).id));
                 }
                 return $.Promise.resolve();
             }
@@ -5712,7 +5708,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             }
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
-            return this._requestRebuild();
+            return this._requestRebuild(0);
         }
 
         /**
@@ -6043,98 +6039,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         } // end of function
 
         /**
-         * Allow drawing to FBO instead of the main canvas.
-         * This works once per draw, the configuration is discarded afterwads.
-         * You should use
-         * const context = this.initDrawFBO();
-         * this.draw(...)
-         * const data = this.freeDrawFRBO(context); //cleanup
-         *
-         * @return {object} { fbo, tex } context info
-         */
-        initDrawFBO() {
-            const gl = this.renderer.gl;
-            const w = this.canvas.width,
-                h = this.canvas.height;
-
-            const tex = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-            const fbo = gl.createFramebuffer();
-            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-
-            // verify completeness
-            const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-            if (status !== gl.FRAMEBUFFER_COMPLETE) {
-                console.warn('Export FBO incomplete:', status.toString(16));
-            }
-
-            this.__activeOutputFBO = fbo;
-            return { fbo, tex };
-        }
-
-        /**
-         * Retrieve drawing from FBO instead of the main canvas.
-         * Requires prior call of initDrawFBO
-         * const context = this.initDrawFBO();
-         * this.draw(...)
-         * const data = this.freeDrawFRBO(context); //cleanup
-         *
-         * @return {CanvasRenderingContext2D} output data
-         */
-        freeDrawFRBO(context) {
-            const gl = this.renderer.gl;
-            const w = this.canvas.width,
-                h = this.canvas.height;
-            const { fbo, tex } = context;
-
-            // Ensure we read from the exact FBO we drew into
-            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-            if (gl.readBuffer) {
-                gl.readBuffer(gl.COLOR_ATTACHMENT0);
-            }
-
-            const pixels = new Uint8ClampedArray(w * h * 4);
-            gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-            const err = gl.getError();
-            if (err) {
-                console.warn('readPixels error:', err);
-            }
-
-            // Flip Y in-place (single output canvas)
-            const rowBytes = w * 4;
-            const row = new Uint8ClampedArray(rowBytes);
-            for (let y = 0; y < (h >> 1); y++) {
-                const top = y * rowBytes,
-                    bot = (h - 1 - y) * rowBytes;
-                row.set(pixels.subarray(top, top + rowBytes));
-                pixels.copyWithin(top, bot, bot + rowBytes);
-                pixels.set(row, bot);
-            }
-
-            // Write to a single output canvas
-            const output = document.createElement('canvas');
-            output.width = w;
-            output.height = h;
-            const ctx = output.getContext('2d', { willReadFrequently: true });
-            ctx.putImageData(new ImageData(pixels, w, h), 0, 0);
-
-            // Cleanup
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            gl.deleteFramebuffer(fbo);
-            gl.deleteTexture(tex);
-            this.__activeOutputFBO = null;
-
-            return ctx;
-        }
-
-        /**
          * During the first-pass draw all tiles' data sources into the corresponding off-screen textures using identity rendering,
          * excluding any image-processing operations or any rendering customizations.
          * @param {OpenSeadragon.TiledImage[]} tiledImages array of TiledImage objects to draw
@@ -6278,7 +6182,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 return false;
             }
 
-            this.renderer.secondPassProcessData(sources, { framebuffer: null });
+            this.renderer.secondPassProcessData(sources);
             this.renderer.gl.finish();
             return true;
         }
@@ -6732,49 +6636,90 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             options:            options
         });
 
-        const originalDraw = drawer.draw.bind(drawer);
-        drawer.draw = (function (tiledImages, size, view = undefined) {
+        let locked = false;
+        const waiters = [];
+        const lock = async() => {
+            if (!locked) {
+                locked = true;
+                return;
+            }
+            await new $.Promise(resolve => waiters.push(resolve));
+        };
+        const unlock = () => {
+            const next = waiters.shift();
+            if (next) {
+                next();
+            } else {
+                locked = false;
+            }
+        };
+
+        /**
+         * Draws the viewer with the given configuration.
+         * @param {Array<OpenSeadragon.TiledImage>} tiledImages - The tiled images to draw.
+         * @param {Object.<string, ShaderConfig>} configuration - map of id -> shader config value
+         * @param {OpenSeadragon.Point} size - The size of the viewer
+         * @param {object} view - The viewport to draw, see {@link OpenSeadragon.FlexDrawer#draw}
+         * @returns {Promise<CanvasRenderingContext2D>}
+         */
+        drawer.drawWithConfiguration = (async function (tiledImages, configuration, size, view = undefined) {
+            // do not block preprocessing if necessary, custom view requires tiles -> ensure tiles are supported
+            let tiles;
+            let tasks;
             if (view) {
-                const tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
-                const tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+                tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+            }
 
-                return Promise.all(tasks).then(() => {
-                    //const ctx = this.initDrawFBO();
-                    this.renderer.setDimensions(0, 0, size.width, size.height, tiledImages.length);
-                    originalDraw(tiledImages, view);
-                    //return this.freeDrawFRBO(ctx);
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    canvas.width = this.renderer.canvas.width;
-                    canvas.height = this.renderer.canvas.height;
-                    ctx.drawImage(this.renderer.canvas, 0, 0);
-                    return ctx;
-                }).catch(e => console.error(e)).finally(() => {
-                    // free data
-                    const dId = drawer.getId();
-                    tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+            await lock();
+            try {
+                if (configuration) {
+                    await drawer.overrideConfigureAll(configuration);
+                }
+
+                if (view) {
+                    return Promise.all(tasks).then(() => {
+                        this.renderer.setDimensions(0, 0, size.x, size.y, tiledImages.length);
+                        this.draw(tiledImages, view);
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        canvas.width = this.renderer.canvas.width;
+                        canvas.height = this.renderer.canvas.height;
+                        ctx.drawImage(this.renderer.canvas, 0, 0);
+                        return ctx;
+                    }).catch(e => console.error(e)).finally(() => {
+                        // free data
+                        const dId = drawer.getId();
+                        tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                    });
+                }
+
+                this.renderer.setDimensions(0, 0, size.x, size.y, tiledImages.length);
+                // Steal FP initialized textures
+                if (!this.renderer.__firstPassResult) {
+                    // todo dirty, hide the __firstPassResult structure within the program logics
+                    const program = this.renderer.getProgram('firstPass');
+                    this.renderer.__firstPassResult = {
+                        texture: program.colorTextureA,
+                        stencil: program.stencilTextureA,
+                    };
+                }
+
+                // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
+                viewer.drawer.renderer.copyRenderOutputToContext(this.renderer);
+
+                this._drawTwoPassSecond({
+                    zoom: this.viewport.getZoom(true)
                 });
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = this.renderer.canvas.width;
+                canvas.height = this.renderer.canvas.height;
+                ctx.drawImage(this.renderer.canvas, 0, 0);
+                return ctx;
+            } finally {
+                unlock();
             }
-
-            this.renderer.setDimensions(0, 0, size.width, size.height, tiledImages.length);
-            // Steal FP initialized textures
-            if (!this.renderer.__firstPassResult) {
-                // todo dirty, hide the __firstPassResult structure within the program logics
-                const program = this.renderer.getProgram('firstPass');
-                this.renderer.__firstPassResult = {
-                    texture: program.colorTextureA,
-                    stencil: program.stencilTextureA,
-                };
-            }
-
-            // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
-            viewer.drawer.renderer.copyRenderOutputToContext(this.renderer);
-            const ctx = this.initDrawFBO();
-            this._drawTwoPassSecond({
-                zoom: this.viewport.getZoom(true)
-            });
-            return this.freeDrawFRBO(ctx);
-
         }).bind(drawer);
         return drawer;
     };
@@ -7940,7 +7885,7 @@ function makeWorker() {
 
 //! flex-renderer 0.0.1
 //! Built on 2025-10-28
-//! Git commit: --3205840-dirty
+//! Git commit: --bbf4f99-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8110,10 +8055,11 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2025-10-28
-//! Git commit: --3205840-dirty
+//! Git commit: --bbf4f99-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

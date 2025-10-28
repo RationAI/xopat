@@ -110,9 +110,7 @@ OpenSeadragon.Tools = class {
     /**
      * Create viewport screenshot
      * @param {boolean} toImage true if <img> element should be created, otherwise Context2D
-     * @param {object} size the output size
-     * @param {number} size.width
-     * @param {number} size.height
+     * @param {OpenSeadragon.Point|object} size the output size
      * @param {(OpenSeadragon.Rect|object|undefined)} [focus=undefined] screenshot
      *   focus area (screen coordinates), by default thw whole viewport
      * @return {CanvasRenderingContext2D|Image}
@@ -124,17 +122,17 @@ OpenSeadragon.Tools = class {
         if (viewer.drawer.canvas.width < 1) return undefined;
 
         if (!focus) focus = new OpenSeadragon.Rect(0, 0, window.innerWidth, window.innerHeight);
-        size.width = size.width || focus.width;
-        size.height = size.height || focus.height;
-        let ar = size.width / size.height;
+        size.width = size.x || focus.width;
+        size.height = size.y || focus.height;
+        let ar = size.x / size.y;
         if (focus.width < focus.height) focus.width *= ar;
         else focus.height /= ar;
 
         let canvas = document.createElement('canvas'),
             ctx = canvas.getContext('2d');
-        canvas.width = size.width;
-        canvas.height = size.height;
-        ctx.drawImage(viewer.drawer.canvas, focus.x, focus.y, size.width, size.height, 0, 0, size.width, size.height);
+        canvas.width = size.x;
+        canvas.height = size.y;
+        ctx.drawImage(viewer.drawer.canvas, focus.x, focus.y, size.x, size.y, 0, 0, size.x, size.y);
 
         if (toImage) {
             let img = document.createElement("img");
@@ -147,10 +145,8 @@ OpenSeadragon.Tools = class {
     /**
      * Create thumbnail screenshot
      * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
-     * @param {object} size the output size
+     * @param {OpenSeadragon.Point} size the output size
      * @param {number} timeout
-     * @param {number} size.width
-     * @param {number} size.height
      * @param {boolean} [size.preserveAspectRatio=true]
      * @return {Promise<CanvasRenderingContext2D>}
      */
@@ -279,6 +275,8 @@ OpenSeadragon.Tools = class {
                 throw images.error;
             }
 
+            console.log("render using", images.length, "images", images)
+
             const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id);
 
             let config = existingConfig ? {...existingConfig} : {
@@ -288,11 +286,18 @@ OpenSeadragon.Tools = class {
                 name: bgConfig.name || dataRef
             };
             config.tiledImages = images.map((_, idx) => idx);
-            await drawer.overrideConfigureAll({[bgConfig.id]: config});
 
             const originalTiledImages = config.tiledImages;
-            const bounds = viewer.viewport.getHomeBounds();
-            const context = await drawer.draw(images, size, {
+            const w = images[0].source.height;
+            const h = images[0].source.width;
+            const ar = h / w;
+            const bounds = new OpenSeadragon.Rect(0, 0, 1, 1/ar);
+            const preserve = size.preserveAspectRatio || size.preserveAspectRatio === undefined;
+            if (preserve) {
+                if (ar < 1) size.x = size.x * ar;
+                else size.y = size.y / ar;
+            }
+            const context = await drawer.drawWithConfiguration(images, {[bgConfig.id]: config}, size, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: 0,
@@ -307,13 +312,12 @@ OpenSeadragon.Tools = class {
     /**
      * Retrieve label
      * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
-     * @param {number} timeout
      * @return {Promise<Image>}
      */
-    async retrieveLabel(config, timeout=30000) {
-        return this.constructor.retrieveLabel(this.viewer, config, size);
+    async retrieveLabel(config) {
+        return this.constructor.retrieveLabel(this.viewer, config);
     }
-    static async retrieveLabel(viewer, bgConfig, size = {}, timeout=30000) {
+    static async retrieveLabel(viewer, bgConfig) {
         if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
         if (!bgConfig.id) {
             console.error("Thumbnail can be created for now only from background configurations!");
@@ -346,7 +350,7 @@ OpenSeadragon.Tools = class {
             // if we have a thumbnail, replace the source with single-image thumbnail
             let label = await source.getLabel();
             if (label) {
-                label = await UTILITIES.imageLikeToImage(thumb);
+                label = await UTILITIES.imageLikeToImage(label);
                 return label;
             }
         }
@@ -395,9 +399,7 @@ OpenSeadragon.Tools = class {
         };
 
         if (!eventArgs.imagePreview) {
-            this.viewer.tools.navigatorThumbnail(bgSpec, {
-                width, height, timeout: 60000
-            }).then(ctx => {
+            this.viewer.tools.navigatorThumbnail(bgSpec, {x: width, y: height}, 60000).then(ctx => {
                 let data = ctx.canvas.toDataURL();
                 if (data.length < 1000) {
                     console.warn("Image preview is too small, probably missing data - replacing with preview.");

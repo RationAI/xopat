@@ -648,6 +648,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             } else {
                 bg.id = UTILITIES.sanitizeID(bg.id);
             }
+            // todo document this but BackgroundItem should be config without methods - only what is exported
+            bg.getViewer = () => undefined;
         }
 
         const clampIndex = (i, max) =>
@@ -857,14 +859,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (successLoadedItemCount === 0) {
             viewer.toggleDemoPage(true, $.t('error.invalidDataHtml'));
         } else {
-            // TODO propose fix in OpenSeadragon
+            // TODO propose fix in OpenSeadragon... also this might be a deadlock
             // Fix indexing: OSD has race conditions when we call addTiledImage subsequently with defined indexes
             const itemCount = world.getItemCount();
-            let index = 0;
-            while (index < itemCount) {
+            let index = 0, iterations = 0;
+            while (index < itemCount && iterations < itemCount*itemCount) {
                 const item = world.getItemAt(index);
                 if (item.__targetIndex !== index) {
                     world.setItemIndex(item, item.__targetIndex);
+                    iterations++;
                 } else {
                     index++;
                 }
@@ -1299,6 +1302,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     if (!bg) continue;
                     toOpen.push(bgUrlFromEntry(bg));
                     openedBase.push(bg);
+                    bg.getViewer = () => viewer;
                 }
             } else {
                 const bgi = entry.bgIndices[0];
@@ -1307,6 +1311,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     if (bg) {
                         toOpen.push(bgUrlFromEntry(bg));
                         openedBase.push(bg);
+                        bg.getViewer = () => viewer;
                     }
                 }
             }

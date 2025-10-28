@@ -143,10 +143,9 @@ export class FloatingWindow extends BaseComponent {
             }
         } else {
             if (!this._rootEl) return;
-            this._rootEl.style.zIndex = String(Date.now());
+            this._rootEl.style.zIndex = "10000";
             this._rootEl.classList.add("ring-2","ring-primary","ring-offset-2","ring-offset-base-100");
             setTimeout(() => this._rootEl?.classList.remove("ring-2","ring-primary","ring-offset-2","ring-offset-base-100"), 200);
-
         }
     }
 

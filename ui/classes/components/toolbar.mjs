@@ -134,7 +134,7 @@ class Toolbar extends BaseComponent {
         left: ${left}px;
         top: ${top}px;
         display: ${this.display};
-        z-index: 1000;
+        z-index: 10000;
       `
             },
             // drag handle

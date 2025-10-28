@@ -57,6 +57,7 @@ data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.
             };
             const outputSize = {width: Math.round(region.width / region.height * 120), height: 120};
 
+            //todo implement back
             VIEWER.tools.offlineScreenshot(region, outputSize, (canvas) => {
                 let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
                 if (image) {

@@ -165,7 +165,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             );
 
             APPLICATION_CONTEXT.setOption?.("activeBackgroundIndex", indexes);
-            setTimeout(() => this._refreshAllLinkIcons(), 0);
+            // setTimeout(() => this._refreshAllLinkIcons(), 0);
         } finally {
             clearTimeout(loadingTimer);
             USER_INTERFACE.Loading.show(false);
@@ -196,7 +196,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this.explorer.reconfigure({ levels });
 
         // preserve original post-render sync
-        this._refreshAllLinkIcons();
+        //this._refreshAllLinkIcons();
     }
 
     // ---------- internals ----------}
@@ -345,15 +345,18 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const bg = this.configGetter(item);
         const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
         const checkboxId = `${this.windowId}-chk-${idx}`;
-        const checked = this.selected.has(idx);
-        const viewer = this._getViewerForBg(idx) || VIEWER_MANAGER.viewers[0] || null;
+        let checked = this.selected.has(idx);
+        const viewer = bg.getViewer();
+        if (!checked && viewer) {
+            this.selected.add(idx);
+            checked = true;
+        }
 
         const WRAP_CLASS  = "relative overflow-hidden aspect-[4/3] w-[250px]";
-        const HOST_CLASS  = "relative flex items-center justify-center";
+        const HOST_CLASS  = "flex items-center justify-center";
         const THUMBNAIL_CLASS = "block w-[86%] h-[86%] object-contain select-none pointer-events-none";
-        const LABEL_CLASS = "block w-[120px] absolute bottom-0 right-0";
+        const LABEL_CLASS = "block max-w-[120px] absolute bottom-0 right-0";
 
-        console.log("Creating preview with id ", `${this.windowId}-thumb-${idx}`)
         const previewImage = img({
             id: `${this.windowId}-thumb-${idx}`,
             class: THUMBNAIL_CLASS,
@@ -372,15 +375,16 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const thumbWrap = div(
             { class: WRAP_CLASS },
-            div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage, labelImage),
+            div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage),
             div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
+            labelImage
         );
 
-        // start loading image previews
-
         if (bg?.id) {
-            this._loadSlideComplementaryImage(this._cachedPreviews, viewer, bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
-            this._loadSlideComplementaryImage(this._cachedLabels, viewer, bg, thumbWrap, labelImage, LABEL_CLASS);
+            // need a valid viewer ref no matter what
+            let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
+            this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
+            this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, LABEL_CLASS);
         }
 
         const linked = this._isLinked(viewer);
@@ -402,7 +406,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 class: "btn btn-ghost btn-xs",
                 disabled: !viewer,
                 title: viewer ? (linked ? "Synced — click to unsync" : "Not synced — click to sync") : "Not open",
-                onclick: (e) => { e.stopPropagation(); this._onToggleLink(idx, e); }
+                onclick: (e) => { e.stopPropagation(); this._onToggleLink(idx, item, e); }
             }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
         );
 
@@ -431,11 +435,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         );
     }
 
-    _loadSlideComplementaryImage(cacheMap, viewer, bg, parentNode, replacedImageNode, imageClasses) {
+    _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
         setTimeout(() => {
             const cached = cacheMap[bg.id];
             const availablePreview = !!cached && !(cached instanceof Promise);
-
             const applyPreview = (node) => {
                 if (!node) return;
 
@@ -469,7 +472,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     .catch(err => console.error("Failed to reuse image preview", err));
             } else {
                 // start loading and cache the promise
-                cacheMap[bg.id] = viewer.tools.createImagePreview(bg)
+                cacheMap[bg.id] = method(bg)
                     .then(applyPreview)
                     .catch(err => {
                         console.error("Failed to create image preview", err);
@@ -480,19 +483,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         })
     }
 
-    // --- Viewer plumbing (default context=0) ---
-    _getViewerForBg(idx) {
-        const vm = globalThis.VIEWER_MANAGER;
-        if (!vm || !vm.viewers || !vm.viewers.length) return null;
-
-        const stacked = !!APPLICATION_CONTEXT.getOption("stackedBackground");
-        if (stacked) return vm.viewers[0] || null;
-
-        // map background index -> viewer index by current selection order
-        const order = Array.from(this.selected).sort((a,b)=>a-b);
-        const vIdx = order.indexOf(idx);
-        return vIdx >= 0 ? vm.viewers[vIdx] || null : null;
-    }
     _isLinked(viewer) {
         if (!viewer) return false;
         return !!viewer.tools.isLinked();
@@ -506,31 +496,32 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return viewer.tools.unlink();
     }
 
-    _updateLinkIcon(idx) {
+    _updateLinkIcon(idx, viewer) {
         const btn = document.getElementById(`${this.windowId}-lnk-${idx}`);
         if (!btn) return;
-        const viewer = this._getViewerForBg(idx);
         const linked = this._isLinked(viewer);
         btn.title = viewer
             ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
             : "Not open";
         btn.disabled = !viewer;
         btn.innerHTML = "";  // replace icon
-        btn.appendChild(new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
-    }
-    _refreshAllLinkIcons() {
-        // Call this after list render, after selection changes, and after viewer open
-        const n = APPLICATION_CONTEXT.config.background?.length ?? 0;
-        for (let i = 0; i < n; i++) this._updateLinkIcon(i);
+        btn.appendChild(new UI.FAIcon({name: linked ? "fa-link" : "fa-link-slash"}).create());
     }
 
-    _onToggleLink(idx, ev) {
+    // _refreshAllLinkIcons() {
+    //     // Call this after list render, after selection changes, and after viewer open
+    //     const n = APPLICATION_CONTEXT.config.background?.length ?? 0;
+    //     for (let i = 0; i < n; i++) this._updateLinkIcon(i);
+    // }
+
+    _onToggleLink(idx, item, ev) {
         ev?.stopPropagation?.();
-        const viewer = this._getViewerForBg(idx);
+        const viewer = this.configGetter(item)?.getViewer();
         if (!viewer) return;
         if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
-        // Update all cards that might share the same viewer (esp. stacked)
-        this._refreshAllLinkIcons();
+        // // Update all cards that might share the same viewer (esp. stacked)
+        // this._refreshAllLinkIcons();
+        this._updateLinkIcon(idx, viewer);
     }
 
     // BaseComponent contract

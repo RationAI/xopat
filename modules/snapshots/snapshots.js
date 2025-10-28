@@ -55,7 +55,7 @@ window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
             delay, duration, transition,
             visualization: this._getVisualizationSnapshot(v, st.captureVisualization),
             viewerId,
-            screenShot: st.captureScreen ? utils?.screenshot(true, {width:120, height:120}) : undefined
+            screenShot: st.captureScreen ? utils?.screenshot(true, {x:120, y:120}) : undefined
         };
 
         this._add(step, atIndex);
