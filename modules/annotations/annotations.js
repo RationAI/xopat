@@ -719,6 +719,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		const zoom = this.canvas.getZoom();
 		object.internalID = object.internalID || this._generateInternalId()
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
+
+		this.historyManager.addAnnotationToBoard(object);
 	}
 
 	setCloseEdgeMouseNavigation(enable) {
@@ -746,10 +748,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {OSDAnnotations.Layer} layer it belongs to
 	 */
 	checkLayer(ofObject) {
-		if (!ofObject.hasOwnProperty("layerID")) {
-			if (this._layer) ofObject.layerID = this._layer.id;
-		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
-			this.createLayer(ofObject.layerID);
+		if (ofObject.hasOwnProperty("layerID") && String(ofObject.layerID) && !this._layers.hasOwnProperty(ofObject.layerID)) {
+			this._createLayer({id: ofObject.layerID, _objects: []});
 		}
 	}
 
@@ -1313,7 +1313,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     	    canvas.setActiveObject(sel);
     	}
 
-    	canvas.requestRenderAll();
+		canvas.requestRenderAll();
+		if (typeof annotation === 'object') annotation = annotation.incrementId;
     	this._emitAnnotationSelectionChanged(annotation, true, fromCanvas);
     }
 
@@ -1400,13 +1401,19 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Delete all selected annotations and layers
+	 * @param {boolean} withWarning show warning if nothing is selected
 	 * @returns {void}
 	 */
-	deleteSelection() {
+	deleteSelection(withWarning=true) {
         const layerIds = [...(this.getSelectedLayerIds?.() || [])];
     	const selectedAnnObjs = (this.getSelectedAnnotations?.() || []);
 
-        if (layerIds.length === 0 && selectedAnnObjs.length === 0) return;
+		if (layerIds.length === 0 && selectedAnnObjs.length === 0) {
+        	if (withWarning) {
+        	    Dialogs.show("Please select annotations or layers you would like to delete", 3000, Dialogs.MSG_INFO);
+        	}
+        	return;
+    	}
 
         const layerIdSet = new Set(layerIds.map(String));
     	const annToDelete = selectedAnnObjs.filter(obj => !layerIdSet.has(String(obj.layerID)));
@@ -1424,28 +1431,31 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     	    }
     	}
 
+		const combined = [
+        	...layersData.map(ld => ({ type: "layer", data: ld, pos: ld._position })),
+        	...annToDelete.map(a => ({ type: "annotation", data: a, pos: a._position }))
+    	].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+
 		this.history.push(
         	() => {
-        	    for (const id of layerIds) {
-        	        this._deleteLayer?.(String(id));
-        	    }
-        	    for (const obj of annToDelete) {
-        	        this._deleteAnnotation?.(obj, true);
-        	    }
-
-        	    this.clearLayerSelection?.(true);
-        	    this.clearAnnotationSelection?.(true);
+				for (const item of [...combined].reverse()) {
+                	if (item.type === "annotation") {
+                	    this._deleteAnnotation?.(item.data, true);
+                	} else {
+                	    this._deleteLayer?.(String(item.data.id));
+                	}
+            	}
+           	 	this.clearLayerSelection?.(true);
+           	 	this.clearAnnotationSelection?.(true);
         	},
         	() => {
-        	    layersData
-        	        .slice()
-        	        .sort((a, b) => (a?._position ?? 0) - (b?._position ?? 0))
-        	        .forEach(ld => this._createLayer?.(ld));
-
-        	    annToDelete
-        	        .slice()
-        	        .sort((a, b) => (a._position ?? 0) - (b._position ?? 0))
-        	        .forEach(obj => this._addAnnotation?.(obj, true));
+				for (const item of combined) {
+                	if (item.type === "annotation") {
+						this._addAnnotation?.(item.data, true);
+                	} else {
+						this._createLayer?.(item.data);
+                	}
+            	}
         	}
     	);
     }
@@ -1627,12 +1637,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			factory.updateRendering(object, preset, visuals, visuals);
 
 			const isSelected = this.isAnnotationSelected(object);
-            if (isSelected) {
-                object.set({
-                    stroke: object.borderColor,
-                });
-            }
-
+            if (isSelected) factory?.applySelectionStyle?.(object, this);
 			return true;
 		}
 		// todo consider adding such preset
@@ -1829,15 +1834,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.setMouseOSDInteractive(true, false);
 
 		this._deleteAnnotation = (annotation, _raise = true) => {
-		    if (annotation._position === undefined) {
-				const layer = this.getLayer(annotation.layerID);
-    			if (layer) {
-					annotation._position = layer.getAnnotationIndex(annotation);
-				} else {
-            	    annotation._position = this.historyManager.getBoardIndex('annotation', annotation.incrementId);
-				}
-			}
-
 			if (this.isAnnotationSelected(annotation)) this.deselectAnnotation(annotation.incrementId, true);
 	        this.canvas.remove(annotation);
 			this.removeAnnotationFromLayer(annotation);
@@ -1865,12 +1861,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 			const layerIndex = annotation.hasOwnProperty("_position") && annotation.layerID ? annotation._position : undefined;
 			const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
-			delete annotation._position;
 
 			this.updateSingleAnnotationVisuals(annotation);
 			this.addAnnotationToLayer(annotation, layerIndex);
 
 			if (!_dangerousSkipHistory) this.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
+			this.clearAnnotationSelection(true);
+			this.selectAnnotation(annotation.incrementId, true);
 
 			if (_raise) this.raiseEvent('annotation-create', {object: annotation});
 			this.canvas.renderAll();
@@ -1899,6 +1896,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				//this.highlightAnnotation(next);
 				this.historyManager.addAnnotationToBoard(next, previous, boardIndex);
 			}
+
+			this.clearAnnotationSelection(true);
+			this.selectAnnotation(next.incrementId, true);
+
 			this.canvas.renderAll();
     		this.raiseEvent('annotation-replace', {previous, next});
 			this.raiseEvent('history-change');
@@ -1913,7 +1914,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 			this._layers[layerData.id] = restoredLayer;
 			const boardIndex = restoredLayer.hasOwnProperty("_position") ? restoredLayer._position : undefined;
-			delete restoredLayer._position;
     		this.historyManager.addLayerToBoard(restoredLayer, boardIndex);
 
 			for (let obj of layerData._objects) {
@@ -1927,13 +1927,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     	    let layer = this.getLayer(layerId);
 			if (!layer) return;
 
-			const boardPos = this.historyManager.getBoardIndex('layer', layerId);
-            layer._position = boardPos;
-
  			const layerObjects = [...layer.getObjects()];
-            for (let i = 0; i < layerObjects.length; i++) {
-                if (layerObjects[i]) layerObjects[i]._position = i;
-            }
             for (let obj of layerObjects) {
                 this._deleteAnnotation(obj, false);
             }
@@ -2144,6 +2138,15 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				_this.mode.scrollZooming(o.e, o.e.deltaY);
 			}
 		});
+
+		const handleDeselectionFromCanvas = (e) => {
+            const ids = (e?.deselected || []).map(obj => obj.incrementId);
+            if (ids.length) _this._emitAnnotationSelectionChanged(ids, false, true);
+        };
+        this.canvas.on({
+            'selection:updated': handleDeselectionFromCanvas,
+            'selection:cleared': handleDeselectionFromCanvas,
+        });
 
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
@@ -2396,7 +2399,15 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		}
 
 		return fabric.util.enlivenObjects(nonFabricObjects, objects => {
-		 if (clear) this.canvas.clear();
+		 if (clear) {
+			this.canvas.clear();
+			this.historyManager.clearBoard();
+			this._layers = {};
+			this._layer = undefined;
+			this.clearAnnotationSelection();
+			this.clearLayerSelection();
+			this.unsetActiveLayer();
+		}
 			let insertion = 0;
 
 			function initObject(obj) {
@@ -2732,7 +2743,7 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
 	discard(withWarning=true) {
-		this.context.removeActiveObject(withWarning);
+		this.context.deleteSelection(withWarning);
 	}
 
 	/**
@@ -2850,10 +2861,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 
 		const active = canvas.getActiveObject();
 	    const hasModifier = o.ctrlKey || o.metaKey || o.shiftKey;
-		if (active) active.sendToBack();
+		const pointer = VIEWER.scalebar.getReferencedTiledImage().imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        const isOnActive = !!(active && active.containsPoint && active.containsPoint(pointer));
 
-    	let clickedObject = canvas.findNextObjectUnderMouse(o, active); // TODO: not working correctly with active selection probably
-		if (this.context.isAnnotationSelected(clickedObject)) clickedObject = undefined;
+    	let clickedObject = canvas.findNextObjectUnderMouse(o, active);
+		if (this.context.isAnnotationSelected(clickedObject)) clickedObject = undefined; //sometimes the findNextObjectUnderMouse returns object from active selection 
 
 		if (!clickedObject && active && active.type === 'activeSelection') {
 			const pointer = canvas.getPointer(o);
@@ -2879,11 +2891,11 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
     	}
 
     	if (!clickedObject) {
-        	if (active) {
- 				this.context.clearAnnotationSelection(true);
+			if (isOnActive && active && active.type !== 'activeSelection' && hasModifier) {
+				this.context.clearAnnotationSelection(true);
 				canvas.requestRenderAll();
-			}
-        	return true;
+            }
+            return true;
     	}
 
 		if (hasModifier) {
@@ -2900,16 +2912,6 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
     	this.context.selectAnnotation(clickedObject.incrementId, true);
 		
 		return true; //considered as handled
-	}
-
-	handleClickDown(o, point, isLeftClick, objectFactory) {
-		//if clicked on object, highlight it
-		let active = this.context.canvas.findTarget(o);
-		if (!active) {
-			this.context.clearAnnotationSelection(true);
-			this.context.canvas.requestRenderAll();
-		}
-		this.context.canvas.renderAll();
 	}
 
 	customHtml() {
@@ -2978,7 +2980,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		}, getObjectAsCandidateForIntersectionTest);
 
 		const polygonUtils = OSDAnnotations.PolygonUtilities;
-		const active = this.context.canvas.getActiveObject();
+		const active = this.context.getSelectedAnnotations().length > 0;
 		let max = 0, result = candidates; // by default return the whole list if intersections are <= 0
 
 		for (let candidate of candidates) {
@@ -3069,8 +3071,6 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.clearAnnotationSelection(true);
-			this.context.selectAnnotation(result.incrementId, true);
 			this.context.canvas.renderAll();
 		}
 		return true;
@@ -3127,8 +3127,6 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		this.candidates = null;
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.clearAnnotationSelection(true);
-			this.context.selectAnnotation(result.incrementId, true);
 			this.context.canvas.renderAll();
 		}
 		return true;
@@ -3270,7 +3268,6 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		//deselect active if present
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
-		this.context.clearAnnotationSelection(true);
 		return true;
 	}
 
@@ -3310,8 +3307,6 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 		this.candidates = null;
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.clearAnnotationSelection(true);
-			this.context.selectAnnotation(result.incrementId, true);
 			this.context.canvas.renderAll();
 		}
 		return true;
