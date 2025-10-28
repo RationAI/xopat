@@ -344,17 +344,6 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         return this._lastOpenedInDetachedWindow ? this._getDetachedWindow() : window;
     }
 
-    //_annotationVisible(object) {  // TODO: might not be needed anymore - need to check
-    //    if (!object) return false;
-    //    let image = VIEWER.scalebar.getReferencedTiledImage(),
-    //        tl = image.imageToWindowCoordinates(new OpenSeadragon.Point(object.left, object.top)),
-    //        br = image.imageToWindowCoordinates(new OpenSeadragon.Point(object.left + object.width,
-    //            object.top + object.height));
-    //    let windowHeight = window.innerHeight || document.documentElement.clientHeight;
-    //    let windowWidth  = window.innerWidth || document.documentElement.clientWidth;
-    //    return (tl.x >= 0 && br.x <= windowWidth) && (tl.y >= 0 && br.y <= windowHeight);
-    //}
-
     /**
      * Clear all items from the board
      */
