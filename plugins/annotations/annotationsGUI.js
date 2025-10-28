@@ -69,6 +69,7 @@ class AnnotationsGUI extends XOpatPlugin {
 			availableFormats: OSDAnnotations.Convertor.formats,
 			//defaultIOFormat not docummented, as it is not meant to be used
 			format: this.getOption('defaultIOFormat', this._defaultFormat),
+			scope: 'all',
 		};
 		const formats = OSDAnnotations.Convertor.formats;
 		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
@@ -224,6 +225,10 @@ ${modeOptions.join("")}</div>`, 'draw');
 <h4 class="f3-light header-sep">File Download / Upload</h4><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
 <div id="annotation-convertor-options"></div>
+<div id="export-annotations-scope" class="mt-2">
+  <span class="text-small mr-2">Export scope (annotations):</span>
+  ${['all','selected'].map(s => this.getExportScopeRadioButton(s)).join("")}
+</div>
 <br>
 ${UIComponents.Elements.checkBox({label: "Replace existing data on import",
 onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption("importReplace", true)})}
@@ -243,6 +248,20 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.updatePresetsHTML();
 	}
 
+	getExportScopeRadioButton(scope) {
+        const id = `export-scope-${scope}-radio`;
+        const label = scope === 'all' ? 'All' : 'Selected';
+        const checked = this.exportOptions.scope === scope ? 'checked' : '';
+        return `
+        <div class="d-inline-block p-2">
+          <input type="radio" id="${id}" class="d-none switch" ${checked} name="annotation-scope-switch">
+          <label for="${id}" class="position-relative format-selector"
+                 onclick="${this.THIS}.setExportScope('${scope}');">
+            <span class="btn">${label}</span>
+          </label>
+        </div>`;
+    }
+
 	getIOFormatRadioButton(format) {
 		const selected = format === this.exportOptions.format ? "checked" : "";
 		const convertor = OSDAnnotations.Convertor.get(format);
@@ -255,6 +274,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const convertor = OSDAnnotations.Convertor.get(format);
 		document.getElementById('downloadAnnotation').style.visibility = convertor.exportsObjects ? 'visible' : 'hidden';
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
+		const scopeEl = document.getElementById('export-annotations-scope');
+		if (scopeEl) scopeEl.style.display = convertor.exportsObjects ? 'block' : 'none';
+
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
 		this.setLocalOption('defaultIOFormat', format);
@@ -264,6 +286,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchModeActive(id, factory=undefined, isLeftClick) {
+		if (this.context.historyManager.isOngoingEdit()) return; 
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
@@ -697,8 +720,7 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 		let headHtml = history.getHistoryWindowHeadHtml();
 		headHtml = headHtml.replace(/<span[^>]*>Annotation List<\/span>\s*/, '');
 
-		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">
-		${headHtml}${history.getHistoryWindowBodyHtml()}</div>`);
+		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">${headHtml}${history.getHistoryWindowBodyHtml()}</div>`);
 	}
 
 	/******************** Free Form Tool ***********************/
@@ -865,9 +887,13 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * @param withPresets
 	 * @return {Promise<*>}
 	 */
-	async getExportData(preferredFormat = null, withObjects=true, withPresets=true) {
-		this._ioArgs.format = preferredFormat || this._defaultFormat;
-		return this.context.export(this._ioArgs, withObjects, withPresets);
+	async getExportData(preferredFormat = null, withObjects=true, withPresets=true, scope='all', selected=[]) {
+		const ioArgs = { ...this._ioArgs };
+        ioArgs.format = preferredFormat || this._defaultFormat;
+        if (withObjects && scope === 'selected') {
+            ioArgs.filter = { ids: selected };
+        }
+        return this.context.export(ioArgs, withObjects, withPresets);
 	}
 
 	/**
@@ -875,16 +901,58 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	exportToFile(withObjects=true, withPresets=true) {
 		const toFormat = this.exportOptions.format;
+
+		let scope = 'all';
+        let selectedItems = [];
+        if (withObjects) {
+            scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
+            if (scope === 'selected') {            
+                const selectedAnns = (this.context.getSelectedAnnotations?.() || []);
+                const layers = (this.context.getSelectedLayers?.() || [])
+                    .filter(Boolean);
+                const layerAnns = layers.length
+                    ? layers.flatMap(l => l.getObjects?.() || [])
+                    : [];
+
+                const seen = new Set();
+                const pushUnique = (arr) => {
+                    for (const o of arr) {
+                        const key = String(o?.incrementId ?? '');
+                        if (!key || seen.has(key)) continue;
+                        seen.add(key);
+                        selectedItems.push(o);
+                    }
+                };
+                pushUnique(selectedAnns);
+                pushUnique(layerAnns);
+
+				if (!selectedItems.length) {
+                    Dialogs.show("No annotations selected to export.", 2500, Dialogs.MSG_WARN);
+                    return;
+                }
+            }
+        }
+
+		selectedItems = selectedItems.map(o => o.id);
+        const scopeSuffix = withObjects && scope === 'selected' ? "-selection" : "";
 		const name = APPLICATION_CONTEXT.referencedName(true)
 			+ "-" + UTILITIES.todayISOReversed() + "-"
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
-		this.getExportData(toFormat, withObjects, withPresets).then(result => {
+			+ scopeSuffix;
+
+		this.getExportData(toFormat, withObjects, withPresets, scope, selectedItems).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});
 	}
+
+	setExportScope(scope) {
+        this.exportOptions.scope = scope === 'selected' ? 'selected' : 'all';
+        $('#export-scope-all-radio').prop('checked', this.exportOptions.scope === 'all');
+        $('#export-scope-selected-radio').prop('checked', this.exportOptions.scope === 'selected');
+    }
 
 	/**
 	 * Output GUI HTML for presets

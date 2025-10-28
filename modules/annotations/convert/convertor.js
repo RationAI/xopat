@@ -119,8 +119,21 @@ OSDAnnotations.Convertor = class {
 
         options.exportsObjects = withAnnotations && parserCls.exportsObjects;
         options.exportsPresets = withPresets && parserCls.exportsPresets;
+
+        const annotationsGetter = (...exportedProps) => {
+            if (!options.exportsObjects) return undefined;
+            let objs = context.toObject(exportAll, ...exportedProps).objects;
+
+            const ids = options?.filter?.ids;
+            if (Array.isArray(ids) && ids.length) {
+                const set = new Set(ids.map(String));
+                objs = objs.filter(o => set.has(String(o.id)));
+            }
+            return objs;
+        };
+
         const encoded = await new parserCls(context, options).encodePartial(
-            (...exportedProps) => context.toObject(exportAll, ...exportedProps).objects,
+            annotationsGetter,
             () => context.presets.toObject()
         );
         encoded.format = options.format;
