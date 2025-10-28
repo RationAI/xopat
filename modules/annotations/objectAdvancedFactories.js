@@ -124,6 +124,12 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }
     }
 
+    applySelectionStyle(ofObject) {
+        ofObject._objects[0].set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
+    }
+
     onZoom(ofObject, graphicZoom, realZoom) {
         if (ofObject._objects) {
             ofObject._objects[1].set({

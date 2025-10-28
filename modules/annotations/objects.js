@@ -594,6 +594,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Apply selection style to the object
+     * @param {*} ofObject 
+     */
+    applySelectionStyle(ofObject) {
+        ofObject.set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
+    }
+
+    /**
      * Create array of points - approximation of the object shape. This method should be overridden.
      * For groups, it should return the best possible approximation via single array of points
      * (or nested points see multipolygons). If difficult, you can return undefined,
