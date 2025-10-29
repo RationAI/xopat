@@ -5,6 +5,7 @@
   "main": "index.php",
   "scripts": {
     "env": "grunt env",
+    "build": "grunt build",
     "minify": "grunt minify",
     "test": "npx cypress run --browser chrome --e2e",
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",

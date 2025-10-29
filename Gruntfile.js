@@ -143,6 +143,7 @@ module.exports = function(grunt) {
     });
 
     grunt.registerTask('default', []);
+    grunt.registerTask('build', ["uglify"]);  // for now uglification only, which also includes dynamic build steps if necessary
     grunt.registerTask('minify', ["uglify"]);
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
