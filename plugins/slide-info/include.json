@@ -7,5 +7,7 @@
   "includes": [
     "slide-info.mjs"
   ],
-  "modules": ["menu-pages"]
+  "modules": ["menu-pages"],
+  "slideSwitching": true,
+  "slideBrowser": true
 }

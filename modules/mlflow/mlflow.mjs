@@ -1,6 +1,5 @@
 import { ExperimentsAPI } from "./experiments.mjs";
 import { RunsAPI } from "./runs.mjs";
-import { HttpClient } from "./http-client.mjs";
 import * as ArtifactAdapters from "./adapters-artifacts.mjs";
 
 /**
@@ -31,7 +30,7 @@ class MlFlowClient {
     constructor({ url, token, username, password, http = {}, artifacts } = {}) {
         if (!url) throw new Error("MlFlowClient: options.url is required");
 
-        this.http = new HttpClient({ baseURL: url, token, username, password, ...http });
+        this.http = new globalThis.HttpClient({ baseURL: url, token, username, password, ...http });
 
         this.experiments = new ExperimentsAPI(this.http);
         this.runs = new RunsAPI(this.http);
@@ -48,14 +47,14 @@ class MlFlowClient {
 
         if (artifacts.type === "mlflow-artifacts") {
             const { MlflowArtifactsAdapter } = await import("./adapters-artifacts.mjs");
-            const http = new HttpClient({ baseURL: artifacts.url, token: artifacts.token ?? this.http.token, username: artifacts.username ?? this.http.username, password: artifacts.password ?? this.http.password, timeoutMs: this.http.timeoutMs, maxRetries: this.http.maxRetries });
+            const http = new globalThis.HttpClient({ baseURL: artifacts.url, token: artifacts.token ?? this.http.token, username: artifacts.username ?? this.http.username, password: artifacts.password ?? this.http.password, timeoutMs: this.http.timeoutMs, maxRetries: this.http.maxRetries });
             return new MlflowArtifactsAdapter(http);
         }
 
         if (artifacts.type === "databricks") {
             const { DatabricksArtifactsAdapter } = await import("./adapters-artifacts.mjs");
             const baseURL = artifacts.url || this.http.baseURL.replace(/\/mlflow($|\/)/, "mlflow"); // best-effort
-            const http = new HttpClient({ baseURL, token: artifacts.token ?? this.http.token, username: artifacts.username ?? this.http.username, password: artifacts.password ?? this.http.password, timeoutMs: this.http.timeoutMs, maxRetries: this.http.maxRetries });
+            const http = new globalThis.HttpClient({ baseURL, token: artifacts.token ?? this.http.token, username: artifacts.username ?? this.http.username, password: artifacts.password ?? this.http.password, timeoutMs: this.http.timeoutMs, maxRetries: this.http.maxRetries });
             return new DatabricksArtifactsAdapter(http);
         }
 
@@ -66,8 +65,8 @@ class MlFlowClient {
     endRun(run_id, status) { return this.runs.endRun(run_id, status); }
 }
 
-export { MlFlowClient, ExperimentsAPI, RunsAPI, HttpClient, ArtifactAdapters };
-const __MLFLOW_EXPORT__ = { MlFlowClient, ExperimentsAPI, RunsAPI, HttpClient, ArtifactAdapters };
+export { MlFlowClient, ExperimentsAPI, RunsAPI, ArtifactAdapters };
+const __MLFLOW_EXPORT__ = { MlFlowClient, ExperimentsAPI, RunsAPI, ArtifactAdapters };
 
 if (typeof globalThis !== "undefined") {
     const ns = (globalThis.MlFlow = globalThis.MlFlow || {});

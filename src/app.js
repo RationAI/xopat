@@ -752,10 +752,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             updated = true;
             effectiveBg = undefined;
         } else if (bgSpec === undefined) {
-            effectiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+            effectiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined);
         } else {
             const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
+            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined);
             if (JSON.stringify(prevActiveBg) !== JSON.stringify(newActiveBg)) {
                 APPLICATION_CONTEXT.setOption("activeBackgroundIndex", newActiveBg);
                 updated = true;
@@ -798,7 +798,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             } // else: vizSpec === undefined and derive flag is false => keep existing option
 
             if (typeof desiredActiveVis !== "undefined") {
-                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
+                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined);
                 if (JSON.stringify(prevActiveVis) !== JSON.stringify(desiredActiveVis)) {
                     APPLICATION_CONTEXT.setOption("activeVisualizationIndex", desiredActiveVis);
                     updated = true;

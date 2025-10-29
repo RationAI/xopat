@@ -179,10 +179,6 @@ export class Explorer extends BaseComponent {
 
         // Data/config
         this.levels = Array.isArray(opts.levels) ? opts.levels.slice() : [];
-        if (!this.levels.length) {
-            console.warn("Explorer created with no levels.");
-        }
-
         this.onPathChange = typeof opts.onPathChange === "function" ? opts.onPathChange : null;
 
         // ⬅️ Remember page per levelId (only used for mode:"page")

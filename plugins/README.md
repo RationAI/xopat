@@ -338,7 +338,7 @@ First, get familiar with (sorted in importance order):
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
-    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``  todo docs is this still true?
+ - ``window.HTTPClient`` for seamless auth integration
  - Third party code (see below)    
  - `window.UIComponents`
     - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...

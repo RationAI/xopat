@@ -19,7 +19,7 @@ const { button } = van.tags
 class Button extends BaseComponent {
 
     /**
-     * @param {*} options
+     * @param {BaseUIOptions} options
      * @param  {...any} args
      * @param {Function} [options.onClick] - The click event handler
      * @param {keyof typeof Button.SIZE} [options.size] - The size of the button

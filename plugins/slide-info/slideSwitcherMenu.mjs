@@ -12,6 +12,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._suspendUpdates = false;
         this._cachedPreviews = {};
         this._cachedLabels = {};
+        this._levels = undefined;
     }
 
     // ---------- public ----------
@@ -42,7 +43,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 onClose: () => this.options.onClose?.(),
             }, body);
 
-            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer" });
+            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer", levels: this._levels });
             contentHost.appendChild(this.explorer.create());
         }
 
@@ -190,10 +191,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             if (!this.configGetter) throw new Error("bgItemGetter is required for retrieving custom bg configurations!");
         }
 
+        this._levels = this._buildLevels();
         if (!this.opened()) return;
-
-        const levels = this._buildLevels();
-        this.explorer.reconfigure({ levels });
+        this.explorer.reconfigure({ levels: this._levels });
 
         // preserve original post-render sync
         //this._refreshAllLinkIcons();

@@ -6,8 +6,11 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this.infoMenuBuilder = new AdvancedMenuPages(this.id, 'guessUIFromJson');
         this.hasCustomBrowser = false;
 
+        this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
+        this.slideBrowser = this.getOptionOrConfiguration('slideBrowser', 'slideBrowser', true);
+
         VIEWER_MANAGER.addHandler('after-open', e => {
-            if (!this.hasCustomBrowser) {
+            if (!this.hasCustomBrowser && this.slideBrowser) {
                 this.menu.refresh();
             }
 
@@ -29,18 +32,21 @@ addPlugin('slide-info', class extends XOpatPlugin {
             }
         });
 
-        // TODO proper slide switching
+        this._customControlButtons = undefined;
+        this._customControlsInitialized = false;
+        if (this.slideSwitching) {
+            this.setupSlideSwitching();
+        }
+    }
+
+    setupSlideSwitching() {
         VIEWER_MANAGER.addHandler('viewer-create', e => {
-            if (APPLICATION_CONTEXT.config.background.length <= 1) return;
-            USER_INTERFACE.addViewerHtml(
-                new UI.Div({class: "absolute", id:"my-test-item"},
-                    new UI.Button({onClick: this.changeSlide.bind(this, false)}, '<<'),
-                    new UI.Button({onClick: this.changeSlide.bind(this, true)}, '>>')
-                ), this.id, e.viewer.id);
+            this._createControlButtons(e.viewer);
         });
         VIEWER_MANAGER.addHandler('viewer-destroy', e => {
-            document.getElementById("my-test-item")?.remove();
+            document.getElementById("slide-info-control-bar-"+e.viewer.id)?.remove();
         });
+        this._customControlsInitialized = true;
     }
 
     changeSlide(forward) {
@@ -65,22 +71,24 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     pluginReady() {
-        this.menu = new SlideSwitcherMenu({
-            onClose: () => !this._preventChange && USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false)
-        });
-        // todo this does not follow plugin API!
-        const selected = USER_INTERFACE.AppBar.View.registerViewItem('slide-info-switcher', 'fa-window-restore', 'Slide Manager', selected => {
-            this._preventChange = true;
-            if (selected) {
-                this.menu.close();
-                USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false);
-            } else {
-                this.menu.open();
-                USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', true);
-            }
-            this._preventChange = false;
-        });
-        if (selected) setTimeout(() => this.menu.open());
+        if (this.slideBrowser) {
+            this.menu = new SlideSwitcherMenu({
+                onClose: () => !this._preventChange && USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false)
+            });
+            // todo this does not follow plugin API!
+            const selected = USER_INTERFACE.AppBar.View.registerViewItem('slide-info-switcher', 'fa-window-restore', 'Slide Manager', selected => {
+                this._preventChange = true;
+                if (selected) {
+                    this.menu.close();
+                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false);
+                } else {
+                    this.menu.open();
+                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', true);
+                }
+                this._preventChange = false;
+            });
+            if (selected) setTimeout(() => this.menu.open());
+        }
     }
 
     /**
@@ -89,15 +97,51 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * @returns {StandaloneBackgroundItem}
      */
 
-    // todo consider updates support and colision resolution, e.g. by OSD events...
     /**
-     *
+     * Set custom browser hierarchy for the slide item browser.
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
      * @param {getBGStandaloneItem} config.bgItemGetter a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.
      */
     setCustomBrowser(config) {
+        if (!this.slideBrowser) {
+            console.warn("Slide browser is disabled, skipping setCustomBrowser call.");
+            return;
+        }
+        if (this.hasCustomBrowser && this.menu.orgConfig?.id !== config?.id) {
+            console.warn(`Slide browser is already configured with different ID ${this.menu.orgConfig.id}, consider keeping only one browsing configuration. Overwriting with ${config.id}.`);
+        }
         this.menu.refresh(config);
         this.hasCustomBrowser = !!config;
+    }
+
+    /**
+     * Add custom control buttons to the viewer.
+     * @param children
+     */
+    addCustomViewerButtons(...children) {
+        if (!children.length) return;
+
+        if (this._customControlButtons === undefined) {
+            // todo consider using JOIN, or better yet, use toolbar view once ready (with nested items strategy)
+            this._customControlButtons = van.tags.div({class: "mx-2 my-0 px-2 py-1 bg-base-100 flex flex-row rounded-md"});
+        }
+        for (let ch of children) this._customControlButtons.appendChild(UI.BaseComponent.toNode(ch));
+
+        if (this._customControlsInitialized) {
+            for (let viewer of VIEWER_MANAGER.viewers) {
+                this._createControlButtons(viewer);
+            }
+        }
+    }
+
+    _createControlButtons(viewer) {
+        const active = APPLICATION_CONTEXT.config.background.length <= 1 ? {"active": "disabled"} : undefined;
+        USER_INTERFACE.addViewerHtml(
+            van.tags.div({class: "absolute bottom-0 left-[50%] flex flex-row", id: "slide-info-control-bar-"+viewer.id, style: "transform: translate(-50%, 0);"},
+                new UI.Button({onClick: this.changeSlide.bind(this, false), extraClasses: active}, '❮❮').create(),
+                this._customControlButtons,
+                new UI.Button({onClick: this.changeSlide.bind(this, true), extraClasses: active}, '❯❯').create()
+            ), this.id, viewer.id);
     }
 });

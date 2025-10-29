@@ -38,23 +38,48 @@ class XOpatUser extends OpenSeadragon.EventSource {
         return !!this._id;
     }
 
-    getSecret(type="jwt") {
-        return this._secret && this._secret[type];
+    /**
+     * Get secret for given type and contextId. If generic type secret exists but context ID-specific secret is not found,
+     * generic secret is returned.
+     * @param {string} type - secret type, e.g. 'jwt' or 'basic'. For new types, HTTPClient needs to register a handler
+     * @param {string} [contextId] if set, the secret si bound to a given context, see HTTPClient class
+     * @return {*} secret
+     */
+    getSecret(type="jwt", contextId = undefined) {
+        const keyWithCtx = contextId ? `${type}:${contextId}` : type;
+        return this._secret && (this._secret[keyWithCtx] || this._secret[type]);
     }
 
-    setSecret(secret, type="jwt") {
+    /**
+     * Get secret for given type and contextId
+     * @param {any} secret - secret to set, if falsey value, the secret is removed
+     * @param {string} type - secret type, e.g. 'jwt' or 'basic'. For new types, HTTPClient needs to register a handler
+     * @param {string} [contextId] if set, the secret si bound to a given context, see HTTPClient class
+     * @raise secret-updated, secret-removed
+     */
+    setSecret(secret, type="jwt", contextId = undefined) {
         if (!this.isLogged) throw "User needs to be first logged in to set a secret!";
         this._secret = this._secret || {};
+        const keyWithCtx = contextId ? `${type}:${contextId}` : type;
+        if (!HttpClient.knowsSecretType(type)) {
+            console.warn(`XOpatUser.setSecret: unknown secret type '${type}'! You should register a handler for this type in HTTPClient.`);
+        }
         if (secret) {
-            this._secret[type] = secret;
-            this.raiseEvent('secret-updated', {secret: secret, type: type});
-        } else if (this._secret[type]) {
-            delete this._secret[type];
-            this.raiseEvent('secret-removed', {type: type});
+            this._secret[keyWithCtx] = secret;
+            this.raiseEvent('secret-updated', {secret, type, contextId});
+        } else if (this._secret[keyWithCtx]) {
+            delete this._secret[keyWithCtx];
+            this.raiseEvent('secret-removed', {type, contextId});
         }
     }
 
-    async requestSecretUpdate(type="jwt") {
+    /**
+     * Request a secret update for given type and contextId
+     * @param {string} type - secret type, e.g. 'jwt' or 'basic'. For new types, HTTPClient needs to register a handler
+     * @param {string} [contextId] if set, the secret si bound to a given context, see HTTPClient class
+     * @raise secret-needs-update
+     */
+    async requestSecretUpdate(type="jwt", contextId = undefined) {
         const awaitToken = new Promise((resolve, reject) => {
             let timeout = setTimeout(() => reject('Timeout waiting for secret update'), 20000);
             this.addOnceHandler('secret-updated', e => {
@@ -70,7 +95,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
                 }
             });
         });
-        await VIEWER.raiseEventAwaiting('secret-needs-update', {type: type});
+        await VIEWER.raiseEventAwaiting('secret-needs-update', {type, contextId});
         return awaitToken;
     }
 

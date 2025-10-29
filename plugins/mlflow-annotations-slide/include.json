@@ -1,0 +1,17 @@
+{
+  "id": "mlflow-annotations-slide",
+  "name": "Annotations Per Slide",
+  "author": "Jirka Horák",
+  "version": "1.0.0",
+  "description": "",
+  "icon": null,
+  "includes": ["index.js"],
+  "modules": ["mlflow"],
+  "permaLoad": true,
+  //mlflow endpoint
+  "mlflowURL": "http://localhost:5000",
+  //experiment name
+  "experimentName": "experiment-test",
+  //authentication for HTTPClient
+  "auth": null
+}

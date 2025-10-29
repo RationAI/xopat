@@ -1,5 +1,3 @@
-
-/*
 # Tiny MLflow JS Client
 
 A lightweight, modular MLflow REST client for browsers or Node.js. It focuses on:

@@ -1064,7 +1064,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     this._textTimeout = setTimeout(() => {
                         this._textTimeout = null;
                         this._allowDescription = true;
-                        if (loader.isVisible()) loader.text(true);
+                        if (this.isVisible()) loader.text(true);
                     }, 3000);
                 } else {
                     if (this._textTimeout) {
@@ -1252,12 +1252,26 @@ ${label}
                     return false;
                 }
 
-                if (!cell.firstChild) {
-                    cell.appendChild(van.tags.div({class: "absolute"}));
+                let parent;
+                for (let child of cell.children) { if (child.dataset.kind === 'custom-viewer-html') { parent = child; break; } }
+                if (!parent) {
+                    parent = van.tags.div({class: "absolute", style: "pointer-events: none; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden;"});
+                    parent.dataset.kind = 'custom-viewer-html';
+                    cell.appendChild(parent);
+                } else {
+                    for (let ch of parent.children) {
+                        if (ch.dataset.id === pluginId) {
+                            ch.remove();
+                        }
+                    }
                 }
 
                 // todo: viewer might get re-initialized, reusing the same cell - ensure we replace
-                jqNode.appendTo(cell.firstChild).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                jqNode.appendTo(parent).each((idx, element) => {
+                    element.classList.add(`${pluginId}-plugin-root`);
+                    element.style.pointerEvents = 'auto';
+                    element.dataset.id = pluginId;
+                });
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

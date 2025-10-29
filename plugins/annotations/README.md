@@ -52,8 +52,7 @@ Everything is built upon simple object representing the **data** object:
 todo docs
 - (required) id: id for the current annotation data
 - (optional) data: serialized, format-compatible export
-- (read-optional) metadata: metadata 
-  - default implementation re-uses ``UTILTIES.fetchJSON`` that adds meta automatically via the viewer metadata
+- (read-optional) metadata: metadata
 + (optional) any other custom data not recognized by default by the plugin
 todo docs
 Furthermore, ``metadata`` must either contain several properties, or implement

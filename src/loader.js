@@ -1,29 +1,4 @@
 /**
- * Error thrown for HTTP failures in utility requests (e.g., via UTILITIES.fetchJSON).
- * The content is not guaranteed to be translated.
- * @class HTTPError
- * @extends Error
- * @property {string} message - Human-readable error message.
- * @property {Response} [response] - The Fetch API Response object, if available.
- * @property {string} [textData] - Raw response body text returned by the server.
- * @property {number} statusCode - HTTP status code derived from the response (default 500).
- */
-window.HTTPError = class extends Error {
-    /**
-     * @param {string} message - Error message.
-     * @param {Response} [response] - Fetch Response associated with the error.
-     * @param {string} [textData] - Raw response text for diagnostics.
-     */
-    constructor(message, response, textData) {
-        super();
-        this.message = message;
-        this.response = response;
-        this.textData = textData;
-        this.statusCode = response && response.status || 500;
-    }
-};
-
-/**
  * @typedef {Object} XOpatElementRecord
  * @property {string} id
  * @property {string} [name]
@@ -1185,60 +1160,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @namespace UTILITIES
      */
     window.UTILITIES = /** @lends UTILITIES */ {
-
-        /**
-         * Send an HTTP request. If postData is provided, a POST request is made; otherwise GET.
-         * The response is returned as the Fetch API Response object.
-         * @param {string} url - Absolute or relative URL.
-         * @param {any} [postData=null] - Data to be JSON.stringified as the request body for POST.
-         * @param {Object<string,string>} [headers={}] - Additional request headers.
-         * @throws {HTTPError} When the response status is not 2xx.
-         * @returns {Promise<Response>} The fetch Response object.
-         */
-        fetch: async function(url, postData=null, headers={}) {
-            let method = postData ? "POST" : "GET";
-            headers = $.extend({
-                'Access-Control-Allow-Origin': '*'
-            }, ENV.client.osdOptions?.ajaxHeaders, headers);
-
-            const response = await fetch(url, {
-                method: method,
-                mode: 'cors',
-                cache: 'no-cache',
-                credentials: 'same-origin',
-                headers: headers,
-                body: postData ? JSON.stringify(postData) : null
-            });
-
-            if (response.status < 200 || response.status > 299) {
-                return response.text().then(text => {
-                    throw new HTTPError(`Server returned ${response.status}: ${text}`, response, text);
-                });
-            }
-
-            return response;
-        },
-
-        /**
-         * Send a JSON request. Sets Content-Type: application/json and parses the JSON response body.
-         * @param {string} url - Absolute or relative URL.
-         * @param {any} [postData=null] - Data to be JSON.stringified as the request body for POST.
-         * @param {Object<string,string>} [headers=null] - Additional request headers (merged), Content-Type is enforced.
-         * @throws {HTTPError} When the response status is not 2xx or body is not valid JSON.
-         * @returns {Promise<any>} Parsed JSON value.
-         */
-        fetchJSON: async function(url, postData=null, headers=null) {
-            headers = headers || {};
-            headers['Content-Type'] = 'application/json';
-            const response = await this.fetch(url, postData, headers),
-                data = await response.text();
-            try {
-                return JSON.parse(data);
-            } catch (e) {
-                throw new HTTPError("Server returned non-JSON data!", response, data);
-            }
-        },
-
         /**
          * @param imageFilePath image path
          * @param stripSuffix
