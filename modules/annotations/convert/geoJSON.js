@@ -125,6 +125,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         "ruler": (object) => this._getAsNativeObject(object),
     };
 
+    // todo support unpacking like qupath does
     _decodeMulti(object, type) {
         let result = {};
         //for now we do not make use of Multi* so this has to be external GeoJSON
@@ -253,6 +254,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 const preset = object.properties;
                 presets[preset.presetID] = preset;
             } else {
+                // todo try to detect & map onto existing presets in the system
                 let result;
                 const type = object.properties["factoryID"] || object.properties["type"];
                 if (type) result = this.nativeDecoders[type]?.(object);

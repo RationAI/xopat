@@ -1,6 +1,31 @@
+const {parseArgs} = require('node:util');
+const args = process.argv;
+const options = {
+    language: {
+        type: 'string',
+        short: 'l'
+    },
+    port: {
+        type: 'string',
+        short: 'p'
+    },
+    host: {
+        type: 'string',
+        short: 'h'
+    },
+    root: {
+        type: 'string',
+        short: 'r'
+    }
+};
+const {
+    values,
+    positionals
+} = parseArgs({ args, options, allowPositionals: true });
+
 const path = require('node:path');
 
-_ABSPATH = path.dirname(path.dirname(__dirname));
+_ABSPATH = values.root || path.dirname(path.dirname(__dirname));
 ABSPATH = _ABSPATH + path.sep;
 PROJECT_ROOT = process.env.PROJECT_ROOT || "";
 
@@ -22,6 +47,13 @@ module.exports = Object.freeze({
     MODULES_FOLDER: PROJECT_ROOT + 'modules/',
     PLUGINS_FOLDER: PROJECT_ROOT + 'plugins/',
 
-    //Utiles
-    TEMPLATE_PATTERN: /<template\s+id="template-([a-zA-Z0-9-_]+)">\s*<\/template>/g
+    //Utils
+    TEMPLATE_PATTERN: /<template\s+id="template-([a-zA-Z0-9-_]+)">\s*<\/template>/g,
+
+    //Server
+    SERVER: {
+        HOST: values.host || process.env.XOPAT_NODE_HOST || '0.0.0.0',
+        PORT: values.port || process.env.XOPAT_NODE_PORT || 9000,
+        LANGUAGE: values.language || 'en',
+    }
 });

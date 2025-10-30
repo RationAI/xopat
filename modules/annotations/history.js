@@ -1,4 +1,3 @@
-//todo move some func up if could be used (e.g. annotation name extraction etc.)
 OSDAnnotations.AnnotationHistoryManager = class {
     /**
      * Create a history annotation manager
@@ -490,7 +489,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             if (!object.hasOwnProperty("incrementId")) {
                 object.incrementId = this._autoIncrement++;
             }
-            
+
             if (!object.hasOwnProperty("label")) {
                 object.label = this._labelIncrement++;
             }
@@ -588,7 +587,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             onAdd: (evt) => {
                 this._normalizeSortableEventPayload(evt);
                 if (this._shouldCancelDrag(evt)) return false;
-                
+
                 this._handleDrop(evt, boardEl, true, true);
                 this._toggleDropHover(this._lastDropHover, false);
             },
@@ -673,7 +672,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             onUpdate: (evt) => {
                 this._normalizeSortableEventPayload(evt);
                 if (checkForLayerSelection(evt) || this._shouldCancelDrag(evt)) return false;
-                
+
                 this._handleDrop(evt, container, false, true);
                 this._toggleDropHover(this._lastDropHover, false);
             }
@@ -1319,7 +1318,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _removeFromBoard(containerId, objectSelector) {
         this._performAtJQNode(containerId, node => {
             node.find(objectSelector).remove()
-        });      
+        });
     }
 
     _setControlsVisuallyEnabled(enabled) {
@@ -1355,7 +1354,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             console.warn(`Layer with ID ${layerID} not found.`);
             return;
         }
-    
+
         const isVisible = layer.visible;
         layer.toggleVisibility();
 
@@ -1386,7 +1385,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _updateLayerHtml(layerId) {
         let layer = this._context.getLayer(layerId);
         if (!layer) return;
-        
+
         this._performAtJQNode(this.getAnnotationContainerId(layer.id), node => node.html(""));
         let layerObjects = layer.getObjects();
         for (const obj of layerObjects) {
@@ -1692,7 +1691,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
-
+        const privateIcon = object.private ? `<span class="material-symbols-outlined" style="vertical-align:sub;">visibility_lock</span>` : '';
+        // todo dataset-order defined instead of dataset-id
         const html = `
         <div id="log-object-${object.label}" class="rounded-2 d-flex align-items-center"
             data-type="annotation" data-id="${object.incrementId}"
@@ -1712,6 +1712,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
                 </span>
             </div>
             <span class="material-icons" style="vertical-align:sub;color: ${color};margin:0;padding:0;">${icon}</span> 
+            ${privateIcon}
             <div style="width: calc(100% - 80px);" class="d-inline-block">${inputs.join("")}</div>
             ${editIcon}
         </div>`;
@@ -1720,6 +1721,17 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
     }
 
     _boardItemEdit(self, focusBBox, object) {
+        // todo docs, return bool if allowed
+        let cancelAction = false;
+		try {
+			if (object) this._context.raiseEvent('annotation-before-edit', {
+				object,
+				isCancelled: () => cancelAction,
+				setCancelled: (cancelled) => {cancelAction = cancelled},
+			});
+		} catch {}
+		if (cancelAction) return;
+
         let updateUI = false;
         if (this._editSelection) {
             this._boardItemSave(true);
@@ -1857,7 +1869,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         let box = this._getFocusBBox(of, factory);
         return `{left: ${box.left},top: ${box.top},width: ${box.width},height: ${box.height}}`;
     }
- 
+
     /**
      * Get the index of a board item by type and id.
      * @param {'layer'|'annotation'} type Board item type.
@@ -2002,7 +2014,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             index: boardIndex,
             html: html
         });
-        
+
         this.initLayerSortable(this._getNode(this.getAnnotationContainerId(layer.id)));
     }
 
@@ -2017,7 +2029,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         if (this._context.getSelectedLayerIds().includes(layer.id)) {
             this._context.deselectLayer(layer.id);
         }
-        
+
         this._boardItems = this._boardItems.filter(item => !(item.type === "layer" && item.id === layer.id));
         this._removeFromBoard(this.getLayerContainerId(), `#${this.getLayerElementId(layer.id)}`);
     }

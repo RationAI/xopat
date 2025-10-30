@@ -6,12 +6,22 @@ module.exports = function(grunt) {
     // task to compile static server
     require("./server/static/build.grunt")(grunt);
     // utility tasks from separated files
-    grunt.registerTask('env', 'Generate Env Configuration Example.',
-        require('./server/utils/grunt/tasks/env')(grunt));
-    grunt.registerTask('docs', 'Generate JSDoc documentation using theme configuration file',
-        require('./server/utils/grunt/tasks/jsodc')(grunt));
-    grunt.registerTask("generate", "Generate a plugin or module",
-        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt));
+    grunt.registerTask('env',
+        'Generate Env Configuration Example.',
+        require('./server/utils/grunt/tasks/env')(grunt)
+    );
+    grunt.registerTask('jsdoc', '' +
+        'Generate JSDoc documentation using theme configuration file',
+        require('./server/utils/grunt/tasks/jsodc')(grunt)
+    );
+    grunt.registerTask("generate",
+        "Generate a plugin or module",
+        require('./server/utils/grunt/tasks/generate-plugin-module')(grunt)
+    );
+    grunt.registerTask("twinc",
+        'Tailwind incremental build/watch by parts.',
+        require('./server/utils/grunt/tasks/css-and-ui-dev-tool')(grunt)
+    );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');
@@ -30,6 +40,9 @@ module.exports = function(grunt) {
             files: {},
         },
         modules: {
+            files: {},
+        },
+        ui: {
             files: {},
         }
     };
@@ -82,11 +95,45 @@ module.exports = function(grunt) {
                     plugin.includes.map(i => `plugins/${folder}/${i}`);
                 return acc;
             }, uglification, true, true),
-        }
+
+            ...grunt.util.reduceUI((acc, ui, folder) => {
+                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"];
+                return acc;
+            }, uglification, true, true),
+        },
+        // Custom twinc task
+        twinc: {
+            inputCSS:   './src/assets/tailwind-spec.css',
+            configFile: './tailwind.config.js',
+            outFile:    './src/libs/tailwind.min.css',   // single output
+            cacheDir:   './.dev-cache',
+            watch: [
+                'ui/**/*.{html,js,mjs}',
+                'modules/**/*.{html,js,mjs}',
+                'plugins/**/*.{html,js}',
+                'src/**/*.{html,js}'
+            ],
+            ignore: [
+                'ui/index.js',
+                'src/libs/**',
+                '.dev-cache/**',
+                '**/*.min.js'
+            ],
+            minify: true,
+            debounceMs: 150,
+            // usePolling: true, interval: 250, // if needed on WSL/Docker/UNC
+        },
     });
 
     grunt.registerTask('default', []);
-    grunt.registerTask('all', ["uglify"]);
+    grunt.registerTask('all', ["uglify", "css"]);
+
+    // todo enable build-only step
+    grunt.registerTask('build', 'Build Necessary Parts of the Viewer', function () {
+        // todo only on a single place:
+        exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+    });
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {

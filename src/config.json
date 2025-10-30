@@ -231,8 +231,7 @@
             "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
         },
         "ui": {
-            // Todo: temporarily disabled due to import errors
-            // "components": ["index.mjs"]
+          "van": ["index.js"]
         }
     },
     /**
@@ -249,7 +248,7 @@
             "nouislider": "nouislider.css"
         },
         "src": {
-            "env": ["assets/style.css", "assets/xopat.css"]
+          "env": ["assets/style.css", "assets/xopat.css", "assets/custom.css"]
         }
     }
 }

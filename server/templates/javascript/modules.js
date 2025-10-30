@@ -138,6 +138,9 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
             let sourceValue = source[property];
             if (sourceValue) {
                 html += ` ${propScriptName}="${sourceValue}"`;
+                if (property === "src" && sourceValue && sourceValue.endsWith(".mjs")) {
+                    html += " type='module'";
+                }
             }
         }
         return html;
@@ -163,16 +166,38 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
 
         for (let file of item["includes"]) {
             if (isType(file, "string")) {
-                result += `    <script src="${directory}${item["directory"]}/${file}?v=${version}"></script>\n`;
+                result += file.endsWith(".mjs") ?
+                    `    <script src="${directory}${item["directory"]}/${file}?v=${version}" type="module"></script>\n` :
+                    `    <script src="${directory}${item["directory"]}/${file}?v=${version}"></script>\n`;
             } else if (isType(file, "object")) {
+                if (!/^https?:\/\//.test(file.src)) {
+                    // normalize relative paths
+                    if (file.src.startsWith('.')) {
+                        file.src = file.src.substring(1);
+                    }
+                    if (file.src.startsWith("/")) {
+                        file.src = file.src.substring(1);
+                    }
+                    if (file.src.endsWith(".mjs")) {
+                        file.type = "module";
+                    }
+                    file.src = `${directory}${item["directory"]}/${file.src}?v=${version}`;
+                }
+
                 result += `    <script ${getAttributes(file, {
-                    async: 'async', crossOrigin: 'crossorigin',
+                    async: 'async', crossOrigin: 'crossorigin', type: 'type',
                     defer: 'defer', integrity: 'integrity', referrerPolicy: 'referrerpolicy', src: 'src'
-                })}></script>`;
+                })}></script>\n`;
             } else {
-                result += `    <script>console.warn('Invalid include:', '${item["id"]}', '${file}');</script>`;
+                result += `    <script>console.warn('Invalid include:', '${item["id"]}', '${file}');</script>\n`;
             }
         }
+
+        // todo consider testing name pattern and pre-loading workers and wasm
+        //   or in general support preloading on assets (needs to be implemented in loader.js too!)
+        // <link rel="modulepreload" href="/x.worker.mjs">
+        // <link rel="modulepreload" href="/x_wasm.mjs">
+        // <link rel="preload" href="/x_wasm.wasm" as="fetch" type="application/wasm" crossorigin>
         return result;
     }
 

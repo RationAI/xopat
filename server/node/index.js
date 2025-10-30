@@ -11,11 +11,8 @@ const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
-const { ABSPATH } = require("./constants");
 
-
-// TODO hardcoded language!
-const language = 'en';
+const language = constants.SERVER.LANGUAGE;
 const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
 i18n.init(languageServerConf);
@@ -30,7 +27,7 @@ const rawReqToString = async (req) => {
 
 const initViewerCoreAndPlugins = (req, res) => {
 
-    const core = getCore(ABSPATH, PROJECT_PATH,
+    const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key]);
@@ -94,7 +91,11 @@ async function responseStaticFile(req, res, targetPath) {
             res.writeHead(500);
             res.end(`Sorry, check with the site admin for error: ${err.code}`);
         } else {
-            res.writeHead(200, { 'Content-Type': contentType }); // indicate the request was successful
+            const head = { 'Content-Type': contentType };
+            // Threading for WASM requires all resources to comply: this is not often doable due to external image servers
+            // head['Cross-Origin-Opener-Policy'] = 'same-origin';
+            // head['Cross-Origin-Embedder-Policy'] = 'require-corp';
+            res.writeHead(200, head);
             res.end(content, 'utf-8');
         }
     });
@@ -162,14 +163,14 @@ async function responseViewer(req, res) {
             switch (p1) {
             case "head":
                 return `
-${core.requireCore("env")}
-${core.requireLibs()}
 ${core.requireOpenseadragon()}
-${core.requireUI()}
+${core.requireLibs()}
 ${core.requireExternal()}
+${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
-${core.requireCore("app")}`;
+${core.requireCore("app")}
+${core.requireCore("env")}`;
 
             case "app":
                 return `
@@ -191,6 +192,9 @@ ${core.requireCore("app")}`;
 
             case "plugins":
                 return core.requirePlugins(core.CORE.client.production);
+
+            case "ui":
+                return core.requireUI(core.CORE.client.production);
 
             default:
                 //todo warn
@@ -223,8 +227,10 @@ async function responseDeveloperSetup(req, res) {
             switch (p1) {
                 case "head":
                     return `
+${core.requireOpenseadragon()}
 ${core.requireLib('primer')}
 ${core.requireLib('jquery')}
+${core.requireLib('render')}
 ${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}
@@ -284,7 +290,7 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
+server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
@@ -295,10 +301,15 @@ server.listen(process.env.XOPAT_NODE_PORT || 9000, '0.0.0.0', () => {
     } else {
         console.log("Using default ENV (no overrides).");
     }
-    console.log(`The server is listening on localhost:9000 ...`);
-    console.log(`  To manually create and run a session, open http://localhost:9000/dev_setup`);
-    console.log(`  To open using GET, provide http://localhost:9000?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide http://localhost:9000#urlEncodedSessionJSONHere`);
+
+    const port = constants.SERVER.PORT;
+    const scheme = port === 443 ? "https" : "http";
+    const host = constants.SERVER.HOST === "0.0.0.0" ? "localhost" : constants.SERVER.HOST;
+    const URL = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+    console.log(`The server is listening on ${URL} ...`);
+    console.log(`  To manually create and run a session, open ${URL}/dev_setup`);
+    console.log(`  To open using GET, provide ${URL}?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide ${URL}#urlEncodedSessionJSONHere`);
     console.log(`                                      or sent the data using HTTP POST`);
     console.log(`  The session description is available in src/README.md`);
 });

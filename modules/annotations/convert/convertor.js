@@ -122,7 +122,12 @@ OSDAnnotations.Convertor = class {
 
         const annotationsGetter = (...exportedProps) => {
             if (!options.exportsObjects) return undefined;
-            let objs = context.toObject(exportAll, ...exportedProps).objects;
+            let objs = context.toObject(
+                exportAll,
+                // todo move _exportPrivateAnnotations to options
+                !context._exportPrivateAnnotations && ((o) => !o.private),
+                ...exportedProps
+            ).objects;
 
             const ids = options?.filter?.ids;
             if (Array.isArray(ids) && ids.length) {

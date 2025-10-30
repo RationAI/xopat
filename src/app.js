@@ -1333,9 +1333,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
 
         /**
-         * Push a new action to the history buffer.
-         * @param {*} forward function to execute the forward (redo) operation
+         * Push a new action to the history buffer. The function forward is executed immediately -
+         * you must not call this method/logics manually.
+         * @param {*} forward function to execute the forward (redo) operation, it is executed once upon call
          * @param {*} backward function to execute the backward (undo) operation
+         * @return {any} return value of the forward function executed
          */
         push(forward, backward) {
             if (typeof forward !== 'function' || typeof backward !== 'function') {
@@ -1348,7 +1350,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             this._triggerStateChange(true, false);
 
-            forward();
+            return forward();
         }
 
         /**

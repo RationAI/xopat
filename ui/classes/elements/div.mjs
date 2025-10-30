@@ -1,5 +1,5 @@
-import van from "../vanjs.mjs";
-import { BaseComponent } from "./baseComponent.mjs";
+import van from "../../vanjs.mjs";
+import { BaseComponent } from "../baseComponent.mjs";
 
 const { div } = van.tags
 
@@ -24,12 +24,11 @@ class Div extends BaseComponent {
      */
     constructor(options, ...args) {
         super(options, ...args);
-        this.classMap = this.options;
     }
 
     create() {
         return div(
-            { ...this.commonProperties, ...this.additionalProperties },
+            { ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties },
             ...this.children
         );
     }

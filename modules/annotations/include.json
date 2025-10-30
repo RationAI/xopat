@@ -26,4 +26,6 @@
     "requires": ["webgl", "fabricjs"],
     // Whether to store presets in the local storage
     "storeCacheSnapshots": true,
+    // Whether to include private annotations in module export
+    "exportPrivate" : false,
 }

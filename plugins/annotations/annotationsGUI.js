@@ -1,10 +1,62 @@
 class AnnotationsGUI extends XOpatPlugin {
+	/**
+	 * @typedef {{
+	 * 	show?: boolean;
+	 * 	pos?: {
+	 * 		x: number;
+	 * 		y: number;
+	 * 	}
+	 * 	private?: boolean;
+	 * 	comments?: {
+	 * 		author: string;
+	 * 		date: Date;
+	 * 		content: string;
+	 * 	}
+	 * }} AnnotationMenuOptions
+	 */
+
+	/**
+	 * @typedef {{
+	 * 	id: string,
+	 * 	author: {
+	 * 		id: string,
+	 * 		name: string,
+	 * 	},
+	 * 	content: string,
+	 * 	createdAt: Date,
+	 *  replyTo?: string,
+	 * 	removed?: boolean,
+	 * }} AnnotationComment
+	 */
+
+	static annotationMenuIconOrder = [
+		"private", "locked", "comments"
+	]
+
+	/**
+	 * Check if an array of menu icons is sorted per annotationMenuIconOrder
+	 * @param {string[]} array
+	 * @returns {boolean}
+	 */
+	static _isAnnotationMenuSorted(array) {
+		const order = AnnotationsGUI.annotationMenuIconOrder;
+		return (
+			array.length === order.length &&
+			array.every((v, i) => v.includes(order[i]))
+		)
+	}
 
 	//todo test with multiple swap bgimages
 	constructor(id) {
 		super(id);
 		this._ioArgs = this.getStaticMeta("convertors") || {};
 		this._defaultFormat = this._ioArgs.format || "native";
+		/**
+		 * @type {Set<string>}
+		 */
+		this._preferredPresets = new Set();
+		this.user = XOpatUser.instance();
+
 		this.registerAsEventSource();
 	}
 
@@ -26,6 +78,12 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
+
+        this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
+        this.context.commentsEnabled = this._commentsEnabled;
+		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
+		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
+		this._commentsOpened = this.commentsDefaultOpened;
 
 		await this.setupFromParams();
 
@@ -51,6 +109,12 @@ class AnnotationsGUI extends XOpatPlugin {
 			_this.context.setAnnotationCommonVisualProperty('originalStrokeWidth', Number.parseFloat($(this).val()));
 		});
 		this.preview = new AnnotationsGUI.Previewer("preview", this);
+
+		this._copiedAnnotation = null;
+		this._copiedPos = {x: 0, y: 0};
+		this._selectedAnnot = null;
+
+		this._refreshCommentsInterval = null;
 	}
 
 	async setupFromParams() {
@@ -118,7 +182,83 @@ class AnnotationsGUI extends XOpatPlugin {
 		return enable;
 	}
 
+	_toggleStrokeStyling(enable) {
+		const authorButton = $("#author-list-button-mp");
+		const isAuthorsTabActive = authorButton.attr('aria-selected') === 'true';
+
+		if (enable) {
+			authorButton.show();
+		} else {
+			authorButton.hide();
+
+			if (isAuthorsTabActive) {
+				this.switchMenuList('preset');
+			}
+		}
+	}
+
 	initHTML() {
+
+		USER_INTERFACE.addHtml(
+			new UI.FloatingWindow(
+				{
+					id: "annotation-comments-menu",
+					title: "Comments",
+					closable: false,
+					onClose: () => {this.commentsToggleWindow(false)},
+				}, new UI.RawHtml({},
+				`
+					<div class="flex-1 overflow-y-auto space-y-3 p-2" id="comments-list" style="min-height: 0;">
+					</div>
+					<div id="comments-input-section" class="p-2 flex-shrink">
+						<div class="flex gap-2">
+							<textarea 
+								type="text" 
+								placeholder="Add a comment..."
+								class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+								style="background: var(--color-bg-primary); color: var(--color-text-primary);"
+								id="comment-input"
+								rows="2"
+								onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
+								${!this.user ? 'disabled' : ''}
+							></textarea>
+							<button 
+								class="px-3 py-2 btn btn-pointer material-icons"
+								style="font-size: 22px;"
+								onclick="${this.THIS}._addComment()"
+							>
+								send
+							</button>
+						</div>
+					</div>
+				`
+			)),
+			this.id
+		);
+
+		const commentsMenu = document.getElementById("annotation-comments-menu");
+
+		const commentsBody = document.querySelector('.card-body div')
+		commentsBody.style.width = "100%";
+		commentsBody.style.height = "100%";
+		commentsBody.style.position = "relative";
+		commentsBody.style.display = "flex";
+		commentsBody.style.flexDirection = "column";
+
+		const commentsResize = document.querySelector('.cursor-se-resize')
+		commentsResize.style.borderColor = "var(--color-text-primary)";
+
+		commentsMenu.style.display = 'none';
+		commentsMenu.classList.add(
+			"flex-col", "shadow-lg", "rounded-lg", "border", "overflow-hidden", "bg-[var(--color-bg-primary)]"
+		)
+		commentsMenu.style.borderColor = "var(--color-border-primary)";
+		commentsMenu.style.minWidth = "320px";
+		commentsMenu.style.minHeight = "370px";
+
+		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
+		this.context.addHandler('annotation-deselected', e => this._annotationDeselected(e.object));
+
 		USER_INTERFACE.MainMenu.appendExtended(
 			"Annotations",
 			`<div class="float-right">
@@ -151,10 +291,12 @@ ${UIComponents.Elements.checkBox({
 <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
+<button id="author-list-button-mp" class="btn rounded-0" style="display: none;" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
 </div>
 <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-<div id="annotation-list-mp" class="mr-2" style="display: none;"></div>`,
+<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>
+<div id="author-list-mp" class="mx-2" style="display: none;"><div id="author-list-inner-mp"></div></div>`,
 			"annotations-panel",
 			this.id
 		);
@@ -240,12 +382,34 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	&emsp;&emsp;
 	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
-</div>`);
+</div>
+<h4 class="f3-light header-sep">Comments</h4><br>
+${UIComponents.Elements.checkBox({label: "Enable comments",
+onchange: this.THIS + ".enableComments(!!this.checked)", default: this._commentsEnabled})}
+${UIComponents.Elements.checkBox({label: "Automatically open comments on initial click",
+onchange: this.THIS + ".commentsDefaultOpen(!!this.checked)", default: this._commentsDefaultOpened})}
+<div class="flex gap-2 justify-between">
+<span>Remember comments window opened/closed state</span>
+${UIComponents.Elements.select({
+    default: this._commentsClosedMethod,
+    options: {
+        'none': 'Always keep open',
+        'global': 'Keep open globally',
+        'individual': 'Keep open per-annotation',
+    },
+    changed: this.THIS + ".switchCommentsClosedMethod(value)",
+})}
+</div>
+`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 
 		//trigger UI refreshes
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
+
+		this.context.addHandler('author-annotation-styling-toggle', e => this._toggleStrokeStyling(e.enable))
+		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
+		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
 	getExportScopeRadioButton(scope) {
@@ -285,8 +449,556 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		);
 	}
 
+    /**
+     * Enable/disable comments UI
+     * @param {boolean} enabled
+     */
+    enableComments(enabled) {
+        if (this._commentsEnabled === enabled) return;
+        this._commentsEnabled = enabled;
+        this.context.commentsEnabled = enabled;
+        this.setOption("commentsEnabled", enabled);
+				if (!enabled) {
+					this.commentsToggleWindow(false, true);
+				} else if (this._selectedAnnot) {
+					this.commentsToggleWindow(true, true);
+				}
+        this.context.canvas.requestRenderAll();
+    }
+
+		commentsDefaultOpen(enabled) {
+			if (this._commentsDefaultOpened === enabled) return;
+			this._commentsDefaultOpened = enabled;
+			this.setOption("commentsDefaultOpened", enabled);
+		}
+
+    /**
+     * Set strategy for closing comments
+     * @param {'none' | 'global' | 'individual'} method
+     */
+    switchCommentsClosedMethod(method) {
+        if (this._commentsClosedMethod === method) return;
+        this._commentsClosedMethod = method;
+        this.setOption("commentsClosedMethod", method);
+    }
+
+    /**
+     * Get opened state cache for object
+     * @param {string} objectId
+     */
+    _getCommentOpenedCache(objectId) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', '{}');
+            return undefined;
+        }
+        const cache = JSON.parse(cacheRaw)[objectId];
+        return cache;
+    }
+    /**
+     * Set opened state cache for object
+     * @param {string} objectId
+     * @param {boolean} opened
+     */
+    _setCommentOpenedCache(objectId, opened) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', JSON.stringify({ objectId: opened }));
+            return;
+        }
+        const cache = JSON.parse(cacheRaw);
+        cache[objectId] = opened;
+        this.cache.set('comments-opened-states', JSON.stringify(cache));
+    }
+
+	/**
+	 * Check whether comments should be opened for this object
+	 * @param {string} objectId object this was called on
+	 */
+	_shouldOpenComments(objectId) {
+		if (!this._commentsEnabled) return false;
+    if (this._commentsClosedMethod === 'none') return true;
+		if (this._commentsClosedMethod === 'global') return this._commentsOpened;
+    const shouldOpen = this._getCommentOpenedCache(objectId);
+		if (shouldOpen === undefined) return this._commentsDefaultOpened;
+		return shouldOpen;
+	}
+
+	/**
+	 * Add comment from the user
+	 */
+	_addComment() {
+		if (!this._selectedAnnot) return;
+		if (!this.user) return;
+		const input = document.getElementById('comment-input');
+		const commentText = input.value.trim();
+
+		if (!commentText) return;
+
+		const comment = {
+			id: crypto.randomUUID(),
+			author: {
+				id: this.user.id,
+				name: this.user.name,
+			},
+			content: commentText,
+			createdAt: new Date(),
+			removed: false,
+		};
+
+		this.context.addComment(this._selectedAnnot, comment);
+		this.context.canvas.requestRenderAll();
+		this._renderSingleComment(comment);
+		input.value = '';
+
+		const commentsList = document.getElementById('comments-list');
+		if (commentsList) {
+			commentsList.scrollTop = commentsList.scrollHeight;
+		}
+	}
+
+	/**
+	 * Generate a consistent color corresponding to a username
+	 * @param {string} username
+	 * @returns {string} HSL CSS color string
+	 */
+	getColorForUser(username) {
+		let hash = 0;
+		for (let i = 0; i < username.length; i++) {
+			const char = username.charCodeAt(i);
+			hash = ((hash << 5) - hash) + char;
+			hash = hash & hash;
+		}
+
+		const positiveHash = Math.abs(hash);
+
+		const hue = positiveHash % 360;
+
+		const saturation = 65;
+		const lightness = 45;
+
+		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+	}
+
+	/**
+	 * Clear all existing comments from the comments list
+	 */
+	_clearComments() {
+		const commentsList = document.getElementById('comments-list');
+		if (commentsList) {
+			commentsList.innerHTML = '';
+		}
+	}
+
+	/**
+	 * Render comments from an array of comment objects
+	 * @param {AnnotationComment[]} comments - Array of comment objects to render
+	 */
+	_renderComments() {
+		const comments = this._selectedAnnot.comments;
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) {
+			return;
+		}
+		this._clearComments();
+		if (!comments || comments.filter(c => !c.removed).length === 0) {
+			const noCommentsElement = document.createElement('div');
+			noCommentsElement.id = 'comments-list-empty';
+			noCommentsElement.className = 'rounded-md flex items-center justify-center gap-2 w-full h-full select-none';
+			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
+			noCommentsElement.style.padding = "15px";
+			noCommentsElement.innerHTML = `
+				<span class="material-icons text-4xl" style="color: var(--color-text-tertiary);">chat_bubble_outline</span>
+				<p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
+			`;
+			commentsList.appendChild(noCommentsElement);
+			return;
+		}
+
+		const roots = [];
+		const replies = [];
+		comments.forEach(comment => {
+			if (!comment.replyTo) {
+				roots.push(comment);
+			} else if (!comment.removed) {
+				replies.push(comment);
+			}
+		});
+		roots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+		replies.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+		const rootMap = new Map(roots.filter(c => !c.removed).map(c => [c.id, c]));
+		const renderedRemoved = new Set();
+		// render comments and replies
+		roots.forEach(root => {
+			const rootReplies = replies.filter(r => r.replyTo === root.id)
+			if (root.removed && rootReplies.length) {
+				this._renderSingleComment(root, null, true);
+			} else if (!root.removed) {
+				this._renderSingleComment(root);
+			}
+			rootReplies
+				.forEach(reply => {
+					this._renderSingleComment(reply, root.id);
+				});
+		});
+
+		// render orphan replies (sorted)
+		const orphanGroups = {};
+		replies.filter(r => !rootMap.has(r.replyTo)).forEach(orphan => {
+			if (!orphanGroups[orphan.replyTo]) orphanGroups[orphan.replyTo] = [];
+			orphanGroups[orphan.replyTo].push(orphan);
+		});
+		Object.keys(orphanGroups).forEach(parentId => {
+			const alreadyRendered = roots.some(root => root.id === parentId && root.removed);
+			if (!renderedRemoved.has(parentId) && !alreadyRendered) {
+				this._renderSingleComment({ id: parentId, removed: true }, null, true);
+				renderedRemoved.add(parentId);
+				orphanGroups[parentId]
+					.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+					.forEach(orphan => {
+						this._renderSingleComment(orphan, parentId);
+					});
+			}
+		});
+	}
+
+	/**
+	 * Render a single comment element
+	 * @param {AnnotationComment[]} comment - Comment object to render
+	 * @param {string | null} [parentId=null] - ID of comment's parent or null
+	 * @param {boolean} [isRemovedPlaceholder=false] - If this comment is a [deleted] placeholder
+	 */
+	_renderSingleComment(comment, parentId = null, isRemovedPlaceholder = false) {
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) return;
+
+		const noCommentsElement = document.getElementById("comments-list-empty");
+		if (noCommentsElement) noCommentsElement.remove();
+
+		// placeholder
+		if (isRemovedPlaceholder) {
+			const removedEl = document.createElement('div');
+			removedEl.className = 'rounded-lg p-3 border-l-4';
+			removedEl.style.background = 'var(--color-bg-canvas-inset)';
+			removedEl.style.borderLeftColor = '#888';
+			removedEl.style.color = '#888';
+			removedEl.style.fontStyle = 'italic';
+			removedEl.textContent = '[removed]';
+			removedEl.dataset.commentId = comment.id;
+			commentsList.appendChild(removedEl);
+			return;
+		}
+
+		const commentElement = document.createElement('div');
+		commentElement.className = 'rounded-lg p-3 border-l-4';
+		commentElement.style.background = 'var(--color-bg-canvas-inset)';
+		commentElement.style.borderLeftColor = this.getColorForUser(comment.author.name);
+		commentElement.dataset.commentId = comment.id;
+
+		if (comment.replyTo) {
+			commentElement.style.marginLeft = '2em';
+		}
+
+		const createdAt = new Date(comment.createdAt);
+		const timeAgo = this._formatTimeAgo(createdAt);
+
+		const isAuthor = this.user.id === comment.author.id;
+		const deleteButtonHtml = isAuthor ?
+			`<button class="relative" title="Delete comment" data-confirmed="false">
+				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
+				<div class="delete-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+					<span>Click again to delete</span>
+				</div>
+			</button>` : '';
+
+		let replyButtonHtml = '';
+		if (!comment.replyTo && this.user) {
+			replyButtonHtml = `
+				<button class="relative" title="Reply to comment" data-reply="${comment.id}">
+					<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);">reply</span>
+				</button>
+			`;
+		}
+
+		commentElement.innerHTML = `
+			<div class="flex justify-between items-center mb-1">
+				<span class="font-medium text-sm" style="color: var(--color-text-primary);">${this._escapeHtml(comment.author.name)}</span>
+				<div class="flex items-center justify-center">
+					<span name="created-at" class="text-xs mr-2" style="color: var(--color-text-secondary);" title="${createdAt.toLocaleString()}">${timeAgo}</span>
+					${deleteButtonHtml}
+					${replyButtonHtml}
+				</div>
+			</div>
+			<p class="text-sm" style="color: var(--color-text-secondary);">${this._escapeHtml(comment.content)}</p>
+		`;
+
+		if (isAuthor) {
+			const deleteButton = commentElement.querySelector('button[title="Delete comment"]');
+			deleteButton.addEventListener('click', (event) => {
+				const confirmed = event.currentTarget.dataset.confirmed === 'true';
+				if (confirmed) {
+					this._deleteComment(comment.id);
+				} else {
+					event.currentTarget.dataset.confirmed = 'true';
+					event.currentTarget.querySelector('.delete-hint').classList.remove('hidden');
+				}
+			});
+			deleteButton.addEventListener('mouseleave', (event) => {
+				event.currentTarget.dataset.confirmed = 'false';
+				event.currentTarget.querySelector('.delete-hint').classList.add('hidden');
+			});
+		}
+
+		// reply UI
+		if (!comment.replyTo) {
+			const replyBtn = commentElement.querySelector('button[data-reply]');
+			if (replyBtn) {
+				replyBtn.addEventListener('click', () => {
+					if (commentElement.querySelector('.reply-box')) return;
+					const replyBox = document.createElement('div');
+					replyBox.className = 'reply-box mt-2 flex flex-col gap-2';
+					replyBox.innerHTML = `
+						<textarea
+							class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
+							rows="2"
+							placeholder="Add a reply..."
+							${!this.user ? 'disabled' : ''}
+						></textarea>
+						<div class="flex gap-2 justify-end">
+							<button class="reply-cancel-btn btn px-2 py-1 rounded text-xs text-[var(--color-text-primary)] hover:text-black" type="button" aria-selected="true">Cancel</button>
+							<button class="reply-submit-btn btn btn-pointer px-2 py-1 rounded text-xs" type="button">Reply</button>
+						</div>
+					`;
+					commentElement.appendChild(replyBox);
+					// Cancel button
+					replyBox.querySelector('.reply-cancel-btn').addEventListener('click', () => {
+						replyBox.remove();
+					});
+					// Submit button
+					replyBox.querySelector('.reply-submit-btn').addEventListener('click', () => {
+						const textarea = replyBox.querySelector('textarea');
+						const text = textarea.value.trim();
+						if (!text) return;
+						// Add reply comment
+						this._addReplyComment(comment.id, text);
+						replyBox.remove();
+					});
+				});
+			}
+		}
+
+		// insert replies after parent
+		if (parentId) {
+			const parentEl = commentsList.querySelector(`[data-comment-id="${parentId}"]`);
+			if (parentEl && parentEl.nextSibling) {
+				commentsList.insertBefore(commentElement, parentEl.nextSibling);
+			} else if (parentEl) {
+				commentsList.appendChild(commentElement);
+			} else {
+				// If parent is not found, just append (should not happen with new logic)
+				commentsList.appendChild(commentElement);
+			}
+		} else {
+			commentsList.appendChild(commentElement);
+		}
+	}
+
+	/**
+	 * Add a reply comment from the user
+	 * @param {string} parentId - ID of comment's parent
+	 * @param {*} text - Contents of reply
+	 */
+	_addReplyComment(parentId, text) {
+		const id = crypto.randomUUID();
+		const newComment = {
+			id,
+			author: { id: this.user.id, name: this.user.name },
+			content: text,
+			createdAt: new Date(),
+			replyTo: parentId,
+			removed: false
+		};
+		if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
+		this._selectedAnnot.comments.push(newComment);
+		this._renderComments();
+
+		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
+		if (addedComment) addedComment.scrollIntoView({ block: "end" });
+
+		this.context.canvas.requestRenderAll();
+	}
+
+	/**
+	 * Format a date as a time ago string
+	 * @param {Date} date - Date to format
+	 * @returns {string} - Formatted time ago string
+	 */
+	_formatTimeAgo(date) {
+		const now = new Date();
+		const diffMs = now - date;
+		const diffSecs = Math.floor(diffMs / 1000);
+		const diffMins = Math.floor(diffSecs / 60);
+		const diffHours = Math.floor(diffMins / 60);
+		const diffDays = Math.floor(diffHours / 24);
+
+		if (diffSecs < 60) return 'just now';
+		if (diffMins < 60) return `${diffMins}m ago`;
+		if (diffHours < 24) return `${diffHours}h ago`;
+		if (diffDays < 7) return `${diffDays}d ago`;
+		if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+		if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`;
+		return `${Math.floor(diffDays / 365)}y ago`;
+	}
+
+	/**
+	 * Escape HTML to prevent XSS attacks
+	 * @param {string} text - Text to escape
+	 * @returns {string} - HTML escaped text
+	 */
+	_escapeHtml(text) {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
+	}
+
+	/**
+	 * Delete a comment by ID
+	 * @param {string} commentId - ID of the comment to delete
+	 */
+	_deleteComment(commentId) {
+		this.context.deleteComment(this._selectedAnnot, commentId);
+		const commentsList = document.getElementById('comments-list');
+		if (!commentsList) return;
+		const comment = this._selectedAnnot.comments.find(c => c.id === commentId);
+		const commentParent = this._selectedAnnot.comments.find(c => c.id === comment.replyTo)
+		const commentEl = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
+
+		const hasReplies = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === commentId);
+		const removeParentPlaceholder =
+			comment.replyTo &&
+			!this._selectedAnnot.comments.some(c => !c.removed && comment.replyTo === c.id) &&
+			commentParent?.removed
+
+		if (removeParentPlaceholder) {
+			const commentParentId = commentParent?.id;
+			if (commentParentId) commentsList.querySelector(`[data-comment-id="${commentParentId}"]`).remove();
+		}
+
+		if (commentEl) {
+			if (hasReplies) {
+				// replace with placeholder
+				const removedEl = document.createElement('div');
+				removedEl.className = 'rounded-lg p-3 border-l-4';
+				removedEl.style.background = 'var(--color-bg-canvas-inset)';
+				removedEl.style.borderLeftColor = '#888';
+				removedEl.style.color = '#888';
+				removedEl.style.fontStyle = 'italic';
+				removedEl.textContent = '[removed]';
+				removedEl.dataset.commentId = commentId;
+				commentEl.replaceWith(removedEl);
+			} else {
+				commentEl.remove();
+			}
+		}
+		this.context.canvas.requestRenderAll();
+
+		if (this._selectedAnnot.comments.filter(c => !c.removed).length === 0) {
+			this._clearComments();
+			this._renderComments();
+		}
+	}
+
+	/**
+	 * Toggle comments window
+     * @param {boolean} enabled Optionally specify state
+     * @param {boolean} [stopPropagation=false] Dont propagate this toggle to the comment window opened state
+	 */
+	commentsToggleWindow(enabled = undefined, stopPropagation = false) {
+		const menu = document.getElementById("annotation-comments-menu");
+        if (!menu) return;
+
+		if (!this._commentsEnabled) {
+            if (menu.style.display === 'flex') menu.style.display = 'none';
+            return;
+        }
+
+        if (enabled === undefined) enabled = menu.style.display !== 'flex';
+        menu.style.display = enabled ? 'flex' : 'none';
+        if (!stopPropagation) {
+            const objectId = this._selectedAnnot?.id ?? this._previousAnnotId;
+            this._commentsOpened = enabled;
+            this._setCommentOpenedCache(objectId, enabled);
+        };
+	}
+
+	_annotationSelected(object) {
+		this._selectedAnnot = object;
+		this._renderComments(object.comments);
+		this._startCommentsRefresh();
+
+		if (
+				this._shouldOpenComments(object.id)
+		) {
+			this.commentsToggleWindow(true, true);
+		}
+	}
+
+	_annotationDeselected(object) {
+		this._selectedAnnot = null;
+    this._previousAnnotId = object.id;
+		this.commentsToggleWindow(false, true);
+		this._clearComments();
+
+		this._stopCommentsRefresh();
+	}
+
+	/**
+	 * Start the interval to refresh comment timestamps
+	 */
+	_startCommentsRefresh() {
+		this._stopCommentsRefresh();
+
+		this._refreshCommentsInterval = setInterval(() => {
+			this._refreshCommentTimestamps();
+		}, 30_000);
+	}
+
+	/**
+	 * Stop the comment timestamp refresh interval
+	 */
+	_stopCommentsRefresh() {
+		if (this._refreshCommentsInterval) {
+			clearInterval(this._refreshCommentsInterval);
+			this._refreshCommentsInterval = null;
+		}
+	}
+
+	/**
+	 * Refresh the timestamp display for all visible comments
+	 */
+	_refreshCommentTimestamps() {
+		if (!this._selectedAnnot || !this._selectedAnnot.comments) {
+			return;
+		}
+
+		this._selectedAnnot.comments.forEach(comment => {
+			if (comment.removed) return;
+
+			const commentElement = document.querySelector(`[data-comment-id="${comment.id}"]`);
+			if (!commentElement) return;
+
+			const timestampSpan = commentElement.querySelector('span[name="created-at"]');
+			if (!timestampSpan) return;
+
+			const timeAgo = this._formatTimeAgo(comment.createdAt);
+			timestampSpan.textContent = timeAgo;
+		});
+	}
+
 	switchModeActive(id, factory=undefined, isLeftClick) {
-		if (this.context.historyManager.isOngoingEdit()) return; 
+		if (this.context.historyManager.isOngoingEdit()) return;
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
@@ -321,23 +1033,40 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchMenuList(type) {
+		const presetListButton = $("#preset-list-button-mp");
+		const annotListButton = $("#annotation-list-button-mp");
+		const authorListButton = $("#author-list-button-mp");
+
+		presetListButton.attr('aria-selected', false);
+		annotListButton.attr('aria-selected', false);
+		authorListButton.attr('aria-selected', false);
+
+		// hide panels
+		const presetList = $("#preset-list-mp");
+		const annotList = $("#annotation-list-mp");
+		const authorList = $("#author-list-mp");
+
+		presetList.css('display', 'none');
+		annotList.css('display', 'none');
+		authorList.css('display', 'none');
+
 		if (type === "preset") {
-			$("#preset-list-button-mp").attr('aria-selected', true);
-			$("#annotation-list-button-mp").attr('aria-selected', false);
-			$("#preset-list-mp").css('display', 'block');
-			$("#annotation-list-mp").css('display', 'none');
-		} else {
+			presetListButton.attr('aria-selected', true);
+			presetList.css('display', 'block');
+		} else if (type === "authors") {
+			authorListButton.attr('aria-selected', true);
+			authorList.css('display', 'block');
+			this._populateAuthorsList();
+		} else { // annot
 			if (!this.isModalHistory) {
-				$("#preset-list-mp").css('display', 'none');
-				$("#annotation-list-mp").css('display', 'block');
+				annotList.css('display', 'block');
 			}
 			if (this._preventOpenHistoryWindowOnce) {
 				this._preventOpenHistoryWindowOnce = false;
 			} else {
 				this.openHistoryWindow(this.isModalHistory);
 			}
-			$("#preset-list-button-mp").attr('aria-selected', false);
-			$("#annotation-list-button-mp").attr('aria-selected', true);
+			annotListButton.attr('aria-selected', true);
 		}
 	}
 
@@ -365,6 +1094,91 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			$("#annotation-list-button-mp").click();
 		}
 		this.isModalHistory = asModal;
+	}
+
+	_toggleAuthorShown(authorId) {
+		this.context.toggleAuthorShown(authorId);
+		this._populateAuthorsList();
+	}
+
+	_updateAuthorBorderColor(authorId, color) {
+		this.context.updateAuthorBorderColor(authorId, color);
+	}
+
+	_updateAuthorBorderDashing(authorId, dashing) {
+		this.context.updateAuthorBorderDashing(authorId, dashing);
+	}
+
+	_toggleAuthorIgnoreCustomStyling(authorId) {
+		this.context.updateAuthorIgnoreCustomStyling(authorId, !this.context.getAuthorConfig(authorId).ignoreCustomStyling);
+		this._populateAuthorsList();
+	}
+
+	_populateAuthorsList() {
+		const authorListContainer = $("#author-list-inner-mp");
+		if (!authorListContainer.length) return;
+
+		const objects = this.context.canvas.getObjects();
+		const authorCounts = new Map();
+
+		objects.forEach(obj => {
+			if (this.context.isAnnotation(obj) && obj.author) {
+				const author = this.context.mapAuthorCallback?.(obj) ?? obj.author;
+
+				// skip current user
+				if (author === this.user.id) return;
+
+				authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+			}
+		});
+
+		authorListContainer.empty();
+
+		if (authorCounts.size === 0) {
+			authorListContainer.html('<div class="text-muted text-small p-2">No authors found</div>');
+			return;
+		}
+
+		const sortedAuthors = Array.from(authorCounts.keys()).sort();
+
+		const authorItems = sortedAuthors.map(author => {
+			const count = authorCounts.get(author);
+			const pluralS = count === 1 ? '' : 's';
+			const config = this.context.getAuthorConfig(author);
+			const authorIdSafe = author.replace(/[^a-zA-Z0-9]/g, '_');
+
+			return `<div class="author-item p-2 border-bottom border-secondary" style="${config.shown ? '' : 'opacity: 0.6;'}">
+				<div class="d-flex align-items-center mb-2">
+					<span class="material-icons mr-2">person</span>
+					<span class="author-name">${author}</span>
+				</div>
+				<div class="d-flex align-items-center text-muted text-small ml-4 mb-2">
+					<span class="mr-2">${count} annotation${pluralS}</span>
+					<input type="checkbox" disabled id="author-shown-${authorIdSafe}" ${config.shown ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorShown('${author.replace(/'/g, "\\'")}')">
+					<label for="author-shown-${authorIdSafe}" class="text-small ml-1 mr-3">Show</label>
+					<input type="checkbox" id="author-ignore-styling-${authorIdSafe}" ${config.ignoreCustomStyling ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorIgnoreCustomStyling('${author.replace(/'/g, "\\'")}')">
+					<label for="author-ignore-styling-${authorIdSafe}" class="text-small ml-1">Ignore styling</label>
+				</div>
+				<div class="ml-4">
+					<div class="d-flex align-items-center mb-1">
+						<label class="text-small mr-2" style="min-width: 60px;">Color:</label>
+						<input type="color" value="${config.borderColor}" class="form-control form-control-sm" style="width: 50px; height: 25px; padding: 1px;"
+							onchange="${this.THIS}._updateAuthorBorderColor('${author.replace(/'/g, "\\'")}', this.value)">
+					</div>
+					<div class="d-flex align-items-center">
+						<label class="text-small mr-2" style="min-width: 60px;">Dash:</label>
+						<input type="range" min="1" max="50" value="${config.borderDashing}" class="form-control-range flex-grow-1 mr-2"
+							oninput="document.getElementById('dash-value-${authorIdSafe}').textContent = this.value"
+							onchange="${this.THIS}._updateAuthorBorderDashing('${author.replace(/'/g, "\\'")}', this.value)">
+						<span id="dash-value-${authorIdSafe}" class="text-small" style="min-width: 20px;">${config.borderDashing}</span>
+					</div>
+				</div>
+			</div>`;
+		}).join('');
+
+		authorListContainer.html(authorItems);
 	}
 
 	_createHistoryInAdvancedMenu(focus = false) {
@@ -405,7 +1219,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
 
-		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('import', (e) => {
+			this.updatePresetsHTML(e);
+			if ($("#author-list-mp").css('display') !== 'none') {
+				this._populateAuthorsList();
+			}
+		});
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
@@ -423,6 +1242,22 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
+
+		this.context.addHandler('annotation-set-private', e => {
+			this.context.canvas.requestRenderAll();
+		});
+
+		this.context.canvas.on('object:added', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
+
+		this.context.canvas.on('object:removed', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
@@ -447,9 +1282,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -457,6 +1295,69 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					},
 				});
 			});
+
+			if (active) {
+				const props = this._getAnnotationProps(active);
+				const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+
+				actions.push({
+					title: "Modify annotation:",
+				})
+				actions.push({
+					title: props.private ? "Unmark as private" : "Mark as private",
+					icon: props.private ? "visibility" : "visibility_lock",
+					action: () => {
+						handlerMarkPrivate();
+					}
+				})
+			}
+
+			actions.push({
+				title: "Actions:",
+			});
+
+			const mousePos = this._getMousePosition(e);
+
+			const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Copy",
+				icon: "content_copy",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCopy();
+				}
+			})
+
+			const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+			actions.push({
+				title: "Cut",
+				icon: "content_cut",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerCut();
+				}
+			})
+
+			const canPaste = this._canPasteAnnotation(e);
+			const handlerPaste = this._pasteAnnotation.bind(this, e);
+			actions.push({
+				title: "Paste",
+				icon: "content_paste",
+				containerCss: !canPaste && 'opacity-50',
+				action: () => {
+					if (canPaste) handlerPaste();
+				}
+			})
+
+			const handlerDelete = this._deleteAnnotation.bind(this, active);
+			actions.push({
+				title: "Delete",
+				icon: "delete",
+				containerCss: !active && 'opacity-50',
+				action: () => {
+					if (active) handlerDelete();
+				}
+			})
 
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
@@ -472,9 +1373,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.presets.foreach(preset => {
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
+				const containerCss =
+					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
+					containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
@@ -906,7 +1810,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
         let selectedItems = [];
         if (withObjects) {
             scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
-            if (scope === 'selected') {            
+            if (scope === 'selected') {
                 const selectedAnns = (this.context.getSelectedAnnotations?.() || []);
                 const layers = (this.context.getSelectedLayers?.() || [])
                     .filter(Boolean);
@@ -1014,10 +1918,12 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 		let pushed = false;
 		this.context.presets.foreach(preset => {
+			const containerCss =
+				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
 			const icon = preset.objectFactory.getIcon();
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -1213,8 +2119,13 @@ class="btn m-2">Set for left click </button></div>`
 			$("#preset-filter-select").on('input', e => {
 				const search = e.target.value.toLowerCase();
 				document.querySelectorAll(`#preset-modify-dialog .preset-option`).forEach(el => {
-					const value = this.context.presets._presets[el.dataset.presetId].meta["category"]?.value.toLowerCase();
-					if (!search || value.includes(search) || ("unknown".includes(search) && !value)) {
+					const meta = this.context.presets._presets[el.dataset.presetId].meta;
+					const value = meta.category?.value.toLowerCase();
+					const collection = meta.collection?.name.toLowerCase() || "";
+					if (
+						!search || value.includes(search) || ("unknown".includes(search) && !value) ||
+						collection.includes(search)
+					) {
 						el.classList.remove("d-none");
 					} else {
 						el.classList.add("d-none");
@@ -1239,6 +2150,81 @@ class="btn m-2">Set for left click </button></div>`
 		return false;
 	}
 
+	_getMousePosition(e, checkBounds = true) {
+		const image = VIEWER.scalebar.getReferencedTiledImage() || VIEWER.world.getItemAt(0);
+		if (!image) return {x: 0, y: 0};
+		const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+
+		const {x, y} = image.windowToImageCoordinates(screen);
+		const {x: maxX, y: maxY} = image.getContentSize();
+
+		if (
+			checkBounds && (
+				x <= 0 ||
+				y <= 0 ||
+				x >= maxX ||
+				y >= maxY
+			)
+		) {
+			return false;
+		}
+		return {x, y};
+	}
+
+	_copyAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+	}
+
+	_cutAnnotation(mousePos, annotation) {
+		const bounds = annotation.getBoundingRect(true, true);
+		this._copiedPos = {
+			x: bounds.left - mousePos.x,
+			y: bounds.top - mousePos.y,
+		};
+		this._copiedAnnotation = annotation;
+		this._deleteAnnotation(annotation);
+	}
+
+	_deleteAnnotation(annotation) {
+		this.context.deleteObject(annotation);
+		this.context.canvas.requestRenderAll();
+	}
+
+	_canPasteAnnotation(e, getMouseValue = false) {
+		if (!this._copiedAnnotation) return null;
+		const mousePos = this._getMousePosition(e);
+		if (getMouseValue) return mousePos;
+		else return !!mousePos;
+	}
+
+	_pasteAnnotation(e) {
+		const mousePos = this._canPasteAnnotation(e, true);
+		if (!mousePos) {
+			if (mousePos === false) Dialogs.show('Cannot paste annotation out of bounds', 5000, Dialogs.MSG_WARN);
+			return;
+		}
+
+		const annotation = this._copiedAnnotation;
+		const factory = annotation._factory();
+
+		const copy = factory.copy(annotation);
+		const res = factory.translate(
+			copy,
+			{
+				x: mousePos.x + this._copiedPos.x,
+				y: mousePos.y + this._copiedPos.y,
+			},
+			true
+		);
+		this.context.addAnnotation(res);
+		factory.renderAllControls(res);
+	}
+
 	_clickAnnotationChangePreset(annotation) {
 		if (this._presetSelection === undefined) {
 			Dialogs.show('You must click on a preset to be selected first.', 5000, Dialogs.MSG_WARN);
@@ -1251,6 +2237,19 @@ class="btn m-2">Set for left click </button></div>`
 			_this.context.canvas.requestRenderAll();
 		}, 150);
 		return false;
+	}
+
+	_clickAnnotationMarkPrivate(annotation) {
+		const _this = this;
+		const newValue = !this._getAnnotationProps(annotation).private;
+
+		_this.context.setAnnotationPrivate(annotation, newValue);
+	}
+
+	_getAnnotationProps(annotation) {
+		return {
+			private: annotation.private
+		};
 	}
 
 	createNewPreset(buttonNode, isLeftClick) {
@@ -1279,6 +2278,39 @@ class="btn m-2">Set for left click </button></div>`
 		if (this.needsSave) {
 			this.exportToFile();
 		}
+	}
+
+	/**
+	 * Set preferred preset IDs for the GUI
+	 * @param {string[]} presets array of presetIDs
+	 */
+	setPreferredPresets(presetIDs) {
+		this._preferredPresets = new Set(presetIDs);
+	}
+
+	/**
+	 * Add a preset ID to the preferred presets
+	 * @param {string} presetID
+	 */
+	addPreferredPreset(presetID) {
+		this._preferredPresets.add(presetID);
+	}
+
+	/**
+	 * Remove a preset ID from the preferred presets
+	 * @param {string} presetID
+	 */
+	removePreferredPreset(presetID) {
+		this._preferredPresets.delete(presetID);
+	}
+
+	/**
+	 * Check if a preset ID is not preferred
+	 * @param {string} presetID
+	 * @returns {boolean} true if the preset is not preferred
+	 */
+	isUnpreferredPreset(presetID) {
+		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
 }
 

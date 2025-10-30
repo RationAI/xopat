@@ -3,10 +3,28 @@
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
+### 2.3.1
+**Features**: author annotation distinction.
+
+**Bugfixes**: php image includes UI folder.
+
+### 2.3.0
+
+**Features**: added a way to set preferred annotation preset IDs for the GUI. Support for
+annotation modes private and locked. Support for annotation comments. Implementation of ICC profiles.
+Guidelines for WASM usage.
+Annotation features: private / locked modes, comments support. Support for copy/move/delete
+on right click.
+
+**Bugfixes**: Fixed mjs module loading on servers.
+
+**V3 Pull**: We are slowly adding code from v3 development that does not 
+influence the v2 functionality, but allow using v3 features - UI and dev scripts.
+
 ### 2.2.2
 
 **Bugfixes**: Fixed annotation visuals for point, line. Fix annotations rest IO, fix logics with refreshing token,
-more robust behavior. Better behavior of tutorials.
+more robust behavior. Better behavior of tutorials. Better points rendering.
 
 **Features**: annotation reconstruction from point array new API. Useful for convertors.
 Using 'Unknown', non-exported annotation preset instead of creating new. Configurable data snapshots.

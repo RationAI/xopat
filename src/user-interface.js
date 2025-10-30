@@ -303,6 +303,7 @@ window.addEventListener("beforeunload", (e) => {
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
             crossorigin="anonymous"></script>
@@ -382,6 +383,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
      * @typedef {{
      *  icon: string | undefined,
      * 	iconCss: string | undefined,
+     *  containerCss: string | undefined,
      * 	title: string,
      * 	action: function,
      * 	selected: boolean | undefined
@@ -432,9 +434,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
          *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
          *      - you can also pass custom HTML and override the default styles and content, handler system etc...
-         *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.containerCss {string} css for the container, optional
          *   config.iconCss {string} css for icon
          */
         bind: function(context, optionsGetter) {
@@ -494,7 +496,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);
@@ -1158,13 +1160,32 @@ ${label}
 
         /**
          * Add custom HTML to the DOM selector
-         * @param {string} html to append
+         * @param {string|Node|BaseComponent} html to append
          * @param {string} pluginId owner plugin ID
          * @param {string} selector jquery selector where to append, default 'body'
          */
         addHtml: function(html, pluginId, selector="body") {
+            function materialize(htmlLike) {
+                if (htmlLike == null) return [];
+                if (typeof htmlLike === "string") return htmlLike;
+                if (htmlLike.jquery) return htmlLike;
+                if (Array.isArray(htmlLike)) return htmlLike.map(materialize);
+
+                // BaseComponent instance (your components have create() or render())
+                if (htmlLike instanceof UI.BaseComponent ||
+                    (htmlLike && typeof htmlLike === "object" && (htmlLike.create || htmlLike.render))) {
+                    return (htmlLike.render?.() ?? htmlLike.create?.() ?? htmlLike.el ?? htmlLike.element ?? htmlLike);
+                }
+
+                // DOM Node / DocumentFragment
+                if (htmlLike.nodeType || htmlLike instanceof Node) return htmlLike;
+
+                // Fallback: stringify
+                return String(htmlLike);
+            }
+
             try {
-                $(html).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                $(materialize(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

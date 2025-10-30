@@ -241,7 +241,7 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} newly created preset
      */
     addPreset(id=undefined, categoryName="") {
-        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this._randomColorHexString());
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this.randomColorHexString());
         this._presets[preset.presetID] = preset;
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
@@ -575,7 +575,7 @@ OSDAnnotations.PresetManager = class {
         }
     }
 
-    _randomColorHexString() {
+    randomColorHexString() {
         // from https://stackoverflow.com/questions/1484506/random-color-generator/7419630#7419630
         let r, g, b;
         let h = (this._colorStep++ % this._colorSteps) / this._colorSteps;
@@ -663,7 +663,7 @@ OSDAnnotations.Layer = class {
     */
     addObject(object, index = undefined) {
         if (!object || object.internalID === undefined || object.internalID === null) return;
-        
+
         if (!this.contains(object)) {
             if (typeof index === "number" && index >= 0 && index <= this._objects.length) {
                 this._objects.splice(index, 0, object);

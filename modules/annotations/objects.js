@@ -62,6 +62,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "id",
         "author",
         "created",
+        "private",
+        "comments",
         "label",
     ];
 
@@ -195,6 +197,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Initialize object before import
+     * todo check if necessary
      * @param {fabric.Object} object object to be initialized
      */
     initializeBeforeImport(object) {
@@ -293,6 +296,146 @@ OSDAnnotations.AnnotationObjectFactory = class {
         const result = {};
         this.__copyInnerProps(ofObject, result);
         return result;
+    }
+
+    /**
+     *
+     * @param {string | (fabric.Object) => string} iconRenderer Either a plain icon string, or a callback that returns it
+     * @param {string | (fabric.Object) => string | undefined} valueRenderer Either a plain value string, or a callback that returns it. undefined for no value.
+     * @param {((event: any, transform: any, mouseX: any, mouseY: any) => any) | undefined} onClick mouseUpHandler of the control
+     * @returns
+     */
+    renderIcon(iconRenderer, valueRenderer, onClick) {
+        const control = new fabric.Control({
+            x: 0.5,
+            y: -0.5,
+            offsetX: 25,
+            offsetY: 20,
+            cursorStyle: 'pointer',
+            sizeX: 40,
+            sizeY: 40,
+            touchSizeX: 40,
+            touchSizeY: 40,
+            enabled: true,
+            render: (ctx, left, top, styleOverride, fabricObject) => {
+                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
+                const value = valueRenderer ? (
+                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
+                ) : null;
+                const showValue = value !== null && value !== undefined && value !== '';
+
+                const iconSize = 36;
+                const padding = 8;
+
+                let totalWidth = iconSize;
+                let textWidth = 0;
+
+                if (showValue) {
+                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    textWidth = ctx.measureText(value).width;
+                    totalWidth = iconSize + padding + textWidth + padding;
+                }
+
+                const height = iconSize;
+                const radius = height / 2;
+
+                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
+
+                ctx.save();
+                ctx.translate(leftAlignedX, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
+
+                const halfWidth = totalWidth / 2;
+
+                ctx.beginPath();
+                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
+                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.closePath();
+
+                ctx.fillStyle = 'white';
+                ctx.fill();
+
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                const iconX = -halfWidth + iconSize / 2;
+                ctx.font = `${iconSize * 0.8}px "Material Icons"`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = 'black';
+                ctx.fillText(icon, iconX, 3);
+
+                if (showValue) {
+                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
+                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(value, textX, 1);
+                }
+
+                ctx.restore();
+            },
+        });
+
+        control.positionHandler = (dim, finalMatrix, fabricObject) => {
+            let visibleBefore = 0;
+            const controls = fabricObject?.controls || {};
+            for (const name of Object.keys(controls)) {
+                const ctrl = controls[name];
+                if (ctrl === control) break;
+                let isVisible = true;
+                try {
+                    if (typeof ctrl.getVisibility === 'function') {
+                        isVisible = !!ctrl.getVisibility(fabricObject, name);
+                    } else if (fabricObject._controlsVisibility && name in fabricObject._controlsVisibility) {
+                        isVisible = !!fabricObject._controlsVisibility[name];
+                    } else if ('visible' in ctrl) {
+                        isVisible = !!ctrl.visible;
+                    }
+                } catch {}
+                if (isVisible) visibleBefore++;
+            }
+
+            const spacing = 45;
+            const baseOffsetY = 20;
+            const dynamicOffsetY = baseOffsetY + spacing * visibleBefore;
+
+            const pt = { x: control.x * dim.x + control.offsetX, y: control.y * dim.y + dynamicOffsetY };
+            return fabric.util.transformPoint(pt, finalMatrix);
+        };
+
+        if (onClick) {
+            control.mouseUpHandler = function(eventData, transform, x, y) {
+                onClick(eventData, transform, x, y);
+                return true;
+            };
+        }
+
+        return control;
+
+    }
+
+    renderAllControls(ofObject) {
+        const controls = {};
+
+        controls.private = this.renderIcon(
+            (obj) => obj.private ? 'visibility_lock' : 'visibility',
+            undefined,
+            undefined,
+        );
+        const commentsControl = this.renderIcon(
+            'comment',
+            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+            () => {
+                this._context.raiseEvent('comments-control-clicked')
+            },
+        );
+        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
+        controls.comments = commentsControl;
+
+        ofObject.controls = controls;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
@@ -431,8 +574,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
+     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
      */
-    recalculate(theObject) {
+    recalculate(theObject, ignoreReplace=false) {
+    }
+
+    /**
+     * Update the object coordinates to the set position
+     * @param {fabric.Object} theObject object to translate
+     * @param {Object} pos new position of object
+     * @param {number} pos.x new x value
+     * @param {number} pos.y new y value
+     * @param {'move' | 'set'} [pos.mode='set'] whether to 'move' annotation from its existing position or 'set' a new one.
+     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     */
+    translate(theObject, pos, ignoreReplace=false) {
+        let x, y;
+        if (pos.mode === 'move') {
+            x = theObject.left + pos.x;
+            y = theObject.top + pos.y;
+        } else {
+            x = pos.x;
+            y = pos.y;
+        }
+        theObject.top = y;
+        theObject.left = x;
+        this.recalculate(theObject, ignoreReplace);
+        return theObject;
     }
 
     /**
@@ -530,7 +698,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 isHighlight: true
             });
             delete clonedObj.type;
-    
+
             return clonedObj;
         } catch (error) {
             console.error("Error in selected function:", error);
@@ -595,7 +763,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Apply selection style to the object
-     * @param {*} ofObject 
+     * @param {*} ofObject
      */
     applySelectionStyle(ofObject) {
         ofObject.set({

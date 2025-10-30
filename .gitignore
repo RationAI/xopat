@@ -6,6 +6,7 @@
 !/modules/empation-api
 !/modules/fabricjs
 !/modules/human-readable-ids
+!/modules/icc_profile
 !/modules/jwt-decode
 !/modules/menu-pages
 !/modules/oidc-client-ts
