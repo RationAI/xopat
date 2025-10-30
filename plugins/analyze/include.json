@@ -1,0 +1,10 @@
+{
+    "id": "analyze",
+    "name": "Analyze dropdown in Main Menu",
+    "author": "Filip Vrubel",
+    "version": "1.0.0",
+    "description": "Plugin for creating and running jobs",
+    "icon": null,
+    "includes" : ["newAppForm.mjs", "analyzeDropdown.mjs", "analyze.plugin.mjs"],
+    "permaLoad": true
+}
