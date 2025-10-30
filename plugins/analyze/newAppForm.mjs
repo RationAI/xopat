@@ -14,8 +14,8 @@ class NewAppForm extends BaseComponent {
     }
 
     _row(labelText, fieldNode) {
-        return div({ class: 'mb-3' },
-            label({ class: 'block mb-1 text-sm font-medium' }, labelText),
+        return div({ class: 'mb-2' },
+            label({ class: 'block mb-1 text-xs font-medium' }, labelText),
             fieldNode
         );
     }
@@ -23,16 +23,19 @@ class NewAppForm extends BaseComponent {
     create() {
         if (this._el) return this._el;
 
-        const schemaEl = input({ type: 'text', id: this.id + '-schema', class: 'input input-sm w-full', value: this.values.schema || '' });
-        const nameEl = input({ type: 'text', id: this.id + '-name', class: 'input input-sm w-full', value: this.values.name || '' });
-        const nsEl = input({ type: 'text', id: this.id + '-namespace', class: 'input input-sm w-full', value: this.values.namespace || '' });
-        const descEl = textarea({ id: this.id + '-description', class: 'textarea textarea-sm w-full', rows: 4 }, this.values.description || '');
-        const inputsEl = textarea({ id: this.id + '-inputs', class: 'textarea textarea-sm w-full', rows: 3 }, this.values.inputs || '');
-        const outputsEl = textarea({ id: this.id + '-outputs', class: 'textarea textarea-sm w-full', rows: 3 }, this.values.outputs || '');
-        const jobEl = input({ type: 'text', id: this.id + '-joburl', class: 'input input-sm w-full', value: this.values.jobUrl || '' });
+    // use explicit inline sizing so styles apply even if utility classes are missing
+    const smallInputStyle = 'height:30px;padding:4px 6px;font-size:12px;line-height:1.1;box-sizing:border-box;';
+    const smallTextareaBase = 'padding:6px 6px;font-size:12px;line-height:1.2;box-sizing:border-box;resize:vertical;';
+    const schemaEl = input({ type: 'text', id: this.id + '-schema', class: 'input w-full', style: smallInputStyle, value: this.values.schema || '' });
+    const nameEl = input({ type: 'text', id: this.id + '-name', class: 'input w-full', style: smallInputStyle, value: this.values.name || '' });
+    const nsEl = input({ type: 'text', id: this.id + '-namespace', class: 'input w-full', style: smallInputStyle, value: this.values.namespace || '' });
+    const descEl = textarea({ id: this.id + '-description', class: 'textarea w-full', style: smallTextareaBase + 'height:64px;', rows: 4 }, this.values.description || '');
+    const inputsEl = textarea({ id: this.id + '-inputs', class: 'textarea w-full', style: smallTextareaBase + 'height:48px;', rows: 3 }, this.values.inputs || '');
+    const outputsEl = textarea({ id: this.id + '-outputs', class: 'textarea w-full', style: smallTextareaBase + 'height:48px;', rows: 3 }, this.values.outputs || '');
+    const jobEl = input({ type: 'text', id: this.id + '-joburl', class: 'input w-full', style: smallInputStyle, value: this.values.jobUrl || '' });
 
-        const btnEdit = button({ class: 'btn btn-secondary mr-2', type: 'button', onclick: (ev) => this._onEdit() }, 'Edit EAD');
-        const btnCreate = button({ class: 'btn btn-primary', type: 'button', onclick: (ev) => this._onCreate() }, 'Create');
+    const btnEdit = button({ class: 'btn btn-secondary btn-sm mr-2', type: 'button', onclick: (ev) => this._onEdit() }, 'Edit EAD');
+    const btnCreate = button({ class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => this._onCreate() }, 'Create');
 
         const closeBtn = button({
             class: 'btn btn-xs btn-circle absolute right-2 top-2',
@@ -40,15 +43,24 @@ class NewAppForm extends BaseComponent {
             title: 'Close',
             onclick: (ev) => {
                 const el = this._el;
-                if (el && el.parentNode) el.parentNode.removeChild(el);
+                if (!el) return;
+                // Prefer removing the wrapper/container the form was attached into so
+                // reopening the dialog places it in the same position instead of
+                // creating another sibling wrapper to the right.
+                const wrapper = el.parentNode;
+                if (wrapper && wrapper.parentNode) {
+                    wrapper.parentNode.removeChild(wrapper);
+                } else if (el.parentNode) {
+                    el.parentNode.removeChild(el);
+                }
             }
         }, '✕');
-        const titleEl = div({ class: 'relative mb-3' },
-            h3({ class: 'text-xl font-bold text-center' }, 'New App'),
+        const titleEl = div({ class: 'relative mb-2' },
+            h3({ class: 'text-base font-bold text-center' }, 'New App'),
             closeBtn
         );
 
-        const form = div({ class: 'p-4 bg-base-200 border border-base-300 rounded-md max-w-2xl relative' },
+        const form = div({ class: 'p-2 bg-base-200 border border-base-300 rounded-md max-w-full relative', style: 'max-width:420px;width:100%;' },
             titleEl,
             this._row('Schema:', schemaEl),
             this._row('Name:', nameEl),
