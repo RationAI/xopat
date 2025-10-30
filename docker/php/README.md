@@ -17,6 +17,12 @@ The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XOPAT_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 
 
+### Proxying
+The viewer env needs to specify the url of the viewer in the configuration.
+If your proxy wants a sub-root deployment, you have to also specify the ``XO_ROOT_PATH``
+subroot path for the apache server. If your server proxy strips the prefix, nothing extra needs to be done.
+
+Health check is available at ``health`` endpoint.
 
 ### Simple Setup
 

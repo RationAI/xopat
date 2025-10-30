@@ -9,6 +9,41 @@ if (!defined( 'ABSPATH' )) {
 
 use Ahc\Json\Comment;
 
+function server_forwarded($key, $fallback = null) {
+    $k = 'HTTP_' . strtoupper(str_replace('-', '_', $key));
+    return $_SERVER[$k] ?? $fallback;
+}
+
+function detect_public_scheme() {
+    // honor X-Forwarded-Proto when present
+    $xfp = server_forwarded('X-Forwarded-Proto');
+    if ($xfp) return strtolower(explode(',', $xfp)[0]) . '://';
+    if (
+        (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+        (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+    ) return 'https://';
+    return 'http://';
+}
+
+function detect_public_host() {
+    // prefer X-Forwarded-Host, fallback to Host
+    return server_forwarded('X-Forwarded-Host', $_SERVER['HTTP_HOST'] ?? 'localhost');
+}
+
+function detect_public_basepath() {
+    // 1) explicit header from ingress (recommended)
+    $xfp = server_forwarded('X-Forwarded-Prefix');
+    if (is_string($xfp) && $xfp !== '') return '/' . trim($xfp, '/') . '/';
+
+    // 2) env override (useful in containers)
+    $env = getenv('APP_BASE_PATH');
+    if (is_string($env) && $env !== '') return '/' . trim($env, '/') . '/';
+
+    // 3) derive from script location (works when app is deployed physically under a dir)
+    $dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    return $dir === '' ? '/' : $dir . '/';
+}
+
 /**
  * array_merge_recursive merge second argument to the first, only
  *   allows overriding existing values
@@ -115,7 +150,13 @@ if ($C["domain"] == null) {
     else {
         $protocol = 'http://';
     }
-    $CORE["client"]["domain"] = $protocol . $_SERVER['HTTP_HOST'];
+    $protocol = detect_public_scheme();
+    $host     = detect_public_host();
+    $basePath = detect_public_basepath();
+
+    $CORE["client"]["domain"]  = $protocol . $host;
+    $CORE["client"]["basePath"] = $basePath;
+    $CORE["client"]["baseURL"]  = $protocol . $host . $basePath;
 }
 
 /*

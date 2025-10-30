@@ -84,7 +84,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
     && rm /etc/apache2/sites-available/000-default.conf \
-    && echo > /etc/apache2/ports.conf
+    && echo > /etc/apache2/ports.conf \
+    && echo "ok" > /var/www/healthz.txt
 
 COPY --chown=www-data:www-data docker/php/apache-dev.conf /etc/apache2/sites-available/000-default.conf
 
@@ -144,7 +145,8 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
     && rm /etc/apache2/sites-available/000-default.conf \
-    && echo > /etc/apache2/ports.conf
+    && echo > /etc/apache2/ports.conf \
+    && echo "ok" > /var/www/healthz.txt
 
 COPY --chown=www-data:www-data docker/php/apache.conf /etc/apache2/sites-available/000-default.conf
 
