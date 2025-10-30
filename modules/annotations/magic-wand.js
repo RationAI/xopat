@@ -75,7 +75,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
 
         this._allowCreation = true;
-        this.context.canvas.discardActiveObject();
+        this.context.clearAnnotationSelection(true);
         this._isLeft = isLeftClick;
     }
 

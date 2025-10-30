@@ -52,12 +52,6 @@ This event is fired when user performs direct annotation editing.
 ##### annotation-before-edit | ``{object: fabric.Object, isCancelled: () => boolean, setCancelled: (cancelled: boolean) => void}``
 This event is fired prior to editing annotation. Same usage as `annotation-before-delete`
 
-##### annotation-selected | ``{object: fabric.Object}``
-This event is fired when user selects an annotation.
-
-##### annotation-deselected | ``{object: fabric.Object}``
-This event is fired when user deselects an annotation.
-
 ##### annotation-set-private | ``{object: fabric.Object}``
 This event is fired when the `private` property of an annotation changes.
 

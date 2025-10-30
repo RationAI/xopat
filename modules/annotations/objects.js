@@ -52,6 +52,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "cornerColor",
         "borderScaleFactor",
         "hasControls",
+        "hasBorders",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -63,6 +64,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "created",
         "private",
         "comments",
+        "label",
     ];
 
     /**
@@ -193,6 +195,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return [];
     }
 
+    /**
+     * Initialize object before import
+     * todo check if necessary
+     * @param {fabric.Object} object object to be initialized
+     */
+    initializeBeforeImport(object) {
+    }
+
     trimExportJSON(objectList) {
         let array = objectList;
         if (typeof array === "object") {
@@ -289,11 +299,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * 
+     *
      * @param {string | (fabric.Object) => string} iconRenderer Either a plain icon string, or a callback that returns it
      * @param {string | (fabric.Object) => string | undefined} valueRenderer Either a plain value string, or a callback that returns it. undefined for no value.
      * @param {((event: any, transform: any, mouseX: any, mouseY: any) => any) | undefined} onClick mouseUpHandler of the control
-     * @returns 
+     * @returns
      */
     renderIcon(iconRenderer, valueRenderer, onClick) {
         const control = new fabric.Control({
@@ -313,49 +323,49 @@ OSDAnnotations.AnnotationObjectFactory = class {
                     typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
                 ) : null;
                 const showValue = value !== null && value !== undefined && value !== '';
-                
+
                 const iconSize = 36;
                 const padding = 8;
-                
+
                 let totalWidth = iconSize;
                 let textWidth = 0;
-                
+
                 if (showValue) {
                     ctx.font = `${iconSize * 0.4}px Arial`;
                     textWidth = ctx.measureText(value).width;
                     totalWidth = iconSize + padding + textWidth + padding;
                 }
-                
+
                 const height = iconSize;
                 const radius = height / 2;
-                
+
                 const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
-                
+
                 ctx.save();
                 ctx.translate(leftAlignedX, top);
                 ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
-                
+
                 const halfWidth = totalWidth / 2;
-                
+
                 ctx.beginPath();
                 ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
                 ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
                 ctx.closePath();
-                
+
                 ctx.fillStyle = 'white';
                 ctx.fill();
-                
+
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
-                
+
                 const iconX = -halfWidth + iconSize / 2;
                 ctx.font = `${iconSize * 0.8}px "Material Icons"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
                 ctx.fillText(icon, iconX, 3);
-                
+
                 if (showValue) {
                     const textX = iconX + iconSize / 2 + padding + textWidth / 2;
                     ctx.font = `${iconSize * 0.5}px Segoe UI`;
@@ -603,6 +613,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Returns the length of the object if applicable (for objects that do not have area).
+     * By default, returns undefined. Should be overridden in subclasses for line-like objects.
+     * @param {fabric.Object} theObject object to measure
+     * @return {Number|undefined} length in pixels and unit, or undefined if not applicable
+     */
+    getLength(theObject) {
+        return undefined;
+    }
+
+    /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
      * @param {fabric.Object} ofObject
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)
@@ -631,10 +651,58 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Creates a deep clone of a Fabric.js object
+     * @param {fabric.Object} theObject the Fabric.js object to clone
+     * @param {string[]} customProps an array of custom properties to include in the clone
+     * @returns {Promise<fabric.Object>} a promise that resolves with the cloned object
+     */
+    cloneFabricObject(theObject, customProps = []) {
+        return new Promise((resolve, reject) => {
+            theObject.clone(cloned => {
+                resolve(cloned);
+            }, customProps, error => {
+                reject(error || new Error("Failed to clone Fabric object"));
+            });
+        });
+    }
+
+    /**
      * Called when object is selected
      * @param {fabric.Object} theObject selected fabricjs object
+     * @returns fabricjs object that will be used for highlighting
      */
-    selected(theObject) {
+    async selected(theObject) {
+        try {
+            const clonedObj = await this.cloneFabricObject(theObject);
+
+            let newStroke = theObject.strokeWidth * 7;
+            let newStrokeDashArray = [newStroke * 4, newStroke * 2];
+
+            clonedObj.set({
+                fill: '',
+                stroke: theObject.cornerColor,
+                strokeWidth: newStroke,
+                originalStrokeWidth: theObject.originalStrokeWidth,
+                strokeDashArray: newStrokeDashArray,
+                strokeLineCap: 'round',
+                strokeUniform: true,
+                left: clonedObj.left + clonedObj.width / 2,
+                top: clonedObj.top + clonedObj.height / 2,
+                originX: 'center',
+                originY: 'center',
+                selectable: false,
+                opacity: 1,
+                hasControls: false,
+                hasBorders: false,
+                isHighlight: true
+            });
+            delete clonedObj.type;
+
+            return clonedObj;
+        } catch (error) {
+            console.error("Error in selected function:", error);
+            return null;
+        }
     }
 
     /**
@@ -690,6 +758,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
             }
             ofObject.set(props);
         }
+    }
+
+    /**
+     * Apply selection style to the object
+     * @param {*} ofObject
+     */
+    applySelectionStyle(ofObject) {
+        ofObject.set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
     }
 
     /**

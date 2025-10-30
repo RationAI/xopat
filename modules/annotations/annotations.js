@@ -3,7 +3,7 @@
  * @type {OSDAnnotations}
  *
  * @typedef {{x: number, y: number}} Point
- * 
+ *
  * @typedef {{
  * 	id: string,
  * 	author: {
@@ -15,7 +15,7 @@
  *  replyTo?: string,
  * 	removed?: boolean,
  * }} AnnotationComment
- * 
+ *
  * @typedef {{
  * 	shown: boolean,
  * 	borderColor: string,
@@ -377,7 +377,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
 
 		if (imported) {
-			this.history.refresh();
+			this.historyManager.refresh();
 		}
 
 		this.raiseEvent('import', {
@@ -420,16 +420,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			props = this._exportedPropertiesGlobal(true);
 			props.push(withAllProps);
 		}
-		
+
 		if (typeof filter === "string") {
 			props.push(filter);
 			filter = undefined;
 		}
-		
+
 		props.push(...withProperties);
 		props.push(...this._extraProps);
 		props = Array.from(new Set(props));
-		
+
 		let objectsToExport = this.canvas.getObjects();
 		if (filter && typeof filter === "function") {
 			objectsToExport = objectsToExport.filter(filter);
@@ -439,7 +439,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			version: this.canvas.version,
 			objects: objectsToExport.map(obj => obj.toObject(props))
 		};
-		
+
 		if (withAllProps === true) return data;
 		return this.trimExportJSON(data);
 	}
@@ -586,11 +586,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				objects[i].lockUniScaling = false;
 			}
 			if (this.cachedTargetCanvasSelection) {
-				this.canvas.setActiveObject(this.cachedTargetCanvasSelection);
+				const selection = this.cachedTargetCanvasSelection;
+    			if (selection.type === 'activeSelection') {
+    			    selection.getObjects().forEach(obj => {
+    			        this.selectAnnotation(obj, true);
+						this.updateSingleAnnotationVisuals(obj);
+    			    });
+    			} else {
+    			    this.selectAnnotation(selection, true);
+					this.updateSingleAnnotationVisuals(selection);
+    			}
 			}
 		} else {
 			this.cachedTargetCanvasSelection = this.canvas.getActiveObject();
-			this.history.highlight(null);
+			this.historyManager.highlight(null);
 			for (let i = 0; i < objects.length; i++) {
 				//set all objects as invisible and lock in position
 				objects[i].visible = false;
@@ -604,7 +613,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				objects[i].lockSkewingY = true;
 				objects[i].lockUniScaling = true;
 			}
-			this.canvas.discardActiveObject();
+			this.clearAnnotationSelection(true);
 		}
 		this.canvas.renderAll();
 	}
@@ -618,7 +627,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	enableInteraction(on) {
 		this.disabledInteraction = !on;
 		this.raiseEvent('enabled', {isEnabled: on});
-		this.history._setControlsVisuallyEnabled(on);
+		this.historyManager._setControlsVisuallyEnabled(on);
 		//return to the default state, always
 		this.setMode(this.Modes.AUTO);
 	}
@@ -743,12 +752,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		}
 		const conf = factory.configure(object, props);
-		conf?._factory?.().renderAllControls(conf);
+        factory.renderAllControls(conf);
 
 		//todo make sure cached zoom value
 		const zoom = this.canvas.getZoom();
-		object.internalID = object.internalID || Date.now();
+		object.internalID = object.internalID || this._generateInternalId()
 		object.zooming(this.canvas.computeGraphicZoom(zoom), zoom);
+
+		this.historyManager.addAnnotationToBoard(object);
 	}
 
 	setCloseEdgeMouseNavigation(enable) {
@@ -776,10 +787,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {OSDAnnotations.Layer} layer it belongs to
 	 */
 	checkLayer(ofObject) {
-		if (!ofObject.hasOwnProperty("layerID")) {
-			if (this._layer) ofObject.layerID = this._layer.id;
-		} else if (!this._layers.hasOwnProperty(ofObject.layerID)) {
-			this.createLayer(ofObject.layerID);
+		if (ofObject.hasOwnProperty("layerID") && String(ofObject.layerID) && !this._layers.hasOwnProperty(ofObject.layerID)) {
+			this._createLayer({id: ofObject.layerID, _objects: []});
 		}
 	}
 
@@ -789,10 +798,112 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	setActiveLayer(layer) {
 		if (typeof layer === 'number') layer = this._layers[layer];
-		if (this._layer) this._layer.setActive(false);
 		this._layer = this._layers[layer.id];
 		this._layer.setActive(true);
+
+		this.raiseEvent('active-layer-changed', {
+			id: String(this._layer.id)
+		});
 	}
+
+	/**
+     * Unset the current active layer (keeps selection intact)
+     * @param {boolean} silent do not emit event
+     */
+    unsetActiveLayer() {
+        if (!this._layer) return;
+        this._layer.setActive(false);
+        this._layer = undefined;
+
+		this.raiseEvent('active-layer-changed', {
+			id: undefined
+		});
+    }
+
+	/**
+     * Select a layer (optionally append for multi-selection).
+     * @param {OSDAnnotations.Layer|number} layer layer instance or id
+     * @param {boolean} append true to keep existing selection and add this one
+     * @param {boolean} silent do not emit event
+     */
+    selectLayer(layer, silent=false) {
+        if (typeof layer === 'number') layer = this._layers[layer];
+        if (!layer) return;
+
+        if (!this._selectedLayers.has(layer.id)) {
+            this._selectedLayers.add(layer.id);
+            layer.setActive(true);
+
+			if (!silent) this._emitLayerSelectionChanged(layer.id, true);
+        }
+    }
+
+	/**
+     * Deselect a specific layer (if it was active, active layer becomes last remaining or undefined)
+     * @param {number} layerId
+     * @param {boolean} silent
+     */
+    deselectLayer(layerId, silent=false) {
+		layerId = String(layerId);
+        if (!this._selectedLayers.has(layerId)) return;
+        const layer = this._layers[layerId];
+        this._selectedLayers.delete(layerId);
+        if (layer) layer.setActive(false);
+
+        if (this._layer && this._layer.id === layerId) {
+            const last = Array.from(this._selectedLayers).at(-1);
+           	last ? this.setActiveLayer(Number(last)) : this.unsetActiveLayer();
+        }
+        if (!silent) this._emitLayerSelectionChanged(layerId, false);
+    }
+
+	/**
+     * Clear all layer selection (no active layer afterwards)
+     * @param {boolean} silent
+     */
+    clearLayerSelection(silent=false) {
+        if (this._selectedLayers.size === 0) return;
+		const ids = this.getSelectedLayerIds();
+
+        this._selectedLayers.forEach(id => {
+            const l = this._layers[id];
+            if (l) l.setActive(false);
+        });
+
+        this._selectedLayers.clear();
+        if (!silent) this._emitLayerSelectionChanged(ids, false);
+    }
+
+	/**
+     * Get array of selected layer instances
+     * @returns {OSDAnnotations.Layer[]}
+     */
+    getSelectedLayers() {
+        return Array.from(this._selectedLayers).map(id => this._layers[id]).filter(Boolean);
+    }
+
+	/**
+     * Get array of selected layer IDs
+     * @returns {string[]}
+     */
+    getSelectedLayerIds() {
+        return Array.from(this._selectedLayers);
+    }
+
+	/**
+     * Emit selection change event
+     * @private
+     */
+    _emitLayerSelectionChanged(layerIds, isSelected) {
+		const ids = Array.isArray(layerIds)
+            ? layerIds.map(id => String(id))
+            : (layerIds !== undefined && layerIds !== null ? String(layerIds) : layerIds);
+
+        this.raiseEvent('layer-selection-changed', {
+            ids: ids,
+			isSelected: isSelected
+        });
+    }
 
 	/**
 	 * Get layer by id
@@ -801,41 +912,60 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	getLayer(id=undefined) {
 		if (id === undefined) {
-			if (!this._layer) this.createLayer();
-			return this._layer;
+			return undefined;
 		}
 		return this._layers[id];
+	}
+
+	/**
+	 * Get all layers
+	 * @returns {OSDAnnotations.Layer[]}
+	 */
+	getAllLayers() {
+		return this._layers ? Object.values(this._layers) : [];
+	}
+
+	_serializeLayer(layerId) {
+	    const layer = this.getLayer(layerId);
+	    if (!layer) return null;
+
+		const data = layer.toObject();
+        if (this.historyManager) {
+            data._position = this.historyManager.getBoardIndex('layer', layerId);
+        }
+        return data;
 	}
 
 	/**
 	 * Create new layer
 	 * @event layer-added
 	 * @param {number|string} id optional
-	 * @return {OSDAnnotations.Layer}
+	 * @return {OSDAnnotations.Layer} new layer
 	 */
 	createLayer(id=Date.now()) {
 		id = String(id);
-		let layer = new OSDAnnotations.Layer(this, id);
-		if (!this._layer) this._layer = layer;
-		this._layers[id] = layer;
-		this.raiseEvent('layer-added', {layer: layer});
-		return layer;
+		let layerData = {id: id, _objects: []};
+
+		this.history.push(
+			() => this._createLayer(layerData),
+			() => {
+				layerData = this._serializeLayer(id);
+				this._deleteLayer(id);
+			}
+		);
 	}
 
 	/**
 	 * Delete layer
-	 * @param id
+	 * @param id layer id
 	 */
 	deleteLayer(id) {
-		let layer = this._layers[id];
-		if (!layer) return;
+		const layerData = this._serializeLayer(id);
 
-		const _this = this;
-		this.canvas.forEachObject(function (obj) {
-			if (obj.layerID === layer.id) _this.deleteObject(obj, false);
-		});
-		this.raiseEvent('layer-removed', {layer: layer});
-		this.canvas.renderAll();
+		this.history.push(
+			() => this._deleteLayer(id),
+			() => this._createLayer(layerData)
+		);
 	}
 
 	/**
@@ -862,7 +992,74 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.canvas.renderAll();
 	}
 
+	/**
+	 * Get the active layer
+	 * @returns {OSDAnnotations.Layer} active layer
+	 */
+	getActiveLayer() {
+		return this._layer;
+	}
+
+	/**
+     * Add an annotation to a layer.
+     * If layerID is missing, adds to the active layer; no-op if no active layer found.
+     * @param {fabric.Object} annotation
+     * @param {number} [index] insert position; appends by default
+     * @returns {void}
+     */
+	addAnnotationToLayer(annotation, index = undefined) {
+
+		if (!annotation.hasOwnProperty("layerID")) {
+			let activeLayer = this.getActiveLayer();
+			if (!activeLayer){
+				annotation.layerID = undefined;
+				return;
+			}
+
+			annotation.layerID = activeLayer.id;
+			activeLayer.addObject(annotation, index);
+			return;
+		}
+
+		let layer = this.getLayer(annotation.layerID);
+		if (!layer) return;
+		layer.addObject(annotation, index);
+	}
+
+	/**
+	 * Remove annotation from its layer
+	 * @param {*} annotation
+	 */
+	removeAnnotationFromLayer(annotation) {
+		const layer = this.getLayer(annotation.layerID);
+		if (layer) layer.removeObject(annotation);
+	}
+
 	/************************ Canvas object modification utilities *******************************/
+
+	_generateInternalId() {
+		const MULTIPLIER = 100;
+		const now = Date.now();
+		const objects = this.canvas._objects;
+		let lastIdTime = null;
+
+  		if (objects.length > 0) {
+			const lastObj = objects.at(-1);
+        	const idSource = lastObj?.isHighlight ? objects.at(-2) : lastObj;
+
+        	if (idSource?.internalID) {
+            	lastIdTime = Math.floor(idSource.internalID / MULTIPLIER);
+        	}
+  		}
+
+	  	if (now === lastIdTime) {
+	  	  this._idCounter++;
+	  	} else {
+	  	  this._idCounter = 0;
+	  	}
+
+	  	return now * MULTIPLIER + this._idCounter;
+	}
 
 	/**
 	 * Add annotation to the canvas without registering it with with available features (history, events...)
@@ -881,87 +1078,70 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {boolean} true if annotation was promoted
 	 */
 	promoteHelperAnnotation(annotation, _raise=true, _dangerousSkipHistory=false) {
-		annotation.off('selected');
-		annotation.off('deselected');
-		delete annotation.excludeFromExport;
-		if (Array.isArray(annotation._objects)) {
-			for (let child of annotation._objects) delete child.excludeFromExport;
-		}
-		annotation.sessionID = this.session;
-		annotation.author = XOpatUser.instance().id;
-		annotation.created = Date.now();
-		annotation.internalID = annotation.instaceID || annotation.created;
-
-        if (!_dangerousSkipHistory) {
-            // skip event if skipping history - internal logics
-            let cancelFlag = false;
-            try {
-                this.raiseEvent('annotation-before-create', {
-                    object: annotation,
-                    isCancelled: () => cancelFlag,
-                    setCancelled: (cancelled) => {cancelFlag = cancelled},
-                });
-            } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
-            if (cancelFlag) return false;
+        if (_dangerousSkipHistory) {
+            return this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory);
         }
+        // skip event if skipping history - internal logics
+        let cancelFlag = false;
+        try {
+            this.raiseEvent('annotation-before-create', {
+                object: annotation,
+                isCancelled: () => cancelFlag,
+                setCancelled: (cancelled) => {cancelFlag = cancelled},
+            });
+        } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
+        if (cancelFlag) return false;
+		return this.history.push(
+			() => this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory),
+			() => this._deleteAnnotation(annotation, _raise)
+		);
+    }
 
-        annotation.on('selected', this._objectClicked.bind(this));
-        annotation.on('deselected', this._objectDeselected.bind(this));
+    /**
+     * Change annotation's `private` property
+     * @param {fabric.Object} annotation Any annotation
+     * @param {boolean} value New value
+     */
+    setAnnotationPrivate(annotation, value) {
+        if (annotation.private === value) return;
+        annotation.private = value;
+        this.raiseEvent('annotation-set-private', {object: annotation});
+    }
 
-        if (!_dangerousSkipHistory) this.history.push(annotation);
-        this.canvas.discardActiveObject();
-        this.canvas.setActiveObject(annotation);
+    /**
+     * Check if comments were declared as enabled
+     * @returns {boolean}
+     */
+    getCommentsEnabled() {
+        return this.commentsEnabled;
+    }
 
-		if (_raise) this.raiseEvent('annotation-create', {object: annotation});
-		this.canvas.renderAll();
+    /**
+     * Add comment to annotation
+     * @param {fabric.Object} annotation Any annotation
+     * @param {AnnotationComment} comment Comment to add
+     */
+    addComment(annotation, comment) {
+        if (!annotation.comments) annotation.comments = [];
+        annotation.comments.push(comment);
+        this.raiseEvent('annotation-add-comment', {object: annotation, comment});
+    }
+
+    /**
+     * Delete comment from annotation
+     * @param {fabric.Object} annotation Any annotation
+     * @param {string} comment Comment ID to delete
+     * @returns {boolean} Whether the comment to delete was found
+     */
+    deleteComment(annotation, commentId) {
+        if (!annotation.comments) return false;
+        const found = annotation.comments.findIndex(c => c.id === commentId);
+        if (found === -1) return false;
+        // annotation.comments.splice(found, 1);
+        annotation.comments[found].removed = true;
+        this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
         return true;
-	}
-
-	/**
-	 * Change annotation's `private` property
-	 * @param {fabric.Object} annotation Any annotation
-	 * @param {boolean} value New value
-	 */
-	setAnnotationPrivate(annotation, value) {
-		if (annotation.private === value) return;
-		annotation.private = value;
-		this.raiseEvent('annotation-set-private', {object: annotation});
-	}
-
-	/**
-	 * Check if comments were declared as enabled
-	 * @returns {boolean}
-	 */
-	getCommentsEnabled() {
-		return this.commentsEnabled;
-	}
-
-	/**
-	 * Add comment to annotation
-	 * @param {fabric.Object} annotation Any annotation
-	 * @param {AnnotationComment} comment Comment to add
-	 */
-	addComment(annotation, comment) {
-		if (!annotation.comments) annotation.comments = [];
-		annotation.comments.push(comment);
-		this.raiseEvent('annotation-add-comment', {object: annotation, comment});
-	}
-
-	/**
-	 * Delete comment from annotation
-	 * @param {fabric.Object} annotation Any annotation
-	 * @param {string} comment Comment ID to delete
-	 * @returns {boolean} Whether the comment to delete was found
-	 */
-	deleteComment(annotation, commentId) {
-		if (!annotation.comments) return false;
-		const found = annotation.comments.findIndex(c => c.id === commentId);
-		if (found === -1) return false;
-		// annotation.comments.splice(found, 1);
-		annotation.comments[found].removed = true; 
-		this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
-		return true;
-	}
+    }
 
 	/**
 	 * Add annotation to the canvas. Annotation will have NEW identity
@@ -973,12 +1153,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {boolean} true if annotation was added
 	 */
 	addAnnotation(annotation, _raise=true) {
-		this.addHelperAnnotation(annotation);
-		return this.promoteHelperAnnotation(annotation, _raise);
-	}
+	    return this.history.push(
+			() => this._addAnnotation(annotation, _raise),
+			() => this._deleteAnnotation(annotation, _raise)
+		);
+    }
 
-	/**
-	 * Change the annotation
+    /**
+     * Change the annotation
 	 * @param annotation
 	 * @param presetID
 	 * @param _raise
@@ -1010,9 +1192,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Delete helper annotation, should not be used on full identity
 	 * annotation.
 	 * @param {fabric.Object} annotation helper annotation
+     * @return {boolean} true if annotation was deleted
 	 */
 	deleteHelperAnnotation(annotation) {
 		this.canvas.remove(annotation);
+        return true;
 	}
 
 	/**
@@ -1022,38 +1206,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {boolean} true if annotation was deleted
 	 */
 	deleteAnnotation(annotation, _raise=true) {
-		let cancelFlag = false;
-		try {
-			if (annotation) {
-				this.raiseEvent('annotation-before-delete', {
-					object: annotation,
-					isCancelled: () => cancelFlag,
-					setCancelled: (cancelled) => {cancelFlag = cancelled},
-				});
-			}
-		} catch (e) { console.error("Error in annotation-before-delete handler:", e); }
-		if (cancelFlag) return false;
+        this.history.push(
+            () => this._deleteAnnotation(annotation, _raise),
+            () => this._addAnnotation(annotation, _raise),
+        );
+    }
 
-		const wasSelected = this.canvas.getActiveObject() === annotation;
-		
-		annotation.off('selected');
-        annotation.off('deselected');
-        this.canvas.remove(annotation);
-		this.history.push(null, annotation);
-		this.canvas.renderAll();
-
-		if (_raise) {
-			this.raiseEvent('annotation-delete', {object: annotation});
-			if (wasSelected) this.raiseEvent('annotation-deselected', {object: annotation});
-		}
-        return true;
-	}
-
-	/**
-	 * Get annotation description from a preset, overriden by own object meta if present
+    /**
+     * Get annotation description from a preset, overriden by own object meta if present
 	 * @param {fabric.Object} annotation annotation to describe
 	 * @param {string} desiredKey metadata key to read and return
 	 * @param {boolean} defaultIfUnknown if false, empty string is returned in case no property was found
+	 * @param {boolean} withCoordinates if true, includes coordinates in the default name
 	 * @return {string|*} annotation description
 	 */
 	getAnnotationDescription(annotation, desiredKey="category", defaultIfUnknown=true, withCoordinates=true) {
@@ -1167,38 +1331,27 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				console.error("[replaceAnnotation] no full annotation object with temporary swap!", previous, next);
 			}
 
-		} else {
-			if (!this.isAnnotation(previous)) {
-				// Try to recover
-				console.warn("[replaceAnnotation] annotation is a helper object!", previous);
-				this.promoteHelperAnnotation(previous, false, true);
-			}
-
-			// !! keep reference of entity identity the same !!
-			next.internalID = previous.internalID;
-			if (!this.isAnnotation(next)) {
-				this.promoteHelperAnnotation(next, false, true);
-			}
+			this._replaceAnnotation(previous, next, false);
+            this.raiseEvent('annotation-replace-doppelganger', {previous, next});
+            return true;
 		}
 
-		const wasActive = (this.canvas.getActiveObject() === previous);
-		if (wasActive) {
-            this.canvas.discardActiveObject();
-		}
-		this.canvas.remove(previous);
-		previous.off('selected');
-		previous.off('deselected');
+        if (!this.isAnnotation(previous)) {
+            // Try to recover
+            console.warn("[replaceAnnotation] annotation is a helper object!", previous);
+            this._promoteHelperAnnotation(previous, false, true);
+        }
 
-		this.canvas.add(next);
-		this.canvas.renderAll();
+        // !! keep reference of entity identity the same !!
+        next.internalID = previous.internalID;
+        if (!this.isAnnotation(next)) {
+            this._promoteHelperAnnotation(next, false, true);
+        }
 
-		if (isDoppelganger) {
-			this.raiseEvent('annotation-replace-doppelganger', {previous, next});
-		} else {
-			this.history.push(next, previous);
-			this.raiseEvent('annotation-replace', {previous, next});
-		}
-        return true;
+        return this.history.push(
+            () => this._replaceAnnotation(previous, next, true),
+            () => this._replaceAnnotation(next, previous, true)
+        );
 	}
 
 	/**
@@ -1242,6 +1395,216 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/**
+     * Get array of selected annotation IDs (incrementId as strings)
+     * @returns {string[]}
+     */
+    getSelectedAnnotationIds() {
+		return this.getSelectedAnnotations()
+        	.map(obj => String(obj.incrementId))
+        	.filter(Boolean);
+    }
+
+ 	/**
+     * Get array of selected annotation objects
+     * @returns {fabric.Object[]}
+     */
+    getSelectedAnnotations() {
+        const activeObject = this.canvas.getActiveObject();
+    	if (!activeObject) return [];
+
+    	return activeObject.type === 'activeSelection'
+        	? activeObject._objects
+        	: [activeObject];
+    }
+
+	/**
+     * Select an annotation by object or incrementId; supports multi-select.
+     * @param {fabric.Object|number|string} annotation
+     * @param {boolean} [fromCanvas=false]
+     * @returns {void}
+     */
+    selectAnnotation(annotation, fromCanvas=false) {
+        //todo fix this method
+		if (annotation === null || annotation === undefined) return;
+		const obj = typeof annotation === 'object' ?
+            annotation : this.findObjectOnCanvasByIncrementId(Number(annotation));
+
+    	if (!obj) return;
+    	const canvas = this.canvas;
+    	let active = this.__oldSelection || this.canvas.getActiveObject();
+
+    	if (!active) {
+    	    canvas.setActiveObject(obj);
+            this.__oldSelection = obj;
+    	} else if (active.incrementId === obj.incrementId) {
+    	    return;
+    	}
+
+        if (active?.type === 'activeSelection') {
+    	    if (!active._objects.includes(obj)) {
+    	        active.addWithUpdate(obj);
+    	    }
+            this.__oldSelection = obj;
+    	} else {
+    	    const sel = new fabric.ActiveSelection(active ? [obj] : [obj], { canvas });
+			sel.hasBorders = false;
+			sel.hasControls = false;
+    	    canvas.setActiveObject(sel);
+            this.__oldSelection = sel;
+    	}
+
+		canvas.requestRenderAll();
+		if (typeof annotation === 'object') annotation = annotation.incrementId;
+    	this._emitAnnotationSelectionChanged(annotation, true, fromCanvas);
+    }
+
+
+	/**
+     * Deselect an annotation by incrementId.
+     * Handles single and multi-selection.
+     * @param {fabric.Object|string|number} object object or incrementId of the annotation to deselect
+     * @param {boolean} [fromCanvas=false]
+     * @returns {void}
+     */
+    deselectAnnotation(object, fromCanvas=false) {
+        const canvas = this.canvas;
+        const obj = typeof object === 'object' ? object : this.findObjectOnCanvasByIncrementId(object);
+    	if (!obj) return;
+
+    	const active = this.canvas.getActiveObject() || this.__oldSelection; // todo oldSelection maybe not necessary
+    	if (!active) return;
+
+    	if (active.type === 'activeSelection') {
+    	    if (active._objects.includes(obj)) {
+    	        active.removeWithUpdate(obj);
+
+    	        if (active._objects.length === 1) {
+    	            const single = active._objects[0];
+    	            canvas.setActiveObject(single);
+    	        }
+    	        else if (active._objects.length === 0) {
+    	            canvas.discardActiveObject();
+                    this.__oldSelection = null;
+    	        }
+    	    }
+    	} else if (active.incrementId === obj.incrementId) {
+    	    canvas.discardActiveObject();
+            this.__oldSelection = null;
+    	}
+
+    	canvas.requestRenderAll();
+    	this._emitAnnotationSelectionChanged(id, false, fromCanvas);
+    }
+
+	/**
+     * Emit annotation selection change
+     */
+    _emitAnnotationSelectionChanged(annotationIds, isSelected, fromCanvas) {
+		const ids = Array.isArray(annotationIds)
+            ? annotationIds.map(id => String(id))
+            : (annotationIds !== undefined && annotationIds !== null ? String(annotationIds) : annotationIds);
+
+        // todo selection event collision
+        this.raiseEvent('annotation-selection-changed', {
+            ids: ids,
+            isSelected: isSelected,
+            fromCanvas: fromCanvas
+        });
+    }
+
+	/**
+     * Clear all annotation selection
+     */
+    clearAnnotationSelection(fromCanvas=false) {
+		const selected = this.getSelectedAnnotationIds();
+    	if (!selected.length) return;
+
+		this.canvas.discardActiveObject();
+    	this.canvas.requestRenderAll();
+        this.__oldSelection = null;
+
+    	this._emitAnnotationSelectionChanged(selected, false, fromCanvas);
+    }
+
+	/**
+     * Check if an annotation object is currently selected.
+     * Works with single and multi-selection.
+     * @param {fabric.Object} object annotation object to test
+     * @param {fabric.Object|fabric.ActiveSelection} [referenceSelection] optionally, perform the test against custom selection reference
+     * @returns {boolean} true if selected
+     */
+	isAnnotationSelected(object, referenceSelection = null) {
+		if (!object) return false;
+        const active = referenceSelection || this.canvas.getActiveObject();
+        if (!active) return false;
+        if (active.type === 'activeSelection') {
+            return !!(active._objects && active._objects.includes(object));
+        }
+        return active.incrementId === object.incrementId;
+    }
+
+	/**
+	 * Delete all selected annotations and layers
+	 * @param {boolean} withWarning show warning if nothing is selected
+	 * @returns {void}
+	 */
+	deleteSelection(withWarning=true) {
+        const layerIds = [...(this.getSelectedLayerIds?.() || [])];
+    	const selectedAnnObjs = (this.getSelectedAnnotations?.() || []);
+
+		if (layerIds.length === 0 && selectedAnnObjs.length === 0) {
+        	if (withWarning) {
+        	    Dialogs.show("Please select annotations or layers you would like to delete", 3000, Dialogs.MSG_INFO);
+        	}
+        	return;
+    	}
+
+        const layerIdSet = new Set(layerIds.map(String));
+    	const annToDelete = selectedAnnObjs.filter(obj => !layerIdSet.has(String(obj.layerID)));
+
+        const layersData = layerIds
+            .map(id => this._serializeLayer?.(String(id)))
+            .filter(Boolean);
+
+		for (const obj of annToDelete) {
+    	    if (obj.layerID) {
+    	        const layer = this.getLayer(obj.layerID);
+    	        obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
+    	    } else {
+    	        obj._position = this.historyManager.getBoardIndex('annotation', obj.incrementId);
+    	    }
+    	}
+
+		const combined = [
+        	...layersData.map(ld => ({ type: "layer", data: ld, pos: ld._position })),
+        	...annToDelete.map(a => ({ type: "annotation", data: a, pos: a._position }))
+    	].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+
+		this.history.push(
+        	() => {
+				for (const item of [...combined].reverse()) {
+                	if (item.type === "annotation") {
+                	    this._deleteAnnotation?.(item.data, true);
+                	} else {
+                	    this._deleteLayer?.(String(item.data.id));
+                	}
+            	}
+           	 	this.clearLayerSelection?.(true);
+           	 	this.clearAnnotationSelection?.(true);
+        	},
+        	() => {
+				for (const item of combined) {
+                	if (item.type === "annotation") {
+						this._addAnnotation?.(item.data, true);
+                	} else {
+						this._createLayer?.(item.data);
+                	}
+            	}
+        	}
+    	);
+    }
+
+	/**
 	 * Find annotations by a predicate
 	 * @param callback
 	 * @return {*}
@@ -1258,11 +1621,12 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Delete object without knowledge of its identity (fully-fledged annotation or helper one)
 	 * @param {fabric.Object} o
 	 * @param _raise @private
+     * @return {boolean} true if object was deleted
 	 */
 	deleteObject(o, _raise=true) {
-		this._deletedObject = o;
-		if (this.isAnnotation(o)) this.deleteAnnotation(o, _raise);
-		else this.deleteHelperAnnotation(o);
+		// this._deletedObject = o;
+		if (this.isAnnotation(o)) return this._deleteAnnotation(o, _raise);
+		return this.deleteHelperAnnotation(o);
 	}
 
 	/**
@@ -1273,9 +1637,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	focusObjectOrArea(object, incremendId=undefined) {
 		if (object.incrementId) {
-			object = this.history._getFocusBBox(object);
+			object = this.historyManager._getFocusBBox(object);
 		}
-		this.history._focus(object, incremendId);
+		this.historyManager._focus(object, incremendId);
 	}
 
 	/**
@@ -1310,7 +1674,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	undo() {
 		const can = this.mode.canUndo();
-		if (can === undefined) return this.history.back();
+		if (can === undefined) return this.history.undo();
 		this.mode.undo();
 		this.raiseEvent('history-change');
 	}
@@ -1358,7 +1722,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * Deselect active object (single)
 	 */
 	deselectFabricObjects() {
-		this.canvas.discardActiveObject().renderAll();
+		this.clearAnnotationSelection(true);
+		this.canvas.renderAll();
 	}
 
 	/**
@@ -1366,12 +1731,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
 	removeActiveObject(withWarning=true) {
-		let toRemove = this.canvas.getActiveObject();
-		if (toRemove) {
-			this.deleteObject(toRemove);
-		} else if (withWarning) {
-			Dialogs.show("Please select the annotation you would like to delete", 3000, Dialogs.MSG_INFO);
-		}
+		let activeObject = this.canvas.getActiveObject();
+		if (!activeObject) {
+        	if (withWarning) {
+        	    Dialogs.show("Please select the annotation you would like to delete", 3000, Dialogs.MSG_INFO);
+        	}
+        	return;
+    	}
+
+		if (activeObject.type === 'activeSelection') {
+        	activeObject.getObjects().forEach(obj => {
+        	    this.deleteObject(obj);
+        	});
+        	this.canvas.requestRenderAll();
+    	} else {
+        	this.deleteObject(activeObject);
+    	}
 	}
 
 	/**
@@ -1398,11 +1773,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @return {boolean} true on update success
 	 */
 	updateSingleAnnotationVisuals(object) {
+		if (object.isHighlight) return false;
+
 		let preset = this.presets.get(object.presetID);
 		if (preset) {
 			const factory = this.getAnnotationObjectFactory(object.factoryID);
 			const visuals = {...this.presets.commonAnnotationVisuals};
 			factory.updateRendering(object, preset, visuals, visuals);
+
+			const isSelected = this.isAnnotationSelected(object);
+            if (isSelected) factory?.applySelectionStyle?.(object, this);
 			return true;
 		}
 		// todo consider adding such preset
@@ -1417,7 +1797,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	updateAnnotationVisuals = UTILITIES.makeThrottled(() => {
 		this.canvas.getObjects().forEach(o => this.updateSingleAnnotationVisuals(o));
 		this.canvas.requestRenderAll();
-		this.history.forEachHistoryCacheObject(o => this.updateSingleAnnotationVisuals(o), true);
 		this.raiseEvent('visual-property-changed', {visuals: this.presets.commonAnnotationVisuals});
 	}, 180);
 
@@ -1490,7 +1869,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (this.user.id === obj.author) return;
 
 		const author = this.mapAuthorCallback?.(obj);
-		
+
 		if (
 			!author ||
 			author === this.user.id
@@ -1522,7 +1901,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Enable or disable per author styling
-	 * @param {boolean} enable 
+	 * @param {boolean} enable
 	 */
 	toggleStrokeStyling(enable) {
 		this.strokeStyling = enable;
@@ -1569,7 +1948,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	getAuthorConfig(authorId) {
 		const authorsConfig = this.getAuthorsConfig();
 		let config = authorsConfig[authorId];
-		
+
 		if (!config) {
 			config = {
 				shown: true,
@@ -1580,7 +1959,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			// Save the new config immediately to prevent regeneration
 			this.setAuthorConfig(authorId, config);
 		}
-		
+
 		return {
 			shown: true,
 			borderColor: this.generateRandomColor(),
@@ -1648,7 +2027,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// note the board would have to reflect the UI state when opening
 
 		const _this = this;
-		
+
 		/**
 		 * Attach factory getter to each object
 		 */
@@ -1662,6 +2041,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			return factory;
 		}
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
+			if (this.isHighlight) _this.highlightOnZoom(this, zoom, _realZoom);
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
 
@@ -1688,7 +2068,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			}
 		};
 
-
 		this.Modes = {
 			AUTO: new OSDAnnotations.AnnotationState(this, "", "", ""),
 		};
@@ -1700,6 +2079,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._wasModeFiredByKey = false;
 		this._trackedDoppelGangers = {};
 		this._dopperlGangerCount = 0;
+		this._idCounter = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = APPLICATION_CONTEXT.getOption("exportPrivate", this.getStaticMeta("exportPrivate", false));
 		this.cursor = {
@@ -1725,10 +2105,20 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.presets = new OSDAnnotations.PresetManager("presets", this);
 		/**
 		 * History reference
-		 * @member {OSDAnnotations.History}
+		 * @member {History}
 		 */
-		this.history = new OSDAnnotations.History("history", this, this.presets);
-		this.history.size = 50;
+		this.history = APPLICATION_CONTEXT.history;
+		/**
+		 * History Manager reference
+		 * @member {OSDAnnotations.AnnotationHistoryManager}
+		 */
+		this.historyManager = new OSDAnnotations.AnnotationHistoryManager("historyManager", this, this.presets);
+
+		this.history.setStateChangeCallback(({ canUndo, canRedo }) => {
+			this.historyManager.setHistoryState(canUndo, canRedo);
+			this.raiseEvent('history-change');
+		});
+
 		/**
 		 * FreeFormTool reference
 		 * @member {OSDAnnotations.FreeFormTool}
@@ -1767,10 +2157,137 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 */
 		this.multiPolygonFactory = this._requireAnnotationObjectPresence("multipolygon");
 
+		this._layers = {};					// all existing layers (id -> layer)
+        this._layer = undefined;            // active layer (last selected)
+		this._selectedLayers = new Set();   // all selected layers (ids)
 
-		this._layers = {};
-		if (Object.keys(this._layers).length < 1) this.createLayer();
 		this.setMouseOSDInteractive(true, false);
+
+		this._deleteAnnotation = (annotation, _raise = true) => {
+            let cancelFlag = false;
+            try {
+                if (annotation) {
+                    this.raiseEvent('annotation-before-delete', {
+                        object: annotation,
+                        isCancelled: () => cancelFlag,
+                        setCancelled: (cancelled) => {cancelFlag = cancelled},
+                    });
+                }
+            } catch (e) { console.error("Error in annotation-before-delete handler:", e); }
+            if (cancelFlag) return false;
+
+            // todo, fires event -> respect _raise flag?
+            if (this.isAnnotationSelected(annotation)) this.deselectAnnotation(annotation, true);
+
+            annotation.off('selected');
+            // annotation.off('deselected');
+            this.canvas.remove(annotation);
+            this.removeAnnotationFromLayer(annotation);
+            this.historyManager.removeAnnotationFromBoard(annotation);
+            this.canvas.renderAll();
+
+            if (_raise) {
+                this.raiseEvent('annotation-delete', {object: annotation});
+            }
+            return true;
+		};
+
+		this._promoteHelperAnnotation = (annotation, _raise = true, _dangerousSkipHistory = false) => {
+            annotation.off('selected');
+            annotation.on('selected', this._objectClicked.bind(this));
+            // annotation.off('deselected');
+            delete annotation.excludeFromExport;
+            if (Array.isArray(annotation._objects)) {
+                for (let child of annotation._objects) delete child.excludeFromExport;
+            }
+            annotation.sessionID = this.session;
+            annotation.author = XOpatUser.instance().id;
+            annotation.created = annotation.created || Date.now();
+            annotation.id = annotation.id || crypto.randomUUID();
+            annotation.internalID = annotation.internalID || this._generateInternalId();
+
+            const layerIndex = annotation.hasOwnProperty("_position") && annotation.layerID ? annotation._position : undefined;
+            const boardIndex = annotation.hasOwnProperty("_position") && !annotation.layerID ? annotation._position : undefined;
+
+            this.updateSingleAnnotationVisuals(annotation);
+            this.addAnnotationToLayer(annotation, layerIndex);
+
+            if (!_dangerousSkipHistory) this.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
+            this.clearAnnotationSelection(true);
+            this.selectAnnotation(annotation, true);
+
+            if (_raise) this.raiseEvent('annotation-create', {object: annotation});
+            this.canvas.renderAll();
+            return true;
+		};
+
+		this._addAnnotation = (annotation, _raise = true) => {
+ 			this.addHelperAnnotation(annotation);
+	        const promoted = this._promoteHelperAnnotation(annotation, _raise, false);
+            if (!promoted) this.deleteHelperAnnotation(annotation);
+            return promoted;
+		};
+
+		this._replaceAnnotation = (previous, next, updateUI) => {
+			let boardIndex = undefined;
+			if (previous.layerID) {
+                const layerIndex = this.getLayer(previous.layerID).getAnnotationIndex(previous);
+				this.removeAnnotationFromLayer(previous);
+				this.addAnnotationToLayer(next, layerIndex);
+			} else {
+				boardIndex = this.historyManager.getBoardIndex('annotation', previous.incrementId);
+			}
+
+			this.canvas.remove(previous);
+    		this.canvas.add(next);
+
+			if (updateUI) {
+				//this.removeHighlight();
+				//this.highlightAnnotation(next);
+				this.historyManager.addAnnotationToBoard(next, previous, boardIndex);
+			}
+
+			this.clearAnnotationSelection(true);
+			this.selectAnnotation(next, true);
+
+			this.canvas.renderAll();
+    		this.raiseEvent('annotation-replace', {previous, next});
+			this.raiseEvent('history-change');
+		};
+
+		this._createLayer = (layerData) => {
+			const restoredLayer = new OSDAnnotations.Layer(this, layerData.id);
+
+			for (let [key, value] of Object.entries(layerData)) {
+            	restoredLayer[key] = value;
+            }
+
+			this._layers[layerData.id] = restoredLayer;
+			const boardIndex = restoredLayer.hasOwnProperty("_position") ? restoredLayer._position : undefined;
+    		this.historyManager.addLayerToBoard(restoredLayer, boardIndex);
+
+			for (let obj of layerData._objects) {
+    	        this._addAnnotation(obj, false);
+    	    }
+
+			this.raiseEvent('layer-added', {layer: restoredLayer});
+		};
+
+		this._deleteLayer = (layerId) => {
+    	    let layer = this.getLayer(layerId);
+			if (!layer) return;
+
+ 			const layerObjects = [...layer.getObjects()];
+            for (let obj of layerObjects) {
+                this._deleteAnnotation(obj, false);
+            }
+
+			this.historyManager.removeLayerFromBoard(layer);
+			delete this._layers[layerId];
+			this._selectedLayers.delete(layerId);
+
+			this.raiseEvent('layer-removed', {layer: layer});
+		};
 	}
 
 	_requireAnnotationObjectPresence(type) {
@@ -1807,6 +2324,17 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 
 	_setListeners() {
 		const _this = this;
+
+        // todo this event is called too often when clicking, the update should be preformed once to reflect the correct state - e.g. prevent by flag, or add deferred execution
+        this.addHandler('annotation-selection-changed', (payload) => {
+			const ids = Array.isArray(payload.ids) ? payload.ids : [payload.ids];
+
+	    	ids.forEach(id => {
+        		const annotation = _this.findObjectOnCanvasByIncrementId(Number(id));
+        		if (annotation) _this.updateSingleAnnotationVisuals(annotation);
+    		});
+        });
+
 		VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
 		VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
 		//Window switch alt+tab makes the mode stuck
@@ -1975,6 +2503,14 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			}
 		});
 
+		const handleDeselectionFromCanvas = (e) => {
+            console.log("Selection", e);
+            const ids = (e?.deselected || []).map(obj => obj.incrementId);
+            if (ids.length) _this._emitAnnotationSelectionChanged(ids, false, true);
+        };
+        this.canvas.on('selection:updated', handleDeselectionFromCanvas);
+        this.canvas.on('selection:cleared', handleDeselectionFromCanvas);
+
 		/****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
 		VIEWER.addHandler("animation-start", function() {
@@ -2056,6 +2592,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	}
 
 	_keyDownHandler(e) {
+		if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 		// switching mode only when no mode AUTO and mouse is up
 		if (this.cursor.isDown || this.disabledInteraction || !e.focusCanvas) return;
 
@@ -2068,7 +2605,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 	}
 
 	_keyUpHandler(e) {
-		if (this.disabledInteraction) return;
+		if (this.disabledInteraction || (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))) return;
 
 		if (e.focusCanvas) {
 			if (!e.ctrlKey && !e.altKey) {
@@ -2079,7 +2616,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				if (e.key === "Escape") {
 					this.deselectFabricObjects();  // this ensures discard does not delete created object!
 					this.mode.discard(false);
-					this.history._boardItemSave();
+					this.historyManager._boardItemSave();
 					this.setMode(this.Modes.AUTO);
 					return;
 				}
@@ -2096,58 +2633,181 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		}
 	}
 
-	_objectDeselected(event) {
-		if (this.disabledInteraction || !event.target) return;
-		this.raiseEvent('annotation-deselected', {object: event.target});
-
-		//todo make sure deselect prevent does not prevent also deletion
-		try {
-			if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
-				this.disabledInteraction = true;
-				this.canvas.setActiveObject(event.target);
-				this.disabledInteraction = false;
-			}
-		} catch (e) {
-			console.error(e);
-		}
-	}
+    // todo consider removal
+	// _objectDeselected(event) {
+	// 	if (this.disabledInteraction || !event.target) return;
+	// 	//todo make sure deselect prevent does not prevent also deletion
+	// 	try {
+	// 		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
+	// 			this.disabledInteraction = true;
+	// 			this.selectAnnotation(event.target?.incrementId, true)
+	// 			this.disabledInteraction = false;
+	// 		}
+	// 		//this.removeHighlight();
+    //
+	// 	} catch (e) {
+	// 		console.error(e);
+	// 	}
+	// }
 
 	_objectClicked(event) {
 		if (this.disabledInteraction) return;
 		let object = event.target;
 
 		try {
-			if (!this.mode.objectSelected(event, object)) {
-				this.context.disabledInteraction = true;
-				this.context.canvas.discardActiveObject();
-				this.context.disabledInteraction = false;
-			} else {
-				this.history.highlight(object);
-				if (this.history.isOngoingEditOf(object)) {
-					if (this.isMouseOSDInteractive()) {
-						object.set({
-							hasControls: false,
-							lockMovementX: true,
-							lockMovementY: true
-						});
-					}
-				} else {
-					let factory = this.getAnnotationObjectFactory(object.factoryID);
-					if (factory) {
-						factory.selected(object);
-						this.raiseEvent('annotation-selected', {object});
-					}
-				}
-			}
+            this.disabledInteraction = true;
+            let clickedObject = this.canvas.getActiveObject();
+            const originalEvent = event.e;
+            // non-user event, selection fired by the system (e.g. annotation added to canvas)
+            if (!originalEvent) return;
+
+            // const isOnActive = !!(active && active.containsPoint && active.containsPoint(pointer));
+
+            if (!clickedObject && clickedObject && clickedObject.type === 'activeSelection') {
+                // todo simona moved code here to compute only when needed, select one to use
+
+                const pointer = this.canvas.getPointer(event);
+
+                // const point = new OpenSeadragon.Point(originalEvent.x, originalEvent.y);
+                // const pointer = VIEWER.scalebar.getReferencedTiledImage().imageToWindowCoordinates(point);
+
+                // todo simona removed pointer creation here, re-using the created one above, either we use image-coords-level pointer or window, don't create a third one, if you prefer creation of
+                //  fabric pointer, create it above
+                for (const obj of clickedObject._objects) {
+                    let currObj = {
+                        left: obj.left + clickedObject.left + (clickedObject.width / 2),
+                        top: obj.top + clickedObject.top + (clickedObject.height / 2),
+                        width: obj.width,
+                        height: obj.height
+                    }
+
+                    if (
+                        pointer.x >= currObj.left &&
+                        pointer.x <= currObj.left + currObj.width &&
+                        pointer.y >= currObj.top &&
+                        pointer.y <= currObj.top + currObj.height
+                    ) {
+                        // todo simona this needs to do fine selection upon AAB hit similar to what brush tool does, but RN it is point VS polygon - simpler
+
+                        // select only if not already selected
+                        if (clickedObject !== obj) {
+                            clickedObject = obj;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (!clickedObject) {
+                // if (isOnActive && active && active.type !== 'activeSelection' && hasModifier) {
+                //     this.clearAnnotationSelection(true);
+                //     this.requestRenderAll();
+                // }
+                return;
+            }
+
+            if (this.historyManager.isOngoingEditOf(object)) {
+                if (this.isMouseOSDInteractive()) {
+                    // todo this should be hidden in factory api
+                    object.set({
+                        hasControls: false,
+                        lockMovementX: true,
+                        lockMovementY: true
+                    });
+                }
+                return;
+            }
+
+            if (originalEvent.ctrlKey || originalEvent.metaKey || originalEvent.shiftKey) {
+                // check old selection
+                const isSelected = this.isAnnotationSelected(clickedObject, this.__oldSelection);
+                // If the mode does not allow, skip
+                if (isSelected && this.mode.objectDeselected(event, object)) {
+                    this.deselectAnnotation(clickedObject, true);
+                } else if (!isSelected && this.mode.objectSelected(event, object)) {
+                    this.selectAnnotation(clickedObject, true);
+                }
+                return;
+            }
+
+            // If the mode does not allow selection, skip
+            if (!this.mode.objectSelected(event, object)) {
+                return;
+            }
+
+            this.clearAnnotationSelection(true);
+            this.selectAnnotation(clickedObject, true);
 		} catch (e) {
 			console.error(e);
+		} finally {
+            this.disabledInteraction = false;
+        }
+	}
+
+	/**
+	 * Removes the current highlight of annotation, if any
+	 */
+	removeHighlight() {
+		this.setHighlight(null);
+	}
+
+	/**
+	 * Highlights selected annotation by adding highlight object as
+	 * helper annotation
+	 * @param {fabric.Object} selectedObject selected annotation to highlight
+	 */
+	async highlightAnnotation(selectedObject) {
+		this.removeHighlight();
+
+		let factory = this.getAnnotationObjectFactory(selectedObject.factoryID);
+		if (!factory) return;
+
+		const highlight = await factory.selected(selectedObject);
+		if (!highlight) return;
+
+		this.setHighlight(highlight);
+	}
+
+	/**
+	 * Sets the highlight object, removing any existing one first
+	 * @param {fabric.Object} highlightObject the object to be set as highlight
+	 */
+	setHighlight(highlightObject) {
+		if (this._currentHighlight) {
+			this.deleteHelperAnnotation(this._currentHighlight);
+			this._currentHighlight = null;
 		}
+
+		if (highlightObject) {
+			this._currentHighlight = highlightObject;
+			this.addHelperAnnotation(highlightObject);
+		}
+	}
+
+	/**
+	 * Retrieves the currently active highlight object, if any
+	 * @returns {fabric.Object|null} the highlight object or null if none
+	 */
+	getHighlight() {
+		return this._currentHighlight;
+	}
+
+	/**
+	 * Adjusts the visual style of an annotation's highlight based on zoom levels
+	 * @param {fabric.Object} object highlight object to adjust
+	 * @param {number} graphicZoom scaled zoom value to better draw graphics
+	 * @param {number} realZoom real zoom value of the viewer
+	 */
+	highlightOnZoom(object, graphicZoom, realZoom) {
+		object.set({
+			strokeWidth: (object.originalStrokeWidth / graphicZoom) * 7,
+			strokeDashArray: [object.strokeWidth * 4, object.strokeWidth * 2]
+		});
 	}
 
 	_loadObjects(input, clear, inheritSession = false) {
 		//from loadFromJSON implementation in fabricJS
 		const _this = this.canvas, self = this;
-		const multipolygonFactory = this.multiPolygonFactory;
 
 		// If we get already fabric.js objects, avoid passing them to enlivenObjects
 		const fabricObjects = [];
@@ -2156,16 +2816,22 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			if (obj instanceof fabric.Object) {
 				fabricObjects.push(obj);
 			} else {
-				// TODO Dirty patch, detect factory and forward before-import hook via its API
-				if (obj.type === 'path' && obj.points && !obj.path) {
-					obj.path = multipolygonFactory._createPathFromPoints(obj.points);
-				}
+				const factory = this.getAnnotationObjectFactory(obj.factoryID);
+				factory.initializeBeforeImport(obj);
 				nonFabricObjects.push(obj);
 			}
 		}
 
 		return fabric.util.enlivenObjects(nonFabricObjects, objects => {
-		 if (clear) this.canvas.clear();
+             if (clear) {
+                this.canvas.clear();
+                this.historyManager.clearBoard();
+                this._layers = {};
+                this._layer = undefined;
+                this.clearAnnotationSelection();
+                this.clearLayerSelection();
+                this.unsetActiveLayer();
+            }
 			let insertion = 0;
 
 			function initObject(obj) {
@@ -2175,7 +2841,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				self.checkLayer(obj);
 				self.checkAnnotation(obj);
 				obj.on('selected', self._objectClicked.bind(self));
-				obj.on('deselected', self._objectDeselected.bind(self));
+				// obj.on('deselected', self._objectDeselected.bind(self));
 				_this.insertAt(obj, insertion++);
 			}
 
@@ -2187,7 +2853,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			for (let obj of fabricObjects) {
 				initObject(obj);
 			}
-			self.history.assignIDs(_this.getObjects());
+			self.historyManager.assignIDs(_this.getObjects());
 		});
 	}
 
@@ -2501,7 +3167,7 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
 	discard(withWarning=true) {
-		this.context.removeActiveObject(withWarning);
+		this.context.deleteSelection(withWarning);
 	}
 
 	/**
@@ -2606,40 +3272,20 @@ OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 		super(context, "auto", "open_with", "🆀  navigate / select annotations");
 	}
 
-	handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (!isLeftClick) return false;
-
-		let clickTime = Date.now();
-
-		let clickDelta = clickTime - this.context.cursor.mouseTime,
-			canvas = this.context.canvas;
-
-		// just navigate if click longer than 100ms or other conds not met, fire if double click
-		if (clickDelta > 100) return false;
-
-		//instead of auto-creation, select underneath
-		if (!isLeftClick) return false;
-		const active = canvas.getActiveObject();
-		if (active) {
-			active.sendToBack();
-		}
-		const object = canvas.findNextObjectUnderMouse(point, active);
-		if (object) {
-			canvas.setActiveObject(object, o);
-		}
-		this.context.canvas.renderAll();
-
-		return true; //considered as handled
-	}
-
-	handleClickDown(o, point, isLeftClick, objectFactory) {
-		//if clicked on object, highlight it
-		let active = this.context.canvas.findTarget(o);
-		if (!active) {
-			this.context.canvas.discardActiveObject();
-		}
-		this.context.canvas.renderAll();
-	}
+	// handleClickUp(o, point, isLeftClick, objectFactory) {
+	// 	if (!isLeftClick) return false;
+    //
+	// 	let clickTime = Date.now();
+    //
+	// 	let clickDelta = clickTime - this.context.cursor.mouseTime,
+	// 		canvas = this.context.canvas;
+    //
+	// 	// just navigate if click longer than 100ms or other conds not met, fire if double click
+	// 	if (clickDelta > 100) return false;
+    //
+	//
+	// 	return true; //considered as handled
+	// }
 
 	customHtml() {
 		return "";
@@ -2670,7 +3316,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 	}
 
 	fftStartWith(point, ffTool, reference, wasCreated) {
-		this.context.canvas.discardActiveObject();
 		if (reference.asPolygon) {
 			ffTool.init(reference.object, wasCreated.asPolygon);
 		} else {
@@ -2708,7 +3353,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		}, getObjectAsCandidateForIntersectionTest);
 
 		const polygonUtils = OSDAnnotations.PolygonUtilities;
-		const active = this.context.canvas.getActiveObject();
+		const active = this.context.getSelectedAnnotations().length > 0;
 		let max = 0, result = candidates; // by default return the whole list if intersections are <= 0
 
 		for (let candidate of candidates) {
@@ -2799,7 +3444,6 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
 		}
 		return true;
@@ -2815,6 +3459,8 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 			this.abortClick(isLeftClick);
 			return;
 		}
+		this.context.clearAnnotationSelection(true);
+
 		let created = false;
 		const ffTool = this.context.freeFormTool;
 		ffTool.zoom = this.context.canvas.getZoom();
@@ -2854,7 +3500,6 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 		this.candidates = null;
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
 		}
 		return true;
@@ -2883,6 +3528,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 			this.abortClick(isLeftClick);
 			return;
 		}
+		this.context.clearAnnotationSelection(true);
 
 		const ffTool = this.context.freeFormTool;
 		ffTool.zoom = this.context.canvas.getZoom();
@@ -2995,7 +3641,6 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		//deselect active if present
 		this.context.canvas.hoverCursor = "crosshair";
 		this.context.canvas.defaultCursor = "crosshair";
-		this.context.canvas.discardActiveObject();
 		return true;
 	}
 
@@ -3035,7 +3680,6 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 		this.candidates = null;
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.canvas.setActiveObject(result);
 			this.context.canvas.renderAll();
 		}
 		return true;
@@ -3065,6 +3709,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 			this.abortClick(isLeftClick);
 			return;
 		}
+		this.context.clearAnnotationSelection(true);
 		this.context.freeFormTool.setModeAdd(isLeftClick);
 
 		const ffTool = this.context.freeFormTool,
