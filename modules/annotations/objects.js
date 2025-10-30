@@ -692,7 +692,6 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 originY: 'center',
                 selectable: false,
                 opacity: 1,
-                selectable: false,
                 hasControls: false,
                 hasBorders: false,
                 isHighlight: true
