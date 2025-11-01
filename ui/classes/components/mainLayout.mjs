@@ -236,6 +236,7 @@ export class MainLayout extends BaseComponent {
 </div>
 
 <div id="fullscreen-menu" class="bg-base-100"></div>
+<div id="toolbars-container"></div>
 
 <div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
     <div id="bottom-menu-left"></div>

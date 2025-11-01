@@ -822,7 +822,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         body: [html],
                     }
                 );
-                menu.attachTo(document.body);
+                menu.attachTo(document.getElementById('toolbars-container'));
                 this.makeDraggable(`toolbar-${ownerPluginId}`);
                 this.stayOnScreen(`toolbar-${ownerPluginId}`);
 
