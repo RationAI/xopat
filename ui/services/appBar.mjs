@@ -38,12 +38,7 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "toolbars", icon: "fa-toolbox", title: $.t('main.bar.toolbars'), body: undefined, onClick: function () {
-                document.querySelectorAll('.draggable').forEach(toolbar => {
-                    toolbar.classList.toggle('toolbar-fullscreen');
-                });
-                document.getElementById('toolbars-container').classList.toggle('toolbars-open');
-            } },
+            { id: "toolbars", icon: "fa-toolbox", title: $.t('main.bar.toolbars'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("toolbar-menu")} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },

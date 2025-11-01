@@ -134,12 +134,28 @@ class Toolbar extends BaseComponent {
         left: ${left}px;
         top: ${top}px;
         display: ${this.display};
-        z-index: 10000;
+        z-index: 100;
       `
             },
             // drag handle
-            div({ class: "handle badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", style: "width: min(180px, 90%);" },
-                i({ class: "fa-auto fa-grip-horizontal" })
+            div({ class: "spacer flex-grow" },
+
+                div({ class: "toolbar-hide badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", 
+                    style: "width: min(45px, 90%);",
+                    onclick: () => this._switchDisplay()
+                    },  
+                    i({ class: "fa-auto fa-eye-slash" }),
+                ),
+                div({ class: "handle badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", style: "width: min(180px, 90%);" },  
+                    i({ class: "fa-auto fa-grip-horizontal" }),
+                ),
+                div({ class: "toolbar-hide badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", 
+                    style: "width: min(45px, 90%);",
+                    onclick: () => this._hide()
+                    },  
+                    i({ class: "fa-auto fa-xmark" }),
+                ),
+
             ),
 
             // INTERNAL MEASUREMENT WRAPPER (this is new)
@@ -165,6 +181,27 @@ class Toolbar extends BaseComponent {
         });
 
         return this._outerEl;
+    }
+
+    _hide() {
+        if (this._outerEl.parentElement.id === "toolbars-container") {
+            document.getElementById("toolbars-container-hidden")?.appendChild(this._outerEl);
+            this._outerEl.classList.add("toolbar-hidden");
+        }
+        else {
+            document.getElementById("toolbars-container")?.appendChild(this._outerEl);
+            this._outerEl.classList.remove("toolbar-hidden");
+        }
+    }
+
+    _switchDisplay() {
+        if (this.body.classMap.display === "display-none") {
+            this.body.setClass("display", "");
+            APPLICATION_CONTEXT.AppCache.set(`${this.id}-Visible`, "true");
+            return;
+        }
+        this.body.setClass("display", "display-none");
+        APPLICATION_CONTEXT.AppCache.set(`${this.id}-Visible`, "false");
     }
 
     /** When attached to DOM: start observers (resize + position) */

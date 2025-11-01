@@ -582,10 +582,21 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 this.menu = new UI.FullscreenMenu({
                     id: "fullscreen-menu",
-                },this.getSettingsBody(), this.getPluginsBody(),
+                },this.getSettingsBody(), this.getPluginsBody(), this.getToolbarMenuBody()
             );
 
                 this.menu.attachTo(this.context);
+            },
+            getToolbarMenuBody: function () {
+                const { div, span } = van.tags();
+                const logo = this.getLogo(-70, 20);
+
+                toolbars = div({ class: "flex flex-col gap-2" },
+                    span({ class: "f3-light header-sep" }, "Toolbars"),
+                    div({ id: "toolbars-container-hidden", class: "flex flex-col gap-1" }),
+                );
+
+                return new UI.Div({id: "toolbar-menu"}, toolbars, logo);
             },
 
             getSettingsBody: function () {
@@ -879,21 +890,40 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 let offsetX, offsetY;
                 const SNAP_DISTANCE = 20;
 
-
-                handle.addEventListener('mousedown', (e) => {
-                    if (e.button === 0) {
-                        isDragging = true;
-                        draggableBox.classList.add('dragging');
-
-                        offsetX = e.clientX - draggableBox.getBoundingClientRect().left;
-                        offsetY = e.clientY - draggableBox.getBoundingClientRect().top;
-
-                        e.preventDefault();
+                const getClientCoords = (e) => {
+                    if (e.touches && e.touches.length) {
+                        return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
                     }
-                });
+                    return { clientX: e.clientX, clientY: e.clientY };
+                };
 
-                document.addEventListener('mousemove', (e) => {
+                const startDrag = (e) => {
+                    const coords = getClientCoords(e);
+                    
+                    if (e.type === 'touchstart') {
+                        e.preventDefault();
+                    } else if (e.button !== 0) {
+                        return;
+                    }
+
+                    isDragging = true;
+                    draggableBox.classList.add('dragging');
+
+                    offsetX = coords.clientX - draggableBox.getBoundingClientRect().left;
+                    offsetY = coords.clientY - draggableBox.getBoundingClientRect().top;
+                };
+                
+                handle.addEventListener('mousedown', startDrag);
+                handle.addEventListener('touchstart', startDrag, { passive: false });
+
+                const moveDrag = (e) => {
                     if (!isDragging) return;
+                    
+                    if (e.type === 'touchmove') {
+                        e.preventDefault(); 
+                    }
+
+                    const coords = getClientCoords(e);
 
                     draggableBox.style["max-width"] = "";
 
@@ -902,23 +932,18 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     const boxWidth = draggableBox.offsetWidth;
                     const boxHeight = draggableBox.offsetHeight;
 
-                    let newX = e.clientX - offsetX;
-                    let newY = e.clientY - offsetY;
+                    let newX = coords.clientX - offsetX;
+                    let newY = coords.clientY - offsetY;
 
-                    // ----- Snappping logic -----
-
-                    // left
                     if (newX < SNAP_DISTANCE) {
                         draggableBox.style["max-width"] = "100px";
                         newX = 0;
                     }
 
-                    // bottom
                     else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
                         newY = viewportHeight - boxHeight;
                     }
 
-                    // cannot be dragged out of viewport
                     newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
                     newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
 
@@ -927,19 +952,25 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                     APPLICATION_CONTEXT.setOption(`${id}-PositionLeft`, newX);
                     APPLICATION_CONTEXT.setOption(`${id}-PositionTop`, newY);
-                });
+                };
 
-                document.addEventListener('mouseup', () => {
+                document.addEventListener('mousemove', moveDrag);
+                document.addEventListener('touchmove', moveDrag, { passive: false });
+
+                const endDrag = () => {
                     if (isDragging) {
                         isDragging = false;
                         draggableBox.classList.remove('dragging');
                     }
-                });
+                };
+
+                document.addEventListener('mouseup', endDrag);
+                document.addEventListener('touchend', endDrag);
+                document.addEventListener('touchcancel', endDrag);
 
                 document.addEventListener('mouseleave', (e) => {
                     if (isDragging && e.buttons === 1) {
-                        isDragging = false;
-                        draggableBox.classList.remove('dragging');
+                        endDrag();
                     }
                 });
             },
