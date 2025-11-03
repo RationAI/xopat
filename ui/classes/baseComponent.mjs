@@ -100,11 +100,8 @@ export class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
-        this.refreshClassState();
-        this.refreshPropertiesState();
-        console.log('attachTo called with', element);
-        console.log('element instanceof BaseComponent?', element instanceof BaseComponent);
-        console.log('element && typeof element.create === "function"?', element && typeof element.create === 'function');
+    this.refreshClassState();
+    this.refreshPropertiesState();
 
         // Treat component-like objects as components even if instanceof fails
         const looksLikeComponent = element && (element instanceof BaseComponent || (typeof element.create === 'function' && element.id));
@@ -405,13 +402,10 @@ export class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
-        console.log('_applyOptions this:', this && this.constructor ? this.constructor.name : typeof this, 'refreshPropertiesState type:', typeof (this && this.refreshPropertiesState));
+        // internal helper: call provided option functions in the component context
         try {
-            console.log('_applyOptions proto chain:',
-                Object.getPrototypeOf(this),
-                Object.getPrototypeOf(Object.getPrototypeOf(this))
-            );
-        } catch (e) { console.warn('proto logging failed', e); }
+            // proto chain logging removed (diagnostic)
+        } catch (e) { /* ignore */ }
         for (let prop of names) {
             const option = options[prop];
             try {
