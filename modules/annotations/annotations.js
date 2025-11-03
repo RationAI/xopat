@@ -1433,39 +1433,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		if (!obj) return;
 		const canvas = this.canvas;
-		// let active = /*this.__oldSelection || */ this.canvas.getActiveObject();
-		//
-		// if (!active) {
-		//	 canvas.setActiveObject(obj);
-		//	 // this.__oldSelection = obj;
-		// } else if (active.incrementId === obj.incrementId) {
-		//	 return;
-		// }
-		//
-		// if (active?.type === 'activeSelection') {
-		//	 if (!active._objects.includes(obj)) {
-		//		 active.addWithUpdate(obj);
-		//	 }
-		//	 // this.__oldSelection = obj;
-		// } else {
-		//	 // const sel = new fabric.ActiveSelection(active && active.incrementId !== obj.incrementId ?
-		//	 //	 [active, obj] : [obj], { canvas });
-		// 	// sel.hasBorders = false;
-		// 	// sel.hasControls = false;
-		//	 // canvas.setActiveObject(sel);
-		//
-		//	 const sel = new fabric.ActiveSelection([], { canvas });
-		//	 sel.addWithUpdate(active);
-		//	 if (active.incrementId !== obj.incrementId) {
-		//		 sel.addWithUpdate(obj);
-		//	 }
-		//	 sel.hasBorders = false;
-		//	 sel.hasControls = false;
-		//	 canvas.setActiveObject(sel);
-		//
-		//	 // this.__oldSelection = sel;
-		// }
-
 		const baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
 		if (!baseIds.includes(obj.incrementId)) baseIds.push(obj.incrementId);
 		this._applySelectionFromIds(baseIds, true);
@@ -1486,27 +1453,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		const canvas = this.canvas;
 		const obj = typeof object === 'object' ? object : this.findObjectOnCanvasByIncrementId(object);
 		if (!obj) return;
-		//
-		// const active = this.canvas.getActiveObject() /* || this.__oldSelection*/; // todo oldSelection maybe not necessary
-		// if (!active) return;
-		//
-		// if (active.type === 'activeSelection') {
-		//	 if (active._objects.includes(obj)) {
-		//		 active.removeWithUpdate(obj);
-		//
-		//		 if (active._objects.length === 1) {
-		//			 const single = active._objects[0];
-		//			 canvas.setActiveObject(single);
-		//		 }
-		//		 else if (active._objects.length === 0) {
-		//			 canvas.discardActiveObject();
-		//			 // this.__oldSelection = null;
-		//		 }
-		//	 }
-		// } else if (active.incrementId === obj.incrementId) {
-		//	 canvas.discardActiveObject();
-		//	 // this.__oldSelection = null;
-		// }
 
 		let baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
 		baseIds = baseIds.filter(x => x !== obj.incrementId);
@@ -2705,23 +2651,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			e.preventDefault();
 		}
 	}
-
-	// todo consider removal
-	// _objectDeselected(event) {
-	// 	if (this.disabledInteraction || !event.target) return;
-	// 	//todo make sure deselect prevent does not prevent also deletion
-	// 	try {
-	// 		if (!this.mode.objectDeselected(event, event.target) && this._deletedObject !== event.target) {
-	// 			this.disabledInteraction = true;
-	// 			this.selectAnnotation(event.target?.incrementId, true)
-	// 			this.disabledInteraction = false;
-	// 		}
-	// 		//this.removeHighlight();
-	//
-	// 	} catch (e) {
-	// 		console.error(e);
-	// 	}
-	// }
 
 	_objectClicked(event) {
 
