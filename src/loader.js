@@ -1563,7 +1563,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const cell = this.layout.attachCell(cellId, index);
             const menu = new UI.RightSideViewerMenu(cellId, navigatorId);
             // todo think of a better way of hosting menu within the viewer
-            cell.append(menu.create());
+            if (window.innerWidth < 600) {
+                console.log(USER_INTERFACE.FullscreenMenu.menu.tabs["right-side-menu-mobile"])
+                USER_INTERFACE.FullscreenMenu.menu.addTab(new UI.Div({id: "right-side-menu-mobile"}, menu.create()));
+            } else {
+                cell.append(menu.create());
+            }
             this.viewerMenus[cellId] = menu;
 
             const viewer = OpenSeadragon($.extend(
