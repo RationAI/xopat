@@ -582,21 +582,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             init: function () {
                 this.menu = new UI.FullscreenMenu({
                     id: "fullscreen-menu",
-                },this.getSettingsBody(), this.getPluginsBody(), this.getToolbarMenuBody()
+                },this.getSettingsBody(), this.getPluginsBody()
             );
 
                 this.menu.attachTo(this.context);
-            },
-            getToolbarMenuBody: function () {
-                const { div, span } = van.tags();
-                const logo = this.getLogo(-70, 20);
-
-                toolbars = div({ class: "flex flex-col gap-2" },
-                    span({ class: "f3-light header-sep" }, "Toolbars"),
-                    div({ id: "toolbars-container-hidden", class: "flex flex-col gap-1" }),
-                );
-
-                return new UI.Div({id: "toolbar-menu"}, toolbars, logo);
             },
 
             getSettingsBody: function () {

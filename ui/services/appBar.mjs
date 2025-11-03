@@ -38,7 +38,6 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "toolbars", icon: "fa-toolbox", title: $.t('main.bar.toolbars'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("toolbar-menu")} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
@@ -208,6 +207,7 @@ export class AppBar {
          * @return {boolean} true if the selection is currently active.
          */
         registerViewItem(ownerPluginId, icon, label, onClick) {
+            console.log("Registering view item:", ownerPluginId, label);
             const selected = APPLICATION_CONTEXT.getOption(`${ownerPluginId}-selected`, false);
             this.otherWindows[ownerPluginId] = {
                 ownerPluginId, icon, label, onClick, selected

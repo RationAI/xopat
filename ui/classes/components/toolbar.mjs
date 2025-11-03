@@ -47,8 +47,15 @@ class Toolbar extends BaseComponent {
             }
         });
 
+        if (APPLICATION_CONTEXT.getOption(`${this.id}-body-visible`, true)){
+            this.body.setClass("display", "")
+        } else {
+            this.body.setClass("display", "display-none")
+        }
+
         // state
         this.display = (args.length === 0) ? "none" : "";
+        this.display = APPLICATION_CONTEXT.getOption(`${this.id}-visible`, true) ? "" : "none";
         this._dir = "horizontal"; // "horizontal" | "vertical"
         this._edgeThreshold = Number.isFinite(options.edgeThreshold) ? Number(options.edgeThreshold) : 96;
         this._horizontalOnly = !!options.horizontalOnly;
@@ -62,6 +69,8 @@ class Toolbar extends BaseComponent {
         this._rootWrap = null;       // [data-toolbar-root]
         this._observer = null;
         this._lastBox = null;        // last measured rect for cheap change detection
+
+        USER_INTERFACE.AppBar.View.registerViewItem(this.id,"fa-gear" , this.id, this.toggleVisible.bind(this));
     }
 
     /**
@@ -74,7 +83,7 @@ class Toolbar extends BaseComponent {
         }
 
         this.header.setClass("display", "");
-        this.body.setClass("display", "");
+        //this.body.setClass("display", "");
 
         const tab = this._createTab(item);
         this.tabs[item.id] = tab;
@@ -142,7 +151,7 @@ class Toolbar extends BaseComponent {
 
                 div({ class: "toolbar-hide badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", 
                     style: "width: min(45px, 90%);",
-                    onclick: () => this._switchDisplay()
+                    onclick: () => this._toggle_body()
                     },  
                     i({ class: "fa-auto fa-eye-slash" }),
                 ),
@@ -151,7 +160,7 @@ class Toolbar extends BaseComponent {
                 ),
                 div({ class: "toolbar-hide badge badge-soft badge-primary pointer-events-auto self-center text-xs mb-1", 
                     style: "width: min(45px, 90%);",
-                    onclick: () => this._hide()
+                    onclick: () => this.toggleVisible()
                     },  
                     i({ class: "fa-auto fa-xmark" }),
                 ),
@@ -183,25 +192,29 @@ class Toolbar extends BaseComponent {
         return this._outerEl;
     }
 
-    _hide() {
-        if (this._outerEl.parentElement.id === "toolbars-container") {
-            document.getElementById("toolbars-container-hidden")?.appendChild(this._outerEl);
-            this._outerEl.classList.add("toolbar-hidden");
+    toggleVisible() {
+        if (this._outerEl.classList.contains("display-none")) {
+            this._outerEl.classList.remove("display-none");
+            APPLICATION_CONTEXT.setOption(`${this.id}-selected`, "true");
+            return;
         }
-        else {
-            document.getElementById("toolbars-container")?.appendChild(this._outerEl);
-            this._outerEl.classList.remove("toolbar-hidden");
-        }
+        this._outerEl.classList.add("display-none");
+        APPLICATION_CONTEXT.setOption(`${this.id}-selected`, "false");
+
     }
 
-    _switchDisplay() {
+    isVisible() {
+        return !this._outerEl.classList.contains("display-none");
+    }
+
+    _toggle_body() {
         if (this.body.classMap.display === "display-none") {
             this.body.setClass("display", "");
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-Visible`, "true");
+            APPLICATION_CONTEXT.setOption(`${this.id}-body-visible`, "true");
             return;
         }
         this.body.setClass("display", "display-none");
-        APPLICATION_CONTEXT.AppCache.set(`${this.id}-Visible`, "false");
+        APPLICATION_CONTEXT.setOption(`${this.id}-body-visible`, "false");
     }
 
     /** When attached to DOM: start observers (resize + position) */
