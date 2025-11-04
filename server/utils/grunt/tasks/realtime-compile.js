@@ -117,6 +117,7 @@ module.exports = function (grunt) {
                         //     });
                         //     return;
                         // }
+                        // todo refactor this to have building logics only on a single place
                         if (workspace["main"]) {
                             return new Promise((resolve, reject) => {
                                 const child = spawn("npx", ["esbuild", ...esbuildArgs,

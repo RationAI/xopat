@@ -261,6 +261,13 @@ const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+
+        if (url.pathname.startsWith("/health")) {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+
         // Treat suffix paths as attempt to access existing files
         if (url.pathname.match(/.+\..{2,5}$/g)) {
             const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
@@ -269,7 +276,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.writeHead(404);
             res.end();
-            return
+            return;
         }
 
         if (url.pathname.startsWith("/dev_setup")) {
