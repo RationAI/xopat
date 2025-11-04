@@ -291,7 +291,7 @@ OSDAnnotations.FreeFormTool = class {
      * Finalize the object modification
      * @return {fabric.Polygon | null} polygon if successfully updated
      */
-    finish (_withDeletion=false) {
+    finish(_withDeletion=false) {
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;

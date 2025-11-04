@@ -1562,4 +1562,111 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         USER_INTERFACE.Errors.show(CONFIG.error, `${CONFIG.description} <br><code>${CONFIG.details}</code>`,
             true);
     }
+
+    const History = class {
+        constructor() {
+            this._buffer = [];
+            // points to the current state in the redo/undo index in circular buffer
+            this._buffidx = -1;
+            // points to the most recent object in cache, when undo action comes full loop to _lastValidIndex
+            // it means the redo action went full circle on the buffer, and we cannot further undo,
+            // if we set this index to buffindex, we throw away ability to redo (diverging future)
+            this._lastValidIndex = -1;
+            this.BUFFER_LENGTH = null;
+            this._stateChangeCallback = null;
+        }
+
+        /**
+         * Set the callback to be called when the state changes.
+         * @param {function} cb callback function to be called on state change
+         */
+        setStateChangeCallback(cb) { this._stateChangeCallback = cb; }
+
+        _triggerStateChange(canUndo, canRedo) {
+            if (this._stateChangeCallback) {
+                this._stateChangeCallback({ canUndo, canRedo });
+            }
+        }
+
+        /**
+         * Set the number of steps possible to go in the past
+         * @param {number} value size of the history
+         */
+        set size(value) {
+            this.BUFFER_LENGTH = Math.max(2, value);
+        }
+
+        /**
+         * Push a new action to the history buffer. The function forward is executed immediately -
+         * you must not call this method/logics manually.
+         * @param {*} forward function to execute the forward (redo) operation, it is executed once upon call
+         * @param {*} backward function to execute the backward (undo) operation
+         * @return {any} return value of the forward function executed
+         */
+        push(forward, backward) {
+            if (typeof forward !== 'function' || typeof backward !== 'function') {
+                throw new Error("Both forward and backward must be functions.");
+            }
+
+            this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
+            this._buffer[this._buffidx] = { forward, backward };
+            this._lastValidIndex = this._buffidx;
+
+            this._triggerStateChange(true, false);
+
+            return forward();
+        }
+
+        /**
+         * Go step back in the history.
+         */
+        undo() {
+            if (!this.canUndo()) return;
+
+            const entry = this._buffer[this._buffidx];           
+            entry.backward();
+            this._buffidx = (this._buffidx - 1 + this.BUFFER_LENGTH) % this.BUFFER_LENGTH;
+
+            if (this._lastValidIndex === this._buffidx) {
+                this._buffer[this._lastValidIndex] = null;
+
+                this._lastValidIndex--;
+                if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
+            }
+
+            this._triggerStateChange(this.canUndo(), true);
+        }
+
+        /**
+         * Go step forward in the history.
+         */
+        redo() {
+            if (!this.canRedo()) return;
+
+            this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
+            const entry = this._buffer[this._buffidx];
+            entry.forward();
+
+            this._triggerStateChange(true, this.canRedo());
+        }
+
+        /**
+         * Check if undo is possible
+         * @return {boolean}
+         */
+        canUndo() {
+            return !!this._buffer[this._buffidx];
+        }
+
+        /**
+         * Check if redo is possible
+         * @return {boolean}
+         */
+        canRedo() {
+            return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
+        }
+    }
+
+    APPLICATION_CONTEXT.history = new History();
+    APPLICATION_CONTEXT.history.size = APPLICATION_CONTEXT.config.defaultParams.historySize || 50;
 }

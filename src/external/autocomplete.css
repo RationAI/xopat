@@ -41,7 +41,7 @@ Developed by: Bruno Vieira
     float: right;
     pointer-events: none;
 }
-.up {
+.autocomplete-up {
     transform: rotate(-135deg);
     -webkit-transform: rotate(-135deg);
     margin-top: 5px;
@@ -96,9 +96,9 @@ Developed by: Bruno Vieira
     border: 2px solid #e1e1e1;
     border-radius: 8px;
     display: none;
-    z-index: 1;
     max-height: 400px;
     overflow-x: auto;
+    z-index: 999;
 }
 
 .bv_ul_inner li {

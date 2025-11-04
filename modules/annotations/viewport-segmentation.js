@@ -51,7 +51,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         }
 
         this._allowCreation = true;
-        this.context.canvas.discardActiveObject();
+        this.context.clearAnnotationSelection(true);
         this._isLeft = isLeftClick;
 	}
 

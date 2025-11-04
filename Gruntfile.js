@@ -143,8 +143,14 @@ module.exports = function(grunt) {
     });
 
     grunt.registerTask('default', []);
-    grunt.registerTask('build', ["uglify"]);  // for now uglification only, which also includes dynamic build steps if necessary
     grunt.registerTask('minify', ["uglify"]);
+    grunt.registerTask('all', ["uglify", "css"]);
+
+    // todo enable build-only step
+    grunt.registerTask('build', 'Build Necessary Parts of the Viewer', function () {
+        // todo only on a single place:
+        exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+    });
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
     grunt.registerTask('ui', ["uglify:ui"]);

@@ -119,6 +119,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
             hasControls: true,
+            hasBorders: false,
             left: parameters.left,
             top: parameters.top,
             height: ofObject.height,
@@ -162,7 +163,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line = theObject._objects[0];
         const points = [line.x1, line.y1, line.x2, line.y2];
-        
+
         const newObject = this.copy(theObject, {
             left: theObject.left,
             top: theObject.top,
@@ -184,7 +185,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line = theObject._objects[0];
         let deltaX, deltaY;
-        
+
         if (pos.mode === 'move') {
             deltaX = pos.x;
             deltaY = pos.y;
@@ -216,7 +217,21 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         visualProperties.modeOutline = true; // we are always transparent
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        ofObject.set({ opacity: 1 });
+
+        if (ofObject._objects) {
+            const lineFactory = this._context.getAnnotationObjectFactory('line');
+            const textFactory = this._context.getAnnotationObjectFactory('text');
+
+            lineFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties);
+            textFactory.updateRendering(ofObject._objects[1], preset, visualProperties, defaultVisualProperties);
+        }
+    }
+
+    applySelectionStyle(ofObject) {
+        ofObject._objects[0].set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -281,7 +296,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             return true;
         }
 
-        const props = this._presets.getCommonProperties();
+        const props = { ...this._presets.getCommonProperties()};
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
         this._context.addAnnotation(obj);
@@ -299,6 +314,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     supportsBrush() {
         return false;
+    }
+
+    getLength(theObject) {
+        return theObject._objects[1]?.text;
     }
 
     _round(value) {
@@ -323,6 +342,22 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     exportsGeometry() {
         return ["x1", "x2", "y1", "y2", "text"];
+    }
+
+    selected(theObject) {
+        const factory = this._context.getAnnotationObjectFactory('line');
+        const absGroupPos = theObject.getPointByOrigin('center', 'center');
+
+        const originalLine = theObject.item(0);
+        const copyLine = factory.copy(originalLine);
+
+        copyLine.factoryID = factory.factoryID;
+        copyLine.type = factory.type;
+
+        copyLine.left = absGroupPos.x + originalLine.left;
+        copyLine.top = absGroupPos.y + originalLine.top;
+
+        return super.selected(copyLine);
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
@@ -397,6 +432,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             presetID: options.presetID,
             measure: text.text,
             hasControls: true,
+            hasBorders: false,
         });
     }
 
@@ -409,6 +445,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _createWrap(parts, options) {
+        options.hasBorders = false;
         const wrap = new fabric.Group(parts);
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
         return wrap;

@@ -32,7 +32,16 @@ module.exports = {
         },
     },
     plugins: [
-        require("daisyui")
+        require("daisyui"),
+        function ({ addComponents }) {
+            addComponents({
+                /* New variant: looks exactly like .btn-neutral */
+                '.btn-pointer': {
+                '--btn-color': 'var(--n)',     // same base color as neutral
+                '--btn-content': 'var(--nc)',  // same text color as neutral
+                },
+            });
+        },
     ],
     /** usage in css: https://v4.daisyui.com/docs/colors/ */
     daisyui: {

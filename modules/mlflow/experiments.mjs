@@ -1,5 +1,3 @@
-import {nowMs} from "./utils.js";
-
 /** Experiment management wrappers */
 export class ExperimentsAPI {
     /** @param {HttpClient} http */

@@ -46,6 +46,7 @@ RUN cd /tmp \
     && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
     && npm ci
 
+ENV XO_REPO_ROOT=/tmp/xopat
 COPY . /tmp/xopat
 RUN cd /tmp/xopat && npm ci && npm run build
 

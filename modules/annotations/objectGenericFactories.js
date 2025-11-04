@@ -85,7 +85,9 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._top = theObject.top;
         theObject.set({
             lockMovementX: false,
-            lockMovementY: false
+            lockMovementY: false,
+            hasRotatingPoint: false,
+            lockRotation: true
         });
     }
 
@@ -154,6 +156,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
         this._context.deleteHelperAnnotation(obj);
+        if (obj.width === 0 || obj.height === 0) return true;
+
         this._context.addAnnotation(obj);
         this._current = undefined;
         return true;
@@ -299,7 +303,9 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.set({
             hasControls: true,
             lockMovementX: false,
-            lockMovementY: false
+            lockMovementY: false,
+            hasRotatingPoint: false,
+            lockRotation: true
         });
     }
 
@@ -314,7 +320,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             left: left, top: top, rx: rx, ry: ry
         });
         theObject.calcACoords();
-        
+
         if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
@@ -498,6 +504,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param options
      */
     configure(object, options) {
+        object.hasBorders = true;
         options.autoScale = object.autoScale || options.autoScale || false;
         if (options.autoScale) {
             $.extend(object, options, {
@@ -543,8 +550,13 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         delete visualProperties["fill"];
         delete visualProperties["strokeWidth"];
         delete visualProperties["originalStrokeWidth"];
+        visualProperties.hasBorders = true;
         // no support for internal logics, text driven its own scaling, just set the rest
         ofObject.set(visualProperties);
+    }
+
+    applySelectionStyle(ofObject) {
+        return;
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -630,7 +642,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {left: left, top: top, text: text});
         theObject.calcACoords();
-        
+
         if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
@@ -702,6 +714,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             top: pt.y,
             text: "Placeholder"
         };
+    }
+
+    selected(theObject) {
+        return undefined;
     }
 };
 
@@ -815,7 +831,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {x: left, y: top});
         theObject.calcACoords();
-        
+
         if (!ignoreReplace) {
             this._context.replaceAnnotation(theObject, newObject);
         }
@@ -971,7 +987,6 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     edit(theObject) {
         this._origPoints = [...theObject.points];
-        this._context.canvas.setActiveObject(theObject);
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
@@ -1042,7 +1057,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             (value, index) => value === this._origPoints[index])) {
             let newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
-            
+
             if (!ignoreReplace) {
                 this._context.replaceAnnotation(theObject, newObject);
                 this._context.canvas.renderAll();
@@ -1058,7 +1073,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         let deltaX, deltaY;
-        
+
         if (pos.mode === 'move') {
             deltaX = pos.x;
             deltaY = pos.y;
@@ -1330,7 +1345,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     edit(theObject) {
         this._origPoints = [theObject.x1, theObject.y1, theObject.x2, theObject.y2];
-        this._context.canvas.setActiveObject(theObject);
 
         const _this = this,
             rightSkew = theObject.x1 > theObject.x2;
@@ -1930,11 +1944,20 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return copy;
     }
 
-    setPoints(object, points) {
-        object.points = points;
-        const newPathString = this._createPathFromPoints(points);
+    setPoints(object, points = null) {
+        const newPoints = points || object.points;
 
-        object._setPath(fabric.util.parsePath(newPathString));
+        if (!newPoints || !Array.isArray(newPoints)) {
+            console.warn("Invalid or missing points for multipolygon annotation:", object);
+            return object;
+        }
+
+        object.points = newPoints;
+
+        const pathString = this._createPathFromPoints(newPoints);
+        const pathData = fabric.util.parsePath(pathString);
+
+        object._setPath(pathData);
         object.setCoords();
         return object;
     }
@@ -1975,5 +1998,135 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         }
 
         return multipolygonPoints;
+    }
+
+    async selected(theObject) {
+        try {
+            const result = await super.selected(theObject);
+            return this.setPoints(result);
+
+        } catch (error) {
+            console.error("Error in Multipolygon selected function:", error);
+            return null;
+        }
+    }
+
+    initializeBeforeImport(object) {
+        if (object.points && !object.path) {
+            object.path = this._createPathFromPoints(object.points);
+        }
+    }
+
+    edit(theObject) {
+        this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
+
+        const self = this;
+        theObject.cornerStyle = 'circle';
+        theObject.cornerColor = '#fbb802';
+        theObject.hasControls = true;
+        theObject.objectCaching = false;
+        theObject.transparentCorners = false;
+
+        const controls = {};
+        for (let r = 0; r < theObject.points.length; r++) {
+            const ring = theObject.points[r];
+            const last = ring.length - 1;
+            for (let i = 0; i < ring.length; i++) {
+                const key = `r${r}p${i}`;
+                controls[key] = new fabric.Control({
+                    positionHandler: self._multiPositionHandler,
+                    actionHandler: self._multiAnchorWrapper(
+                        r, i > 0 ? i - 1 : last, self._multiActionHandler.bind(self)
+                    ),
+                    actionName: 'modifyMultipolygon',
+                    ringIndex: r,
+                    pointIndex: i
+                });
+            }
+        }
+        theObject.controls = controls;
+        this._context.canvas.renderAll();
+    }
+
+    _multiPositionHandler(dim, finalMatrix, fabricObject) {
+        const ringIdx = this.ringIndex;
+        const ptIdx = this.pointIndex;
+        const pt = fabricObject.points[ringIdx][ptIdx];
+        const x = (pt.x - fabricObject.pathOffset.x);
+        const y = (pt.y - fabricObject.pathOffset.y);
+        return fabric.util.transformPoint(
+            { x, y },
+            fabric.util.multiplyTransformMatrices(
+                fabricObject.canvas.viewportTransform,
+                fabricObject.calcTransformMatrix()
+            )
+        );
+    }
+
+    _multiActionHandler(eventData, transform, x, y) {
+        const obj = transform.target;
+        const ringIdx = obj.controls[obj.__corner].ringIndex;
+        const ptIdx = obj.controls[obj.__corner].pointIndex;
+
+        const mouseLocal = obj.toLocalPoint(new fabric.Point(x, y), 'center', 'center');
+        const baseSize = obj._getNonTransformedDimensions();
+        const size = obj._getTransformedDimensions(0, 0);
+
+        const oldPoint = obj.points[ringIdx][ptIdx];
+        const newX = mouseLocal.x * baseSize.x / size.x + obj.pathOffset.x;
+        const newY = mouseLocal.y * baseSize.y / size.y + obj.pathOffset.y;
+
+        if (oldPoint.x !== newX || oldPoint.y !== newY) {
+            obj.points[ringIdx][ptIdx] = { x: newX, y: newY };
+            this._pointsChanged = true;
+            this.setPoints(obj);
+        }
+
+        return true;
+    }
+
+    _multiAnchorWrapper(anchorRingIdx, anchorPointIdx, fn) {
+        return function(eventData, transform, x, y) {
+            const obj = transform.target;
+
+            const absolutePoint = fabric.util.transformPoint({
+                x: (obj.points[anchorRingIdx][anchorPointIdx].x - obj.pathOffset.x),
+                y: (obj.points[anchorRingIdx][anchorPointIdx].y - obj.pathOffset.y),
+            }, obj.calcTransformMatrix());
+
+            const actionPerformed = fn(eventData, transform, x, y);
+
+            if (typeof obj._setPositionDimensions === 'function') {
+                obj._setPositionDimensions({});
+            } else {
+                obj.setCoords();
+            }
+
+            const baseSize = obj._getNonTransformedDimensions();
+            const newX = (obj.points[anchorRingIdx][anchorPointIdx].x - obj.pathOffset.x) / baseSize.x;
+            const newY = (obj.points[anchorRingIdx][anchorPointIdx].y - obj.pathOffset.y) / baseSize.y;
+
+            obj.setPositionByOrigin(absolutePoint, newX + 0.5, newY + 0.5);
+            return actionPerformed;
+        }
+    }
+
+    recalculate(theObject) {
+        theObject.controls = fabric.Object.prototype.controls;
+        theObject.hasControls = false;
+        theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
+
+        if (this._pointsChanged) {
+            const newObject = this.copy(theObject, theObject.points);
+
+            const originalPointsCopy = this._origPoints.map(r => r.map(p => ({ x: p.x, y: p.y })));
+            theObject.points = originalPointsCopy;
+            this.setPoints(theObject, originalPointsCopy);
+
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+        this._origPoints = null;
+        this._pointsChanged = false;
     }
 };

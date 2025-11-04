@@ -47,6 +47,7 @@ function registerWindow(key, win) {
  *  - startLeft?: number (px)
  *  - startTop?: number (px)
  *  - onClose?: () => void
+ *  - closable?: boolean (default true)
  *  - onPopout?: (childWindow: Window) => void
  *  - external?: boolean (default false)
  *  - externalProps?: {
@@ -68,6 +69,7 @@ export class FloatingWindow extends BaseComponent {
 
         this.title = options.title ?? "Window";
         this.resizable = options.resizable !== false;
+        this.closable = options.closable ?? true;
 
         // Persisted position/size keys
         this._cacheKey = (k) => `${this.id}:${k}`;
@@ -89,6 +91,15 @@ export class FloatingWindow extends BaseComponent {
         this._dragOffX = 0;
         this._dragOffY = 0;
 
+        const btnClose = this.closable || options.onClose ? [
+            (this._btnClose = new Button({
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.NONE,
+                extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
+                onClick: () => this.close(),
+            }, new FAIcon({ name: "fa-close" }))).create()
+        ] : [];
+
         this._header = new Div({
                 extraClasses: {
                     layout: "navbar min-h-0 h-9 bg-base-300/70 rounded-t-box px-2 cursor-move select-none",
@@ -106,12 +117,7 @@ export class FloatingWindow extends BaseComponent {
                 //     extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
                 //     onClick: () => this._toggleExternal(),
                 // }, new FAIcon({ name: "fa-up-right-from-square" }))).create(),
-                (this._btnClose = new Button({
-                    size: Button.SIZE.TINY,
-                    type: Button.TYPE.NONE,
-                    extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
-                    onClick: () => this.close(),
-                }, new FAIcon({ name: "fa-close" }))).create(),
+                ...btnClose,
             )
         );
 
@@ -188,6 +194,10 @@ export class FloatingWindow extends BaseComponent {
     }
 
     close() {
+        if (!this.closable) {
+            this.options.onClose?.();
+            return;
+        }
         if (this._external && !this._childWindow?.closed) {
             destroyWindow(this.id, this._childWindow);
         }

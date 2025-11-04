@@ -888,7 +888,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 const startDrag = (e) => {
                     const coords = getClientCoords(e);
-                    
+
                     if (e.type === 'touchstart') {
                         e.preventDefault();
                     } else if (e.button !== 0) {
@@ -901,15 +901,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     offsetX = coords.clientX - draggableBox.getBoundingClientRect().left;
                     offsetY = coords.clientY - draggableBox.getBoundingClientRect().top;
                 };
-                
+
                 handle.addEventListener('mousedown', startDrag);
                 handle.addEventListener('touchstart', startDrag, { passive: false });
 
                 const moveDrag = (e) => {
                     if (!isDragging) return;
-                    
+
                     if (e.type === 'touchmove') {
-                        e.preventDefault(); 
+                        e.preventDefault();
                     }
 
                     const coords = getClientCoords(e);

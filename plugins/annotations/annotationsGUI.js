@@ -35,7 +35,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	/**
 	 * Check if an array of menu icons is sorted per annotationMenuIconOrder
-	 * @param {string[]} array 
+	 * @param {string[]} array
 	 * @returns {boolean}
 	 */
 	static _isAnnotationMenuSorted(array) {
@@ -55,6 +55,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		 * @type {Set<string>}
 		 */
 		this._preferredPresets = new Set();
+		this.user = XOpatUser.instance();
 
 		this.registerAsEventSource();
 	}
@@ -79,6 +80,12 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 		// todo fix
 		// this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
+
+        this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
+        this.context.commentsEnabled = this._commentsEnabled;
+		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
+		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
+		this._commentsOpened = this.commentsDefaultOpened;
 
 		await this.setupFromParams();
 
@@ -110,12 +117,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this._selectedAnnot = null;
 
 		this._refreshCommentsInterval = null;
-		this._commentsMoved = false;
 	}
 
 	async setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.getStaticMeta("factories") || ["polygon"];
-		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+		this.context.historyManager.focusWithZoom = this.getOption("focusWithZoom", true);
 		const convertOpts = this.getOption('convertors');
 		this._ioArgs.serialize = true;
 		this._ioArgs.imageCoordinatesOffset = convertOpts?.imageCoordinatesOffset || this._ioArgs.imageCoordinatesOffset;
@@ -129,6 +135,7 @@ class AnnotationsGUI extends XOpatPlugin {
 			availableFormats: OSDAnnotations.Convertor.formats,
 			//defaultIOFormat not docummented, as it is not meant to be used
 			format: this.getOption('defaultIOFormat', this._defaultFormat),
+			scope: 'all',
 		};
 		const formats = OSDAnnotations.Convertor.formats;
 		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
@@ -177,48 +184,82 @@ class AnnotationsGUI extends XOpatPlugin {
 		return enable;
 	}
 
+	_toggleStrokeStyling(enable) {
+		const authorButton = $("#author-list-button-mp");
+		const isAuthorsTabActive = authorButton.attr('aria-selected') === 'true';
+
+		if (enable) {
+			authorButton.show();
+		} else {
+			authorButton.hide();
+
+			if (isAuthorsTabActive) {
+				this.switchMenuList('preset');
+			}
+		}
+	}
+
 	initHTML() {
 
-		USER_INTERFACE.addHtml(`
-			<div class="fixed flex-col shadow-lg rounded-lg border p-4 max-w-sm w-80 max-h-96 overflow-hidden" id="annotation-comments-menu" 
-				 style="top: 48px; left: 12px; z-index: 2; background: var(--color-bg-primary); border-color: var(--color-border-primary); display: none;">
-				<div class="flex items-center gap-3 btn-pointer pb-2 select-none" id="annotation-comments-titlebar" style="border-bottom: 1px solid var(--color-border-secondary);">
-					<button class="text-sm" id="comments-toggle-btn">
-                        <i class="fa-auto fa-chevron-down" style="color: var(--color-icon-secondary); font-size: 30px;"></i>
-					</button>
-					<h2 class="text-lg font-semibold" style="color: var(--color-text-primary);">Comments</h2>
-				</div>
-				
-				<div class="flex-1 overflow-y-auto space-y-3 my-4" id="comments-list">
-				</div>
-				
-				<div class="pt-3" id="comments-input-section" style="border-top: 1px solid var(--color-border-secondary);">
-					<div class="flex gap-2">
-						<textarea 
-							type="text" 
-							placeholder="Add a comment..." 
-							class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
-							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
-							id="comment-input"
-							rows="2"
-							onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
-						></textarea>
-						<button 
-                            class="px-3 py-2 btn btn-pointer"
-							style="font-size: 22px;"
-							onclick="${this.THIS}._addComment()"
-						>
-							  <i class="fa-auto fa-paper-plane"></i>
-						</button>
+		USER_INTERFACE.addHtml(
+			new UI.FloatingWindow(
+				{
+					id: "annotation-comments-menu",
+					title: "Comments",
+					closable: false,
+					onClose: () => {this.commentsToggleWindow(false)},
+				}, new UI.RawHtml({},
+				`
+					<div class="flex-1 overflow-y-auto space-y-3 p-2" id="comments-list">
 					</div>
-				</div>
-			</div>
-		`, this.id);
+					<div  class="pt-3" id="comments-input-section" style="border-top: 1px solid var(--color-border-secondary);">
+						<div class="flex gap-2">
+							<textarea 
+								type="text" 
+								placeholder="Add a comment..."
+								class="resize-none flex-1 px-3 py-2 text-sm border-[1px] border-[var(--color-border-secondary)] rounded-md focus:outline-none focus:border-[var(--color-border-info)]"
+								style="background: var(--color-bg-primary); color: var(--color-text-primary);"
+								id="comment-input"
+								rows="2"
+								onkeypress="if(event.key==='Enter') this.nextElementSibling.click()"
+								${!this.user ? 'disabled' : ''}
+							></textarea>
+							<button 
+								class="px-3 py-2 btn btn-pointer"
+								style="font-size: 22px;"
+								onclick="${this.THIS}._addComment()"
+							>
+								<i class="fa-auto fa-paper-plane"></i>
+							</button>
+						</div>
+					</div>
+				`
+			)),
+			this.id
+		);
 
-		this._initCommentsTitlebar()
+		const commentsMenu = document.getElementById("annotation-comments-menu");
+
+		const commentsBody = document.querySelector('.card-body div')
+		commentsBody.style.width = "100%";
+		commentsBody.style.height = "100%";
+		commentsBody.style.position = "relative";
+		commentsBody.style.display = "flex";
+		commentsBody.style.flexDirection = "column";
+
+		const commentsResize = document.querySelector('.cursor-se-resize')
+		commentsResize.style.borderColor = "var(--color-text-primary)";
+
+		commentsMenu.style.display = 'none';
+		commentsMenu.classList.add(
+			"flex-col", "shadow-lg", "rounded-lg", "border", "overflow-hidden", "bg-[var(--color-bg-primary)]"
+		)
+		commentsMenu.style.borderColor = "var(--color-border-primary)";
+		commentsMenu.style.minWidth = "320px";
+		commentsMenu.style.minHeight = "370px";
 
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
-		this.context.addHandler('annotation-deselected', () => this._annotationDeselected());
+		this.context.addHandler('annotation-deselected', e => this._annotationDeselected(e.object));
 
 //         USER_INTERFACE.RightSideMenu.appendExtended(
 // 			"Annotations",
@@ -232,7 +273,7 @@ class AnnotationsGUI extends XOpatPlugin {
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
-// 			`
+//			`
 // <div class="d-flex flex-row mt-1 width-full">
 // <div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
 // ${UIComponents.Elements.checkBox({
@@ -252,10 +293,12 @@ class AnnotationsGUI extends XOpatPlugin {
 // <div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
 // <button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
 // <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
+// <button id="author-list-button-mp" class="btn rounded-0" style="display: none;" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
 // </div>
 // <div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
 // <span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-// <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>`,
+// <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>
+// <div id="author-list-mp" class="mx-2" style="display: none;"><div id="author-list-inner-mp"></div></div>`,
 // 			"annotations-panel",
 // 			this.id
 // 		);
@@ -329,6 +372,10 @@ title="${customMode.getDescription()}: ${factory.title()}">
 <h4 class="f3-light header-sep">File Download / Upload</h4><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
 <div id="annotation-convertor-options"></div>
+<div id="export-annotations-scope" class="mt-2">
+  <span class="text-small mr-2">Export scope (annotations):</span>
+  ${['all','selected'].map(s => this.getExportScopeRadioButton(s)).join("")}
+</div>
 <br>
 ${UIComponents.Elements.checkBox({label: "Replace existing data on import",
 onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption("importReplace", true)})}
@@ -340,13 +387,49 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	&emsp;&emsp;
 	<button id="downloadPreset" onclick="${this.THIS}.exportToFile(false, true);return false;" class="btn">Download presets.</button>&nbsp;
 	<button id="downloadAnnotation" onclick="${this.THIS}.exportToFile(true, true);return false;" class="btn">Download annotations.</button>&nbsp;
-</div>`);
+</div>
+<h4 class="f3-light header-sep">Comments</h4><br>
+${UIComponents.Elements.checkBox({label: "Enable comments",
+onchange: this.THIS + ".enableComments(!!this.checked)", default: this._commentsEnabled})}
+${UIComponents.Elements.checkBox({label: "Automatically open comments on initial click",
+onchange: this.THIS + ".commentsDefaultOpen(!!this.checked)", default: this._commentsDefaultOpened})}
+<div class="flex gap-2 justify-between">
+<span>Remember comments window opened/closed state</span>
+${UIComponents.Elements.select({
+    default: this._commentsClosedMethod,
+    options: {
+        'none': 'Always keep open',
+        'global': 'Keep open globally',
+        'individual': 'Keep open per-annotation',
+    },
+    changed: this.THIS + ".switchCommentsClosedMethod(value)",
+})}
+</div>
+`);
 		this.annotationsMenuBuilder = new UIComponents.Containers.RowPanel("available-annotations");
 
 		//trigger UI refreshes
 		this.updateSelectedFormat(this.exportOptions.format);
 		this.updatePresetsHTML();
+
+		this.context.addHandler('author-annotation-styling-toggle', e => this._toggleStrokeStyling(e.enable))
+		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
+		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
+
+	getExportScopeRadioButton(scope) {
+        const id = `export-scope-${scope}-radio`;
+        const label = scope === 'all' ? 'All' : 'Selected';
+        const checked = this.exportOptions.scope === scope ? 'checked' : '';
+        return `
+        <div class="d-inline-block p-2">
+          <input type="radio" id="${id}" class="d-none switch" ${checked} name="annotation-scope-switch">
+          <label for="${id}" class="position-relative format-selector"
+                 onclick="${this.THIS}.setExportScope('${scope}');">
+            <span class="btn">${label}</span>
+          </label>
+        </div>`;
+    }
 
 	getIOFormatRadioButton(format) {
 		const selected = format === this.exportOptions.format ? "checked" : "";
@@ -360,6 +443,9 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const convertor = OSDAnnotations.Convertor.get(format);
 		document.getElementById('downloadAnnotation').style.visibility = convertor.exportsObjects ? 'visible' : 'hidden';
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
+		const scopeEl = document.getElementById('export-annotations-scope');
+		if (scopeEl) scopeEl.style.display = convertor.exportsObjects ? 'block' : 'none';
+
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
 		this.setCacheOption('defaultIOFormat', format);
@@ -368,23 +454,97 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		);
 	}
 
+    /**
+     * Enable/disable comments UI
+     * @param {boolean} enabled
+     */
+    enableComments(enabled) {
+        if (this._commentsEnabled === enabled) return;
+        this._commentsEnabled = enabled;
+        this.context.commentsEnabled = enabled;
+        this.setOption("commentsEnabled", enabled);
+				if (!enabled) {
+					this.commentsToggleWindow(false, true);
+				} else if (this._selectedAnnot) {
+					this.commentsToggleWindow(true, true);
+				}
+        this.context.canvas.requestRenderAll();
+    }
+
+		commentsDefaultOpen(enabled) {
+			if (this._commentsDefaultOpened === enabled) return;
+			this._commentsDefaultOpened = enabled;
+			this.setOption("commentsDefaultOpened", enabled);
+		}
+
+    /**
+     * Set strategy for closing comments
+     * @param {'none' | 'global' | 'individual'} method
+     */
+    switchCommentsClosedMethod(method) {
+        if (this._commentsClosedMethod === method) return;
+        this._commentsClosedMethod = method;
+        this.setOption("commentsClosedMethod", method);
+    }
+
+    /**
+     * Get opened state cache for object
+     * @param {string} objectId
+     */
+    _getCommentOpenedCache(objectId) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', '{}');
+            return undefined;
+        }
+        const cache = JSON.parse(cacheRaw)[objectId];
+        return cache;
+    }
+    /**
+     * Set opened state cache for object
+     * @param {string} objectId
+     * @param {boolean} opened
+     */
+    _setCommentOpenedCache(objectId, opened) {
+        const cacheRaw = this.cache.get('comments-opened-states')
+        if (!cacheRaw) {
+            this.cache.set('comments-opened-states', JSON.stringify({ objectId: opened }));
+            return;
+        }
+        const cache = JSON.parse(cacheRaw);
+        cache[objectId] = opened;
+        this.cache.set('comments-opened-states', JSON.stringify(cache));
+    }
+
+	/**
+	 * Check whether comments should be opened for this object
+	 * @param {string} objectId object this was called on
+	 */
+	_shouldOpenComments(objectId) {
+		if (!this._commentsEnabled) return false;
+    if (this._commentsClosedMethod === 'none') return true;
+		if (this._commentsClosedMethod === 'global') return this._commentsOpened;
+    const shouldOpen = this._getCommentOpenedCache(objectId);
+		if (shouldOpen === undefined) return this._commentsDefaultOpened;
+		return shouldOpen;
+	}
+
 	/**
 	 * Add comment from the user
 	 */
 	_addComment() {
 		if (!this._selectedAnnot) return;
+		if (!this.user) return;
 		const input = document.getElementById('comment-input');
 		const commentText = input.value.trim();
-
+		
 		if (!commentText) return;
-
-		const user = XOpatUser.instance();
 
 		const comment = {
 			id: crypto.randomUUID(),
 			author: {
-				id: user.id,
-				name: user.name,
+				id: this.user.id,
+				name: this.user.name,
 			},
 			content: commentText,
 			createdAt: new Date(),
@@ -400,18 +560,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		if (commentsList) {
 			commentsList.scrollTop = commentsList.scrollHeight;
 		}
-	}
-
-	/**
-	 * Initialize the comments titlebar for dragging
-	 */
-	_initCommentsTitlebar() {
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-
-		titlebar.style.cursor = "grab";
-
-		titlebar.addEventListener("mousedown", e => this._commentsMouseDown(e));
-		titlebar.addEventListener("mouseup", e => this._commentsMouseUp(e));
 	}
 
 	/**
@@ -437,31 +585,32 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 	}
 
-	/**
-	 * Expand or collapse comments
-	 */
-	_toggleCommentsExpanded() {
-		const root = document.getElementById('annotation-comments-menu');
-		const commentsList = document.getElementById('comments-list');
-		const inputSection = document.getElementById('comments-input-section');
-		const arrow = document.getElementById('comments-toggle-btn').querySelector('i');
-
-		const isExpanded = !commentsList.classList.contains('hidden');
-
-		if (isExpanded) {
-			root.classList.remove('w-80');
-			root.classList.add('w-52');
-			commentsList.classList.add('hidden');
-			inputSection.classList.add('hidden');
-            arrow.className = 'fa-auto fa-chevron-right';
-		} else {
-			root.classList.add('w-80');
-			root.classList.remove('w-52');
-			commentsList.classList.remove('hidden');
-			inputSection.classList.remove('hidden');
-            arrow.className = 'fa-auto fa-chevron-down';
-        }
-	}
+	// /**
+	//  * Expand or collapse comments
+    //todo delete?
+	//  */
+	// _toggleCommentsExpanded() {
+	// 	const root = document.getElementById('annotation-comments-menu');
+	// 	const commentsList = document.getElementById('comments-list');
+	// 	const inputSection = document.getElementById('comments-input-section');
+	// 	const arrow = document.getElementById('comments-toggle-btn').querySelector('i');
+    //
+	// 	const isExpanded = !commentsList.classList.contains('hidden');
+    //
+	// 	if (isExpanded) {
+	// 		root.classList.remove('w-80');
+	// 		root.classList.add('w-52');
+	// 		commentsList.classList.add('hidden');
+	// 		inputSection.classList.add('hidden');
+    //         arrow.className = 'fa-auto fa-chevron-right';
+	// 	} else {
+	// 		root.classList.add('w-80');
+	// 		root.classList.remove('w-52');
+	// 		commentsList.classList.remove('hidden');
+	// 		inputSection.classList.remove('hidden');
+    //         arrow.className = 'fa-auto fa-chevron-down';
+    //     }
+	// }
 
 	/**
 	 * Clear all existing comments from the comments list
@@ -473,78 +622,6 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		}
 	}
 
-	_commentsMouseDown(e) {
-		e.preventDefault();
-
-		if (this._isDragging) {
-			this._commentsMouseUp();
-			return;
-		}
-
-		this._isDragging = false;
-		this._commentsMoved = false;
-		this._dragStartPos = {x: e.clientX, y: e.clientY};
-
-		const root = document.getElementById('annotation-comments-menu');
-		if (root) {
-			this._dragStartElementPos = {
-				left: root.offsetLeft,
-				top: root.offsetTop
-			};
-		}
-
-		this._commentsDragListener = (e) => this._commentsMouseMove(e);
-		this._commentsUpListener = (e) => this._commentsMouseUp();
-
-		document.addEventListener("mousemove", this._commentsDragListener);
-		document.addEventListener("mouseup", this._commentsUpListener);
-	}
-
-	_commentsMouseUp() {
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-		if (titlebar) titlebar.style.cursor = "grab";
-		document.body.style.cursor = "";
-
-		// clear existing listeners
-		if (this._commentsDragListener) {
-			document.removeEventListener("mousemove", this._commentsDragListener);
-			this._commentsDragListener = null;
-		}
-		if (this._commentsUpListener) {
-			document.removeEventListener("mouseup", this._commentsUpListener);
-			this._commentsUpListener = null;
-		}
-
-		// collapse on no movement
-		if (!this._commentsMoved) {
-			this._toggleCommentsExpanded();
-		}
-
-		this._isDragging = false;
-		this._commentsMoved = false;
-	}
-
-	_commentsMouseMove(e) {
-		const root = document.getElementById('annotation-comments-menu');
-		const titlebar = document.getElementById("annotation-comments-titlebar");
-		if (!root || !this._dragStartPos) return;
-
-		const deltaX = e.clientX - this._dragStartPos.x;
-		const deltaY = e.clientY - this._dragStartPos.y;
-
-		const threshold = 5;
-		if (!this._isDragging && (Math.abs(deltaX) > threshold || Math.abs(deltaY) > threshold)) {
-			this._isDragging = true;
-			this._commentsMoved = true;
-			titlebar.style.cursor = "grabbing";
-		}
-
-		if (this._isDragging && this._dragStartElementPos) {
-			root.style.left = (this._dragStartElementPos.left + deltaX) + "px";
-			root.style.top = (this._dragStartElementPos.top + deltaY) + "px";
-		}
-	}
-
 	/**
 	 * Render comments from an array of comment objects
 	 * @param {AnnotationComment[]} comments - Array of comment objects to render
@@ -553,15 +630,15 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const comments = this._selectedAnnot.comments;
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) {
-			console.warn('annotationsGUI: comments list element not found');
 			return;
 		}
 		this._clearComments();
 		if (!comments || comments.filter(c => !c.removed).length === 0) {
 			const noCommentsElement = document.createElement('div');
 			noCommentsElement.id = 'comments-list-empty';
-			noCommentsElement.className = 'rounded-md flex items-center justify-center py-8 px-4 gap-2 select-none';
+			noCommentsElement.className = 'rounded-md flex items-center justify-center gap-2 w-full h-full select-none';
 			noCommentsElement.style.background = "var(--color-bg-canvas-inset)";
+			noCommentsElement.style.padding = "15px";
 			noCommentsElement.innerHTML = `
               <i class="fa-auto fa-comment text-4xl" style="color: var(--color-text-tertiary);"></i>
               <p class="text-sm" style="color: var(--color-text-tertiary);">No comments to show</p>
@@ -658,23 +735,22 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
-		const user = XOpatUser.instance();
-		const isAuthor = user.id === comment.author.id;
+		const isAuthor = this.user.id === comment.author.id;
 		const deleteButtonHtml = isAuthor ?
-            `<button class="relative" title="Delete comment" data-confirmed="false">
-                 <i class="fa-auto fa-trash btn-pointer" style="font-size: 21px; color: var(--color-text-danger);"></i>
-                 <div class="show-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
-                   <span>Click again to delete</span>
-                 </div>
-               </button>` : '';
+			`<button class="relative" title="Delete comment" data-confirmed="false">
+				<i class="fa-auto fa-trash btn-pointer" style="font-size: 21px; color: var(--color-text-danger);"></i>
+				<div class="delete-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
+					<span>Click again to delete</span>
+				</div>
+			</button>` : '';
 
 		let replyButtonHtml = '';
-		if (!comment.replyTo) {
-            replyButtonHtml = `
-                <button class="relative" title="Reply to comment" data-reply="${comment.id}">
-                  <i class="fa-auto fa-reply btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);"></i>
-                </button>
-              `;
+		if (!comment.replyTo && this.user) {
+			replyButtonHtml = `
+				<button class="relative" title="Reply to comment" data-reply="${comment.id}">
+					<i class="fa-auto fa-reply btn-pointer" style="font-size: 21px; color: var(--color-text-secondary);"></i>
+				</button>
+			`;
 		}
 
 		commentElement.innerHTML = `
@@ -697,12 +773,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 					this._deleteComment(comment.id);
 				} else {
 					event.currentTarget.dataset.confirmed = 'true';
-					event.currentTarget.querySelector('.show-hint').classList.remove('hidden');
+					event.currentTarget.querySelector('.delete-hint').classList.remove('hidden');
 				}
 			});
 			deleteButton.addEventListener('mouseleave', (event) => {
 				event.currentTarget.dataset.confirmed = 'false';
-				event.currentTarget.querySelector('.show-hint').classList.add('hidden');
+				event.currentTarget.querySelector('.delete-hint').classList.add('hidden');
 			});
 		}
 
@@ -720,6 +796,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 							style="background: var(--color-bg-primary); color: var(--color-text-primary);"
 							rows="2"
 							placeholder="Add a reply..."
+							${!this.user ? 'disabled' : ''}
 						></textarea>
 						<div class="flex gap-2 justify-end">
 							<button class="reply-cancel-btn btn px-2 py-1 rounded text-xs text-[var(--color-text-primary)] hover:text-black" type="button" aria-selected="true">Cancel</button>
@@ -766,11 +843,10 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	 * @param {*} text - Contents of reply
 	 */
 	_addReplyComment(parentId, text) {
-		const user = XOpatUser.instance();
 		const id = crypto.randomUUID();
 		const newComment = {
 			id,
-			author: { id: user.id, name: user.name },
+			author: { id: this.user.id, name: this.user.name },
 			content: text,
 			createdAt: new Date(),
 			replyTo: parentId,
@@ -866,19 +942,43 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		}
 	}
 
-	_annotationSelected(object) {
-		this._selectedAnnot = object;
+	/**
+	 * Toggle comments window
+     * @param {boolean} enabled Optionally specify state
+     * @param {boolean} [stopPropagation=false] Dont propagate this toggle to the comment window opened state
+	 */
+	commentsToggleWindow(enabled = undefined, stopPropagation = false) {
 		const menu = document.getElementById("annotation-comments-menu");
-		menu.style.display = 'flex';
-		this._renderComments(object.comments);
+        if (!menu) return;
 
-		this._startCommentsRefresh();
+		if (!this._commentsEnabled) {
+            if (menu.style.display === 'flex') menu.style.display = 'none';
+            return;
+        }
+
+        if (enabled === undefined) enabled = menu.style.display !== 'flex';
+        menu.style.display = enabled ? 'flex' : 'none';
+        if (!stopPropagation) {
+            const objectId = this._selectedAnnot?.id ?? this._previousAnnotId;
+            this._commentsOpened = enabled;
+            this._setCommentOpenedCache(objectId, enabled);
+        };
 	}
 
-	_annotationDeselected() {
+	_annotationSelected(object) {
+		this._selectedAnnot = object;
+		this._renderComments(object.comments);
+		this._startCommentsRefresh();
+
+		if (this._shouldOpenComments(object.id)) {
+			this.commentsToggleWindow(true, true);
+		}
+	}
+
+	_annotationDeselected(object) {
 		this._selectedAnnot = null;
-		const menu = document.getElementById("annotation-comments-menu");
-		menu.style.display = 'none';
+    this._previousAnnotId = object.id;
+		this.commentsToggleWindow(false, true);
 		this._clearComments();
 
 		this._stopCommentsRefresh();
@@ -928,6 +1028,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchModeActive(id, factory=undefined, isLeftClick) {
+		if (this.context.historyManager.isOngoingEdit()) return;
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
@@ -962,31 +1063,48 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 	}
 
 	switchMenuList(type) {
+		const presetListButton = $("#preset-list-button-mp");
+		const annotListButton = $("#annotation-list-button-mp");
+		const authorListButton = $("#author-list-button-mp");
+
+		presetListButton.attr('aria-selected', false);
+		annotListButton.attr('aria-selected', false);
+		authorListButton.attr('aria-selected', false);
+
+		// hide panels
+		const presetList = $("#preset-list-mp");
+		const annotList = $("#annotation-list-mp");
+		const authorList = $("#author-list-mp");
+
+		presetList.css('display', 'none');
+		annotList.css('display', 'none');
+		authorList.css('display', 'none');
+
 		if (type === "preset") {
-			$("#preset-list-button-mp").attr('aria-selected', true);
-			$("#annotation-list-button-mp").attr('aria-selected', false);
-			$("#preset-list-mp").css('display', 'block');
-			$("#annotation-list-mp").css('display', 'none');
-		} else {
+			presetListButton.attr('aria-selected', true);
+			presetList.css('display', 'block');
+		} else if (type === "authors") {
+			authorListButton.attr('aria-selected', true);
+			authorList.css('display', 'block');
+			this._populateAuthorsList();
+		} else { // annot
 			if (!this.isModalHistory) {
-				$("#preset-list-mp").css('display', 'none');
-				$("#annotation-list-mp").css('display', 'block');
+				annotList.css('display', 'block');
 			}
 			if (this._preventOpenHistoryWindowOnce) {
 				this._preventOpenHistoryWindowOnce = false;
 			} else {
 				this.openHistoryWindow(this.isModalHistory);
 			}
-			$("#preset-list-button-mp").attr('aria-selected', false);
-			$("#annotation-list-button-mp").attr('aria-selected', true);
+			annotListButton.attr('aria-selected', true);
 		}
 	}
 
 	openHistoryWindow(asModal = this.isModalHistory) {
 		if (asModal) {
-			this.context.history.openHistoryWindow();
+			this.context.historyManager.openHistoryWindow();
 		} else {
-			this.context.history.openHistoryWindow(this._annotationsDomRenderer);
+			this.context.historyManager.openHistoryWindow(this._annotationsDomRenderer);
 		}
 		this._afterHistoryWindowOpen(asModal);
 	}
@@ -1008,9 +1126,102 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.isModalHistory = asModal;
 	}
 
-	_createHistoryInTopPluginsMenu(focus = false) {
-		USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
-		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+    // todo: remoev?
+    _createHistoryInTopPluginsMenu(focus = false) {
+        USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+        this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+        this._openedHistoryMenu = true;
+        if (focus) USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
+    }
+
+	_toggleAuthorShown(authorId) {
+		this.context.toggleAuthorShown(authorId);
+		this._populateAuthorsList();
+	}
+
+	_updateAuthorBorderColor(authorId, color) {
+		this.context.updateAuthorBorderColor(authorId, color);
+	}
+
+	_updateAuthorBorderDashing(authorId, dashing) {
+		this.context.updateAuthorBorderDashing(authorId, dashing);
+	}
+
+	_toggleAuthorIgnoreCustomStyling(authorId) {
+		this.context.updateAuthorIgnoreCustomStyling(authorId, !this.context.getAuthorConfig(authorId).ignoreCustomStyling);
+		this._populateAuthorsList();
+	}
+
+	_populateAuthorsList() {
+		const authorListContainer = $("#author-list-inner-mp");
+		if (!authorListContainer.length) return;
+
+		const objects = this.context.canvas.getObjects();
+		const authorCounts = new Map();
+
+		objects.forEach(obj => {
+			if (this.context.isAnnotation(obj) && obj.author) {
+				const author = this.context.mapAuthorCallback?.(obj) ?? obj.author;
+
+				// skip current user
+				if (author === this.user.id) return;
+
+				authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
+			}
+		});
+
+		authorListContainer.empty();
+
+		if (authorCounts.size === 0) {
+			authorListContainer.html('<div class="text-muted text-small p-2">No authors found</div>');
+			return;
+		}
+
+		const sortedAuthors = Array.from(authorCounts.keys()).sort();
+
+		const authorItems = sortedAuthors.map(author => {
+			const count = authorCounts.get(author);
+			const pluralS = count === 1 ? '' : 's';
+			const config = this.context.getAuthorConfig(author);
+			const authorIdSafe = author.replace(/[^a-zA-Z0-9]/g, '_');
+
+			return `<div class="author-item p-2 border-bottom border-secondary" style="${config.shown ? '' : 'opacity: 0.6;'}">
+				<div class="d-flex align-items-center mb-2">
+					<span class="material-icons mr-2">person</span>
+					<span class="author-name">${author}</span>
+				</div>
+				<div class="d-flex align-items-center text-muted text-small ml-4 mb-2">
+					<span class="mr-2">${count} annotation${pluralS}</span>
+					<input type="checkbox" disabled id="author-shown-${authorIdSafe}" ${config.shown ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorShown('${author.replace(/'/g, "\\'")}')">
+					<label for="author-shown-${authorIdSafe}" class="text-small ml-1 mr-3">Show</label>
+					<input type="checkbox" id="author-ignore-styling-${authorIdSafe}" ${config.ignoreCustomStyling ? 'checked' : ''} 
+						onchange="${this.THIS}._toggleAuthorIgnoreCustomStyling('${author.replace(/'/g, "\\'")}')">
+					<label for="author-ignore-styling-${authorIdSafe}" class="text-small ml-1">Ignore styling</label>
+				</div>
+				<div class="ml-4">
+					<div class="d-flex align-items-center mb-1">
+						<label class="text-small mr-2" style="min-width: 60px;">Color:</label>
+						<input type="color" value="${config.borderColor}" class="form-control form-control-sm" style="width: 50px; height: 25px; padding: 1px;"
+							onchange="${this.THIS}._updateAuthorBorderColor('${author.replace(/'/g, "\\'")}', this.value)">
+					</div>
+					<div class="d-flex align-items-center">
+						<label class="text-small mr-2" style="min-width: 60px;">Dash:</label>
+						<input type="range" min="1" max="50" value="${config.borderDashing}" class="form-control-range flex-grow-1 mr-2"
+							oninput="document.getElementById('dash-value-${authorIdSafe}').textContent = this.value"
+							onchange="${this.THIS}._updateAuthorBorderDashing('${author.replace(/'/g, "\\'")}', this.value)">
+						<span id="dash-value-${authorIdSafe}" class="text-small" style="min-width: 20px;">${config.borderDashing}</span>
+					</div>
+				</div>
+			</div>`;
+		}).join('');
+
+		authorListContainer.html(authorItems);
+	}
+
+	_createHistoryInAdvancedMenu(focus = false) {
+		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
+		this.context.historyManager.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		this._openedHistoryMenu = true;
 		if (focus) USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
@@ -1047,7 +1258,12 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 		this.context.addHandler('mode-changed', modeChangeHandler);
 		modeChangeHandler({mode: this.context.mode}); //force refresh manually
 
-		this.context.addHandler('import', this.updatePresetsHTML.bind(this));
+		this.context.addHandler('import', (e) => {
+			this.updatePresetsHTML(e);
+			if ($("#author-list-mp").css('display') !== 'none') {
+				this._populateAuthorsList();
+			}
+		});
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
@@ -1061,14 +1277,26 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			this.context.createPresetsCookieSnapshot();
 			this._updateRightSideMenuPresetList();
 		});
-		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
+		this.context.historyManager.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
 		this.context.addHandler('annotation-set-private', e => {
 			this.context.canvas.requestRenderAll();
-		})
+		});
+        // todo: maybe these events should instead rely on our module?
+		this.context.canvas.on('object:added', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
+
+		this.context.canvas.on('object:removed', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+				this._populateAuthorsList();
+			}
+		});
 
 		//allways select primary button preset since context menu shows only on non-primary
 		this.context.addHandler('nonprimary-release-not-handled', (e) => {
@@ -1174,7 +1402,7 @@ onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: th
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
 		this.context.addHandler('history-select', e => {
-			if (e.originalEvent.isPrimary) return;
+			if (e.originalEvent.isPrimary || e.originalEvent.button === 0) return;
 			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
 			if (!annotationObject) return; //todo error message
 
@@ -1435,8 +1663,10 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 	}
 
 	_annotationsDomRenderer(history, containerId) {
-		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">
-${history.getWindowSwapButtonHtml(2)}${history.getHistoryWindowBodyHtml()}</div>`);
+		let headHtml = history.getHistoryWindowHeadHtml();
+		headHtml = headHtml.replace(/<span[^>]*>Annotation List<\/span>\s*/, '');
+
+		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">${headHtml}${history.getHistoryWindowBodyHtml()}</div>`);
 	}
 
 	/******************** Free Form Tool ***********************/
@@ -1602,9 +1832,13 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * @param withPresets
 	 * @return {Promise<*>}
 	 */
-	async getExportData(preferredFormat = null, withObjects=true, withPresets=true) {
-		this._ioArgs.format = preferredFormat || this._defaultFormat;
-		return this.context.export(this._ioArgs, withObjects, withPresets);
+	async getExportData(preferredFormat = null, withObjects=true, withPresets=true, scope='all', selected=[]) {
+		const ioArgs = { ...this._ioArgs };
+        ioArgs.format = preferredFormat || this._defaultFormat;
+        if (withObjects && scope === 'selected') {
+            ioArgs.filter = { ids: selected };
+        }
+        return this.context.export(ioArgs, withObjects, withPresets);
 	}
 
 	/**
@@ -1612,16 +1846,58 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	exportToFile(withObjects=true, withPresets=true) {
 		const toFormat = this.exportOptions.format;
+
+		let scope = 'all';
+        let selectedItems = [];
+        if (withObjects) {
+            scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
+            if (scope === 'selected') {
+                const selectedAnns = (this.context.getSelectedAnnotations?.() || []);
+                const layers = (this.context.getSelectedLayers?.() || [])
+                    .filter(Boolean);
+                const layerAnns = layers.length
+                    ? layers.flatMap(l => l.getObjects?.() || [])
+                    : [];
+
+                const seen = new Set();
+                const pushUnique = (arr) => {
+                    for (const o of arr) {
+                        const key = String(o?.incrementId ?? '');
+                        if (!key || seen.has(key)) continue;
+                        seen.add(key);
+                        selectedItems.push(o);
+                    }
+                };
+                pushUnique(selectedAnns);
+                pushUnique(layerAnns);
+
+				if (!selectedItems.length) {
+                    Dialogs.show("No annotations selected to export.", 2500, Dialogs.MSG_WARN);
+                    return;
+                }
+            }
+        }
+
+		selectedItems = selectedItems.map(o => o.id);
+        const scopeSuffix = withObjects && scope === 'selected' ? "-selection" : "";
 		const name = APPLICATION_CONTEXT.referencedName(true)
 			+ "-" + UTILITIES.todayISOReversed() + "-"
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
-		this.getExportData(toFormat, withObjects, withPresets).then(result => {
+			+ scopeSuffix;
+
+		this.getExportData(toFormat, withObjects, withPresets, scope, selectedItems).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});
 	}
+
+	setExportScope(scope) {
+        this.exportOptions.scope = scope === 'selected' ? 'selected' : 'all';
+        $('#export-scope-all-radio').prop('checked', this.exportOptions.scope === 'all');
+        $('#export-scope-selected-radio').prop('checked', this.exportOptions.scope === 'selected');
+    }
 
 	/**
 	 * Output GUI HTML for presets
@@ -1697,7 +1973,7 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
 		if (this._fireBoardUpdate) {
-			this.context.history.refresh();
+			this.context.historyManager.refresh();
 		}
 		this._fireBoardUpdate = true;
 	}
@@ -2076,7 +2352,6 @@ class="btn m-2">Set for left click </button></div>`
 	isUnpreferredPreset(presetID) {
 		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
-
 }
 
 /*------------ Initialization of OSD Annotations ------------*/
