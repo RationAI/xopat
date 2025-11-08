@@ -171,8 +171,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
 
         return newObject;
@@ -208,8 +207,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
 
         return newObject;
@@ -251,7 +249,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             //todo bugged
             let opts = this._presets.getAnnotationOptions(isLeftClick);
             let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
-            this._context.addAnnotation(object);
+            this._context.fabric.addAnnotation(object);
             return true;
         }
         return false;
@@ -262,8 +260,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         let parts = this._createParts([x, y, x, y], opts);
         this._updateText(parts[0], parts[1]);
         this._current = parts;
-        this._context.addHelperAnnotation(this._current[0]);
-        this._context.addHelperAnnotation(this._current[1]);
+        this._context.fabric.addHelperAnnotation(this._current[0]);
+        this._context.fabric.addHelperAnnotation(this._current[1]);
     }
 
     updateCreate(x, y) {
@@ -276,8 +274,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     discardCreate() {
         if (this._current) {
-            this._context.deleteHelperAnnotation(this._current[0]);
-            this._context.deleteHelperAnnotation(this._current[1]);
+            this._context.fabric.deleteHelperAnnotation(this._current[0]);
+            this._context.fabric.deleteHelperAnnotation(this._current[1]);
             this._current = undefined;
         }
     }
@@ -285,8 +283,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return true;
-        this._context.deleteHelperAnnotation(obj[0]);
-        this._context.deleteHelperAnnotation(obj[1]);
+        this._context.fabric.deleteHelperAnnotation(obj[0]);
+        this._context.fabric.deleteHelperAnnotation(obj[1]);
 
         const line = obj[0],
             text = obj[1],
@@ -299,7 +297,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const props = { ...this._presets.getCommonProperties()};
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
-        this._context.addAnnotation(obj);
+        this._context.fabric.addAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -570,8 +568,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         let parts = this._createParts([x, y, x, y], opts);
 //         this._updateText(parts[0], parts[1]);
 //         this._current = parts;
-//         this._context.addHelperAnnotation(this._current[0]);
-//         this._context.addHelperAnnotation(this._current[1]);
+//         this._context.fabric.addHelperAnnotation(this._current[0]);
+//         this._context.fabric.addHelperAnnotation(this._current[1]);
 //
 //     }
 //
@@ -586,11 +584,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //     finishDirect() {
 //         let obj = this.getCurrentObject();
 //         if (!obj) return true;
-//         this._context.deleteHelperAnnotation(obj[0]);
-//         this._context.deleteHelperAnnotation(obj[1]);
+//         this._context.fabric.deleteHelperAnnotationobj[0]);
+//         this._context.fabric.deleteHelperAnnotationobj[1]);
 //
 //         obj = this._createWrap(obj, this._presets.getCommonProperties());
-//         this._context.addAnnotation(obj);
+//         this._context.fabric.addAnnotation(obj);
 //         this._current = undefined;
 //         return true;
 //     }
@@ -764,7 +762,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         let newObject = this.copy(theObject, {left: left, top: top});
 //         delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
 //         theObject.calcACoords();
-//         this._context.replaceAnnotation(theObject, newObject);
+//         this._context.fabric.replaceAnnotation(theObject, newObject);
 //     }
 //
 //     instantCreate(screenPoint, isLeftClick = true) {
@@ -780,7 +778,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             width: 1,
 //             height: 1
 //         }, this._presets.getAnnotationOptions(isLeftClick)));
-//         this._context.addHelperAnnotation(this._current);
+//         this._context.fabric.addHelperAnnotation(this._current);
 //     }
 //
 //     updateCreate(x, y) {
@@ -805,8 +803,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         UTILITIES.uploadFile(url => {
 //             const image = document.createElement('img');
 //             image.onload = () => {
-//                 self._context.deleteHelperAnnotation(obj);
-//                 self._context.addAnnotation(self.create({
+//                 self._context.fabric.deleteHelperAnnotationobj);
+//                 self._context.fabric.addAnnotation(self.create({
 //                         top: obj.top,
 //                         left: obj.left,
 //                         scaleX: obj.width / image.width,
@@ -815,10 +813,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //                 }, this._presets.getAnnotationOptions(obj.isLeftClick)));
 //             };
 //             image.onerror = () => {
-//                 self._context.deleteHelperAnnotation(obj);
+//                 self._context.fabric.deleteHelperAnnotationobj);
 //             };
 //             image.onabort = () => {
-//                 self._context.deleteHelperAnnotation(obj);
+//                 self._context.fabric.deleteHelperAnnotationobj);
 //             }
 //             image.setAttribute('src', url);
 //         }, "image/*", "url");

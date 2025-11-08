@@ -20,8 +20,8 @@ OSDAnnotations.FreeFormTool = class {
         this._created = false;
         this._node = null;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
-        this._scale = this._scale = {x: 0, y: 0, factor: 1};
-        this._windowSize = {width: this._context.overlay._containerWidth, height: this._context.overlay._containerHeight};
+        this._scale = {x: 0, y: 0, factor: 1};
+        this._windowSize = {width: this._context.fabric.overlay._containerWidth, height: this._context.fabric.overlay._containerHeight};
 
         USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
@@ -118,14 +118,14 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _isWindowSizeUpdated() {
-        const { containerWidth, containerHeight } = this._context.overlay;
+        const { containerWidth, containerHeight } = this._context.fabric.overlay;
 
         if (this._windowSize.width === containerWidth && this._windowSize.height === containerHeight) {
             return false;
         }
 
-        this._windowSize.width = this._context.overlay._containerWidth;
-        this._windowSize.height = this._context.overlay._containerHeight;
+        this._windowSize.width = this._context.fabric.overlay._containerWidth;
+        this._windowSize.height = this._context.fabric.overlay._containerHeight;
         return true;
     }
 
@@ -173,7 +173,7 @@ OSDAnnotations.FreeFormTool = class {
      * @return {boolean} true if mode 'add' is active
      */
     get isModeAdd() {
-        return this._update === this._subtract;
+        return this._update === this._union;
     }
 
     /**
@@ -272,7 +272,7 @@ OSDAnnotations.FreeFormTool = class {
             }
 
             this._updatePerformed = this._update(point) || this._updatePerformed;
-            this._context.canvas.renderAll();
+            this._context.fabric.rerender();
 
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
@@ -299,17 +299,17 @@ OSDAnnotations.FreeFormTool = class {
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
                 //revert annotation replacement and delete the initial (annotation was erased by modification)
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
-                this._context.deleteAnnotation(this.initial);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.deleteAnnotation(this.initial);
             } else if (!this._created) {
                 //revert annotation replacement and when updated, really swap
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
                 if (this._updatePerformed) {
-                    this._context.replaceAnnotation(this.initial, this.polygon);
+                    this._context.fabric.replaceAnnotation(this.initial, this.polygon);
                 }
             } else {
-                this._context.deleteHelperAnnotation(this.polygon);
-                this._context.addAnnotation(this.polygon);
+                this._context.fabric.deleteHelperAnnotation(this.polygon);
+                this._context.fabric.addAnnotation(this.polygon);
             }
             this._created = false;
             let outcome = this.polygon;
@@ -391,9 +391,9 @@ OSDAnnotations.FreeFormTool = class {
         this.initial = original;
 
         if (!this._created) {
-            this._context.replaceAnnotation(original, polyObject, true);
+            this._context.fabric.replaceAnnotation(original, polyObject, true);
         } else {
-            this._context.addHelperAnnotation(polyObject);
+            this._context.fabric.addHelperAnnotation(polyObject);
         }
 
         const isPolygon = polyObject.factoryID === "polygon";
@@ -416,13 +416,13 @@ OSDAnnotations.FreeFormTool = class {
         newObject.type = factory.type;
 
         if (!this._created) {
-            this._context.replaceAnnotation(this.polygon, this.initial, true);
+            this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
             this.polygon = newObject;
-            this._context.replaceAnnotation(this.initial, this.polygon, true);
+            this._context.fabric.replaceAnnotation(this.initial, this.polygon, true);
         } else {
-            this._context.deleteHelperAnnotation(this.polygon);
+            this._context.fabric.deleteHelperAnnotation(this.polygon);
             this.polygon = newObject;
-            this._context.addHelperAnnotation(this.polygon);
+            this._context.fabric.addHelperAnnotation(this.polygon);
         }
     }
 

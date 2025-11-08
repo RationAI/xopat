@@ -85,7 +85,7 @@ class AnnotationsGUI extends XOpatPlugin {
         this.context.commentsEnabled = this._commentsEnabled;
 		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
 		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
-		this._commentsOpened = this.commentsDefaultOpened;
+		this._commentsOpened = this._commentsDefaultOpened;
 
 		await this.setupFromParams();
 
@@ -463,12 +463,12 @@ ${UIComponents.Elements.select({
         this._commentsEnabled = enabled;
         this.context.commentsEnabled = enabled;
         this.setOption("commentsEnabled", enabled);
-				if (!enabled) {
-					this.commentsToggleWindow(false, true);
-				} else if (this._selectedAnnot) {
-					this.commentsToggleWindow(true, true);
-				}
-        this.context.canvas.requestRenderAll();
+            if (!enabled) {
+                this.commentsToggleWindow(false, true);
+            } else if (this._selectedAnnot) {
+                this.commentsToggleWindow(true, true);
+            }
+        this.context.fabric.rerender();
     }
 
 		commentsDefaultOpen(enabled) {
@@ -497,8 +497,7 @@ ${UIComponents.Elements.select({
             this.cache.set('comments-opened-states', '{}');
             return undefined;
         }
-        const cache = JSON.parse(cacheRaw)[objectId];
-        return cache;
+        return JSON.parse(cacheRaw)[objectId];
     }
     /**
      * Set opened state cache for object
@@ -537,7 +536,7 @@ ${UIComponents.Elements.select({
 		if (!this.user) return;
 		const input = document.getElementById('comment-input');
 		const commentText = input.value.trim();
-		
+
 		if (!commentText) return;
 
 		const comment = {
@@ -551,8 +550,8 @@ ${UIComponents.Elements.select({
 			removed: false,
 		};
 
-		this.context.addComment(this._selectedAnnot, comment);
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.addComment(this._selectedAnnot, comment);
+		this.context.fabric.rerender();
 		this._renderSingleComment(comment);
 		input.value = '';
 
@@ -859,7 +858,7 @@ ${UIComponents.Elements.select({
 		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
 		if (addedComment) addedComment.scrollIntoView({ block: "end" });
 
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.rerender();
 	}
 
 	/**
@@ -900,7 +899,7 @@ ${UIComponents.Elements.select({
 	 * @param {string} commentId - ID of the comment to delete
 	 */
 	_deleteComment(commentId) {
-		this.context.deleteComment(this._selectedAnnot, commentId);
+		this.context.fabric.deleteComment(this._selectedAnnot, commentId);
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
 		const comment = this._selectedAnnot.comments.find(c => c.id === commentId);
@@ -934,7 +933,7 @@ ${UIComponents.Elements.select({
 				commentEl.remove();
 			}
 		}
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.rerender();
 
 		if (this._selectedAnnot.comments.filter(c => !c.removed).length === 0) {
 			this._clearComments();
@@ -1022,8 +1021,7 @@ ${UIComponents.Elements.select({
 			const timestampSpan = commentElement.querySelector('span[name="created-at"]');
 			if (!timestampSpan) return;
 
-			const timeAgo = this._formatTimeAgo(comment.createdAt);
-			timestampSpan.textContent = timeAgo;
+            timestampSpan.textContent = this._formatTimeAgo(comment.createdAt);
 		});
 	}
 
@@ -1156,7 +1154,8 @@ ${UIComponents.Elements.select({
 		const authorListContainer = $("#author-list-inner-mp");
 		if (!authorListContainer.length) return;
 
-		const objects = this.context.canvas.getObjects();
+        // todo check this code, it smells
+		const objects = this.context.fabric.canvas.getObjects();
 		const authorCounts = new Map();
 
 		objects.forEach(obj => {
@@ -1282,18 +1281,20 @@ ${UIComponents.Elements.select({
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
-		this.context.addHandler('annotation-set-private', e => {
-			this.context.canvas.requestRenderAll();
+		this.context.fabric.addHandler('annotation-set-private', e => {
+            // todo smells
+			this.context.fabric.rerender();
 		});
-        // todo: maybe these events should instead rely on our module?
-		this.context.canvas.on('object:added', e => {
-			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+
+        // todo consider moving to OSD Annotations events instead
+		this.context.fabric.canvas.on('object:added', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.fabric.isAnnotation(e.target)) {
 				this._populateAuthorsList();
 			}
 		});
 
-		this.context.canvas.on('object:removed', e => {
-			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+		this.context.fabric.canvas.on('object:removed', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.fabric.isAnnotation(e.target)) {
 				this._populateAuthorsList();
 			}
 		});
@@ -1305,10 +1306,11 @@ ${UIComponents.Elements.select({
 			}
 
 			let actions = [], handler;
-			let active = this.context.canvas.findTarget(e.originalEvent);
+            // todo what about e.target?
+			let active = this.context.fabric.canvas.findTarget(e.originalEvent);
 			if (active) {
-				this.context.canvas.setActiveObject(active);
-				this.context.canvas.renderAll();
+				this.context.fabric.canvas.setActiveObject(active);
+				this.context.fabric.canvas.renderAll();
 				actions.push({
 					title: `Change annotation to:`
 				});
@@ -1403,7 +1405,7 @@ ${UIComponents.Elements.select({
 		});
 		this.context.addHandler('history-select', e => {
 			if (e.originalEvent.isPrimary || e.originalEvent.button === 0) return;
-			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
+			const annotationObject = this.context.fabric.findObjectOnCanvasByIncrementId(e.incrementId);
 			if (!annotationObject) return; //todo error message
 
 			const actions = [{
@@ -1433,7 +1435,7 @@ ${UIComponents.Elements.select({
 		// this.context.forEachLayerSorted(l => {
 		// 	  this.insertLayer(l);
 		// });
-		// this.context.addHandler('layer-added', e => {
+		// this.context.fabric.addHandler('layer-added', e => {
 		// 	  this.insertLayer(e.layer, e.layer.name);
 		// });
 
@@ -1678,36 +1680,6 @@ step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.
 style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">`;
 	}
 
-	/******************** LAYERS ***********************/
-
-	// Blending = {
-	// 	DEFAULT: 'source-over',
-	// 	AND: 'source-in',
-	// 	MASK_FG: 'source-atop',
-	// 	DIFF: 'source-out',
-	// 	MASK_AND: 'destination-in',
-	// 	MASK_DIFF: 'destination-out',
-	// 	MASK_BG: 'destination-atop',
-	// 	XOR: 'xor'
-	// };
-	// globalCompositeOperation
-
-	// insertLayer(layer, name) {
-	// 	console.log("ADDED");
-	// 	let container = $('#annotations-layers');
-	// 	name = name || "Layer " + layer.id;
-	// 	container.append(`<div id="a_layer_${layer.id}" onclick="${this.THIS}.context.setActiveLayer('${layer.id}');">${name}</div>`);
-	//
-	// 	this.context.forEachLayerSorted(l => {
-	// 		let ch = container.find(`#a_layer_${l.id}`);
-	// 		container.append(ch);
-	// 	});
-	// }
-	//
-	// setBlending(blending) {
-	// 	this.canvas.globalCompositeOperation = blending;
-	// 	this.canvas.renderAll();
-	// }
 
 	/******************** AUTO DETECTION ***********************/
 
@@ -1815,7 +1787,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		const _this = this;
 		this._ioArgs.format = _this.exportOptions.format;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			return await _this.context.import(data, this._ioArgs, this.getOption("importReplace", true));
+			return await _this.context.fabric.import(data, this._ioArgs, this.getOption("importReplace", true));
 		}).then(r => {
 			Dialogs.show(r ? "Loaded." : "No data was imported! Are you sure you have a correct format set?", 1500,
 				r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
@@ -1838,7 +1810,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
         if (withObjects && scope === 'selected') {
             ioArgs.filter = { ids: selected };
         }
-        return this.context.export(ioArgs, withObjects, withPresets);
+        return this.context.fabric.export(ioArgs, withObjects, withPresets);
 	}
 
 	/**
@@ -1852,8 +1824,8 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
         if (withObjects) {
             scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
             if (scope === 'selected') {
-                const selectedAnns = (this.context.getSelectedAnnotations?.() || []);
-                const layers = (this.context.getSelectedLayers?.() || [])
+                const selectedAnns = (this.context.fabric.getSelectedAnnotations?.() || []);
+                const layers = (this.context.fabric.getSelectedLayers?.() || [])
                     .filter(Boolean);
                 const layerAnns = layers.length
                     ? layers.flatMap(l => l.getObjects?.() || [])
@@ -2231,8 +2203,7 @@ class="btn m-2">Set for left click </button></div>`
 	}
 
 	_deleteAnnotation(annotation) {
-		this.context.deleteObject(annotation);
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.deleteObject(annotation);
 	}
 
 	_canPasteAnnotation(e, getMouseValue = false) {
@@ -2261,7 +2232,7 @@ class="btn m-2">Set for left click </button></div>`
 			},
 			true
 		);
-		this.context.addAnnotation(res);
+		this.context.fabric.addAnnotation(res);
 		factory.renderAllControls(res);
 	}
 
@@ -2273,8 +2244,7 @@ class="btn m-2">Set for left click </button></div>`
 		const _this = this;
 		setTimeout(function() {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.context.changeAnnotationPreset(annotation, _this._presetSelection);
-			_this.context.canvas.requestRenderAll();
+			_this.context.fabric.changeAnnotationPreset(annotation, _this._presetSelection);
 		}, 150);
 		return false;
 	}
@@ -2283,7 +2253,7 @@ class="btn m-2">Set for left click </button></div>`
 		const _this = this;
 		const newValue = !this._getAnnotationProps(annotation).private;
 
-		_this.context.setAnnotationPrivate(annotation, newValue);
+		_this.context.fabric.setAnnotationPrivate(annotation, newValue);
 	}
 
 	_getAnnotationProps(annotation) {

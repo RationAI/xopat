@@ -574,7 +574,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
-     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
      */
     recalculate(theObject, ignoreReplace=false) {
     }
@@ -586,7 +586,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {number} pos.x new x value
      * @param {number} pos.y new y value
      * @param {'move' | 'set'} [pos.mode='set'] whether to 'move' annotation from its existing position or 'set' a new one.
-     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
      */
     translate(theObject, pos, ignoreReplace=false) {
         let x, y;
@@ -750,7 +750,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
             if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
                 // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
-                const canvas = this._context.canvas;
+                const canvas = this._context.fabric.canvas;
                 props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
             } else {
                 // Shared props object carries over the value

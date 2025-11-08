@@ -20,7 +20,7 @@ OSDAnnotations.Preset = class {
      * @param {string} color fill color
      */
     constructor(id, objectFactory = null, category = "", color = "") {
-        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
+        if (!(objectFactory instanceof OSDAnnotations.AnnotationObjectFactory)) throw "Invalid preset constructor!";
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
@@ -323,7 +323,7 @@ OSDAnnotations.PresetManager = class {
         let toDelete = this._presets[id];
         if (!toDelete) return undefined;
 
-        if (this._context.overlay.fabric._objects.some(o => {
+        if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
@@ -452,7 +452,7 @@ OSDAnnotations.PresetManager = class {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
 
-            if (!usedOnly || this._context.canvas._objects.some(x => x.presetID === preset.presetID)) {
+            if (!usedOnly || this._context.fabric.canvas._objects.some(x => x.presetID === preset.presetID)) {
                 exported.push(preset.toJSONFriendlyObject());
             }
         }
@@ -537,11 +537,11 @@ OSDAnnotations.PresetManager = class {
     }
 
     _withDynamicOptions(options) {
-        const canvas = this._context.canvas,
+        const canvas = this._context.fabric.canvas,
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
-        const layerID = this._context.getActiveLayer()?.id;
+        const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
             layerID: layerID,
             zoomAtCreation: zoom,
@@ -632,7 +632,7 @@ OSDAnnotations.Layer = class {
      */
     iterate(callback) {
         const _this = this;
-        this._context.canvas.getObjects().forEach(o => {
+        this._context.fabric.canvas.getObjects().forEach(o => {
             if (o.layerID === _this.id) callback(_this, o);
         });
     }
@@ -642,8 +642,7 @@ OSDAnnotations.Layer = class {
      * @returns {Object} Plain object copy without the internal context.
      */
     toObject() {
-        const copy = { ...this };
-        copy._objects = [...this._objects];
+        const copy = { ...this, _objects: [...this._objects] };
 	    delete copy._context;
         return copy;
     }
@@ -673,7 +672,7 @@ OSDAnnotations.Layer = class {
             object.layerID = this.id;
             object.visible = this.visible;
 
-            this._context.canvas.requestRenderAll();
+            this._context.fabric.rerender();
         }
     }
 
@@ -687,7 +686,7 @@ OSDAnnotations.Layer = class {
         object.visible = true;
         this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);
 
-        this._context.canvas.requestRenderAll();
+        this._context.fabric.rerender();
     }
 
     /**
@@ -727,7 +726,7 @@ OSDAnnotations.Layer = class {
             });
         }
 
-        this._context.canvas.requestRenderAll();
+        this._context.fabric.rerender();
     }
 
     /**
@@ -760,6 +759,7 @@ OSDAnnotations.Layer = class {
        this._objects.forEach(obj => {
            obj.visible = this.visible;
        });
+       this._context.fabric.rerender();
     }
 
     /**

@@ -104,14 +104,14 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.calcACoords();
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(screenPoint);
         if (bounds) {
-            this._context.addAnnotation(this.create({
+            this._context.fabric.addAnnotation(this.create({
                 left: bounds.left.x,
                 top: bounds.top.y,
                 width: bounds.right.x - bounds.left.x,
@@ -131,7 +131,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             width: 1,
             height: 1
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addHelperAnnotation(this._current);
+        this._context.fabric.addHelperAnnotation(this._current);
     }
 
     updateCreate(x, y) {
@@ -146,7 +146,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 
     discardCreate() {
         if (this._current) {
-            this._context.deleteHelperAnnotation(this._current);
+            this._context.fabric.deleteHelperAnnotation(this._current);
             this._current = undefined;
         }
     }
@@ -155,10 +155,10 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         let obj = this.getCurrentObject();
         if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.deleteHelperAnnotation(obj);
+        this._context.fabric.deleteHelperAnnotation(obj);
         if (obj.width === 0 || obj.height === 0) return true;
 
-        this._context.addAnnotation(obj);
+        this._context.fabric.addAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -322,14 +322,14 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.calcACoords();
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
     }
 
     instantCreate(screenPoint, isLeftClick = true) {
         let bounds = this._auto.approximateBounds(screenPoint);
         if (bounds) {
-            this._context.addAnnotation(this.create({
+            this._context.fabric.addAnnotation(this.create({
                 left: bounds.left.x,
                 top: bounds.top.y,
                 rx: (bounds.right.x - bounds.left.x) / 2,
@@ -349,7 +349,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             rx: 1,
             ry: 1
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addHelperAnnotation(this._current);
+        this._context.fabric.addHelperAnnotation(this._current);
     }
 
     updateCreate(x, y) {
@@ -365,7 +365,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     discardCreate() {
         if (this._current) {
-            this._context.deleteHelperAnnotation(this._current);
+            this._context.fabric.deleteHelperAnnotation(this._current);
             this._current = undefined;
         }
     }
@@ -374,8 +374,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         let obj = this.getCurrentObject();
         if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.deleteHelperAnnotation(obj);
-        this._context.addAnnotation(obj);
+        this._context.fabric.deleteHelperAnnotation(obj);
+        this._context.fabric.addAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -636,7 +636,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
             top = theObject.top,
-            text = this._context.getAnnotationDescription(theObject, "category", false) || theObject.text;
+            text = this._context.fabric.getAnnotationDescription(theObject, "category", false) || theObject.text;
 
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
             hasControls: false, lockMovementX: true, lockMovementY: true});
@@ -644,7 +644,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         theObject.calcACoords();
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
     }
 
@@ -662,13 +662,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             top: y,
             left: x,
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addHelperAnnotation(this._current);
-        this._context.canvas.renderAll();
+        this._context.fabric.addHelperAnnotation(this._current);
     }
 
     discardCreate() {
         if (this._current) {
-            this._context.deleteHelperAnnotation(this._current);
+            this._context.fabric.deleteHelperAnnotation(this._current);
             this._current = undefined;
         }
     }
@@ -677,8 +676,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         let obj = this.getCurrentObject();
         if (!obj) return true;
         //todo fix? just promote did not let me to select the object this._context.promoteHelperAnnotation(obj);
-        this._context.deleteHelperAnnotation(obj);
-        this._context.addAnnotation(obj);
+        this._context.fabric.deleteHelperAnnotation(obj);
+        this._context.fabric.addAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -775,7 +774,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      * todo try (also with other props https://fabricjs.com/demos/stroke-uniform-property/) uniform stroke
      */
     configure(object, options) {
-        const graphicZoom = this._context.canvas.computeGraphicZoom();
+        const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
         const zoom = 3 / graphicZoom;
         $.extend(object, options, {
             angle: 0,
@@ -833,7 +832,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         theObject.calcACoords();
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
     }
 
@@ -846,7 +845,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
             x: x,
             y: y
         }, this._presets.getAnnotationOptions(isLeftClick));
-        this._context.addAnnotation(instance);
+        this._context.fabric.addAnnotation(instance);
         return true;
     }
 
@@ -922,7 +921,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
                 this._followPoint.set({left: currentPoint.x, top: currentPoint.y});
             }
             polygon.setCoords();
-            this._context.canvas.renderAll();
+            this._context.fabric.rerender();
         }
     }
 
@@ -1004,7 +1003,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             });
             return acc;
         }, { });
-        this._context.canvas.renderAll();
+        this._context.fabric.rerender();
     }
 
     _polygonPositionHandler(dim, finalMatrix, fabricObject) {
@@ -1059,8 +1058,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             theObject.points = this._origPoints;
 
             if (!ignoreReplace) {
-                this._context.replaceAnnotation(theObject, newObject);
-                this._context.canvas.renderAll();
+                this._context.fabric.replaceAnnotation(theObject, newObject);
             }
         }
         this._origPoints = null;
@@ -1092,8 +1090,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             top: theObject.top + deltaY
         });
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
 
         return newObject;
@@ -1106,7 +1103,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         if (!result || result.length < 3) return false;
         result = OSDAnnotations.PolygonUtilities.simplify(result);
-        _this._context.addAnnotation(
+        _this._context.fabric.addAnnotation(
             _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
         );
         return true;
@@ -1144,7 +1141,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             if (index < 1) {
                 this._initPoint = this._createControlPoint(x, y, properties);
                 this._initPoint.set({fill: '#d93442', radius: this._initPoint.radius*2});
-                this._context.addHelperAnnotation(this._initPoint);
+                this._context.fabric.addHelperAnnotation(this._initPoint);
             } else {
                 if (Math.sqrt(Math.pow(this._initPoint.left - x, 2) +
                     Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.scalebar.imagePixelSizeOnScreen()) {
@@ -1158,13 +1155,13 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             polygon = this.create([{ x: x, y: y }],
                 $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
-            this._context.addHelperAnnotation(polygon);
+            this._context.fabric.addHelperAnnotation(polygon);
             this._current = polygon;
         } else {
             if (this.withHelperPoints) {
                 if (!this._followPoint) {
                     this._followPoint = this._createControlPoint(x, y, properties);
-                    this._context.addHelperAnnotation(this._followPoint);
+                    this._context.fabric.addHelperAnnotation(this._followPoint);
                 } else {
                     this._followPoint.set({left: x, top: y});
                 }
@@ -1172,7 +1169,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             polygon.points.push({x: x, y: y});
             polygon.setCoords();
         }
-        this._context.canvas.renderAll();
+        this._context.fabric.rerender();
     }
 
     updateCreate(x, y) {
@@ -1203,9 +1200,9 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         if (!this._current) return;
 
         let points = this._current.points;
-        this._context.deleteHelperAnnotation(this._initPoint);
-        if (this._followPoint) this._context.deleteHelperAnnotation(this._followPoint);
-        this._context.deleteHelperAnnotation(this._current);
+        this._context.fabric.deleteHelperAnnotation(this._initPoint);
+        if (this._followPoint) this._context.fabric.deleteHelperAnnotation(this._followPoint);
+        this._context.fabric.deleteHelperAnnotation(this._current);
         if (points.length < 3) {
             this._initialize(false);
             return;
@@ -1213,7 +1210,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         this._current = this.create(OSDAnnotations.PolygonUtilities.simplify(points),
             this._presets.getAnnotationOptions(this._current.isLeftClick));
-        this._context.addAnnotation(this._current);
+        this._context.fabric.addAnnotation(this._current);
         this._initialize(false);
     }
 
@@ -1375,7 +1372,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
                 rightDiagonal: rightSkew,
             })
         };
-        this._context.canvas.renderAll();
+        this._context.fabric.rerender();
     }
 
     _actionHandler(eventData, transform,x, y) {
@@ -1437,8 +1434,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             theObject.y2 = this._origPoints[3];
 
             if (!ignoreReplace) {
-                this._context.replaceAnnotation(theObject, newObject);
-                this._context.canvas.renderAll();
+                this._context.fabric.replaceAnnotation(theObject, newObject);
             }
         }
         this._origPoints = null;
@@ -1451,7 +1447,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
                 [bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y],
                 this._presets.getAnnotationOptions(isLeftClick)
             );
-            this._context.addAnnotation(object);
+            this._context.fabric.addAnnotation(object);
             return true;
         }
         return false;
@@ -1476,13 +1472,13 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
             this._current = this.create([x, y, x, y],
                 $.extend(properties, this._presets.getAnnotationOptions(isLeftClick))
             );
-            this._context.addHelperAnnotation(this._current);
+            this._context.fabric.addHelperAnnotation(this._current);
         } else {
             this._current.set({x2: x, y2: y});
             this.finishIndirect();
             return;
         }
-        this._context.canvas.renderAll();
+        this._context.fabric.rerender();
     }
 
     updateCreate(x, y) {
@@ -1503,7 +1499,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         if (!this._current) return;
 
-        this._context.deleteHelperAnnotation(this._current);
+        this._context.fabric.deleteHelperAnnotation(this._current);
 
         const dy = this._current.y1 - this._current.y2,
             dx = this._current.x1 - this._current.x2;
@@ -1514,7 +1510,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
                 [this._current.x1, this._current.y1, this._current.x2, this._current.y2],
                 this._presets.getAnnotationOptions(this._current.isLeftClick)
             );
-            this._context.addAnnotation(this._current);
+            this._context.fabric.addAnnotation(this._current);
         }
         this._initialize(false);
         return true;
@@ -1756,7 +1752,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     //    //      left: left, top: top, rx: rx, ry: ry
     //    //  });
     //    //  theObject.calcACoords();
-    //    //  this._context.replaceAnnotation(theObject, newObject);
+    //    //  this._context.fabric.replaceAnnotation(theObject, newObject);
     // }
 
     instantCreate(screenPoint, isLeftClick = true) {
@@ -1768,7 +1764,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
-        // let active = this._context.canvas.getActiveObject();
+        // let active = this._context.fabric.canvas.getActiveObject();
         // console.log(active)
         // active = active ? [active] : [];
         // this._current = this.create(active, {});
@@ -1778,7 +1774,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     updateCreate(x, y) {
         // if (!this._current) return;
         //
-        // let active = this._context.canvas.getActiveObject();
+        // let active = this._context.fabric.canvas.getActiveObject();
         // console.log(active)
         //
         // if (!this._current._objects.includes(active)) {
@@ -1806,7 +1802,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
     finishIndirect() {
         // if (!this._current) return;
-        // this._context.addAnnotation(this._current);
+        // this._context.fabric.addAnnotation(this._current);
         // this._current = null;
     }
 
@@ -2045,7 +2041,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
             }
         }
         theObject.controls = controls;
-        this._context.canvas.renderAll();
+        this._context.fabric.rerender();
     }
 
     _multiPositionHandler(dim, finalMatrix, fabricObject) {
@@ -2057,7 +2053,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return fabric.util.transformPoint(
             { x, y },
             fabric.util.multiplyTransformMatrices(
-                fabricObject.canvas.viewportTransform,
+                fabricObject.fabric.canvas.viewportTransform,
                 fabricObject.calcTransformMatrix()
             )
         );
@@ -2123,8 +2119,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
             theObject.points = originalPointsCopy;
             this.setPoints(theObject, originalPointsCopy);
 
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
         this._origPoints = null;
         this._pointsChanged = false;

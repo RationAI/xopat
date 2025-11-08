@@ -203,7 +203,7 @@ static object describing necessary content for exporting as well as below
  - **inner** (``factory.copyInnerProperties``) - creates a shallow copy that copies over only properties defined in the factory's 
 `exports()` and `exportsGeometry()` methods
 
-Furthermore, you can use ``module.trimExportJSON`` method to trim
+Furthermore, you can use ``module.fabric.trimExportJSON`` method to trim
 all properties automatically, **in depth**
  - top-level objects (i.e. the parent group) are trimmed using ``factory.copyNecessaryProperties``
    - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached

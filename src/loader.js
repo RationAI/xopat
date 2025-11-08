@@ -11,6 +11,23 @@
  */
 
 /**
+ * @typedef {string} UniqueViewerId
+ * Unique ID per viewer session. Accessed as `viewer.uniqueId`. Related to any data-like
+ * function and logics. Do not mix with `ViewerId` type (`viewer.id`).
+ */
+
+/**
+ * @typedef {string} ViewerId
+ * ID per viewer instance. Accessed as `viewer.id`. Related to any UI-like
+ * function and logics when we don't care about the particular viewer instance, but position.
+ */
+
+/**
+ * @typedef {OpenSeadragon.Viewer|UniqueViewerId} ViewerLikeItem
+ * Viewer or unique viewer ID. Syntax sugar for methods that usually accept both parameters.
+ */
+
+/**
  * Initialize the xOpat loading system. This sets up the runtime environment for
  * loading modules and plugins and returns an initializer you call when the host
  * application (e.g., the viewer) is ready.
@@ -242,9 +259,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     /**
      * Get a module singleton reference if instantiated.
      * @param id module id
-     * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated
+     * @param {ViewerLikeItem} [viewer] if provided, viewer-context-dependent instance (XOpatModuleViewerSingleton) is fetched
+     * @return {XOpatModuleSingleton|XOpatModuleViewerSingleton|undefined} module if it is a singleton and already instantiated
      */
-    window.singletonModule = function (id) {
+    window.singletonModule = function (id, viewer = undefined) {
+        if (viewer !== undefined) {
+            return VIEWER_MANAGER._getSingleton(id, viewer);
+        }
         return MODULES[id]?.instance;
     };
 
@@ -447,6 +468,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.__id = id;
             this.__uid = `${executionContextName}.${id}`;
             this.__xoContext = executionContextName;
+
+            /**
+             * @type {string} id element identifier
+             * @memberof XOpatElement
+             */
+            this.constructor.id = id;
+
             this[CACHE_TOKEN] = new XOpatStorage.Cache({id: this.__uid});
             REGISTERED_ELEMENTS.push(this);
         }
@@ -592,6 +620,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
             options.id = this.uid;
             options.xoType = this.__xoContext;
+            if (options.inViewerContext === undefined) {
+                options.inViewerContext = true;
+            }
             let store = this[STORE_TOKEN];
             if (!store) {
                 this[STORE_TOKEN] = store = new PostDataStore(options);
@@ -600,24 +631,26 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const vanillaExportKey = (options.exportKey || "").replace("::", "");
 
             try {
-                const exportKey = options.inViewerContext ? vanillaExportKey + "::" : vanillaExportKey;
                 VIEWER_MANAGER.addHandler('export-data', async (e) => {
                     const data = await this.exportData(vanillaExportKey);
                     if (data) {
                         await store.set(vanillaExportKey, data);
                     }
 
-                    for (let v of VIEWER_MANAGER.viewers) {
-                        const contextID = findViewerUniqueId(v);
-                        const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
-                        if (data) {
-                            await store.set(vanillaExportKey + "::" + contextID, viewerData);
+                    if (options.inViewerContext) {
+                        const exportKey = vanillaExportKey + "::";
+                        for (let v of VIEWER_MANAGER.viewers) {
+                            const contextID = findViewerUniqueId(v);
+                            const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
+                            if (data) {
+                                await store.set(exportKey + contextID, viewerData);
+                            }
                         }
                     }
                 });
 
-                const data = await store.get(exportKey);
-                if (data !== undefined) await this.importData(exportKey, data);
+                const data = await store.get(vanillaExportKey);
+                if (data !== undefined) await this.importData(vanillaExportKey, data);
 
             } catch (e) {
                 console.error('IO Failure:', this.constructor.name, e);
@@ -690,19 +723,26 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * TODO: this does not wait once module is fully loaded!
-         * @param moduleId
-         * @param callback
+         * @param {string} moduleId
+         * @param {{ (module: XOpatModuleSingleton | XOpatModuleViewerSingleton): void }} callback
+         * @param {ViewerLikeItem} [viewer] - if defined, XOpatModuleViewerSingleton is listened for given
+         *   the desired viewer in question, otherwise global XOpatModuleSingleton
          * @return {boolean} true if finished immediatelly, false if registered handler for the
          *   future possibility of the module being loaded
          */
-        integrateWithSingletonModule(moduleId, callback) {
+        integrateWithSingletonModule(moduleId, callback, viewer = undefined) {
             const targetModule = singletonModule(moduleId);
             if (targetModule) {
                 callback(targetModule);
                 return true;
             }
             VIEWER_MANAGER.addHandler('module-singleton-created', e => {
-                if (e.id === moduleId) callback(e.module);
+                if (viewer) {
+                    viewer = VIEWER_MANAGER.ensureViewer(viewer);
+                    if (e.id === moduleId && e.module.viewer === viewer) callback(e.module);
+                } else {
+                    if (e.id === moduleId) callback(e.module);
+                }
             });
             return false;
         }
@@ -935,7 +975,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     }
 
     /**
-     * Singleton Module API, ready to run as an instance
+     * Singleton Module API, to provide one system-wide global instance.
      * offering its features to all equally.
      * @class XOpatModuleSingleton
      * @extends XOpatModule
@@ -963,6 +1003,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         static __self = undefined;
+
+
+        /**
+         * Create singleton with ID of the module.
+         * @param {string} id  The ID must be the module id defined in configuration.
+         */
         constructor(id) {
             super(id);
             const staticContext = this.constructor;
@@ -985,6 +1031,177 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 id: id,
                 module: this
             }).catch(/*no-op*/));
+        }
+
+        /**
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
+         */
+        get THIS() {
+            if (!this.id) return "__undefined__";
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `singletonModule('${this.id}')`,
+                writable: false,
+            });
+            return `singletonModule('${this.id}')`;
+        }
+    }
+
+    /**
+     * Singleton Module API, to provide one system-wide global instance per viewer.
+     * offering its features to all equally. One distinct thing from all other elements
+     * is that this component has full lifecycle including destruction - it lives
+     * as long as a particular viewer sub-window is alive, and it should handle its
+     * destruction using destroy() method.
+     * @class XOpatModuleViewerSingleton
+     * @extends XOpatModule
+     * @inheritDoc
+     */
+    window.XOpatModuleViewerSingleton = class extends XOpatModule {
+        /**
+         * Get instance of the annotations manger, a singleton
+         * (only one instance can run since it captures mouse events).
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @static
+         * @return {XOpatModuleSingleton} manager instance
+         */
+        static instance(viewerOrUniqueId) {
+            if (viewerOrUniqueId === undefined) {
+                console.error("The viewer instance needs a viewer argument to obtain the instance, unlike the global singleton.");
+                return undefined;
+            }
+            console.log("CONstructing", this.name);
+            // we use ID as this.name - it will not find itself unless registered, and registers itself with a correct ID
+            return VIEWER_MANAGER._getSingleton(this.id, viewerOrUniqueId, this);
+        }
+
+        /**
+         * Check if instantiated for a particular viewer
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @return {boolean}
+         */
+        static instantiated(viewerOrUniqueId) {
+            // not passing this as a third option avoids instantiation
+            return !!VIEWER_MANAGER._getSingleton(this.id, viewerOrUniqueId);
+        }
+
+        /**
+         * Create singleton with ID of the module based on given viewer.
+         * @param {string} id  The ID must be the module id defined in configuration.
+         * @param {OpenSeadragon.Viewer} viewer
+         */
+        constructor(id, viewer) {
+            super(id);
+
+            if (viewer === undefined) {
+                throw new Error("Viewer must be provided to create a viewer-singleton!");
+            }
+
+            // throws if exists
+            VIEWER_MANAGER._attachSingleton(id, this, viewer);
+
+            /**
+             * @type {OpenSeadragon.Viewer}
+             * @member viewer
+             * @memberOf XOpatModuleViewerSingleton
+             */
+            Object.defineProperty(this, 'viewer', {
+                get: () => viewer,
+            });
+
+            // Await event necessary to fire after instantiation, do in async context
+            /**
+             * Module singleton was instantiated
+             * @property {string} id module id
+             * @property {XOpatModuleSingleton} module
+             * @memberof VIEWER_MANAGER
+             * @event module-singleton-created
+             */
+            setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
+                id: id,
+                module: this,
+                viewer: viewer
+            }).catch(/*no-op*/));
+        }
+
+        /**
+         * Destroy the module. This method is to be overridden by particular de-initialization logics.
+         */
+        destroy() {
+            console.warn("Destroy is not overridden by the module. You might be missing de-initialization logics!");
+        }
+
+        /**
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
+         */
+        get THIS() {
+            if (!this.id) return "__undefined__";
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `singletonModule('${this.id}', '${this.viewer.uniqueId}')`,
+                writable: false,
+            });
+            return `singletonModule('${this.id}', '${this.viewer.uniqueId}')`;
+        }
+
+        get instances() {
+
+        }
+
+        /**
+         * Initialize IO in the Element - enables use of export/import functions. Redefinition
+         * of the element base implementation, exports primarily to the viewer it encapsulates.
+         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
+         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
+         * @return {PostDataStore} data store reference, or false if import failed
+         */
+        async initPostIO(options = {}) {
+            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
+                return;
+            }
+
+            options.id = this.uid;
+            options.xoType = this.__xoContext;
+            let store = this[STORE_TOKEN];
+            if (!store) {
+                this[STORE_TOKEN] = store = new PostDataStore(options);
+            }
+
+            const vanillaExportKey = (options.exportKey || "").replace("::", "");
+
+            try {
+                const exportKey =  vanillaExportKey + "::";
+                VIEWER_MANAGER.addHandler('export-data', async (e) => {
+                    const data = await this.exportData(vanillaExportKey);
+                    if (data) {
+                        console.warn("Xopat Module Viewer Singleton should not export to a global context, instead, it should export to a viewer context!");
+                        await store.set(vanillaExportKey, data);
+                    }
+
+                    const contextID = this.viewer.uniqueId;
+                    const viewerData = await this.exportViewerData(this.viewer, vanillaExportKey, contextID);
+                    if (data) {
+                        await store.set(vanillaExportKey + "::" + contextID, viewerData);
+                    }
+                });
+
+                // fallback compatibility, do for the first viewer only
+                if (this.viewer === VIEWER_MANAGER.viewers[0]) {
+                    const data = await store.get(exportKey);
+                    if (data !== undefined) await this.importData(exportKey, data);
+                }
+
+            } catch (e) {
+                console.error('IO Failure:', this.constructor.name, e);
+                this.error({
+                    error: e, code: "W_IO_INIT_ERROR",
+                    message: $.t('error.pluginImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+            }
+            return store;
         }
     }
 
@@ -1392,10 +1609,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
 
-    // todo this means if we have session with visualization only, no post IO works
+    /**
+     * @param {OpenSeadragon.Viewer} viewer
+     * @return {UniqueViewerId}
+     */
     function findViewerUniqueId(viewer) {
-        const result = viewer.__cachedUUID;
+        let result = viewer.__cachedUUID;
         if (result) return result;
+        let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item = viewer.world.getItemAt(itemIndex);
             const config = item?.getConfig("background");
@@ -1403,11 +1624,20 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 viewer.__cachedUUID = config.id;
                 return config.id;
             }
+            if (!firstItem) {
+                firstItem = item;
+            }
         }
+
+        const path = APPLICATION_CONTEXT.config.data[firstItem?.getConfig()?.dataReference]
+            || firstItem?.source.url || "--unknown--";
+        result = viewer.__cachedUUID = UTILITIES.generateID(path);
+        console.warn('Viewer has no unique ID! Attempt to create one.', result);
+        return result;
     }
 
     /**
-     * @property {string} uniqueId
+     * @property {UniqueViewerId} uniqueId
      * @memberof OpenSeadragon.Viewer
      */
     Object.defineProperty(OpenSeadragon.Viewer.prototype, "uniqueId", {
@@ -1458,6 +1688,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.viewerMenus = {};
             this.broadcastEvents = {};
             this.active = null;
+            this._singletonsKey = Symbol('singletons');
 
             // layout container
             this.layout = new UI.StretchGrid({ cols: 2 }); // e.g. 2 cols
@@ -1515,25 +1746,27 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Get viewer by ID
-         * @param uniqueId
+         * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
+         * @param {UniqueViewerId} uniqueId
          * @param _warn private arg
          * @return OpenSeadragon.Viewer
          */
         getViewer(uniqueId, _warn=true) {
-            let viewer = this.viewers.find(v => v.uniqueId === uniqueId);
-            if (!viewer) {
+            let viewer;
+            if (uniqueId.startsWith("osd-")) {
                 viewer = this.viewers.find(v => v.id === uniqueId);
-                if (viewer && _warn) {
-                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${viewer.id} for ${viewer.uniqueId}`);
+                if (_warn) {
+                    console.warn(`Viewer with id ${uniqueId} not found, provided id is not UniqueViewerId: using ${viewer.id} for ${viewer.uniqueId} viewer detection. This might result in unexpected behavior.`);
                 }
+            } else {
+                viewer = this.viewers.find(v => v.uniqueId === uniqueId);
             }
             return viewer;
         }
 
         /**
          *
-         * @param uniqueId
+         * @param {UniqueViewerId} uniqueId
          * @param _warn private arg
          * @return number
          */
@@ -1546,6 +1779,19 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 }
             }
             return index;
+        }
+
+        /**
+         * Helper method to get viewer instance from viewer-like argument.
+         * @param {OpenSeadragon.Viewer|UniqueViewerId} viewerOrUniqueId
+         * @return {*|OpenSeadragon.Viewer}
+         */
+        ensureViewer(viewerOrUniqueId) {
+            if (!viewerOrUniqueId) throw new Error("No viewer or viewer id provided!");
+            if (typeof viewerOrUniqueId === "string") {
+                return this.getViewer(viewerOrUniqueId);
+            }
+            return viewerOrUniqueId;
         }
 
         /**
@@ -1702,7 +1948,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         /**
                          * Raised when a new viewer comes into the play. Index is the index-position on the screen.
                          * @param {OpenSeadragon.Viewer} viewer
-                         * @param {string} uniqueId
+                         * @param {UniqueViewerId} uniqueId
                          * @param {Number} index
                          * @event viewer-create
                          * @memberof VIEWER_MANAGER
@@ -1831,8 +2077,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         *
-         * @param viewerOrId any viewer ID or viewer instance itself
+         * Get viewer-driven menu: right menu that open tabs for each viewer.
+         * @param {string|OpenSeadragon.Viewer} viewerOrId any viewer ID or viewer instance itself
          * @return {RightSideViewerMenu|undefined} menu instance or undefined if not found
          */
         getMenu(viewerOrId) {
@@ -1843,6 +2089,43 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 viewer = viewerOrId;
             }
             return this.viewerMenus[viewer?.id];
+        }
+
+        /**
+         * Get singleton for particular viewer. This works only for existing isntances - prefer using
+         * @param {string} singletonId
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @param {Function<XOpatModuleViewerSingleton>} [SingletonClass] optionally, supply class to instantiate
+         * @return {XOpatModuleViewerSingleton|undefined} menu instance or undefined if not found and SingletonClass not specified
+         * @private
+         */
+        _getSingleton(singletonId, viewerOrUniqueId, SingletonClass = undefined) {
+            let viewer = this.ensureViewer(viewerOrUniqueId);
+            let result = singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
+            if (!result && SingletonClass.prototype instanceof XOpatModuleViewerSingleton) {
+                // this call registers the singleton automatically
+                result = SingletonClass.instance(viewer);
+            }
+            return result;
+        }
+
+        /**
+         * @private
+         */
+        _attachSingleton(singletonId, singletonModule, viewerOrUniqueId) {
+            let viewer = this.ensureViewer(viewerOrUniqueId);
+            let singletons = viewer[this._singletonsKey];
+            if (!singletons) {
+               singletons = viewer[this._singletonsKey] = {};
+            }
+            if (!(singletonModule instanceof XOpatModuleViewerSingleton)) {
+                console.error("Viewer singleton must be instance of XOpatModuleViewerSingleton");
+            }
+            if (singletons[singletonId]) {
+                throw `Trying to instantiate a singleton. Instead, use ${singletonModule.constructor.name}::instance(viewer).`;
+            }
+            singletons[singletonId] = singletonModule;
+            return singletonModule;
         }
 
         /**
@@ -1871,6 +2154,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 if (menu) {
                     menu.destroy();
                     this.viewerMenus[viewer.id] = null;
+                }
+
+                const singletons = viewer[this._singletonsKey];
+                if (singletons) {
+                    for (let singletonId in singletons) {
+                        singletons[singletonId].destroy();
+                    }
+                    viewer[this._singletonsKey] = null;
                 }
 
                 delete viewer.__cachedUUID;

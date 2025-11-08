@@ -555,6 +555,17 @@ ${await UTILITIES.getForm()}
                 if (idx < alphLen) id += _alphabet[idx];
             }
         }
+        if (id.startsWith("osd-")) {
+            while (id.length < size + 4) {
+                let r = rand32();
+                for (let k = 0; k < 4 && id.length < size; k++) {
+                    const b = r & 0xff; r >>>= 8;
+                    const idx = b & mask;
+                    if (idx < alphLen) id += _alphabet[idx];
+                }
+            }
+            return id.slice(4, size + 4);
+        }
         return id.slice(0, size);
     };
 
@@ -571,6 +582,10 @@ ${await UTILITIES.getForm()}
         let out = [];
         for (const ch of s) {
             out.push(_alphaset.has(ch) ? ch : '_');
+        }
+        // ensure ID does not have reserved 'osd-' prefix
+        if (out.length > 3 && out[0] === 'o' && out[1] === 's' && out[2] === 'd' && out[3] === '-') {
+            out[3] = "_";
         }
         return out.join('');
     };

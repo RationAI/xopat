@@ -37,6 +37,7 @@ class SegmentAnythingState extends OSDAnnotations.AnnotationState {
   /**
    * Raises setup events for the plugin.
    * @returns {Promise<void>}
+   * todo move events to different subject
    * @private
    */
   _registerEventListeners() {
@@ -149,7 +150,7 @@ class SegmentAnythingState extends OSDAnnotations.AnnotationState {
         );
         const factory = this.context.getAnnotationObjectFactory("polygon");
         this.result = factory.create(polygon, visualProps);
-        this.context.addAnnotation(this.result);
+        this.context.fabric.addAnnotation(this.result);
       }
 
       this.sam.raiseSegmentationFinished(this.context, this.result);
