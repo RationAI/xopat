@@ -25,17 +25,17 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._lastOpenedInDetachedWindow = false;
         this._boardItems = [];
 
-        this._context.addHandler('layer-selection-changed', e => {
+        this._context.fabric.addHandler('layer-selection-changed', e => {
             this._updateSelectedLayersVisual(e.ids, e.isSelected);
         });
-        this._context.addHandler('active-layer-changed', e => {
+        this._context.fabric.addHandler('active-layer-changed', e => {
             this._updateActiveLayerVisual(e.id);
         });
-        this._context.addHandler('annotation-selection-changed', e => {
+        this._context.fabric.addHandler('annotation-selection-changed', e => {
             if (e.fromCanvas) this._syncSelectionFromCanvas(e.ids, e.isSelected);
             this._updateSelectedAnnotationsVisual(e.ids, e.isSelected);
         });
-        this._context.addHandler('layer-objects-changed', e => {
+        this._context.fabric.addHandler('layer-objects-changed', e => {
             if (!e?.layerId) return;
             this._updateAnnotationCount(e.layerId);
             this._updateLayerArea(e.layerId);
@@ -147,7 +147,7 @@ window.addEventListener("beforeunload", (e) => {
 </script>`);
         }
 
-        let active = this._context.canvas.getActiveObject();
+        let active = this._context.fabric.canvas.getActiveObject();
         if (active && renderer) {  // do not call highlight inside detached window, handled by _syncLoad
             this.highlight(active);
         }
@@ -319,10 +319,10 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         <span class="history-layer-menu" title="Layer Menu">
           <span style="font-weight:600;">Layers:</span>
           <span class="material-icons btn-pointer no-select" id="history-create-layer" title="Create Layer"
-                onclick="${this._ctx}.createLayer();">add_circle</span>
+                onclick="${this._ctx}.fabric.createLayer();">add_circle</span>
           <span class="material-icons btn-pointer no-select" id="history-delete-selection" title="Delete Selection"
                 style="color: var(--color-icon-tertiary);"
-                onclick="${this._ctx}.deleteSelection();">delete</span>
+                onclick="${this._ctx}.fabric.deleteSelection();">delete</span>
         </span>
 
         <span class="history-head-sep"></span>
@@ -364,7 +364,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         for (const item of this._boardItems) {
             if (item.type === "layer") {
-                const layer = this._context.getLayer(item.id);
+                const layer = this._context.fabric.getLayer(item.id);
                 this.addLayerToBoard(layer);
 
                 const layerObjects = layer.getObjects();
@@ -373,14 +373,14 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
                 }
 
             } else {
-                const annotation = this._context.findObjectOnCanvasByIncrementId(item.id);
+                const annotation = this._context.fabric.findObjectOnCanvasByIncrementId(item.id);
                 if (annotation) this._refreshAnnotationInBoard(annotation);
             }
         }
 
-        const selectedAnnots = this._context.getSelectedAnnotationIds();
-        const selectedLayers = this._context.getSelectedLayerIds();
-        const activeLayer = this._context.getActiveLayer();
+        const selectedAnnots = this._context.fabric.getSelectedAnnotationIds();
+        const selectedLayers = this._context.fabric.getSelectedLayerIds();
+        const activeLayer = this._context.fabric.getActiveLayer();
 
         this._syncSortableSelection(selectedAnnots, 'annotation');
         this._syncSortableSelection(selectedLayers, 'layer');
@@ -391,7 +391,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     _refreshAnnotationInBoard(annotation) {
-        if (this._context.isAnnotation(annotation) && this._context.updateSingleAnnotationVisuals(annotation)) {
+        if (this._context.fabric.isAnnotation(annotation) && this._context.fabric.updateSingleAnnotationVisuals(annotation)) {
             this.addAnnotationToBoard(annotation);
         }
     }
@@ -527,7 +527,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         this.initBoardSortable();
         this.refresh();
 
-        let active = this._context.canvas.getActiveObject();
+        let active = this._context.fabric.canvas.getActiveObject();
         if (active) {
             this.highlight(active);
         }
@@ -575,9 +575,9 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
                 const id = item?.getAttribute('data-id');
                 if (!type || !id || (type === 'annotation')) return;
 
-                let layer = this._context.getLayer(Number(id));
-                if (this._context.getSelectedLayerIds().includes(layer.id)) return;
-                this._context.setActiveLayer(layer);
+                let layer = this._context.fabric.getLayer(Number(id));
+                if (this._context.fabric.getSelectedLayerIds().includes(layer.id)) return;
+                this._context.fabric.setActiveLayer(layer);
             },
             onMove: (evt) => {
                 this._toggleDropHover(this._lastDropHover, false);
@@ -725,7 +725,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (selectedLayerIds.size === 0 || selectedAnnotationIds.length === 0) return false;
 
         for (const annId of selectedAnnotationIds) {
-            const obj = this._context.findObjectOnCanvasByIncrementId(Number(annId));
+            const obj = this._context.fabric.findObjectOnCanvasByIncrementId(Number(annId));
             if (obj?.layerID != null && selectedLayerIds.has(Number(obj.layerID))) {
                 Dialogs.show(
                     "Cannot move annotations together with their selected parent layer. Deselect either the layer or those annotations.",
@@ -743,18 +743,18 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _handleBoardAction(type, id, action) {
         switch (action) {
             case 'select':
-                if (type === 'layer') this._context.selectLayer(id);
-                else if (type === 'annotation') this._context.selectAnnotation(id);
+                if (type === 'layer') this._context.fabric.selectLayer(id);
+                else if (type === 'annotation') this._context.fabric.selectAnnotation(id);
                 break;
 
             case 'deselect':
-                if (type === 'layer') this._context.deselectLayer(id);
-                else if (type === 'annotation') this._context.deselectAnnotation(id);
+                if (type === 'layer') this._context.fabric.deselectLayer(id);
+                else if (type === 'annotation') this._context.fabric.deselectAnnotation(id);
                 break;
 
             case 'clear':
-                this._context.clearLayerSelection();
-                this._context.clearAnnotationSelection();
+                this._context.fabric.clearLayerSelection();
+                this._context.fabric.clearAnnotationSelection();
                 break;
         }
     }
@@ -774,7 +774,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
                 if (el !== item) Sortable.utils.deselect(el);
             });
             this._handleBoardAction(null, null, 'clear');
-            if (type === 'annotation') this._context.unsetActiveLayer();
+            if (type === 'annotation') this._context.fabric.unsetActiveLayer();
         }
 
         this._handleBoardAction(type, Number(id), 'select');
@@ -799,9 +799,9 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             if (el !== item) Sortable.utils.deselect(el);
         });
         this._handleBoardAction(null, null, 'clear');
-        this._context.unsetActiveLayer();
+        this._context.fabric.unsetActiveLayer();
         Sortable.utils.select(item);
-        if (type === 'layer') this._context.setActiveLayer(Number(id));
+        if (type === 'layer') this._context.fabric.setActiveLayer(Number(id));
 
         this._handleBoardAction(type, Number(id), 'select');
     }
@@ -827,7 +827,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
                 el.classList.remove('history-selected');
             });
             this._handleBoardAction(null, null, 'clear');
-            this._context.unsetActiveLayer();
+            this._context.fabric.unsetActiveLayer();
         };
 
         container._clearSelHandler = handler;
@@ -879,8 +879,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (!type || !id) return null;
 
         const object = type === 'layer'
-            ? this._context.getLayer(Number(id))
-            : this._context.findObjectOnCanvasByIncrementId(Number(id));
+            ? this._context.fabric.getLayer(Number(id))
+            : this._context.fabric.findObjectOnCanvasByIncrementId(Number(id));
 
         if (!object) return null;
 
@@ -936,7 +936,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         const sourceList = item.sourceIsBoard
             ? this._boardItems
-            : this._context.getLayer(String(item.sourceLayerId)).getObjects();
+            : this._context.fabric.getLayer(String(item.sourceLayerId)).getObjects();
 
         const containerEl = this._getNode(item.sourceContainerId);
 
@@ -951,7 +951,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (item.sourceIsBoard) {
             this._boardItems = newList;
         } else {
-            this._context.getLayer(String(item.sourceLayerId)).setObjects(newList, true);
+            this._context.fabric.getLayer(String(item.sourceLayerId)).setObjects(newList, true);
         }
 
         let removedItem = null;
@@ -971,7 +971,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _addItemsToTarget(targetLayerId, isBoardTarget, items, indicies, container, dom, sortableAction) {
         const list = isBoardTarget
             ? this._boardItems
-            : this._context.getLayer(String(targetLayerId)).getObjects();
+            : this._context.fabric.getLayer(String(targetLayerId)).getObjects();
 
         const newList = this._addToListByIndicies(
             list,
@@ -985,7 +985,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (isBoardTarget) {
             this._boardItems = newList;
         } else {
-            this._context.getLayer(String(targetLayerId)).setObjects(newList, true);
+            this._context.fabric.getLayer(String(targetLayerId)).setObjects(newList, true);
         }
 
         return newList;
@@ -1026,14 +1026,14 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         const list = isBoardTarget
             ? this._boardItems
-            : this._context.getLayer(String(targetLayerId)).getObjects();
+            : this._context.fabric.getLayer(String(targetLayerId)).getObjects();
 
         const result = removeFn.call(this, list, items, container, !sortableAction);
 
         if (isBoardTarget) {
             this._boardItems = result.newList;
         } else {
-            this._context.getLayer(String(targetLayerId)).setObjects(result.newList, true);
+            this._context.fabric.getLayer(String(targetLayerId)).setObjects(result.newList, true);
         }
 
         return result;
@@ -1055,7 +1055,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _addBackToSource(m, item, dom, sortableAction) {
         const list = m.sourceIsBoard
             ? this._boardItems
-            : this._context.getLayer(String(m.sourceLayerId)).getObjects();
+            : this._context.fabric.getLayer(String(m.sourceLayerId)).getObjects();
         const containerEl = this._getNode(m.sourceContainerId);
 
         const newList = this._addToListByIndicies(
@@ -1070,7 +1070,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (m.sourceIsBoard) {
             this._boardItems = newList;
         } else {
-            this._context.getLayer(String(m.sourceLayerId)).setObjects(newList, true);
+            this._context.fabric.getLayer(String(m.sourceLayerId)).setObjects(newList, true);
         }
     }
 
@@ -1085,7 +1085,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
     _convertItemToLayerFormat(obj) {
         if (!obj || !String(obj.id)) return null;
-        let annotation = this._context.findObjectOnCanvasByIncrementId(obj.id);
+        let annotation = this._context.fabric.findObjectOnCanvasByIncrementId(obj.id);
         if (!annotation) return null;
 
         return annotation;
@@ -1179,7 +1179,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     moveAnnotationInBoard(annotationId, direction) {
-        const annotation = this._context.findObjectOnCanvasByIncrementId(annotationId);
+        const annotation = this._context.fabric.findObjectOnCanvasByIncrementId(annotationId);
         if (!annotation) return;
 
         const pos = this._findAnnotationPosition(annotation);
@@ -1209,7 +1209,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             return this._delegateToAddItems(movedItem, newIdx, true);
         }
 
-        const targetLayer = this._context.getLayer(target.id);
+        const targetLayer = this._context.fabric.getLayer(target.id);
         if (!targetLayer) return;
 
         const targetIdxInsideLayer = direction === "up"
@@ -1258,7 +1258,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         } else {
             const layerIdx = this.getBoardIndex('layer', annotation.layerID);
-            const layer = this._context.getLayer(annotation.layerID);
+            const layer = this._context.fabric.getLayer(annotation.layerID);
             const idx = layer.getAnnotationIndex(annotation);
             if (!layer) return null;
 
@@ -1272,7 +1272,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         let targetObj = undefined;
         if (incrementId !== undefined) {
-            targetObj = this._context.findObjectOnCanvasByIncrementId(incrementId);
+            targetObj = this._context.fabric.findObjectOnCanvasByIncrementId(incrementId);
             if (targetObj) {
                 this.highlight(targetObj);
 
@@ -1306,7 +1306,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     _updateBoardText(object, text) {
-        if (!text || text.length < 0) text = this._context.getDefaultAnnotationName(object);
+        if (!text || text.length < 0) text = this._context.fabric.getDefaultAnnotationName(object);
         this._performAtJQNode("layer-logs", node =>
             node.find(`#log-object-${object.label} span.desc`).html(text));
     }
@@ -1328,7 +1328,6 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             if (!header) return; //todo test window mode hidden why it gets here ctx should be null
             if (enabled) {
                 ctx.document.body.style.background = "transparent";
-                header.readonly = false; this._context.canvas.renderAll()
                 header.style.filter = "none";
             } else {
                 ctx.document.body.style.background = "#eb7777";
@@ -1349,7 +1348,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     toggleLayerVisibility(layerID) {
-        const layer = this._context.getLayer(layerID);
+        const layer = this._context.fabric.getLayer(layerID);
         if (!layer) {
             console.warn(`Layer with ID ${layerID} not found.`);
             return;
@@ -1364,12 +1363,11 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             iconElement.innerText = isVisible ? "visibility_off" : "visibility";
         }
 
-        //this._context.removeHighlight();
-        this._context.canvas.renderAll();
+        //this._context.fabric.removeHighlight();
     }
 
     _updateAnnotationCount(layerId) {
-        let layer = this._context.getLayer(layerId);
+        let layer = this._context.fabric.getLayer(layerId);
         if (!layer) return;
 
         const layerEl = this._getNode(this.getLayerElementId(layer.id));
@@ -1383,7 +1381,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     _updateLayerHtml(layerId) {
-        let layer = this._context.getLayer(layerId);
+        let layer = this._context.fabric.getLayer(layerId);
         if (!layer) return;
 
         this._performAtJQNode(this.getAnnotationContainerId(layer.id), node => node.html(""));
@@ -1397,7 +1395,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
     renameLayerInline(layerID, evt) {
         if (evt) evt.stopPropagation();
-        const layer = this._context.getLayer(layerID);
+        const layer = this._context.fabric.getLayer(layerID);
         if (!layer) return;
 
         const wrapper = this._getNode(this.getLayerElementId(layerID));
@@ -1450,7 +1448,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (!Array.isArray(ids)) ids = [ids];
 
         for (const id of ids) {
-            let obj = this._context.findObjectOnCanvasByIncrementId(Number(id));
+            let obj = this._context.fabric.findObjectOnCanvasByIncrementId(Number(id));
             container = obj.hasOwnProperty("layerID") && obj.layerID ? this._getNode(this.getAnnotationContainerId(obj.layerID)) : container;
 
             if (!container || !Sortable.get(container)) continue;
@@ -1518,8 +1516,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (!btn) return;
 
         const hasAnySelection =
-            (this._context.getSelectedLayerIds()?.length || 0) > 0 ||
-            (this._context.getSelectedAnnotationIds()?.length || 0) > 0;
+            (this._context.fabric.getSelectedLayerIds()?.length || 0) > 0 ||
+            (this._context.fabric.getSelectedAnnotationIds()?.length || 0) > 0;
 
         btn.style.color = hasAnySelection ? 'var(--color-icon-primary)' : 'var(--color-icon-tertiary)';
         btn.style.pointerEvents = hasAnySelection ? 'auto' : 'none';
@@ -1601,7 +1599,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     _updateLayerArea(layerId) {
-        const layer = this._context.getLayer(layerId);
+        const layer = this._context.fabric.getLayer(layerId);
         if (!layer) return;
         const sum = this._computeLayerArea(layer);
         const text = VIEWER?.scalebar?.imageAreaToGivenUnits
@@ -1633,7 +1631,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         //         let metaElement = preset.meta[key];
         //         if (key === "category") {
         //             inputs.unshift('<span class="show-hint d-block px-2 py-1" data-hint="', metaElement.name,
-        //                 '">', metaElement.value || this._context.getDefaultAnnotationName(object), '</span>');
+        //                 '">', metaElement.value || this._context.fabric.getDefaultAnnotationName(object), '</span>');
         //         } else {
         //             // from user-testing: disabled change of properties in the board...
         //
@@ -1645,8 +1643,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         //         }
         //     }
         // }
-        let color = this._context.getAnnotationColor(object);
-        let categoryDesc = this._context.getAnnotationDescription(object, "category", true, false);
+        let color = this._context.fabric.getAnnotationColor(object);
+        let categoryDesc = this._context.fabric.getAnnotationDescription(object, "category", true, false);
         let name = new Date(object.created).toLocaleString();
         let mainRowContent;
 
@@ -1681,7 +1679,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         //     inputs.push('<label class="show-hint d-block" data-hint="Name">',
         //         '<input type="text" class="form-control border-0 width-full" readonly ',
         //         'style="background:transparent;color: inherit;" value="',
-        //         this._context.getDefaultAnnotationName(object), '" name="category"></label>');
+        //         this._context.fabric.getDefaultAnnotationName(object), '" name="category"></label>');
         // }
 
         const _this = this;
@@ -1743,7 +1741,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         let incrementId;
         if (typeof object !== "object") {
             incrementId = object;
-            object = this._focus(focusBBox, incrementId) || this._context.findObjectOnCanvasByIncrementId(incrementId);
+            object = this._focus(focusBBox, incrementId) || this._context.fabric.findObjectOnCanvasByIncrementId(incrementId);
         } else {
             incrementId = object.incrementId;
         }
@@ -1788,7 +1786,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         if (!this._editSelection) return;
 
         try {
-            let obj = this._editSelection.target || this._context.findObjectOnCanvasByIncrementId(this._editSelection.incrementId);
+            let obj = this._editSelection.target || this._context.fabric.findObjectOnCanvasByIncrementId(this._editSelection.incrementId);
             let self = this._editSelection.self,
             //from user testing: disable modification of meta?
                 inputs = self.parent().find("input"),
@@ -1944,7 +1942,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
 
         if (annotation.layerID) {
             annotContainerId = this.getAnnotationContainerId(annotation.layerID);
-            const layer = this._context.getLayer(annotation.layerID);
+            const layer = this._context.fabric.getLayer(annotation.layerID);
 
             this._performAtJQNode(this.getLayerElementId(annotation.layerID), node => {
                 if (!node.length) this.addLayerToBoard(layer);
@@ -1991,7 +1989,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             annotContainerId = this.getLayerContainerId();
         } else {
             annotContainerId = this.getAnnotationContainerId(annotation.layerID);
-            const layer = this._context.getLayer(annotation.layerID);
+            const layer = this._context.fabric.getLayer(annotation.layerID);
             if (layer) this._emitLayerObjectsChanged(annotation.layerID);
         }
 
@@ -2026,8 +2024,8 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
     removeLayerFromBoard(layer) {
         if (!layer) return;
 
-        if (this._context.getSelectedLayerIds().includes(layer.id)) {
-            this._context.deselectLayer(layer.id);
+        if (this._context.fabric.getSelectedLayerIds().includes(layer.id)) {
+            this._context.fabric.deselectLayer(layer.id);
         }
 
         this._boardItems = this._boardItems.filter(item => !(item.type === "layer" && item.id === layer.id));

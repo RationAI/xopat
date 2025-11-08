@@ -58,7 +58,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleClickUp(o, point, isLeftClick, objectFactory) {
         if (this._allowCreation && this.result) {
             delete this.result.strokeDashArray;
-            this.context.promoteHelperAnnotation(this.result);
+            this.context.fabric.promoteHelperAnnotation(this.result);
             this.result = null;
             this._allowCreation = false;
         } else {
@@ -75,7 +75,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
 
         this._allowCreation = true;
-        this.context.clearAnnotationSelection(true);
+        this.context.fabric.clearAnnotationSelection(true);
         this._isLeft = isLeftClick;
     }
 
@@ -140,7 +140,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
         const factory = this.context.getAnnotationObjectFactory("polygon");
         if (this.result) {
-            this.context.deleteHelperAnnotation(this.result);
+            this.context.fabric.deleteHelperAnnotation(this.result);
         }
 
         if (largest && factory) {
@@ -148,7 +148,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
             visualProps.strokeDashArray = [15, 15];
             this.result = factory.create(largest, visualProps);
-            this.context.addHelperAnnotation(this.result);
+            this.context.fabric.addHelperAnnotation(this.result);
         } else {
             this.result = null;
         }
@@ -230,14 +230,14 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         VIEWER.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
-        this.context.canvas.hoverCursor = "crosshair";
-        this.context.canvas.defaultCursor = "crosshair";
+        this.context.fabric.canvas.hoverCursor = "crosshair";
+        this.context.fabric.canvas.defaultCursor = "crosshair";
         return true;
     }
 
     setToAuto(temporary) {
         if (this.result) {
-            this.context.deleteHelperAnnotation(this.result);
+            this.context.fabric.deleteHelperAnnotation(this.result);
             this.result = null;
         }
         this.data = null;
@@ -246,7 +246,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         VIEWER.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
-        this.context.canvas.renderAll();
         return true;
     }
 

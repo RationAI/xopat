@@ -31,10 +31,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     handleClickUp(o, point, isLeftClick, objectFactory) {
-		if (this._allowCreation && this.annotations) {
+        if (this._allowCreation && this.annotations) {
             for (let i = 0; i < this.annotations.length; i++) {
                 delete this.annotations[i].strokeDashArray;
-                this.context.promoteHelperAnnotation(this.annotations[i]);
+                this.context.fabric.promoteHelperAnnotation(this.annotations[i]);
             }
 
             this.annotations = [];
@@ -45,9 +45,9 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         }
 
         return true;
-	}
+    }
 
-	handleClickDown(o, point, isLeftClick, objectFactory) {
+    handleClickDown(o, point, isLeftClick, objectFactory) {
         if (!objectFactory || this.disabled) {
             this.abortClick(isLeftClick);
             Dialogs.show(this.disabled ? 'There are no overlays to segment!' : 'Select a preset to annotate!');
@@ -55,12 +55,12 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         }
 
         this._allowCreation = true;
-        this.context.clearAnnotationSelection(true);
+        this.context.fabric.clearAnnotationSelection(true);
         this._isLeft = isLeftClick;
-	}
+    }
 
-	handleMouseHover(event, point) {
-		if (!this.context.presets.left || this.isZooming) {
+    handleMouseHover(event, point) {
+        if (!this.context.presets.left || this.isZooming) {
             this._invalidData = Date.now();
             return;
         }
@@ -94,25 +94,25 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._lastAlpha = currentAlpha;
     }
 
-	scrollZooming(event, delta) {
+    scrollZooming(event, delta) {
         this._invalidData = Date.now();
-	}
+    }
 
-	setFromAuto() {
+    setFromAuto() {
         this.drawer.canvas.style.setProperty('display', 'block');
 
         const { x, y, w, h } = this._getViewportScreenshotDimensions();
         this._prepareViewportScreenshot(x, y, w, h);
 
         this.context.setOSDTracking(false);
-        this.context.canvas.hoverCursor = "crosshair";
-        this.context.canvas.defaultCursor = "crosshair";
-		return true;
-	}
+        this.context.fabric.canvas.hoverCursor = "crosshair";
+        this.context.fabric.canvas.defaultCursor = "crosshair";
+        return true;
+    }
 
-	setToAuto(temporary) {
+    setToAuto(temporary) {
         if (this.annotations) {
-            this.annotations.forEach(annotation => this.context.deleteHelperAnnotation(annotation));
+            this.annotations.forEach(annotation => this.context.fabric.deleteHelperAnnotation(annotation));
             this.annotations = [];
         }
 
@@ -121,17 +121,16 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         if (temporary) return false;
         this.context.setOSDTracking(true);
-        this.context.canvas.renderAll();
-		return true;
-	}
+        return true;
+    }
 
-	accepts(e) {
-		return e.code === "KeyU" && !e.ctrlKey && !e.shiftKey && !e.altKey;
-	}
+    accepts(e) {
+        return e.code === "KeyU" && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    }
 
-	rejects(e) {
-		return e.code === "KeyU";
-	}
+    rejects(e) {
+        return e.code === "KeyU";
+    }
 
     _prepareViewportScreenshot(x, y, w, h) {
         const canvasW = Math.round(VIEWER.drawer.canvas.width);
@@ -230,10 +229,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         windowPoint.y *= this.ratio;
 
         const outOfBounds =
-        windowPoint.x < this.contentSize.x ||
-        windowPoint.y < this.contentSize.y ||
-        windowPoint.x > this.contentSize.x + this.contentSize.w ||
-        windowPoint.y > this.contentSize.y + this.contentSize.h;
+            windowPoint.x < this.contentSize.x ||
+            windowPoint.y < this.contentSize.y ||
+            windowPoint.x > this.contentSize.x + this.contentSize.w ||
+            windowPoint.y > this.contentSize.y + this.contentSize.h;
 
         if (outOfBounds) return 0;
 
@@ -280,7 +279,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
                 const bboxInner = polygonUtils.getBoundingBox(inner);
                 return polygonUtils.intersectAABB(bboxOuter, bboxInner) &&
-                       OSDAnnotations.checkPolygonIntersect(inner, outer).length > 0;
+                    OSDAnnotations.checkPolygonIntersect(inner, outer).length > 0;
             });
 
             outer = this._convertToImageCoordinates(outer);
@@ -297,7 +296,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const multipolygonFactory = this.context.getAnnotationObjectFactory("multipolygon");
 
         if (this.annotations) {
-            this.annotations.forEach(annotation => this.context.deleteHelperAnnotation(annotation));
+            this.annotations.forEach(annotation => this.context.fabric.deleteHelperAnnotation(annotation));
             this.annotations = [];
         }
 
@@ -314,7 +313,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             }
         });
 
-        this.annotations.forEach(annotation => this.context.addHelperAnnotation(annotation));
+        this.annotations.forEach(annotation => this.context.fabric.addHelperAnnotation(annotation));
     }
 
     _convertToImageCoordinates(points) {
