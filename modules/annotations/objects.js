@@ -603,6 +603,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Compute the area of the object in pixels (image dimension) squared
+     * @param {fabric.Object} theObject
+     * @return {Number|undefined} undefined if length not measure-able
+     */
+    getLength(theObject) {
+        return undefined;
+    }
+
+    /**
      * Zoom event on canvas, update necessary properties to stay visually appleasing
      * @param {fabric.Object} ofObject
      * @param {number} graphicZoom scaled zoom value to better draw graphics (e.g. thicker lines for closer zoom)

@@ -266,7 +266,7 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 <button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><span class="material-icons pl-0 pr-1 v-align-text-top" style="font-size: 19px;">save</span>Save</button>
 <button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AdvancedMenu.openSubmenu(\'${this.id}\', \'annotations-shared\');">more_vert</button>
 </div>`,
-			'',
+			`<div class="flex flex-end width-full"><button class="btn btn-sm" onclick="${this.THIS}.showMeasurementsWindow();">Measurements</button></div>`,
 // 			`<h4 class="f4 d-inline-block">Layers</h4><button class="btn btn-sm" onclick="
 // ${this.THIS}.context.createLayer();"><span class="material-icons btn-pointer">add</span> new layer</button>
 // <div id="annotations-layers"></div>`,
@@ -2242,6 +2242,18 @@ class="btn m-2">Set for left click </button></div>`
 		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
 
+    showMeasurementsWindow() {
+        if (!this.measurementsWindow) {
+            this.measurementsWindow = new AnnotationsGUI.PathologyMetricsWindow({
+                annotations: this.context,
+                userInterface: USER_INTERFACE,
+                pluginId: this.id,
+                THIS: this.THIS + ".measurementsWindow"
+            });
+        } else {
+            this.measurementsWindow.reset();
+        }
+    }
 }
 
 /*------------ Initialization of OSD Annotations ------------*/

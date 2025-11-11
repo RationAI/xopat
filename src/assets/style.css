@@ -563,6 +563,16 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 /*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
 /*input.switch + label:active:after {width: 130px;}*/
 
+
+
+/*TODO remove patches in V3*/
+.shader-part > div > div, .shader-part > div:first-child {display: flex; flex-direction: row} /*patch: force controls on the same row*/
+label>input[type=checkbox] {display: inline-block !important;}
+.btn, .btn.material-icons, .btn > .material-icons {background-color: oklch(var(--bc) / var(--tw-bg-opacity)); color: oklch(var(--b1) / var(--tw-text-opacity));} /*patch: button colors tailwind collides*/
+
+
+
+
 /** DIALOGS*/
 input.selectable-image-row-context:checked + div {
     outline: none; -webkit-box-shadow: 0 0 5px 3px var(--color-state-focus-border);
