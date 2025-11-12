@@ -195,10 +195,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Initialize object before import
-     * todo check if necessary
      * @param {fabric.Object} object object to be initialized
      */
     initializeBeforeImport(object) {
+        // do nothing by default
     }
 
     trimExportJSON(objectList) {

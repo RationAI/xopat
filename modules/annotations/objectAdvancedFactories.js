@@ -145,6 +145,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         //not allowed
     }
 
+    getLength(theObject) {
+        const line = theObject.item(0);
+        return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
+    }
+
     /**
      * Called when object is selected - restore custom controls
      * @param {fabric.Object} theObject selected fabricjs object

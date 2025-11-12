@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "A plugin for annotations creation, management and sharing.",
     "icon": null,
-    "includes": ["annotationsGUI.js", "preview.js"],
+    "includes": ["annotationsGUI.js", "preview.js", "measurements.js"],
     "modules": ["annotations", "human-readable-ids", "sam-segmentation-experimental"],
     "permaLoad": false,
     //Available annotation object types
