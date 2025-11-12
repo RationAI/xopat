@@ -1,4 +1,4 @@
-OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
+OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
     constructor(module, viewer) {
         super();
@@ -2042,3 +2042,4 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         };
     }
 }
+requireViewerSingletonPresence(OSDAnnotations.FabricWrapper);

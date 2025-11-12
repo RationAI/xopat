@@ -50,7 +50,35 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {OSDAnnotations.FabricWrapper}
      */
     get fabric() {
-        return this._fabricProxy;
+        return OSDAnnotations.FabricWrapper.instance(this._activeViewer);
+    }
+
+    /**
+     * Get actual active viewer instance the user interacts with.
+     * @return {OpenSeadragon.Viewer}
+     */
+    get viewer() {
+        if (!this.mode.locksViewer()) {
+            this._activeViewer = VIEWER;
+        }
+        return this._activeViewer;
+    }
+
+
+    /**
+     * Add handler to all contexts of viewers
+     * @param args
+     */
+    addFabricHandler(...args) {
+        OSDAnnotations.FabricWrapper.broadcastHandler(...args);
+    }
+
+    /**
+     * Cancel broadcasting of viewer-bound events
+     * @param args
+     */
+    removeFabricHandler(...args) {
+        OSDAnnotations.FabricWrapper.cancelBroadcast(...args);
     }
 
 	/**
@@ -131,7 +159,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	async importData(data) {
-		const options = {inheritSession: true};
+        // todo mutiplex
+        const options = {inheritSession: true};
 		if (typeof data === "object" && data.format) {
 			options.format = data.format;
 		}
@@ -162,7 +191,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					guard = 0;
 					//todo ensure cache can be non-persistent as a fallback
 					_this.cache.set('_unsaved', {
-						session: APPLICATION_CONTEXT.sessionName,
+                        // todo cache needs to store valid canvas ID to store to
+                        session: APPLICATION_CONTEXT.sessionName,
 						objects: _this._fabricProxy.toObject(true)?.objects,
 						presets: _this.presets.toObject()
 					});
@@ -202,6 +232,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
 						//todo do not avoid import but import to a new layer!!!
+                        // todo multiplex delivery of annotations
 						this._avoidImport = true;
 						if (data?.presets) {
 							await this.presets.import(data?.presets, true);

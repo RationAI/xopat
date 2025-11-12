@@ -744,7 +744,7 @@ draggable="true"></span>`;
             }
         });
 
-        VIEWER.addHandler('key-down', (e) => {
+        VIEWER_MANAGER.addHandler('key-down', (e) => {
             if (!e.focusCanvas) return;
             if (e.code === "KeyN") {
                 _this.snapshots.goToIndex(_this.snapshots.currentStepIndex + 1);

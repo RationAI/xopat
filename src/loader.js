@@ -64,6 +64,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      */
     let REGISTERED_PLUGINS = [];
     let LOADING_PLUGIN = false;
+    const REQUIRED_SINGLETONS = new Set();
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -259,8 +260,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     /**
      * Get a module singleton reference if instantiated.
      * @param id module id
-     * @param {ViewerLikeItem} [viewer] if provided, viewer-context-dependent instance (XOpatModuleViewerSingleton) is fetched
-     * @return {XOpatModuleSingleton|XOpatModuleViewerSingleton|undefined} module if it is a singleton and already instantiated
+     * @param {ViewerLikeItem} [viewer] if provided, viewer-context-dependent instance (XOpatViewerSingleton) is fetched
+     * @return {XOpatModuleSingleton|XOpatViewerSingletonModule|undefined} module if it is a singleton and already instantiated
      */
     window.singletonModule = function (id, viewer = undefined) {
         if (viewer !== undefined) {
@@ -286,6 +287,25 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             }
         } //else do not initialize plugin, wait untill all files loaded dynamically
     };
+
+    /**
+     * Force the SingletonClass class definition to be instantiated automatically per active viewer.
+     * @param {XOpatViewerSingleton} SingletonClass
+     */
+    window.requireViewerSingletonPresence = function (SingletonClass) {
+        if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
+            console.error("Invalid singleton class", SingletonClass);
+            return;
+        }
+        REQUIRED_SINGLETONS.add(SingletonClass);
+        if (window.VIEWER_MANAGER) {
+            for (let v of VIEWER_MANAGER.viewers) {
+                if (v.isOpen() && !this._getSingleton(SingletonClass.IDD, viewer)) {
+                    SingletonClass.instance(v);
+                }
+            }
+        }
+    }
 
     function extendWith(target, source, ...properties) {
         for (let property of properties) {
@@ -363,6 +383,65 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             throw "Invalid translation for item " + id;
         }
     }
+
+    // ability to inherit from mutliple classes https://github.com/rse/aggregation/blob/master/src/aggregation-es6.js
+    const All = (base, ...mixins) => {
+        // Build a linearized, duplicate-free list of mixin classes,
+        // ordered from closest-to-base -> most-derived
+        const linearize = (base, mixins) => {
+            const seen = new Set();
+            const out = [];
+
+            const visit = (K) => {
+                if (!K || K === base || K === Object) return;
+                const superK = Object.getPrototypeOf(K);
+                visit(superK);                 // ensure superclasses come first
+                if (!seen.has(K)) {
+                    seen.add(K);
+                    out.push(K);                  // add each class exactly once
+                }
+            };
+
+            for (const M of mixins) visit(M);
+            return out;
+        };
+
+        const linear = linearize(base, mixins);
+
+        // Copy property helpers (skip problematic keys)
+        const copyProps = (target, source) => {
+            if (!source) return;
+            for (const key of Object.getOwnPropertyNames(source)) {
+                if (/^(?:initializer|constructor|prototype|arguments|caller|name|bind|call|apply|toString|length)$/.test(key))
+                    continue;
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+            }
+
+            for (const key of Object.getOwnPropertySymbols(source)) {
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+            }
+        };
+
+        class Aggregate extends base {
+            constructor (...args) {
+                super(...args);                 // call base constructor once
+
+                // Call each initializer once, in base->derived order
+                for (const K of linear) {
+                    const init = K?.prototype?.initializer;
+                    if (typeof init === "function") init.apply(this, args);
+                }
+            }
+        }
+
+        // Copy statics and prototypes once, in base->derived order
+        for (const K of linear) {
+            copyProps(Aggregate.prototype, K.prototype);
+            copyProps(Aggregate, K);
+        }
+
+        return Aggregate;
+    };
 
     // POST DATA STORAGE - Always implemented via POST, support static IO.
     /**
@@ -724,8 +803,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * TODO: this does not wait once module is fully loaded!
          * @param {string} moduleId
-         * @param {{ (module: XOpatModuleSingleton | XOpatModuleViewerSingleton): void }} callback
-         * @param {ViewerLikeItem} [viewer] - if defined, XOpatModuleViewerSingleton is listened for given
+         * @param {{ (module: XOpatModuleSingleton | XOpatViewerSingletonModule): void }} callback
+         * @param {ViewerLikeItem} [viewer] - if defined, XOpatViewerSingletonModule is listened for given
          *   the desired viewer in question, otherwise global XOpatModuleSingleton
          * @return {boolean} true if finished immediatelly, false if registered handler for the
          *   future possibility of the module being loaded
@@ -739,7 +818,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             VIEWER_MANAGER.addHandler('module-singleton-created', e => {
                 if (viewer) {
                     viewer = VIEWER_MANAGER.ensureViewer(viewer);
-                    if (e.id === moduleId && e.module.viewer === viewer) callback(e.module);
+                    // call also if viewer event arg undefined -> user might missed the usage
+                    if (e.id === moduleId && (e.viewer === viewer || e.viewer) === undefined) callback(e.module);
                 } else {
                     if (e.id === moduleId) callback(e.module);
                 }
@@ -977,6 +1057,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     /**
      * Singleton Module API, to provide one system-wide global instance.
      * offering its features to all equally.
+     * TODO rename to XOpatSingletonModule
      * @class XOpatModuleSingleton
      * @extends XOpatModule
      * @inheritDoc
@@ -1023,13 +1104,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             /**
              * Module singleton was instantiated
              * @property {string} id module id
-             * @property {XOpatModuleSingleton} module
+             * @property {XOpatModuleSingleton|XOpatViewerSingletonModule} module
              * @memberof VIEWER_MANAGER
              * @event module-singleton-created
              */
             setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
                 id: id,
-                module: this
+                module: this,
+                viewer: undefined
             }).catch(/*no-op*/));
         }
 
@@ -1049,16 +1131,34 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     }
 
     /**
-     * Singleton Module API, to provide one system-wide global instance per viewer.
+     * Singleton Viewer API, to provide one system-wide global instance per viewer,
      * offering its features to all equally. One distinct thing from all other elements
      * is that this component has full lifecycle including destruction - it lives
      * as long as a particular viewer sub-window is alive, and it should handle its
      * destruction using destroy() method.
-     * @class XOpatModuleViewerSingleton
-     * @extends XOpatModule
+     * @class XOpatViewerSingleton
+     * @extends OpenSeadragon.EventSource
      * @inheritDoc
      */
-    window.XOpatModuleViewerSingleton = class extends XOpatModule {
+    window.XOpatViewerSingleton = class extends OpenSeadragon.EventSource {
+        /**
+         * Destroy. This method must be called if overridden.
+         */
+        destroy() {
+            const state = this.constructor.__getBroadcastState?.();
+            if (state) {
+                for (const [eventName, perHandler] of state.entries()) {
+                    for (const [, record] of perHandler.entries()) {
+                        const wrapper = record.wrappers.get(this);
+                        if (wrapper) {
+                            try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
+                        }
+                        record.wrappers.delete(this);
+                    }
+                }
+            }
+        }
+
         /**
          * Get instance of the annotations manger, a singleton
          * (only one instance can run since it captures mouse events).
@@ -1071,9 +1171,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 console.error("The viewer instance needs a viewer argument to obtain the instance, unlike the global singleton.");
                 return undefined;
             }
-            console.log("CONstructing", this.name);
             // we use ID as this.name - it will not find itself unless registered, and registers itself with a correct ID
-            return VIEWER_MANAGER._getSingleton(this.id, viewerOrUniqueId, this);
+            const value = VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
+            return value || new this(VIEWER_MANAGER.ensureViewer(viewerOrUniqueId));
         }
 
         /**
@@ -1083,38 +1183,179 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          */
         static instantiated(viewerOrUniqueId) {
             // not passing this as a third option avoids instantiation
-            return !!VIEWER_MANAGER._getSingleton(this.id, viewerOrUniqueId);
+            return !!VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
         }
 
         /**
-         * Create singleton with ID of the module based on given viewer.
-         * @param {string} id  The ID must be the module id defined in configuration.
+         * Viewer Instance ID. Unique ID of the class (shared among instances of this singleton).
+         * @return {string}
+         * @constructor
+         */
+        static get IID() {
+            return "ViewerInstance::" + this.name;
+        }
+
+        /**
+         * Create singleton.
          * @param {OpenSeadragon.Viewer} viewer
          */
-        constructor(id, viewer) {
-            super(id);
-
+        constructor(viewer) {
+            // id ignored, only to be compatible with XOpatElement
             if (viewer === undefined) {
                 throw new Error("Viewer must be provided to create a viewer-singleton!");
             }
+            super();
 
             // throws if exists
-            VIEWER_MANAGER._attachSingleton(id, this, viewer);
+            VIEWER_MANAGER._attachSingleton(this.constructor.IID, this, viewer);
 
             /**
              * @type {OpenSeadragon.Viewer}
              * @member viewer
-             * @memberOf XOpatModuleViewerSingleton
+             * @memberOf XOpatViewerSingletonModule
              */
             Object.defineProperty(this, 'viewer', {
                 get: () => viewer,
             });
 
+            this.constructor.__attachAllHandlersToInstance(this);
+
             // Await event necessary to fire after instantiation, do in async context
+            /**
+             * Singleton was instantiated
+             * @property {string} id
+             * @property {XOpatViewerSingleton} singleton
+             * @memberof VIEWER_MANAGER
+             * @event viewer-singleton-created
+             */
+            setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('viewer-singleton-created', {
+                id: this.constructor.IID,
+                module: this,
+                viewer: viewer
+            }).catch(/*no-op*/));
+        }
+
+        /**
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
+         */
+        get THIS() {
+            const id = this.constructor.IID;
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `singletonModule('${id}', '${this.viewer.uniqueId}')`,
+                writable: false,
+            });
+            return `singletonModule('${id}', '${this.viewer.uniqueId}')`;
+        }
+
+        /**
+         * Get all instances of the singleton from all active viewers.
+         * @return {XOpatViewerSingletonModule[]}
+         */
+        get instances() {
+            return VIEWER_MANAGER._getSingletons(this.constructor.IID);
+        }
+
+        static instances() {
+            return VIEWER_MANAGER._getSingletons(this.IID);
+        }
+
+        /**
+         * Attach a class-wide handler to all current and future instances of this subclass.
+         * Handler is called as handler.call(emittingInst, emittingInst, event, ...args)
+         */
+        static broadcastHandler(eventName, handler, ...args) {
+            const state = this.__getBroadcastState();
+            if (!state.has(eventName)) state.set(eventName, new Map());
+            const perHandler = state.get(eventName);
+
+            if (perHandler.has(handler)) return; // idempotent
+
+            const record = { args, wrappers: new Map() };
+            perHandler.set(handler, record);
+
+            // Attach immediately to instances that are already event sources
+            for (const inst of this.instances()) {
+                const wrapper = (e) => handler.call(inst, inst, e, ...args);
+                record.wrappers.set(inst, wrapper);
+                inst.addHandler(eventName, wrapper);
+            }
+        }
+
+        /**
+         * Remove a previously added class-wide handler from all instances of this subclass.
+         */
+        static cancelBroadcast(eventName, handler) {
+            const state = this.__getBroadcastState();
+            const perHandler = state.get(eventName);
+            if (!perHandler) return;
+
+            const record = perHandler.get(handler);
+            if (!record) return;
+
+            for (const [inst, wrapper] of record.wrappers.entries()) {
+                try { inst.removeHandler(eventName, wrapper); } catch (_) { /* no-op */ }
+            }
+            perHandler.delete(handler);
+            if (perHandler.size === 0) state.delete(eventName);
+        }
+
+        /**
+         * Attach every broadcast handler registered on this subclass to a particular instance.
+         * Called after the instance becomes an event source.
+         * @private
+         */
+        static __attachAllHandlersToInstance(inst) {
+            const state = this.__getBroadcastState();
+
+            for (const [eventName, perHandler] of state.entries()) {
+                for (const [origHandler, record] of perHandler.entries()) {
+                    if (record.wrappers.has(inst)) continue;
+                    const wrapper = (e) => origHandler.call(inst, inst, e, ...record.args);
+                    record.wrappers.set(inst, wrapper);
+                    inst.addHandler(eventName, wrapper);
+                }
+            }
+        }
+
+        /**
+         * Per-subclass state: { Map<eventName, Map<fn, {args:any[], wrappers: Map<inst, fn> }> }
+         * (Own property on the subclass, so subclasses don't share.)
+         */
+        static __getBroadcastState() {
+            if (!Object.prototype.hasOwnProperty.call(this, "__broadcastState")) {
+                Object.defineProperty(this, "__broadcastState", {
+                    value: new Map(),
+                    writable: false, enumerable: false, configurable: false
+                });
+            }
+            return this.__broadcastState;
+        }
+    }
+
+    /**
+     * Singleton Module API as a viewer module, to provide one system-wide global instance per viewer,
+     * offering its features to all equally. One distinct thing from all other elements
+     * is that this component has full lifecycle including destruction - it lives
+     * as long as a particular viewer sub-window is alive, and it should handle its
+     * destruction using destroy() method.
+     *
+     * The class is basically joint logics of XOpatModule and XOpatModuleSingleton
+     * @class XOpatViewerSingletonModule
+     * @extends XOpatModule
+     * @extends XOpatModuleSingleton
+     * @inheritDoc
+     */
+    window.XOpatViewerSingletonModule = class extends All(XOpatModule, XOpatViewerSingleton) {
+
+        constructor(id, viewer) {
+            super(id, viewer);
+
             /**
              * Module singleton was instantiated
              * @property {string} id module id
-             * @property {XOpatModuleSingleton} module
+             * @property {XOpatModuleSingleton|XOpatViewerSingletonModule} module
              * @memberof VIEWER_MANAGER
              * @event module-singleton-created
              */
@@ -1126,28 +1367,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Destroy the module. This method is to be overridden by particular de-initialization logics.
+         * Destructor. When overridden, super call must be issued!
          */
         destroy() {
-            console.warn("Destroy is not overridden by the module. You might be missing de-initialization logics!");
-        }
-
-        /**
-         * JS String to use in DOM callbacks to access self instance.
-         * @type {string}
-         */
-        get THIS() {
-            if (!this.id) return "__undefined__";
-            //memoize
-            Object.defineProperty(this, "THIS", {
-                value: `singletonModule('${this.id}', '${this.viewer.uniqueId}')`,
-                writable: false,
-            });
-            return `singletonModule('${this.id}', '${this.viewer.uniqueId}')`;
-        }
-
-        get instances() {
-
+            super.destroy();
         }
 
         /**
@@ -1187,11 +1410,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     }
                 });
 
-                // fallback compatibility, do for the first viewer only
-                if (this.viewer === VIEWER_MANAGER.viewers[0]) {
-                    const data = await store.get(exportKey);
-                    if (data !== undefined) await this.importData(exportKey, data);
-                }
+                // fallback compatibility, import fo all viewers (importing to just one would make repeated re-import)
+                const data = await store.get(exportKey);
+                if (data !== undefined) await this.importData(exportKey, data);
 
             } catch (e) {
                 console.error('IO Failure:', this.constructor.name, e);
@@ -1848,16 +2069,64 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
                 }
             ));
+
+            $(viewer.element).on('contextmenu', function(event) {
+                event.preventDefault();
+            });
             
             for (let event in this.broadcastEvents) {
                 const eventList = this.broadcastEvents[event];
                 for (let handler in eventList) {
-                    viewer.addHandler(event, handler, ...eventList[handler]);
+                    const hData = eventList[handler];
+                    viewer.addHandler(event, hData[0], ...hData[1]);
                 }
             }
 
+
+            // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
+            // /**
+            //  * From https://github.com/openseadragon/openseadragon/issues/1690
+            //  * brings better zooming behaviour
+            //  */
+            // window.VIEWER.addHandler("canvas-scroll", function(e) {
+            //     if (Math.abs(e.originalEvent.deltaY) < 100) {
+            //         // touchpad has lesser values, do not change scroll behavior for touchpads
+            //         VIEWER.zoomPerScroll = 0.5;
+            //         _scrollCount = 0;
+            //         return;
+            //     }
+            //
+            //     _currentScroll = Date.now();
+            //     if (_currentScroll - _lastScroll < 400) {
+            //         _scrollCount++;
+            //     } else {
+            //         _scrollCount = 0;
+            //         VIEWER.zoomPerScroll = 1.2;
+            //     }
+            //
+            //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
+            //         VIEWER.zoomPerScroll += 0.2;
+            //     }
+            //     _lastScroll = _currentScroll;
+            // });
+
+            viewer.addHandler('navigator-scroll', function(e) {
+                viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+                viewer.viewport.applyConstraints();
+            });
+
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', e => {
+                for (let SingletonClass of REQUIRED_SINGLETONS) {
+                    try {
+                        if (!this._getSingleton(SingletonClass.IDD, viewer)) {
+                            SingletonClass.instance(viewer);
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+
                 if (e.firstLoad) {
                     const DELAY = 90;
                     let last = 0;
@@ -1989,6 +2258,16 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 })();
             });
 
+            viewer.addHandler('destroy', () => {
+                const singletons = viewer[this._singletonsKey];
+                if (singletons) {
+                    for (let singletonId in singletons) {
+                        singletons[singletonId].destroy();
+                    }
+                    viewer[this._singletonsKey] = null;
+                }
+            })
+
             viewer.addHandler('canvas-enter', function (e) {
                 focusOnViewer = e.eventSource;
             });
@@ -2035,13 +2314,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Add an event handler for a given event.
-         * @function
-         * Registers event for each viewer
-         */
-        /**
          * Add an event handler for a given event to all current and future viewers.
          * The handler is also remembered and applied to any viewer created later via add().
+         *
+         * TODO: Supports only viewer events, not events that bound to other instances. Make this design more generic.
          * @param {string} eventName - The OpenSeadragon event name.
          * @param {Function} handler - Event handler function.
          * @param {...any} args - Optional extra arguments passed to OpenSeadragon.addHandler.
@@ -2050,10 +2326,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         broadcastHandler(eventName, handler, ...args) {
             let eventList = this.broadcastEvents[eventName];
             if (!eventList) {
-                eventList = {};
-                this.broadcastEvents[eventName] = eventList;
+                eventList = this.broadcastEvents[eventName] = {};
             }
-            eventList[handler] = args;
+            eventList[handler] = [handler, args];
             for (let v of this.viewers) {
                 v.addHandler(eventName, handler, ...args);
             }
@@ -2095,18 +2370,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * Get singleton for particular viewer. This works only for existing isntances - prefer using
          * @param {string} singletonId
          * @param {ViewerLikeItem} viewerOrUniqueId
-         * @param {Function<XOpatModuleViewerSingleton>} [SingletonClass] optionally, supply class to instantiate
-         * @return {XOpatModuleViewerSingleton|undefined} menu instance or undefined if not found and SingletonClass not specified
+         * @return {XOpatViewerSingleton|undefined} menu instance or undefined if not found and SingletonClass not specified
          * @private
          */
-        _getSingleton(singletonId, viewerOrUniqueId, SingletonClass = undefined) {
+        _getSingleton(singletonId, viewerOrUniqueId) {
             let viewer = this.ensureViewer(viewerOrUniqueId);
-            let result = singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
-            if (!result && SingletonClass.prototype instanceof XOpatModuleViewerSingleton) {
-                // this call registers the singleton automatically
-                result = SingletonClass.instance(viewer);
-            }
-            return result;
+            return singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
         }
 
         /**
@@ -2118,14 +2387,21 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             if (!singletons) {
                singletons = viewer[this._singletonsKey] = {};
             }
-            if (!(singletonModule instanceof XOpatModuleViewerSingleton)) {
-                console.error("Viewer singleton must be instance of XOpatModuleViewerSingleton");
+            if (!(singletonModule instanceof XOpatViewerSingleton)) {
+                console.error("Viewer singleton must be instance of XOpatViewerSingleton");
             }
             if (singletons[singletonId]) {
                 throw `Trying to instantiate a singleton. Instead, use ${singletonModule.constructor.name}::instance(viewer).`;
             }
             singletons[singletonId] = singletonModule;
             return singletonModule;
+        }
+
+        /**
+         * @private
+         */
+        _getSingletons(singletonId) {
+            return this.viewers.map(v => v[this._singletonsKey]?.[singletonId]).filter(Boolean);
         }
 
         /**
@@ -2154,14 +2430,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 if (menu) {
                     menu.destroy();
                     this.viewerMenus[viewer.id] = null;
-                }
-
-                const singletons = viewer[this._singletonsKey];
-                if (singletons) {
-                    for (let singletonId in singletons) {
-                        singletons[singletonId].destroy();
-                    }
-                    viewer[this._singletonsKey] = null;
                 }
 
                 delete viewer.__cachedUUID;
@@ -2207,7 +2475,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                      * @param {OpenSeadragon.Viewer} viewer
                      * @param {string} uniqueId
                      * @param {Number} index
-                     * @event viewer-destroy
+                     * @event viewer-reset
                      * @memberof VIEWER_MANAGER
                      */
                     this.raiseEvent('viewer-reset', {viewer: v, uniqueId: v.uniqueId, index });

@@ -206,7 +206,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             },
             /**
              * Get default (static) parameters of the viewer setup
-             * @return {unknown[]}
+             * @return {any[]}
              */
             get defaultParams() {
                 return defaultSetup;
@@ -293,11 +293,23 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param name
          * @param defaultValue
          * @param cache
+         * @param parse if true, JSON.parse is applied to the value
          * @return {string|*}
          */
-        getOption(name, defaultValue=undefined, cache=true) {
+        getOption(name, defaultValue=undefined, cache=true, parse=false) {
+            const builtin = this.config.defaultParams[name];
+            if (builtin === undefined) {
+                console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(this.config.defaultParams)} are supported.`, name);
+            }
             if (cache && this.AppCache) {
                 let cached = this.AppCache.get(name);
+                if (parse && typeof cached === "string") {
+                    try {
+                        return JSON.parse(cached);
+                    } catch (e) {
+                        console.warn("Failed to parse option cached value", cached);
+                    }
+                }
                 if (cached !== null && cached !== undefined) {
                     if (cached === "false") cached = false;
                     else if (cached === "true") cached = true;
@@ -306,6 +318,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
                 (defaultValue === undefined ? this.config.defaultParams[name] : defaultValue);
+            if (typeof value === "string") {
+                try {
+                    return JSON.parse(value);
+                } catch (e) {
+                    console.warn("Failed to parse option value", value);
+                }
+            }
             if (value === "false") value = false;
             else if (value === "true") value = true;
             return value;
@@ -317,6 +336,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param cache
          */
         setOption(name, value, cache=true) {
+            if (!this.config.defaultParams.hasOwnProperty(name)) {
+                console.warn(`Trying to set non-existing option: only viewer parameters ${Object.keys(this.config.defaultParams)} are supported.`, name);
+            }
+            if (typeof value === "object") {
+                try {
+                    value = JSON.stringify(value);
+                } catch (e) {
+                    console.warn("Failed to stringify option value", value);
+                }
+            }
             if (cache && this.AppCache) this.AppCache.set(name, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
@@ -377,7 +406,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (VIEWER.scalebar) {
                 VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
             } else {
-                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
+                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
                     || CONFIG.background[0];
             }
             return config ? CONFIG.data[config.dataReference] : "__anonymous__";
@@ -387,7 +416,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @return {*}
          */
         activeVisualizationConfig() {
-            return CONFIG.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex")];
+            return CONFIG.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
         },
         _dangerouslyAccessConfig() {
             //remove in the future?
@@ -751,12 +780,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             APPLICATION_CONTEXT.setOption("activeBackgroundIndex", undefined);
             updated = true;
             effectiveBg = undefined;
-        } else if (bgSpec === undefined) {
-            effectiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined);
-        } else {
+        } else if (bgSpec !== undefined) {
             const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined);
-            if (JSON.stringify(prevActiveBg) !== JSON.stringify(newActiveBg)) {
+            const prevActiveBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, false);
+            if (prevActiveBg !== JSON.stringify(newActiveBg)) {
                 APPLICATION_CONTEXT.setOption("activeBackgroundIndex", newActiveBg);
                 updated = true;
             }
@@ -798,8 +825,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             } // else: vizSpec === undefined and derive flag is false => keep existing option
 
             if (typeof desiredActiveVis !== "undefined") {
-                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined);
-                if (JSON.stringify(prevActiveVis) !== JSON.stringify(desiredActiveVis)) {
+                const prevActiveVis = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, false);
+                if (prevActiveVis !== JSON.stringify(desiredActiveVis)) {
                     APPLICATION_CONTEXT.setOption("activeVisualizationIndex", desiredActiveVis);
                     updated = true;
                 }
@@ -905,10 +932,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 );
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
-                const name = UTILITIES.fileNameFromPath(
-                    APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
-                    || 'unknown'
-                );
+                const active = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)?.[0];
+                const name = UTILITIES.fileNameFromPath(APPLICATION_CONTEXT.config.data[active] || 'unknown');
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', {slide: name}), true);
             } else if (!imageData) {
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
@@ -957,7 +982,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     viewer.getMenu().getShadersTab().updateVisualizationList(
                         APPLICATION_CONTEXT.config.visualizations,
                         // todo is this accurate?
-                        APPLICATION_CONTEXT.getOption("activeVisualizationIndex")
+                        APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)?.[0]
                     );
                 } else {
                     //todo action page reload
@@ -1153,9 +1178,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
         });
 
-        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
-        let activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, false);
-        let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
+        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false);
+        let activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+        let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true);
 
         // Ensure we open at least something if possible
         const bgSpecWasUnset  = activeBg  === undefined;
@@ -1163,16 +1188,23 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (bgSpecWasUnset && vizSpecWasUnset) {
             if (bgs.length > 0) {
                 activeBg = 0;
-                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBg);
             } else if (vis.length > 0) {
                 activeViz = 0;
-                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
             }
         } else {
             if (vizSpecWasUnset && vis.length > 0) {
                 activeViz = 0;
-                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
             }
+        }
+
+        // Always keep arrays
+        if (typeof activeBg === "number") {
+            activeBg = [activeBg];
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBg);
+        }
+        if (typeof activeViz === "number") {
+            activeViz = [activeViz];
+            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
         }
 
         // Build per-viewer plan:
