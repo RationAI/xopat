@@ -21,6 +21,8 @@
 !/modules/web-worker-manager
 
 /plugins/**
+!/plugins/analyze
+!/plugins/analyze/** 
 !/plugins/annotations
 !/plugins/custom-pages
 !/plugins/empaia

@@ -100,28 +100,47 @@ export class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
-        this.refreshClassState();
-        this.refreshPropertiesState();
+    this.refreshClassState();
+    this.refreshPropertiesState();
 
-        if (element instanceof BaseComponent) {
+        // Treat component-like objects as components even if instanceof fails
+        const looksLikeComponent = element && (element instanceof BaseComponent || (typeof element.create === 'function' && element.id));
+
+        if (looksLikeComponent) {
             const mount = document.getElementById(element.id);
             if (mount === null) {
-                element._children.push(this);
-            } else {
-                mount.append(this.create());
+                // parent not mounted yet — queue child
+                if (Array.isArray(element._children)) element._children.push(this);
+                else console.warn('attachTo: parent component has no _children array, cannot queue child', element);
+                return;
             }
-        } else {
-            const mount = typeof element === "string"
-                ? document.getElementById(element)
-                : element;
 
-            if (!mount) {
-                console.error(`Element ${element} not found`);
+            // Ensure mount is a DOM node (or at least has append)
+            if (!(mount instanceof Node) && typeof mount.append !== 'function') {
+                console.error('attachTo: resolved mount is not attachable (expected DOM node):', mount);
                 van.add(element, this.create());
-            } else {
-                mount.append(this.create());
+                return;
             }
+
+            mount.append(this.create());
+            return;
         }
+
+        const mount = typeof element === "string" ? document.getElementById(element) : element;
+
+        if (!mount) {
+            console.error(`Element ${element} not found`);
+            van.add(element, this.create());
+            return;
+        }
+
+        if (!(mount instanceof Node) && typeof mount.append !== 'function') {
+            console.error('attachTo: provided mount is not attachable (expected DOM node):', mount);
+            van.add(element, this.create());
+            return;
+        }
+
+        mount.append(this.create());
     }
 
     /**
@@ -200,25 +219,12 @@ export class BaseComponent {
     refreshClassState() {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
-
+    
     refreshPropertiesState() {
         for (let key in this.propertiesStateMap) {
             this.propertiesStateMap[key].val = this.propertiesMap[key] instanceof Object ? this.propertiesMap[key].join(" ") : this.propertiesMap[key];
         }
     }
-    /**
-     *
-     * @param  {...any} properties - functions to set the state of the component
-     */
-    set(...properties) {
-        for (let property of properties) {
-            property.call(this);
-        }
-    }
-    /**
-     *
-     * @param  {...any} children - children to add to the component
-     */
     addChildren(...children) {
         this._children.push(...children);
     }
@@ -396,6 +402,10 @@ export class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
+        // internal helper: call provided option functions in the component context
+        try {
+            // proto chain logging removed (diagnostic)
+        } catch (e) { /* ignore */ }
         for (let prop of names) {
             const option = options[prop];
             try {
