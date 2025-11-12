@@ -1,19 +1,11 @@
 OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
-    constructor(module, viewer) {
-        super();
-
-        /**
-         * @type {OSDAnnotations}
-         */
-        this.module = module;
-        /**
-         * @type {OpenSeadragon.Viewer}
-         */
+    constructor(viewer) {
+        super(viewer);
         this.viewer = viewer;
 
         let refTileImage = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
-        this.overlay = VIEWER.fabricjsOverlay({
+        this.overlay = viewer.fabricjsOverlay({
             scale: refTileImage.source.dimensions ?
                 refTileImage.source.dimensions.x : refTileImage.source.Image.Size.Width,
             fireRightClick: true
@@ -32,6 +24,11 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this._layer = undefined;			// active layer (last selected)
         this._selectedLayers = new Set();   // all selected layers (ids)
         this._setListeners();
+
+        /**
+         * @type {OSDAnnotations}
+         */
+        this.module = OSDAnnotations.instance();
     }
 
     setMouseOSDInteractive(isOSDInteractive) {
@@ -761,8 +758,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this.addAnnotationToLayer(annotation, layerIndex);
 
         if (!_dangerousSkipHistory) this.module.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
-        this.clearAnnotationSelection(true);
-        this.selectAnnotation(annotation, true);
+        // this.clearAnnotationSelection(true);
+        // this.selectAnnotation(annotation, true);
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
         this.canvas.requestRenderAll();
@@ -790,17 +787,15 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this.canvas.add(next);
 
         if (updateUI) {
-            //this.removeHighlight();
-            //this.highlightAnnotation(next);
             this.module.historyManager.addAnnotationToBoard(next, previous, boardIndex);
+
+            // this.clearAnnotationSelection(true);
+            // this.selectAnnotation(next, true);
+            this.raiseEvent('annotation-replace', {previous, next});
+            this.module.raiseEvent('history-change');
         }
 
-        this.clearAnnotationSelection(true);
-        this.selectAnnotation(next, true);
-
         this.canvas.requestRenderAll();
-        this.raiseEvent('annotation-replace', {previous, next});
-        this.module.raiseEvent('history-change');
     }
 
     _createLayer(layerData) {
@@ -1107,6 +1102,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
                 this._dopperlGangerCount--;
             }
 
+            doppelganger._isDoppelganger = true;
             this._trackedDoppelGangers[id] = doppelganger;
             this._dopperlGangerCount++;
         } else {
@@ -1165,7 +1161,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     /**
      * Select an annotation by object or incrementId; supports multi-select.
      * @param {fabric.Object|number|string} annotation
-     * @param {boolean} [fromCanvas=false]
+     * @param {boolean} [fromCanvas=false] if the selection event originates on canvas, set true
      * @returns {void}
      */
     selectAnnotation(annotation, fromCanvas=false) {
@@ -1486,9 +1482,6 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             });
         });
 
-        this.viewer.addHandler('key-down', e => this._keyDownHandler(e));
-        this.viewer.addHandler('key-up', e => this._keyUpHandler(e));
-        // window.addEventListener("blur", e => _this.module.setMode(_this.module.Modes.AUTO), false);
         this.viewer.addHandler('screenshot', e => {
             e.context2D.drawImage(this.canvas.getElement(), 0, 0);
         });
@@ -1538,20 +1531,16 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
 
             _this.module.cursor.mouseTime = Date.now();
-            _this.module.cursor.isDown = true;
 
             let factory = _this.module.presets.right ? _this.module.presets.right.objectFactory : undefined;
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, false, factory);
+            // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
+            _this.module.cursor.isDown = true;
         }
 
         function handleLeftClickUp(event, fabricEvent) {
             if (_this.module.disabledInteraction) return;
-
-            // left click up handles selection for all modes
-            if (fabricEvent.target) {
-                _this._objectClicked(fabricEvent);
-            }
 
             if (!_this.module.cursor.isDown) {
                 //todo in auto mode, this event is fired twice!! fix
@@ -1570,6 +1559,11 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             if (_this.module.mode.handleClickUp(event, point, true, factory)) {
                 event.preventDefault();
             } else /*if (!_this.isModeAuto())*/ {
+                // left click up handles selection for all modes if mode did not handle the event
+                if (fabricEvent.target) {
+                    _this._objectClicked(fabricEvent, point);
+                }
+
                 //todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes
                 _this.module.raiseEvent('canvas-release', {
                     originalEvent: event,
@@ -1584,7 +1578,6 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             if (_this.module.cursor.isDown || _this.module.disabledInteraction) return;
 
             _this.module.cursor.mouseTime = Date.now();
-            _this.module.cursor.isDown = true;
 
             let factory = _this.module.presets.left ? _this.module.presets.left.objectFactory : undefined;
             if (!factory) {
@@ -1597,6 +1590,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             }
             let point = screenToPixelCoords(event.x, event.y);
             _this.module.mode.handleClickDown(event, point, true, factory);
+            // set after handleClickDown -> viewerLocked will be set to false by default after we set isDown to true
+            _this.module.cursor.isDown = true;
         }
 
         /****** E V E N T  L I S T E N E R S: FABRIC (called when not navigating) **********/
@@ -1691,60 +1686,6 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         // this.viewer.addHandler("canvas-scroll", function (e) { ... });
     }
 
-    _keyDownHandler(e) {
-        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
-        // switching mode only when no mode AUTO and mouse is up
-        if (this.module.cursor.isDown || this.module.disabledInteraction || !e.focusCanvas) return;
-
-        let modeFromCode = this._getModeByKeyEvent(e);
-        if (modeFromCode) {
-            this.module._wasModeFiredByKey = true;
-            this.module.setMode(modeFromCode);
-            e.preventDefault();
-        }
-    }
-
-    _getModeByKeyEvent(e) {
-        const modes = this.module.Modes;
-        for (let key in modes) {
-            if (modes.hasOwnProperty(key)) {
-                let mode = modes[key];
-                if (mode.accepts(e)) return mode;
-            }
-        }
-        return undefined;
-    }
-
-    _keyUpHandler(e) {
-        if (this.module.disabledInteraction || (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))) return;
-
-        if (e.focusCanvas) {
-            if (!e.ctrlKey && !e.altKey) {
-                if (e.key === "Delete" || e.key === "Backspace") {
-                    this.module.mode.discard(true);
-                    return;
-                }
-                if (e.key === "Escape") {
-                    this.clearAnnotationSelection(true);
-                    this.module.mode.discard(false);
-                    this.module.historyManager._boardItemSave();
-                    this.module.setMode(this.module.Modes.AUTO);
-                    return;
-                }
-            }
-
-            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
-                return e.shiftKey ? this.module.redo() : this.module.undo();
-            }
-        }
-
-        if (this.module.mode.rejects(e)) {
-            this.module.setMode(this.module.Modes.AUTO);
-            e.preventDefault();
-        }
-    }
-
-
     // Copied out of OpenSeadragon private code scope to allow manual scroll navigation
     _fireMouseWheelNavigation(event) {
         // Simulate a 'wheel' event
@@ -1817,18 +1758,17 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         }
     }
 
-    _objectClicked(event) {
+    _objectClicked(event, point) {
 
         try {
             let clickedObject = event.target;
-            console.log("Clicked", clickedObject.incrementId, "active", this.canvas.getActiveObject()?.incrementId);
             const originalEvent = event.e;
             // non-user event, selection fired by the system (e.g. annotation added to canvas)
-            if (!originalEvent) return;
+            if (!originalEvent || !clickedObject) return;
 
             // const isOnActive = !!(active && active.containsPoint && active.containsPoint(pointer));
 
-            if (clickedObject && clickedObject.type === 'activeSelection') {
+            if (clickedObject.type === 'activeSelection') {
                 // todo simona moved code here to compute only when needed, select one to use
 
                 const pointer = this.canvas.getPointer(event);
@@ -1863,11 +1803,14 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
                 }
             }
 
+            if (clickedObject.type === 'activeSelection') {
+                // this happens if the active selection is 'above' the clicked object, which is not part of the selection,
+                // but hidden underneath -> find the object!
+                clickedObject = this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
+            }
+
             if (!clickedObject) {
-                // if (isOnActive && active && active.type !== 'activeSelection' && hasModifier) {
-                //	 this.clearAnnotationSelection(true);
-                //	 this.requestRenderAll();
-                // }
+                this.clearAnnotationSelection(true);
                 return;
             }
 
@@ -1911,6 +1854,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             }
 
             this.__snapshotIsModifierToggle = false;
+            // todo: this calls the event with updates TWICE -> it would be better to have a single event with all the updates
             this.clearAnnotationSelection(true);
             this.selectAnnotation(clickedObject, true);
         } catch (e) {

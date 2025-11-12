@@ -25,17 +25,17 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._lastOpenedInDetachedWindow = false;
         this._boardItems = [];
 
-        this._context.fabric.addHandler('layer-selection-changed', e => {
+        this._context.addFabricHandler('layer-selection-changed', e => {
             this._updateSelectedLayersVisual(e.ids, e.isSelected);
         });
-        this._context.fabric.addHandler('active-layer-changed', e => {
+        this._context.addFabricHandler('active-layer-changed', e => {
             this._updateActiveLayerVisual(e.id);
         });
-        this._context.fabric.addHandler('annotation-selection-changed', e => {
+        this._context.addFabricHandler('annotation-selection-changed', e => {
             if (e.fromCanvas) this._syncSelectionFromCanvas(e.ids, e.isSelected);
             this._updateSelectedAnnotationsVisual(e.ids, e.isSelected);
         });
-        this._context.fabric.addHandler('layer-objects-changed', e => {
+        this._context.addFabricHandler('layer-objects-changed', e => {
             if (!e?.layerId) return;
             this._updateAnnotationCount(e.layerId);
             this._updateLayerArea(e.layerId);
@@ -1283,6 +1283,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             }
         }
 
+        const viewer = this._context.viewer;
         if (!this._focusWithScreen || !Number.isFinite(bbox.left) || !Number.isFinite(bbox.top)) {
             return targetObj;
         }
@@ -1291,15 +1292,15 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             //show such that the annotation would fit on the screen 4 times
             let offX = bbox.width,
                 offY = bbox.height;
-            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportRectangle(bbox.left-offX*2,
+            let target = viewer.scalebar.getReferencedTiledImage().imageToViewportRectangle(bbox.left-offX*2,
                 bbox.top-offY*2, bbox.width+offX*4, bbox.height+offY*4);
 
-            VIEWER.tools.focus({bounds: target});
+            viewer.tools.focus({bounds: target});
         } else {
             let cx = bbox.left + bbox.width / 4, cy = bbox.top + bbox.height / 4;
-            let target = VIEWER.scalebar.getReferencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
-            VIEWER.viewport.panTo(target, false);
-            VIEWER.viewport.applyConstraints();
+            let target = viewer.scalebar.getReferencedTiledImage().imageToViewportCoordinates(new OpenSeadragon.Point(cx, cy));
+            viewer.viewport.panTo(target, false);
+            viewer.viewport.applyConstraints();
         }
 
         return targetObj;
@@ -1535,8 +1536,9 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         const annCountText = `${annCount} item${annCount === 1 ? '' : 's'}`;
 
         const totalAreaValue = this._computeLayerArea(object);
-        const totalAreaText = VIEWER?.scalebar?.imageAreaToGivenUnits
-            ? VIEWER.scalebar.imageAreaToGivenUnits(totalAreaValue || 0)
+        const viewer = this._context.viewer;
+        const totalAreaText = viewer?.scalebar?.imageAreaToGivenUnits
+            ? viewer.scalebar.imageAreaToGivenUnits(totalAreaValue || 0)
             : String(totalAreaValue || 0);
 
         const visibilityIcon = object.visible ? 'visibility' : 'visibility_off';
@@ -1602,8 +1604,9 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         const layer = this._context.fabric.getLayer(layerId);
         if (!layer) return;
         const sum = this._computeLayerArea(layer);
-        const text = VIEWER?.scalebar?.imageAreaToGivenUnits
-            ? VIEWER.scalebar.imageAreaToGivenUnits(sum || 0)
+        const viewer = this._context.viewer;
+        const text = viewer?.scalebar?.imageAreaToGivenUnits
+            ? viewer.scalebar.imageAreaToGivenUnits(sum || 0)
             : String(sum || 0);
         const el = this._getNode(`layer-area-${layerId}`);
         if (el) el.textContent = `Σ ${text}`;
@@ -1669,7 +1672,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         let length = factory.getLength(object);
 
         if (area) {
-            mainRowContent += `<span class="float-right">Area ${VIEWER.scalebar.imageAreaToGivenUnits(area)}</span>`;
+            mainRowContent += `<span class="float-right">Area ${this._context.viewer.scalebar.imageAreaToGivenUnits(area)}</span>`;
         } else if (length) {
             mainRowContent += `<span class="float-right">Length ${length}</span>`;
         }

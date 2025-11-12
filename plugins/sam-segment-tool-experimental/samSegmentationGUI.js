@@ -7,8 +7,6 @@
 class SAMSegmentationPlugin extends XOpatPlugin {
   constructor(id) {
     super(id);
-    this.registerAsEventSource();
-    this._serverAvailable = false;
   }
 
   /**
