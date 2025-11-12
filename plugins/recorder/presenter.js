@@ -578,9 +578,9 @@ draggable="true"></span>`;
                     }
                 }
 
-                this.annotations.fabric.addHandler('annotation-create', e => addSidRecord(e.object));
-                this.annotations.fabric.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
-                this.annotations.fabric.addHandler('annotation-replace', e => {
+                this.annotations.addFabricHandler('annotation-create', e => addSidRecord(e.object));
+                this.annotations.addFabricHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
+                this.annotations.addFabricHandler('annotation-replace', e => {
                     _this._removeAnnotationRef(e.previous);
                     e.next.presenterSids = e.previous.presenterSids;
                     addSidRecord(e.next);

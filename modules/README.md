@@ -143,8 +143,7 @@ Return data exported with the viewer if available. Exporting the data is done th
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
 Events can furthermore be broadcasted if the instance you want to raise on is ``XOpatViewer*Instance*`` like object,
 which is alive once per active viewer window. The events to call are ``broadcastHandler`` and `cancelBroadcast`, 

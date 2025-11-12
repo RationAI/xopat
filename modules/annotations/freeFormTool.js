@@ -21,7 +21,7 @@ OSDAnnotations.FreeFormTool = class {
         this._node = null;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
         this._scale = {x: 0, y: 0, factor: 1};
-        this._windowSize = {width: this._context.fabric.overlay._containerWidth, height: this._context.fabric.overlay._containerHeight};
+        this._windowSize = {width: 0, height: 0};
 
         USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
@@ -38,7 +38,6 @@ OSDAnnotations.FreeFormTool = class {
         this._ctxAnnotationFull =  this._annotationCanvas.getContext('2d', { willReadFrequently: true });
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
-        this.ref = VIEWER.scalebar.getReferencedTiledImage();
     }
 
     /**
@@ -54,6 +53,7 @@ OSDAnnotations.FreeFormTool = class {
     init(object, created=false) {
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         this._created = created;
+        this.ref = this._context.viewer.scalebar.getReferencedTiledImage();
 
         this._updateCanvasSize();
         this._initializeDefaults();
@@ -85,7 +85,6 @@ OSDAnnotations.FreeFormTool = class {
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
-        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(OSDAnnotations.PolygonUtilities);
         this._updatePerformed = false;
     }
 
@@ -133,7 +132,7 @@ OSDAnnotations.FreeFormTool = class {
      * Update cursor indicator radius
      */
     updateCursorRadius() {
-        let screenRadius = this.radius * VIEWER.scalebar.imagePixelSizeOnScreen() * 2;
+        let screenRadius = this.radius * this._context.viewer.scalebar.imagePixelSizeOnScreen() * 2;
         if (this._node) {
             this._node.style.width = screenRadius + "px";
             this._node.style.height = screenRadius + "px";
@@ -209,9 +208,9 @@ OSDAnnotations.FreeFormTool = class {
      * @param {number} radius in screen pixels
      */
     setRadius (radius) {
-        let imageTileSource = VIEWER.scalebar.getReferencedTiledImage();
-        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
+        let imageTileSource = this._context.viewer.scalebar.getReferencedTiledImage();
+        let pointA = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
         this.radius = Math.round(Math.abs(pointB.x - pointA.x));
         if (this.screenRadius !== radius) this.updateCursorRadius();
@@ -292,6 +291,7 @@ OSDAnnotations.FreeFormTool = class {
      * @return {fabric.Polygon | null} polygon if successfully updated
      */
     finish(_withDeletion=false) {
+        this.ref = null;
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
@@ -333,7 +333,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _convertOSD = (point) => {
-        let newPoint = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        let newPoint = this.ref.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
         newPoint.x += this._offset.x;
         newPoint.y += this._offset.y;
 
@@ -344,7 +344,7 @@ OSDAnnotations.FreeFormTool = class {
         point.x -= this._offset.x;
         point.y -= this._offset.y;
 
-        return this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        return this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
     }
 
     _convertScaling = (point) => {
@@ -506,10 +506,10 @@ OSDAnnotations.FreeFormTool = class {
         const bbox = OSDAnnotations.PolygonUtilities.getBoundingBox(polygonPoints);
         const annotationBounds = { left: bbox.x, top: bbox.y, right: bbox.x + bbox.width, bottom: bbox.y + bbox.height };
 
-        const topLeft = this.ref.windowToImageCoordinates(
+        const topLeft = this.ref.viewerElementToImageCoordinates(
             new OpenSeadragon.Point(-this._offset.x, -this._offset.y)
         );
-        const bottomRight = this.ref.windowToImageCoordinates(
+        const bottomRight = this.ref.viewerElementToImageCoordinates(
             new OpenSeadragon.Point(
                 this._ctxWindow.canvas.width - this._offset.x,
                 this._ctxWindow.canvas.height - this._offset.y

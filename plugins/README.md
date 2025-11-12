@@ -302,10 +302,7 @@ For data IO, you ahve two options
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
-
-> Events are available only after `this.registerAsEventSource()` has been called.
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function

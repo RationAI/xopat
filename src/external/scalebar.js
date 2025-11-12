@@ -189,15 +189,32 @@
          */
         imageLengthToGivenUnits: function(length) {
             //todo what about flexibility in units?
-            return getWithUnitRounded(length / this.pixelsPerMeter,
-                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
+            return getWithUnitRounded(length / this.pixelsPerMeter, this.lengthMetric());
         },
 
         imageAreaToGivenUnits: function(area) {
             //todo what about flexibility in units?
-            return getWithSquareUnitRounded(area / (this.pixelsPerMeter*this.pixelsPerMeter),
-                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
+            return getWithSquareUnitRounded(area / (this.pixelsPerMeter*this.pixelsPerMeter), this.areaMetric());
         },
+
+        imageLength: function (length) {
+            return length / this.pixelsPerMeter;
+        },
+
+        imageArea: function (area) {
+            return area / (this.pixelsPerMeter*this.pixelsPerMeter);
+        },
+
+        lengthMetric: function () {
+            return this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px";
+        },
+
+        areaMetric: function () {
+            return this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m²" : "px²";
+        },
+
+        formatLength: function (unit) {return getWithUnitRounded(unit, this.lengthMetric())},
+        formatArea: function (unit) {return getWithSquareUnitRounded(unit, this.areaMetric())},
 
         _init: function (options) {
             if (!options.destroy) {
@@ -760,62 +777,68 @@
     }
 
     function getWithUnit(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         if (value < 0.000001) {
-            return value * 1000000000 + " n" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000000000 + " n" + unitSuffix;
         }
         if (value < 0.001) {
-            return value * 1000000 + " μ" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000000 + " μ" + unitSuffix;
         }
         if (value < 1) {
-            return value * 1000 + " m" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000 + " m" + unitSuffix;
         }
         if (value < 1000) {
-            return value + unitSuffix;
+            return (negative ? "-" : "") + value + unitSuffix;
         }
         if (value >= 1000) {
-            return value / 1000 + " k" + unitSuffix;
+            return (negative ? "-" : "") + value / 1000 + " k" + unitSuffix;
         }
-        return getWithSpaces(value / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(value / 1000, "k" + unitSuffix);
     }
 
     function getWithUnitRounded(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         if (value < 0.000001) {
-            return (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
         }
         if (value < 0.001) {
-            return (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
         }
         if (value < 1) {
-            return (Math.round(value * 100000) / 100) + " m" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000) / 100) + " m" + unitSuffix;
         }
         if (value < 1000) {
-            return (Math.round(value * 100) / 100) + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100) / 100) + unitSuffix;
         }
         if (value >= 1000) {
-            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
-        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }
 
     function getWithSquareUnitRounded(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         // No support for NM
         if (value < 0.000001) {
-            return (Math.round(value * 100000000000000) / 100) + " μ" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000000000) / 100) + " μ" + unitSuffix;
         }
         if (value < 1) {
-            return (Math.round(value * 100000000) / 100) + " m" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000) / 100) + " m" + unitSuffix;
         }
         if (value < 1000000) {
-            return (Math.round(value * 100) / 100) + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100) / 100) + unitSuffix;
         }
         if (value >= 1000000) {
-            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
-        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }
 
     function getWithSpaces(value, unitSuffix) {
-        if (value < 0) return "Negative distance!";
+        if (value < 0) return "Negative!";
         //https://gist.github.com/MSerj/ad23c73f65e3610bbad96a5ac06d4924
         return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " " + unitSuffix;
     }

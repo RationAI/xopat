@@ -32,14 +32,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		super("annotations");
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
-        this.registerAsEventSource();
 
-        /**
-         * @memberOf OSDAnnotations
-         * @type {OSDAnnotations.FabricWrapper}
-         */
-        this._fabricProxy = new OSDAnnotations.FabricWrapper(this, VIEWER);
-
+        this._fabricProxy = new OSDAnnotations.FabricWrapper(VIEWER);
+        // hack for v3 (future) - remove once merged
+        OSDAnnotations.FabricWrapper.instances = () => [this._fabricProxy];
+        this._activeViewer = VIEWER;
 		this._init();
 		this.user = XOpatUser.instance();
 	}
@@ -155,7 +152,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/******************* EXPORT, IMPORT **********************/
 	async exportData() {
-		return await this._fabricProxy.export();
+        return await this.fabric.export();
 	}
 
 	async importData(data) {
@@ -164,7 +161,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (typeof data === "object" && data.format) {
 			options.format = data.format;
 		}
-		await this._fabricProxy.import(data, options);
+        await this.fabric.import(data, options);
 	}
 
 	/**
@@ -193,7 +190,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					_this.cache.set('_unsaved', {
                         // todo cache needs to store valid canvas ID to store to
                         session: APPLICATION_CONTEXT.sessionName,
-						objects: _this._fabricProxy.toObject(true)?.objects,
+                        objects: _this.fabric.toObject(true)?.objects,
 						presets: _this.presets.toObject()
 					});
 				}
@@ -203,10 +200,10 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				_this.cache.set('_unsaved', null);
 				guard = 0;
 			});
-			this._fabricProxy.addHandler('annotation-create', editRoutine);
-			this._fabricProxy.addHandler('annotation-delete', editRoutine);
-			this._fabricProxy.addHandler('annotation-replace', editRoutine);
-			this._fabricProxy.addHandler('annotation-edit', editRoutine);
+            this.addFabricHandler('annotation-create', editRoutine);
+            this.addFabricHandler('annotation-delete', editRoutine);
+            this.addFabricHandler('annotation-replace', editRoutine);
+            this.addFabricHandler('annotation-edit', editRoutine);
 			window.addEventListener("beforeunload", event => {
 				if (guard === 0 || !_this.history.canUndo()) return;
 				editRoutine(null, true);
@@ -239,7 +236,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 							loaded = true;
 						}
 						if (data?.objects) {
-							await this._fabricProxy._loadObjects({objects: data.objects}, true);
+                            await this.fabric._loadObjects({objects: data.objects}, true);
 							loaded = true;
 						}
 					}
@@ -250,7 +247,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 			if (loaded) {
 				this.raiseEvent('import', {
-                    owner: this._fabricProxy,
+                    owner: this.fabric,
 					options: {},
 					clear: true,
 					data: {
@@ -290,7 +287,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	setMouseOSDInteractive(isOSDInteractive, _raise=true) {
 		if (this.mouseOSDInteractive === isOSDInteractive) return;
 
-		this._fabricProxy.setMouseOSDInteractive(isOSDInteractive);
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.setMouseOSDInteractive(isOSDInteractive);
+        }
         if (isOSDInteractive) {
             if (this.presets.left) this.presets.left.objectFactory.finishIndirect();
             if (this.presets.right) this.presets.right.objectFactory.finishIndirect();
@@ -334,7 +333,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
     enableAnnotations(on) {
         this.enableInteraction(on);
-        this._fabricProxy.enableAnnotations(on);
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.enableAnnotations(on);
+        }
         if (!on) {
             this.historyManager.highlight(null);
         }
@@ -357,7 +358,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	setMode(mode, force=false) {
 		if (this.disabledInteraction || mode === this.mode) return;
 
-		this._fabricProxy._doppelgangerClear();
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance._doppelgangerClear();
+        }
 
 		if (this.mode === this.Modes.AUTO) {
 			this._setModeFromAuto(mode);
@@ -484,7 +487,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	_generateInternalId() {
 		const MULTIPLIER = 100;
 		const now = Date.now();
-		const objects = this._fabricProxy.canvas._objects;
+        const objects = this.fabric.canvas._objects;
 		let lastIdTime = null;
 
 		if (objects.length > 0) {
@@ -555,9 +558,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 * @param {any} propertyValue value for the property
 	 */
 	setAnnotationCommonVisualProperty(propertyName, propertyValue) {
-		if (this.presets.setCommonVisualProp(propertyName, propertyValue)) {
-			this._fabricProxy.updateAnnotationVisuals();
-		}
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.updateAnnotationVisuals();
+        }
 	}
 
 	/**
@@ -637,7 +640,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @param {boolean} tracking
      */
     setOSDTracking(tracking) {
-        this._fabricProxy.setOSDTracking(tracking);
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.setOSDTracking(tracking);
+        }
     }
 
 	/**
@@ -815,8 +820,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		};
 		this.mode = this.Modes.AUTO;
 		this.disabledInteraction = false;
-        // TODO delete in v3
-		this.autoSelectionEnabled = VIEWER.hasOwnProperty("bridge");
 		this.objectFactories = {};
 		this._extraProps = ["objects"];
 		this._wasModeFiredByKey = false;
@@ -857,13 +860,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.FreeFormTool}
 		 */
 		this.freeFormTool = new OSDAnnotations.FreeFormTool("freeFormTool", this);
-		/**
-		 * Automatic object creation strategy reference
-		 * @member {OSDAnnotations.AutoObjectCreationStrategy}
-		 */
-		this.automaticCreationStrategy = VIEWER.bridge ?
-			new OSDAnnotations.RenderAutoObjectCreationStrategy("automaticCreationStrategy", this) :
-			new OSDAnnotations.AutoObjectCreationStrategy("automaticCreationStrategy", this);
 
 		//after properties initialize
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Group, false);
@@ -897,7 +893,65 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 this.setMode(this.Modes.AUTO);
             }
         }, false);
-	}
+        VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
+        VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
+        // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+    }
+
+    _keyDownHandler(e) {
+        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+        // switching mode only when no mode AUTO and mouse is up
+        if (this.cursor.isDown || this.disabledInteraction || !e.focusCanvas) return;
+
+        let modeFromCode = this._getModeByKeyEvent(e);
+        if (modeFromCode) {
+            this._wasModeFiredByKey = true;
+            this.setMode(modeFromCode);
+            e.preventDefault();
+        }
+    }
+
+    _getModeByKeyEvent(e) {
+        const modes = this.Modes;
+        for (let key in modes) {
+            if (modes.hasOwnProperty(key)) {
+                let mode = modes[key];
+                if (mode.accepts(e)) return mode;
+            }
+        }
+        return undefined;
+    }
+
+    _keyUpHandler(e) {
+        if (this.disabledInteraction || (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'))) return;
+
+        if (e.focusCanvas) {
+            if (!e.ctrlKey && !e.altKey) {
+                if (e.key === "Delete" || e.key === "Backspace") {
+                    this.mode.discard(true);
+                    return;
+                }
+                if (e.key === "Escape") {
+                    for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+                        instance.clearAnnotationSelection(true);
+                    }
+                    this.mode.discard(false);
+                    this.historyManager._boardItemSave();
+                    this.setMode(this.Modes.AUTO);
+                    return;
+                }
+            }
+
+            if (e.ctrlKey && !e.altKey && (e.key === "z" || e.key === "Z")) {
+                return e.shiftKey ? this.redo() : this.undo();
+            }
+        }
+
+        if (this.mode.rejects(e)) {
+            this.setMode(this.Modes.AUTO);
+            e.preventDefault();
+        }
+    }
 
     _requireAnnotationObjectPresence(type) {
         //When object type presence is a must
@@ -917,12 +971,11 @@ in order to work. Did you maybe named the ${type} factory implementation differe
     toggleStrokeStyling(enable) {
         this.strokeStyling = enable;
         this.raiseEvent('author-annotation-styling-toggle', {enable});
-        this._fabricProxy.rerender();
     }
 
 	static _registerAnnotationFactory(FactoryClass, atRuntime) {
 		let _this = this.instance();
-		let factory = new FactoryClass(_this, _this.automaticCreationStrategy, _this.presets);
+        let factory = new FactoryClass(_this, _this.presets);
 		if (_this.objectFactories.hasOwnProperty(factory.factoryID)) {
 			throw `The factory ${FactoryClass} conflicts with another factory: ${factory.factoryID}`;
 		}
@@ -954,8 +1007,10 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
 
 			this.mode = this.Modes.AUTO;
-			this._fabricProxy.canvas.hoverCursor = "pointer";
-			this._fabricProxy.canvas.defaultCursor = "grab";
+            for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+                instance.canvas.hoverCursor = "pointer";
+                instance.canvas.defaultCursor = "grab";
+            }
 		}
 	}
 
@@ -976,11 +1031,12 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
 				(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
 			) {
-				const center = VIEWER.viewport.getCenter(true);
-				const current = VIEWER.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
-				let direction = current.minus(center);
+                const viewer = this.viewer;
+                const center = viewer.viewport.getCenter(true);
+                const current = viewer.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
+                let direction = current.minus(center);
 				direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
-				VIEWER.viewport.panTo(direction.times(0.004 / VIEWER.scalebar.imagePixelSizeOnScreen()).plus(center));
+                viewer.viewport.panTo(direction.times(0.004 / viewer.scalebar.imagePixelSizeOnScreen()).plus(center));
 			}
 		}
 	};
@@ -1163,7 +1219,8 @@ OSDAnnotations.AnnotationState = class {
 		// if user selects mode by other method than hotkey, do not fire error on right click
 		// todo consider OSD filter event implementation and letting others decide whether to warn or not
 		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
-			VIEWER.raiseEvent('warn-user', {
+            // todo outdated usage
+            this.context.viewer.raiseEvent('warn-user', {
 				originType: "module",
 				originId: "annotations",
 				code: "W_NO_PRESET",
@@ -1198,7 +1255,7 @@ OSDAnnotations.AnnotationState = class {
 	 * @param {boolean} [withWarning=true] whether user should get warning in case action did not do anything
 	 */
 	discard(withWarning=true) {
-		this.context._fabricProxy.deleteSelection(withWarning);
+        this.context.fabric.deleteSelection(withWarning);
 	}
 
 	/**
@@ -1264,6 +1321,16 @@ OSDAnnotations.AnnotationState = class {
 	rejects(e) {
 		return false;
 	}
+
+    /**
+     * Predicate that returns true if the viewer is locked and must not be changed (even though the
+     * user might hover over different viewer). Because, for example, polygon creation can be in progress.
+     * By default, locking is always on when cursor is down.
+     * @return {boolean|*}
+     */
+    locksViewer() {
+        return this.context.cursor.isDown;
+    }
 
 	/**
 	 * Determines if edge mouse navigation is supported
@@ -1368,7 +1435,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 			return {object: o, asPolygon: result};
 		}
 		// This optimization breaks the logics, since click itself has changed the active annotation if nested
-		// const currentObject = this.context._fabricProxy.canvas.getActiveObject();
+        // const currentObject = this.context.fabric.canvas.getActiveObject();
 		// let current = currentObject && getObjectAsCandidateForIntersectionTest(currentObject);
 		// if (current && OSDAnnotations.PolygonUtilities.polygonsIntersect(brushPolygon, current.asPolygon)) {
 		// 	return current;
@@ -1475,7 +1542,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-			this.context.fabric.rerender();
+            this.context.fabric.selectAnnotation(result, true);
 		}
 		return true;
 	}
@@ -1487,7 +1554,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-			this.abortClick(isLeftClick);
+            this.abortClick(isLeftClick, true);
 			return;
 		}
 		this.context.fabric.clearAnnotationSelection(true);
@@ -1556,7 +1623,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-			this.abortClick(isLeftClick);
+            this.abortClick(isLeftClick, true);
 			return;
 		}
 		this.context.fabric.clearAnnotationSelection(true);
@@ -1603,7 +1670,15 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 		}
 	}
 
-	canUndo() {
+    locksViewer() {
+        if (this._lastUsed?.canUndoCreate()) {
+            // if the last mode supports undo, then we should lock the viewer
+            return true;
+        }
+        return super.locksViewer();
+    }
+
+    canUndo() {
 		if (this._lastUsed) return this._lastUsed.canUndoCreate();
 		return undefined;
 	}
@@ -1625,7 +1700,8 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		if (!objectFactory) {
-			return;
+            this.abortClick(isLeftClick, true);
+            return;
 		}
 		this._init(point, isLeftClick, objectFactory);
 	}
@@ -1737,7 +1813,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 	handleClickDown(o, point, isLeftClick, objectFactory) {
 		objectFactory = this.context.presets.left;
 		if (!objectFactory) {
-			this.abortClick(isLeftClick);
+            this.abortClick(isLeftClick, true);
 			return;
 		}
 		this.context.fabric.clearAnnotationSelection(true);

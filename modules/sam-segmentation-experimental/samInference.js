@@ -12,7 +12,6 @@ class SAMInference extends XOpatModuleSingleton {
     this._modelsLoaded = false;
     this._selectedModel = null;
     this._selectedComputationDevice = "Client";
-    this.registerAsEventSource();
 
     // Servers defined in the configuration
     const serverConfigs = this.getStaticMeta("servers", []);

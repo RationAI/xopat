@@ -56,8 +56,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		 */
 		this._preferredPresets = new Set();
 		this.user = XOpatUser.instance();
-
-		this.registerAsEventSource();
 	}
 
 	/*
@@ -1281,7 +1279,7 @@ ${UIComponents.Elements.select({
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
-		this.context.fabric.addHandler('annotation-set-private', e => {
+        this.context.addFabricHandler('annotation-set-private', e => {
             // todo smells
 			this.context.fabric.rerender();
 		});
@@ -1435,16 +1433,10 @@ ${UIComponents.Elements.select({
 		// this.context.forEachLayerSorted(l => {
 		// 	  this.insertLayer(l);
 		// });
-		// this.context.fabric.addHandler('layer-added', e => {
+        // this.context.fabric.broadcastHandler('layer-added', e => {
 		// 	  this.insertLayer(e.layer, e.layer.name);
 		// });
 
-		let strategy = this.context.automaticCreationStrategy;
-		if (strategy && this.context.autoSelectionEnabled) {
-			this.context.Modes.AUTO.customHtml = this.getAutoCreationStrategyControls.bind(this);
-			//on visualization change update auto UI
-			VIEWER.addHandler('visualization-used', vis => this.updateAutoSelect(vis));
-		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
 				this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =
@@ -1678,63 +1670,6 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 <input class="form-control" title="Size of a brush (scroll to change)." type="number" min="5" max="100" 
 step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.freeFormTool.screenRadius}"
 style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">`;
-	}
-
-
-	/******************** AUTO DETECTION ***********************/
-
-	getDetectionControlOptions(visualization) {
-		let autoStrategy = this.context.automaticCreationStrategy;
-		if (!autoStrategy.running) return "";
-		let html = "";
-
-		let index = -1;
-		let layer = null;
-		let key = "";
-		for (key in visualization.shaders) {
-			if (!visualization.shaders.hasOwnProperty(key)) continue;
-			layer = visualization.shaders[key];
-			if (isNaN(layer._index)) continue;
-
-			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
-			let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
-			let selected = "";
-
-			if (layer._index === autoStrategy.getLayerIndex()) {
-				index = layer._index;
-				autoStrategy.setLayer(index, key);
-				selected = "selected";
-			}
-			html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
-		}
-
-		if (index < 0) {
-			if (!layer) return;
-			autoStrategy.setLayer(layer._index, key);
-			html = "<option selected " + html.substring(8);
-		}
-		return html;
-	}
-
-	updateAutoSelect(visualization) {
-		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualization));
-	}
-
-	getAutoCreationStrategyControls() {
-		return "";
-// 		let strategy = this.context.automaticCreationStrategy;
-// 		if (!strategy || !strategy.running) return "";
-// 		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic
-// annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
-// type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.THIS}.setAutoTargetLayer(this);">
-// ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
-	}
-
-	setAutoTargetLayer(self) {
-		self = $(self);
-		let key = self.val(),
-			layer = VIEWER.bridge.visualization().shaders[key];
-		this.context.automaticCreationStrategy.setLayer(layer._index, key);
 	}
 
 	/******************** PRESETS ***********************/
@@ -2278,7 +2213,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	async saveDefault() {
 		this.needsSave = false;
-		await this.raiseEventAwaiting('save-annotations', {
+		await this.module.raiseEventAwaiting('save-annotations', {
 			getData: this.getExportData.bind(this),
 			setNeedsDownload: (needsDownload) => {
 				this.needsSave = needsDownload;
@@ -2322,6 +2257,19 @@ class="btn m-2">Set for left click </button></div>`
 	isUnpreferredPreset(presetID) {
 		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
+
+    showMeasurementsWindow() {
+        if (!this.measurementsWindow) {
+            this.measurementsWindow = new AnnotationsGUI.PathologyMetricsWindow({
+                annotations: this.context,
+                userInterface: USER_INTERFACE,
+                pluginId: this.id,
+                THIS: this.THIS + ".measurementsWindow"
+            });
+        } else {
+            this.measurementsWindow.reset();
+        }
+    }
 }
 
 /*------------ Initialization of OSD Annotations ------------*/

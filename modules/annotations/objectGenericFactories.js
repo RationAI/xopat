@@ -108,20 +108,6 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         }
     }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint);
-        if (bounds) {
-            this._context.fabric.addAnnotation(this.create({
-                left: bounds.left.x,
-                top: bounds.top.y,
-                width: bounds.right.x - bounds.left.x,
-                height: bounds.bottom.y - bounds.top.y
-            }, this._presets.getAnnotationOptions(isLeftClick)));
-            return true;
-        }
-        return false;
-    }
-
     initCreate(x, y, isLeftClick) {
         this._origX = x;
         this._origY = y;
@@ -215,8 +201,8 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
 };
 
 OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ellipse", "ellipse");
+    constructor(context, presetManager) {
+        super(context, presetManager, "ellipse", "ellipse");
         this._origX = null;
         this._origY = null;
         this._current = null;
@@ -324,20 +310,6 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         if (!ignoreReplace) {
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
-    }
-
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint);
-        if (bounds) {
-            this._context.fabric.addAnnotation(this.create({
-                left: bounds.left.x,
-                top: bounds.top.y,
-                rx: (bounds.right.x - bounds.left.x) / 2,
-                ry: (bounds.bottom.y - bounds.top.y) / 2
-            }, this._presets.getAnnotationOptions(isLeftClick)));
-            return true;
-        }
-        return false;
     }
 
     initCreate(x, y, isLeftClick = true) {
@@ -460,8 +432,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
 OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "text", "text");
+    constructor(context, presetManager) {
+        super(context, presetManager, "text", "text");
     }
 
     getIcon() {
@@ -648,11 +620,6 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         }
     }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        //todo initCreate?
-        return undefined;
-    }
-
     initCreate(x, y, isLeftClick = true) {
         this._origX = x;
         this._origY = y;
@@ -726,8 +693,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
  * @type {OSDAnnotations.Point}
  */
 OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager);
+    constructor(context, presetManager) {
+        super(context, presetManager);
         this.factoryID = "point";
     }
 
@@ -879,8 +846,8 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
 
 OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
-        super(context, autoCreationStrategy, presetManager, factoryID, type);
+    constructor(context, presetManager, factoryID, type, fabricClass, withHelperPoints=true) {
+        super(context, presetManager, factoryID, type);
         this._initialize(false);
         this.Class = fabricClass;
         this.withHelperPoints = withHelperPoints;
@@ -1096,20 +1063,6 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         return newObject;
     }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        const _this = this;
-        //(async function _() {
-        let result = /*await*/ _this._auto.createOutline(screenPoint);
-
-        if (!result || result.length < 3) return false;
-        result = OSDAnnotations.PolygonUtilities.simplify(result);
-        _this._context.fabric.addAnnotation(
-            _this.create(result, _this._presets.getAnnotationOptions(isLeftClick))
-        );
-        return true;
-        //})();
-    }
-
     getCreationRequiredMouseDragDurationMS() {
         return -1; //always allow
     }
@@ -1144,7 +1097,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
                 this._context.fabric.addHelperAnnotation(this._initPoint);
             } else {
                 if (Math.sqrt(Math.pow(this._initPoint.left - x, 2) +
-                    Math.pow(this._initPoint.top - y, 2)) < 20 / VIEWER.scalebar.imagePixelSizeOnScreen()) {
+                    Math.pow(this._initPoint.top - y, 2)) < 20 / this._context.viewer.scalebar.imagePixelSizeOnScreen()) {
                     this.finishIndirect();
                     return;
                 }
@@ -1208,7 +1161,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             return;
         }
 
-        this._current = this.create(OSDAnnotations.PolygonUtilities.simplify(points),
+        this._current = this.create(OSDAnnotations.PolygonUtilities.simplify(points, this._context.viewer.scalebar.imagePixelSizeOnScreen()),
             this._presets.getAnnotationOptions(this._current.isLeftClick));
         this._context.fabric.addAnnotation(this._current);
         this._initialize(false);
@@ -1224,7 +1177,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
         let points = obj.points;
-        if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, quality);
+        if (quality < 1) points = OSDAnnotations.PolygonUtilities.simplifyQuality(points, this._context.viewer.scalebar.imagePixelSizeOnScreen(), quality);
 
         //we already have object points, convert only if necessary
         if (converter !== OSDAnnotations.AnnotationObjectFactory.withObjectPoint) {
@@ -1258,7 +1211,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     //todo replace with the control API (as with edit)
     _createControlPoint(x, y, commonProperties) {
         return new fabric.Circle($.extend(commonProperties, {
-            radius: 5 / VIEWER.scalebar.imagePixelSizeOnScreen(),
+            radius: 5 / this._context.viewer.scalebar.imagePixelSizeOnScreen(),
             fill: '#fbb802',
             left: x,
             top: y,
@@ -1270,16 +1223,17 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     //todo add to factory as some general functions
     _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
+        return Math.pow(1 / this._context.viewer.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 };
 
 
 OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "line", "line");
+    constructor(context, presetManager) {
+        super(context, presetManager, "line", "line");
     }
+
 
     getIcon() {
         return "fa-minus";
@@ -1440,19 +1394,6 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         this._origPoints = null;
     }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint, false);
-        if (bounds) {
-            let object = this.create(
-                [bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y],
-                this._presets.getAnnotationOptions(isLeftClick)
-            );
-            this._context.fabric.addAnnotation(object);
-            return true;
-        }
-        return false;
-    }
-
     initCreate(x, y, isLeftClick = true) {
         if (!this._isOngoingCreate || this._isDragging) {
             this._initialize();
@@ -1517,7 +1458,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _getRelativePixelDiffDistSquared(relativeDiff) {
-        return Math.pow(1 / VIEWER.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
+        return Math.pow(1 / this._context.viewer.scalebar.imagePixelSizeOnScreen() * relativeDiff, 2);
     }
 
 
@@ -1583,8 +1524,8 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 };
 
 OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "polygon", "polygon", fabric.Polygon, true);
+    constructor(context, presetManager) {
+        super(context, presetManager, "polygon", "polygon", fabric.Polygon, true);
     }
 
     getIcon() {
@@ -1605,8 +1546,8 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
 }
 
 OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "polyline", "polyline", fabric.Polyline, false);
+    constructor(context, presetManager) {
+        super(context, presetManager, "polyline", "polyline", fabric.Polyline, false);
     }
 
     getIcon() {
@@ -1645,8 +1586,8 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
 
 OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "group", "group");
+    constructor(context, presetManager) {
+        super(context, presetManager, "group", "group");
     }
 
     getIcon() {
@@ -1755,10 +1696,6 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     //    //  this._context.fabric.replaceAnnotation(theObject, newObject);
     // }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        return false;
-    }
-
     getCreationRequiredMouseDragDurationMS() {
         return Infinity; //never allow
     }
@@ -1837,9 +1774,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
 
 OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFactory {
 
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "multipolygon", "path");
-        this._polygonFactory = new OSDAnnotations.Polygon(context, autoCreationStrategy, presetManager);
+    constructor(context, presetManager) {
+        super(context, presetManager, "multipolygon", "path");
+        // todo use factory of the parent context
+        this._polygonFactory = new OSDAnnotations.Polygon(context, presetManager);
     }
 
     getIcon() {
