@@ -20,8 +20,8 @@ OSDAnnotations.FreeFormTool = class {
         this._created = false;
         this._node = null;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
-        this._scale = this._scale = {x: 0, y: 0, factor: 1};
-        this._windowSize = {width: this._context.overlay._containerWidth, height: this._context.overlay._containerHeight};
+        this._scale = {x: 0, y: 0, factor: 1};
+        this._windowSize = {width: 0, height: 0};
 
         USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
@@ -38,7 +38,6 @@ OSDAnnotations.FreeFormTool = class {
         this._ctxAnnotationFull =  this._annotationCanvas.getContext('2d', { willReadFrequently: true });
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
-        this.ref = VIEWER.scalebar.getReferencedTiledImage();
     }
 
     /**
@@ -54,6 +53,7 @@ OSDAnnotations.FreeFormTool = class {
     init(object, created=false) {
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         this._created = created;
+        this.ref = this._context.viewer.scalebar.getReferencedTiledImage();
 
         this._updateCanvasSize();
         this._initializeDefaults();
@@ -85,7 +85,6 @@ OSDAnnotations.FreeFormTool = class {
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
-        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(OSDAnnotations.PolygonUtilities);
         this._updatePerformed = false;
     }
 
@@ -118,14 +117,14 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _isWindowSizeUpdated() {
-        const { containerWidth, containerHeight } = this._context.overlay;
+        const { containerWidth, containerHeight } = this._context.fabric.overlay;
 
         if (this._windowSize.width === containerWidth && this._windowSize.height === containerHeight) {
             return false;
         }
 
-        this._windowSize.width = this._context.overlay._containerWidth;
-        this._windowSize.height = this._context.overlay._containerHeight;
+        this._windowSize.width = this._context.fabric.overlay._containerWidth;
+        this._windowSize.height = this._context.fabric.overlay._containerHeight;
         return true;
     }
 
@@ -133,7 +132,7 @@ OSDAnnotations.FreeFormTool = class {
      * Update cursor indicator radius
      */
     updateCursorRadius() {
-        let screenRadius = this.radius * VIEWER.scalebar.imagePixelSizeOnScreen() * 2;
+        let screenRadius = this.radius * this._context.viewer.scalebar.imagePixelSizeOnScreen() * 2;
         if (this._node) {
             this._node.style.width = screenRadius + "px";
             this._node.style.height = screenRadius + "px";
@@ -173,7 +172,7 @@ OSDAnnotations.FreeFormTool = class {
      * @return {boolean} true if mode 'add' is active
      */
     get isModeAdd() {
-        return this._update === this._subtract;
+        return this._update === this._union;
     }
 
     /**
@@ -209,9 +208,9 @@ OSDAnnotations.FreeFormTool = class {
      * @param {number} radius in screen pixels
      */
     setRadius (radius) {
-        let imageTileSource = VIEWER.scalebar.getReferencedTiledImage();
-        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
+        let imageTileSource = this._context.viewer.scalebar.getReferencedTiledImage();
+        let pointA = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        let pointB = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
         //no need for euclidean distance, vector is horizontal
         this.radius = Math.round(Math.abs(pointB.x - pointA.x));
         if (this.screenRadius !== radius) this.updateCursorRadius();
@@ -272,7 +271,7 @@ OSDAnnotations.FreeFormTool = class {
             }
 
             this._updatePerformed = this._update(point) || this._updatePerformed;
-            this._context.canvas.renderAll();
+            this._context.fabric.rerender();
 
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
@@ -291,7 +290,8 @@ OSDAnnotations.FreeFormTool = class {
      * Finalize the object modification
      * @return {fabric.Polygon | null} polygon if successfully updated
      */
-    finish (_withDeletion=false) {
+    finish(_withDeletion=false) {
+        this.ref = null;
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
@@ -299,17 +299,17 @@ OSDAnnotations.FreeFormTool = class {
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
                 //revert annotation replacement and delete the initial (annotation was erased by modification)
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
-                this._context.deleteAnnotation(this.initial);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.deleteAnnotation(this.initial);
             } else if (!this._created) {
                 //revert annotation replacement and when updated, really swap
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
                 if (this._updatePerformed) {
-                    this._context.replaceAnnotation(this.initial, this.polygon);
+                    this._context.fabric.replaceAnnotation(this.initial, this.polygon);
                 }
             } else {
-                this._context.deleteHelperAnnotation(this.polygon);
-                this._context.addAnnotation(this.polygon);
+                this._context.fabric.deleteHelperAnnotation(this.polygon);
+                this._context.fabric.addAnnotation(this.polygon);
             }
             this._created = false;
             let outcome = this.polygon;
@@ -333,7 +333,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _convertOSD = (point) => {
-        let newPoint = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        let newPoint = this.ref.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
         newPoint.x += this._offset.x;
         newPoint.y += this._offset.y;
 
@@ -344,7 +344,7 @@ OSDAnnotations.FreeFormTool = class {
         point.x -= this._offset.x;
         point.y -= this._offset.y;
 
-        return this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        return this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
     }
 
     _convertScaling = (point) => {
@@ -391,9 +391,9 @@ OSDAnnotations.FreeFormTool = class {
         this.initial = original;
 
         if (!this._created) {
-            this._context.replaceAnnotation(original, polyObject, true);
+            this._context.fabric.replaceAnnotation(original, polyObject, true);
         } else {
-            this._context.addHelperAnnotation(polyObject);
+            this._context.fabric.addHelperAnnotation(polyObject);
         }
 
         const isPolygon = polyObject.factoryID === "polygon";
@@ -416,13 +416,13 @@ OSDAnnotations.FreeFormTool = class {
         newObject.type = factory.type;
 
         if (!this._created) {
-            this._context.replaceAnnotation(this.polygon, this.initial, true);
+            this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
             this.polygon = newObject;
-            this._context.replaceAnnotation(this.initial, this.polygon, true);
+            this._context.fabric.replaceAnnotation(this.initial, this.polygon, true);
         } else {
-            this._context.deleteHelperAnnotation(this.polygon);
+            this._context.fabric.deleteHelperAnnotation(this.polygon);
             this.polygon = newObject;
-            this._context.addHelperAnnotation(this.polygon);
+            this._context.fabric.addHelperAnnotation(this.polygon);
         }
     }
 
@@ -506,10 +506,10 @@ OSDAnnotations.FreeFormTool = class {
         const bbox = OSDAnnotations.PolygonUtilities.getBoundingBox(polygonPoints);
         const annotationBounds = { left: bbox.x, top: bbox.y, right: bbox.x + bbox.width, bottom: bbox.y + bbox.height };
 
-        const topLeft = this.ref.windowToImageCoordinates(
+        const topLeft = this.ref.viewerElementToImageCoordinates(
             new OpenSeadragon.Point(-this._offset.x, -this._offset.y)
         );
-        const bottomRight = this.ref.windowToImageCoordinates(
+        const bottomRight = this.ref.viewerElementToImageCoordinates(
             new OpenSeadragon.Point(
                 this._ctxWindow.canvas.width - this._offset.x,
                 this._ctxWindow.canvas.height - this._offset.y

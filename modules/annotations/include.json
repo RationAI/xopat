@@ -5,6 +5,8 @@
     "version": "0.1.0",
     "includes" : [
         "annotations.js",
+        "annotations-canvas.js",
+        "ext/Sortable.min.js",
         "ext/greiner-hormann.min.js",
         "ext/magic-wand.js",
         "ext/polygon-intersect.js",

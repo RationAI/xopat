@@ -20,7 +20,7 @@ OSDAnnotations.Preset = class {
      * @param {string} color fill color
      */
     constructor(id, objectFactory = null, category = "", color = "") {
-        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
+        if (!(objectFactory instanceof OSDAnnotations.AnnotationObjectFactory)) throw "Invalid preset constructor!";
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
@@ -154,7 +154,8 @@ OSDAnnotations.PresetManager = class {
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',
-        hasControls: true,
+        hasControls: false,
+        hasBorders: false,
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,
@@ -322,7 +323,7 @@ OSDAnnotations.PresetManager = class {
         let toDelete = this._presets[id];
         if (!toDelete) return undefined;
 
-        if (this._context.overlay.fabric._objects.some(o => {
+        if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
@@ -451,7 +452,7 @@ OSDAnnotations.PresetManager = class {
             if (!this._presets.hasOwnProperty(preset)) continue;
             preset = this._presets[preset];
 
-            if (!usedOnly || this._context.canvas._objects.some(x => x.presetID === preset.presetID)) {
+            if (!usedOnly || this._context.fabric.canvas._objects.some(x => x.presetID === preset.presetID)) {
                 exported.push(preset.toJSONFriendlyObject());
             }
         }
@@ -536,12 +537,13 @@ OSDAnnotations.PresetManager = class {
     }
 
     _withDynamicOptions(options) {
-        const canvas = this._context.canvas,
+        const canvas = this._context.fabric.canvas,
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
+        const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: this._context.getLayer().id,
+            layerID: layerID,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
@@ -609,9 +611,10 @@ OSDAnnotations.Layer = class {
     constructor(context, id=String(Date.now())) {
         this._context = context;
         this.id = id;
-        this.position = -1;
-        this.position = Object.values(this._context._layers)
-            .reduce((result, current) => Math.max(result, current.position), 0) + 1;
+        this._objects = [];
+        this.type = "layer";
+        this.visible = true;
+        this._name = undefined;
     }
 
     /**
@@ -629,8 +632,142 @@ OSDAnnotations.Layer = class {
      */
     iterate(callback) {
         const _this = this;
-        this._context.canvas.getObjects().forEach(o => {
+        this._context.fabric.canvas.getObjects().forEach(o => {
             if (o.layerID === _this.id) callback(_this, o);
         });
+    }
+
+    /**
+     * Returns a plain shallow copy of this layer for serialization.
+     * @returns {Object} Plain object copy without the internal context.
+     */
+    toObject() {
+        const copy = { ...this, _objects: [...this._objects] };
+	    delete copy._context;
+        return copy;
+    }
+
+    /**
+     * Get the number of annotations in this layer
+     * @returns {number} number of objects in this layer
+     */
+    getAnnotationCount() {
+        return this._objects.length;
+    }
+
+    /**
+    * Add a fabric object to this layer
+    * @param {fabric.Object} object
+    * @param {number} index index at which to add the object
+    */
+    addObject(object, index = undefined) {
+        if (!object || object.internalID === undefined || object.internalID === null) return;
+
+        if (!this.contains(object)) {
+            if (typeof index === "number" && index >= 0 && index <= this._objects.length) {
+                this._objects.splice(index, 0, object);
+            } else {
+                this._objects.push(object);
+            }
+            object.layerID = this.id;
+            object.visible = this.visible;
+
+            this._context.fabric.rerender();
+        }
+    }
+
+    /**
+    * Remove a fabric object from this layer
+    * @param {fabric.Object} object
+    */
+    removeObject(object) {
+        if (!object || object.internalID === undefined || object.internalID === null) return;
+
+        object.visible = true;
+        this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);
+
+        this._context.fabric.rerender();
+    }
+
+    /**
+     * Swap (move) an annotation up or down within this layer.
+     * @param {fabric.Object} annotation
+     * @param {"up"|"down"} direction "up" or "down"
+     * @returns {boolean} true if swapped, false if at edge or not found
+     */
+    swapAnnotation(annotation, direction) {
+        const idx = this._objects.findIndex(obj => obj.internalID === annotation.internalID);
+        if (idx === -1) return false;
+        const newIdx = direction === "up" ? idx - 1 : idx + 1;
+        if (newIdx < 0 || newIdx >= this._objects.length) return false;
+        [this._objects[idx], this._objects[newIdx]] = [this._objects[newIdx], this._objects[idx]];
+        return true;
+    }
+
+    /**
+     * Return array of all objects assigned to this layer
+     * @returns {fabric.Object[]}
+     */
+    getObjects() {
+        return [...this._objects];
+    }
+
+    /**
+     * Set objects for this layer
+     * @param {fabric.Object[]} objects array of objects
+     */
+    setObjects(objects, changeLayerID = false) {
+        this._objects.forEach(object => {object.visible = true});
+        this._objects = objects;
+        this._objects.forEach(object => {object.visible = this.visible});
+        if (changeLayerID) {
+            this._objects.forEach(obj => {
+                obj.layerID = this.id;
+            });
+        }
+
+        this._context.fabric.rerender();
+    }
+
+    /**
+    * Clear all objects from this layer (does not delete them from canvas)
+    */
+    clear() {
+       this._objects.forEach(object => {
+           if (object.layerID === this.id) {
+                object.layerID = undefined;
+                object.visible = true;
+           }
+       });
+       this._objects = [];
+    }
+
+    /**
+     * Check if this layer contains the object
+     * @param {*} object object to check
+     * @returns {boolean} true if the object is in this layer
+     */
+    contains(object) {
+        return this._objects.some(obj => obj.internalID === object.internalID);
+    }
+
+    /**
+    * Toggle the visibility of all objects in the layer
+    */
+    toggleVisibility() {
+       this.visible = !this.visible;
+       this._objects.forEach(obj => {
+           obj.visible = this.visible;
+       });
+       this._context.fabric.rerender();
+    }
+
+    /**
+     * Get the index of an annotation within this layer
+     * @param {fabric.Object} annotation annotation to find
+     * @returns {number} index of the annotation, -1 if not found
+     */
+    getAnnotationIndex(annotation) {
+        return this._objects.findIndex(obj => obj.incrementId === annotation.incrementId);
     }
 };

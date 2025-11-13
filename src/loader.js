@@ -395,11 +395,14 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
      * available in docs due to its API nature.
+     * @extends OpenSeadragon.EventSource
      * @abstract
      */
-    class XOpatElement {
+    class XOpatElement extends OpenSeadragon.EventSource {
 
         constructor(id, executionContextName) {
+            super();
+
             if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
             this.__id = id;
             this.__uid = `${executionContextName}.${id}`;
@@ -604,118 +607,6 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
             });
             return false;
         }
-
-        /**
-         * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
-         */
-        registerAsEventSource(errorBindingOnViewer=true) {
-            //consider _errorHandlers that would listen for errors and warnings and provide handling instead of global scope VIEWER (at least for plugins)
-
-            const events = this.__eventSource = new OpenSeadragon.EventSource();
-            events.filters = {};
-            this.addHandler = events.addHandler.bind(events);
-            this.addOnceHandler = events.addOnceHandler.bind(events);
-            this.getHandler = events.getHandler.bind(events);
-            this.numberOfHandlers = events.numberOfHandlers.bind(events);
-            this.raiseEvent = events.raiseEvent.bind(events);
-            this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
-            this.removeAllHandlers = events.removeAllHandlers.bind(events);
-            this.removeHandler = events.removeHandler.bind(events);
-            this.__errorBindingOnViewer = errorBindingOnViewer;
-
-            this.addFilter = ( eventName, handler, priority ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters ) {
-                    this.filters[ eventName ] = filters = [];
-                }
-                if ( handler && OpenSeadragon.isFunction( handler ) ) {
-                    let index = filters.length,
-                        filter = { handler: handler, priority: priority || 0 };
-                    filters[ index ] = filter;
-                    while ( index > 0 && filters[ index - 1 ].priority < filters[ index ].priority ) {
-                        filters[ index ] = filters[ index - 1 ];
-                        filters[ index - 1 ] = filter;
-                        index--;
-                    }
-                }
-            };
-            this.applyFilter = ( eventName, value ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters || !filters.length ) {
-                    return null;
-                }
-                for ( let i = 0; i < length; i++ ) {
-                    if ( filters[ i ] ) {
-                        value = filters[ i ].handler( value );
-                    }
-                }
-                return value;
-            };
-            this.removeFilter = ( eventName, handler ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters || !OpenSeadragon.isArray( filters ) ) {
-                    return;
-                }
-                this.filters = filters.filter(f => f.handler !== handler);
-            };
-        }
-        /**
-         * Add an event handler for a given event. See OpenSeadragon.EventSource::addHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addHandler() {}
-        /**
-         * Add an event handler to be triggered only once (or X times). See OpenSeadragon.EventSource::addOnceHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addOnceHandler () {}
-        /**
-         * Get a function which iterates the list of all handlers registered for a given event, calling the handler for each.
-         * See OpenSeadragon.EventSource::getHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        getHandler () {}
-        /**
-         * Get the amount of handlers registered for a given event. See OpenSeadragon.EventSource::numberOfHandlers
-         * Note: noop if registerAsEventSource() not called.
-         */
-        numberOfHandlers () {}
-        /**
-         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEvent
-         * Note: noop if registerAsEventSource() not called.
-         */
-        raiseEvent () {}
-        /**
-         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseAwaitEvent.
-         * Awaits async handlers.
-         * Note: noop if registerAsEventSource() not called.
-         */
-        raiseAwaitEvent() {}
-        /**
-         * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeAllHandlers () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeHandler () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addFilter () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        applyFilter () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeFilter () {}
     }
 
     /**
