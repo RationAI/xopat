@@ -1051,6 +1051,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             x: point.x + deltaX,
             y: point.y + deltaY
         }));
+        // todo make copy optional!
         const newObject = this.copy(theObject, {
             points: translatedPoints,
             left: theObject.left + deltaX,

@@ -658,7 +658,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
      */
     deleteObject(o, _raise=true) {
         // this._deletedObject = o;
-        if (this.isAnnotation(o)) return this._deleteAnnotation(o, _raise);
+        if (this.isAnnotation(o)) return this.deleteAnnotation(o, _raise);
         return this.deleteHelperAnnotation(o);
     }
 
@@ -1409,6 +1409,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
         if (activeObject.type === 'activeSelection') {
             activeObject.getObjects().forEach(obj => {
+                // todo this overloads history, needs to do in one step
                 this.deleteObject(obj);
             });
             this.canvas.requestRenderAll();
@@ -1431,6 +1432,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
         let objectsLength = objects.length;
         for (let i = 0; i < objectsLength; i++) {
+            //todo this overloads history, needs to do in one step
             this.deleteObject(objects[objectsLength - i - 1]);
         }
     }
