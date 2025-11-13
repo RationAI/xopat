@@ -2107,6 +2107,8 @@ class="btn m-2">Set for left click </button></div>`
 			y: bounds.top - mousePos.y,
 		};
 		this._copiedAnnotation = annotation;
+        this._copiedIsCopy = true;
+        this._deleteAnnotation(annotation);
 	}
 
 	_cutAnnotation(mousePos, annotation) {
@@ -2116,7 +2118,8 @@ class="btn m-2">Set for left click </button></div>`
 			y: bounds.top - mousePos.y,
 		};
 		this._copiedAnnotation = annotation;
-		this._deleteAnnotation(annotation);
+        this._copiedIsCopy = false;
+        this._deleteAnnotation(annotation);
 	}
 
 	_deleteAnnotation(annotation) {
@@ -2141,7 +2144,8 @@ class="btn m-2">Set for left click </button></div>`
 		const annotation = this._copiedAnnotation;
 		const factory = annotation._factory();
 
-		const copy = factory.copy(annotation);
+        const copy = factory.copy(annotation);
+        // todo with polygon, translate creates 'yet another copy' -> avoid.
 		const res = factory.translate(
 			copy,
 			{
@@ -2150,6 +2154,9 @@ class="btn m-2">Set for left click </button></div>`
 			},
 			true
 		);
+        if (this._copiedIsCopy) {
+            delete copy.internalID; // ensure internal ID is changed
+        }
 		this.context.addAnnotation(res);
 		factory.renderAllControls(res);
 	}
