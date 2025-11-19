@@ -77,6 +77,7 @@ export class ShaderSideMenu extends BaseComponent {
                             description: `<code>${message.error}</code>`,
                             compact: true
                         });
+
                         alert.prependedTo(node);
                         break;
                     }

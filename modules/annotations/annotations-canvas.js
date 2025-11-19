@@ -2,7 +2,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
     constructor(viewer) {
         super(viewer);
-        this.viewer = viewer;
 
         let refTileImage = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
         this.overlay = viewer.fabricjsOverlay({
@@ -792,7 +791,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             // this.clearAnnotationSelection(true);
             // this.selectAnnotation(next, true);
             this.raiseEvent('annotation-replace', {previous, next});
-            this.module.raiseEvent('history-change');
         }
 
         this.canvas.requestRenderAll();

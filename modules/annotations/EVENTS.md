@@ -55,8 +55,6 @@ the DOM does not belong to this context. The container
 
 ##### history-close | ``{inNewWindow: boolean}``
 
-#### history-change
-
 ##### canvas-nonprimary-release-not-handled
 Called when the annotation modes did not handle mouse release action.
 

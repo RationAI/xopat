@@ -1595,8 +1595,58 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             true);
     }
 
-    const History = class {
-        constructor() {
+    /**
+     * History provider is logics that can stub history steps without actually
+     * explicitly putting anything inside history state. For example, user is creating
+     * a polygon. 'undo' step can undo individual points, but only changes the internal
+     * creation logics state, not pushing anything to the history. Providers override
+     * the history API and only IF no provider handles the step, the original history logics fires.
+     * @type {Window.HistoryProvider}
+     */
+    window.HistoryProvider = class {
+        /**
+         * Larger importance means earlier run.
+         * @return {number}
+         */
+        get importance() {
+            return 0;
+        }
+
+        /**
+         * Go step back in the history.
+         * @return {boolean} false if underlying history should handle the next step
+         */
+        undo() {
+            throw new Error('Not implemented');
+        }
+
+        /**
+         * Go step forward in the history.
+         * @return {boolean} false if underlying history should handle the next step
+         */
+        redo() {
+            throw new Error('Not implemented');
+        }
+
+        /**
+         * Check if undo is possible
+         * @return {boolean} false if underlying history should handle the next step
+         */
+        canUndo() {
+            throw new Error('Not implemented');
+        }
+
+        /**
+         * Check if redo is possible
+         * @return {boolean} false if underlying history should handle the next step
+         */
+        canRedo() {
+            throw new Error('Not implemented');
+        }
+    }
+
+    window.History = class {
+        constructor(size = 99) {
             this._buffer = [];
             // points to the current state in the redo/undo index in circular buffer
             this._buffidx = -1;
@@ -1604,20 +1654,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // it means the redo action went full circle on the buffer, and we cannot further undo,
             // if we set this index to buffindex, we throw away ability to redo (diverging future)
             this._lastValidIndex = -1;
-            this.BUFFER_LENGTH = null;
-            this._stateChangeCallback = null;
+            this._providers = [];
+            this.BUFFER_LENGTH = size;
         }
 
         /**
-         * Set the callback to be called when the state changes.
-         * @param {function} cb callback function to be called on state change
+         * Outsource history logics to external API
+         * @param {HistoryProvider} provider history api provider
          */
-        setStateChangeCallback(cb) { this._stateChangeCallback = cb; }
-
-        _triggerStateChange(canUndo, canRedo) {
-            if (this._stateChangeCallback) {
-                this._stateChangeCallback({ canUndo, canRedo });
-            }
+        registerProvider(provider) {
+            this._providers.push(provider);
         }
 
         /**
@@ -1644,8 +1690,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             this._buffer[this._buffidx] = { forward, backward };
             this._lastValidIndex = this._buffidx;
 
-            this._triggerStateChange(true, false);
-
             return forward();
         }
 
@@ -1654,6 +1698,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          */
         undo() {
             if (!this.canUndo()) return;
+
+            for (let historyProvider of this._providers) {
+                if (historyProvider.undo()) return;
+            }
 
             const entry = this._buffer[this._buffidx];           
             entry.backward();
@@ -1665,8 +1713,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 this._lastValidIndex--;
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
             }
-
-            this._triggerStateChange(this.canUndo(), true);
         }
 
         /**
@@ -1675,11 +1721,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         redo() {
             if (!this.canRedo()) return;
 
+            for (let historyProvider of this._providers) {
+                if (historyProvider.redo()) return;
+            }
+
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
             const entry = this._buffer[this._buffidx];
             entry.forward();
-
-            this._triggerStateChange(true, this.canRedo());
         }
 
         /**
@@ -1687,6 +1735,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @return {boolean}
          */
         canUndo() {
+            for (let historyProvider of this._providers) {
+                if (this._providers.canUndo()) return true;
+            }
             return !!this._buffer[this._buffidx];
         }
 
@@ -1695,10 +1746,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @return {boolean}
          */
         canRedo() {
+            for (let historyProvider of this._providers) {
+                if (this._providers.canRedo()) return true;
+            }
             return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
         }
     }
 
-    APPLICATION_CONTEXT.history = new History();
-    APPLICATION_CONTEXT.history.size = APPLICATION_CONTEXT.config.defaultParams.historySize || 50;
+
+
+    APPLICATION_CONTEXT.history = new History(APPLICATION_CONTEXT.getOption("historySize", 99));
 }

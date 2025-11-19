@@ -105,8 +105,8 @@ Fired when viewer singleton is created.
 Fired when module is loaded within a system (at runtime).
 
 #### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
-Fired when user presses a key. The event object is extended by one property that tells us whether the
-main canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
+Fired when user presses a key. The event object is extended by one property that tells us whether a viewer
+canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
 and ignores OpenSeadragon key event.
 
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`

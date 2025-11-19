@@ -96,8 +96,8 @@ export class BaseComponent {
     }
 
     /**
-     *
      * @param {*} element - The element to attach the component to
+     * @return {BaseComponent} builder pattern
      */
     attachTo(element) {
         this.refreshClassState();
@@ -122,11 +122,12 @@ export class BaseComponent {
                 mount.append(this.create());
             }
         }
+        return this;
     }
 
     /**
-     *
      * @param {*} element - The element to prepend the component to
+     * @return {BaseComponent} builder pattern
      */
     prependedTo(element) {
         this.refreshClassState();
@@ -151,6 +152,7 @@ export class BaseComponent {
                 mount.prepend(this.create());
             }
         }
+        return this;
     }
 
     /**
@@ -267,6 +269,22 @@ export class BaseComponent {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
 
+    /**
+     * Toggle the class of the component
+     * @param {string} key
+     * @param {string} value
+     * @param {boolean} on if true, set class
+     */
+    toggleClass(key, value, on=true) {
+        this.classMap[key] = on ? value : "";
+        this.classState.val = Object.values(this.classMap).join(" ");
+    }
+
+    /**
+     * Set attribute property to the element
+     * @param {string} key attribute name
+     * @param {string} value
+     */
     setExtraProperty(key, value) {
         this.propertiesMap[key] = value;
         let stateMap = this.propertiesStateMap[key];
@@ -407,5 +425,20 @@ export class BaseComponent {
 
         this.refreshClassState();
         this.refreshPropertiesState();
+    }
+}
+
+/**
+ * @typedef {BaseUIOptions} SelectableUIOptions
+ * @property {string} [itemID] - The selection ID
+ */
+export class BaseSelectableComponent extends BaseComponent {
+    constructor(options, ...args) {
+        options = super(options, ...args);
+        this.itemID = options.itemID || this.id;
+    }
+
+    setSelected(itemID) {
+        throw new Error("Component must override setSelected method");
     }
 }

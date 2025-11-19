@@ -74,7 +74,7 @@ export class FloatingWindow extends BaseComponent {
         // Persisted position/size keys
         this._cacheKey = (k) => `${this.id}:${k}`;
 
-        // Size + position (restored with defaults)
+        // todo, floating manager also stores position, store on single place...
         this._w = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("w"), options.width ?? 360);
         this._h = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("h"), options.height ?? 240);
         this._l = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("l"), options.startLeft ?? 64);
@@ -96,6 +96,7 @@ export class FloatingWindow extends BaseComponent {
                 size: Button.SIZE.TINY,
                 type: Button.TYPE.NONE,
                 extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
+                extraProperties: { "data-no-drag": "true" },
                 onClick: () => this.close(),
             }, new FAIcon({ name: "fa-close" }))).create()
         ] : [];
@@ -466,38 +467,50 @@ export class FloatingWindow extends BaseComponent {
             this._resizeHandle
         );
 
-        // After mount wiring
+        // after mounting ids exist
         queueMicrotask(() => {
             this._rootEl = document.getElementById(this.id);
-            // Drag
             const headerEl = document.getElementById(this._header.id) || this._rootEl.firstChild;
-            headerEl.addEventListener("mousedown", this._onDragStart);
-            headerEl.addEventListener("touchstart", this._onDragStart, { passive: false });
+            if (headerEl && headerEl.style) headerEl.style.touchAction = "none";
+            const resizeEl = this._resizeHandle || null;
 
-            // Resize
-            if (this._resizeHandle) {
-                const el = this._rootEl.querySelector(".cursor-se-resize");
-                el?.addEventListener("mousedown", this._onResizeDragStart);
-                el?.addEventListener("touchstart", this._onResizeDragStart, { passive: false });
+            // access the instance, not the class -> use global UI
+            this._fmToken = UI.Services.FloatingManager.register({
+                el: this._rootEl,
+                owner: this,
+                onOutsideClick: () => this.focus(),   // or "close" if you want clicks to dismiss
+                onEscape: "close",
+                clamp: {
+                    margin: 6,
+                    topBarId: "top-side",
+                    cache: {
+                        leftKey: this._cacheKey("l"),
+                        topKey:  this._cacheKey("t")
+                    }
+                }
+            });
+
+            UI.Services.FloatingManager.enableDrag(this._fmToken, {
+                handle: headerEl,
+                persist: {
+                    leftKey: this._cacheKey("l"),
+                    topKey:  this._cacheKey("t")
+                }
+            });
+
+            if (resizeEl) {
+                UI.Services.FloatingManager.enableResize(this._fmToken, {
+                    handle: resizeEl,
+                    minW: 220,
+                    minH: 140,
+                    persist: {
+                        widthKey:  this._cacheKey("w"),
+                        heightKey: this._cacheKey("h")
+                    }
+                });
             }
 
-            // Keep visible on viewport resize (only when not external)
-            const onViewport = () => {
-                if (this._external) return;
-                this._applyBounds();
-                this._persist();
-            };
-            window.addEventListener("resize", onViewport);
-
-            // Store cleanup hook onto element
-            this._rootEl.__fw_cleanup = () => {
-                headerEl.removeEventListener("mousedown", this._onDragStart);
-                headerEl.removeEventListener("touchstart", this._onDragStart);
-                window.removeEventListener("resize", onViewport);
-            };
-
-            // Initial normalize
-            this._applyBounds();
+            UI.Services.FloatingManager.clampNow(this._fmToken);
         });
 
         return root;

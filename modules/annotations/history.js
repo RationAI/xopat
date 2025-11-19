@@ -49,6 +49,7 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._focusWithScreen = value;
     }
 
+    // todo remove history from the anntoations window here
     setHistoryState(canUndo, canRedo) {
         this._performAtJQNode("history-undo", node =>
             node.css("color", canUndo ? "var(--color-icon-primary)" : "var(--color-icon-tertiary)")

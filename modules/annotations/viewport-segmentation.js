@@ -1,6 +1,6 @@
 OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "viewport-segmentation", "background_dot_small", "🆄  viewport segmentation");
+        super(context, "viewport-segmentation", "fa-border-top-left", "🆄  viewport segmentation");
         this.MagicWand = OSDAnnotations.makeMagicWand();
         this.ref = VIEWER.scalebar.getReferencedTiledImage();
 

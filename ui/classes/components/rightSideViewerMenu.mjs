@@ -64,13 +64,13 @@ export class RightSideViewerMenu extends BaseComponent {
 
         // defaultly open menus
         for (let i of Object.keys(this.menu.tabs)) {
-            if (APPLICATION_CONTEXT.getOption(`${i}-open`, true)) {
+            if (APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
                 this.menu.tabs[i]._setFocus();
             } else {
                 this.menu.tabs[i]._removeFocus();
             }
 
-            if (APPLICATION_CONTEXT.getOption(`${i}-hidden`, false)) {
+            if (APPLICATION_CONTEXT.AppCache.get(`${i}-hidden`, false)) {
                 this.menu.tabs[i].toggleHiden();
             }
         }

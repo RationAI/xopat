@@ -33,9 +33,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
 
-        this._fabricProxy = new OSDAnnotations.FabricWrapper(VIEWER);
-        // hack for v3 (future) - remove once merged
-        OSDAnnotations.FabricWrapper.instances = () => [this._fabricProxy];
         this._activeViewer = VIEWER;
 		this._init();
 		this.user = XOpatUser.instance();
@@ -510,22 +507,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Undo action, handled by either a history implementation, or the current mode
+     * todo remove
 	 */
 	undo() {
 		const can = this.mode.canUndo();
 		if (can === undefined) return this.history.undo();
 		this.mode.undo();
-		this.raiseEvent('history-change');
 	}
 
 	/**
 	 * Redo action, handled by either a history implementation, or the current mode
+     * todo remove
 	 */
 	redo() {
 		const can = this.mode.canRedo();
 		if (can === undefined) return this.history.redo();
 		this.mode.redo();
-		this.raiseEvent('history-change');
 	}
 
 	/**
@@ -825,7 +822,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._wasModeFiredByKey = false;
 		this._idCounter = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
-		this._exportPrivateAnnotations = APPLICATION_CONTEXT.getOption("exportPrivate", this.getStaticMeta("exportPrivate", false));
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
         // Rewrite with bind this arg to use in events
         this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
 		this.cursor = {
@@ -849,11 +846,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.AnnotationHistoryManager}
 		 */
 		this.historyManager = new OSDAnnotations.AnnotationHistoryManager("historyManager", this, this.presets);
-
-		this.history.setStateChangeCallback(({ canUndo, canRedo }) => {
-			this.historyManager.setHistoryState(canUndo, canRedo);
-			this.raiseEvent('history-change');
-		});
 
 		/**
 		 * FreeFormTool reference
@@ -893,8 +885,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 this.setMode(this.Modes.AUTO);
             }
         }, false);
-        VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
-        VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
+        VIEWER_MANAGER.addHandler('key-down', e => this._keyDownHandler(e));
+        VIEWER_MANAGER.addHandler('key-up', e => this._keyUpHandler(e));
         // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
     }
 

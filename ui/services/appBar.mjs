@@ -170,7 +170,7 @@ export class AppBar {
                     selected: item.selected,
                     onClick: () => {
                         // todo is necessary this doublechecking?
-                        item.selected = APPLICATION_CONTEXT.getOption(`${id}-selected`, item.selected);
+                        item.selected = APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, item.selected);
                         item.onClick?.(item.selected);
                     },
                     section: 'global-windows',
@@ -208,7 +208,7 @@ export class AppBar {
          * @return {boolean} true if the selection is currently active.
          */
         registerViewItem(ownerPluginId, icon, label, onClick) {
-            const selected = APPLICATION_CONTEXT.getOption(`${ownerPluginId}-selected`, false);
+            const selected = APPLICATION_CONTEXT.AppCache.get(`${ownerPluginId}-selected`, false);
             this.otherWindows[ownerPluginId] = {
                 ownerPluginId, icon, label, onClick, selected
             };

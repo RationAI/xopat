@@ -98,3 +98,37 @@
     select:disabled,
     textarea:disabled { @apply opacity-50 cursor-not-allowed; }
 }
+
+@layer components {
+    /* Base behavior: make sure the parent can position the icon */
+    .thumb-add,
+    .thumb-remove {
+        @apply relative inline-block;
+    }
+
+    /* Shared styles for the pseudo-element */
+    .thumb-add::after,
+    .thumb-remove::after {
+        content: '';
+        position: absolute;
+        bottom: 0.25rem;   /* adjust as needed */
+        right: 0.25rem;    /* adjust as needed */
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 9999px; /* full circle */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+        box-shadow: 0 0 0 2px #fff; /* white ring so it stands out over images */
+    }
+
+    .thumb-add::after {
+        content: '+';
+    }
+
+    .thumb-remove::after {
+        content: '−';
+    }
+}

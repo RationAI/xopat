@@ -572,7 +572,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             }
         },
 
-        Tooltip: new UI.GlobalTooltip(),
+        Tooltip: UI.Services.GlobalTooltip, //alias
 
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
@@ -796,7 +796,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * Application Top Middle Menu
          * @namespace USER_INTERFACE.AppBar
          */
-        AppBar: new UI.AppBar(),
+        AppBar: UI.Services.AppBar,
 
         /**
          * Tools menu by default invisible (top)
@@ -808,160 +808,33 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param {string} ownerPluginId
              * @param {string} toolsMenuId unique menu id
              * @param {string} title
-             * @param {UIElement} html
+             * @param {UIElement|UIElement[]} html
              * @param {string} [icon=fa-wrench]
              * @param {boolean} forceHorizontal
              */
             setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-wrench", forceHorizontal = false) {
+                if (!Array.isArray(html)) {
+                    html = [html];
+                }
                 const menu = new UI.Toolbar(
                     {id: `toolbar-${ownerPluginId}`, horizontalOnly: forceHorizontal, pluginRootClass: `plugin-${ownerPluginId}-root`},
                     {
                         id: ownerPluginId+"-"+toolsMenuId+"-tools-panel",
                         icon: icon,
                         title: title,
-                        body: [html],
+                        body: html,
                     }
                 );
                 menu.attachTo(document.getElementById('toolbars-container'));
-                this.makeDraggable(`toolbar-${ownerPluginId}`);
-                this.stayOnScreen(`toolbar-${ownerPluginId}`);
 
-                if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
-                    document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
-                }
-
-                // snapping  to left side if set in cookies
-                if (APPLICATION_CONTEXT.getOption(`toolbar-${ownerPluginId}-PositionLeft`) == 0){
-                    document.getElementById(`toolbar-${ownerPluginId}`).style["max-width"] = "100px";
-                }
-
-            },
-
-            stayOnScreen(id){
-                const myDiv = document.getElementById(id);
-                function keepDivOnScreen() {
-                    const rect = myDiv.getBoundingClientRect();
-                    const viewportWidth = window.innerWidth;
-                    const viewportHeight = window.innerHeight;
-
-                    // Check horizontal position
-                    if (rect.right > viewportWidth) {
-                        myDiv.style.left = viewportWidth - rect.width + "px";
-                    }
-
-                    if (rect.left < 0) {
-                        myDiv.style.left = "0px";
-                    } else if (rect.left < APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`)) {
-                        myDiv.style.left = APPLICATION_CONTEXT.getOption(`${id}-PositionLeft`) + "px";
-                    }
-
-                    // Check vertical position
-                    if (rect.bottom > viewportHeight) {
-                        myDiv.style.top = viewportHeight - rect.height + "px";
-                    } else if (rect.top < APPLICATION_CONTEXT.getOption(`${id}-PositionTop`)) {
-                        myDiv.style.top = APPLICATION_CONTEXT.getOption(`${id}-PositionTop`) + "px";
-                    }
-
-                    if (rect.top < document.getElementById('top-side').offsetHeight) {
-                        myDiv.style.top = document.getElementById('top-side').offsetHeight + "px";
-                    }
-                }
-
-                window.addEventListener('scroll', keepDivOnScreen);
-                window.addEventListener('resize', keepDivOnScreen);
-                keepDivOnScreen();
-            },
-            makeDraggable(id){
-                const draggableBox = document.getElementById(id);
-                const handle = draggableBox.querySelector('.handle');
-
-                let isDragging = false;
-                let offsetX, offsetY;
-                const SNAP_DISTANCE = 20;
-
-                const getClientCoords = (e) => {
-                    if (e.touches && e.touches.length) {
-                        return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-                    }
-                    return { clientX: e.clientX, clientY: e.clientY };
-                };
-
-                const startDrag = (e) => {
-                    const coords = getClientCoords(e);
-
-                    if (e.type === 'touchstart') {
-                        e.preventDefault();
-                    } else if (e.button !== 0) {
-                        return;
-                    }
-
-                    isDragging = true;
-                    draggableBox.classList.add('dragging');
-
-                    offsetX = coords.clientX - draggableBox.getBoundingClientRect().left;
-                    offsetY = coords.clientY - draggableBox.getBoundingClientRect().top;
-                };
-
-                handle.addEventListener('mousedown', startDrag);
-                handle.addEventListener('touchstart', startDrag, { passive: false });
-
-                const moveDrag = (e) => {
-                    if (!isDragging) return;
-
-                    if (e.type === 'touchmove') {
-                        e.preventDefault();
-                    }
-
-                    const coords = getClientCoords(e);
-
-                    draggableBox.style["max-width"] = "";
-
-                    const viewportWidth = window.innerWidth;
-                    const viewportHeight = window.innerHeight;
-                    const boxWidth = draggableBox.offsetWidth;
-                    const boxHeight = draggableBox.offsetHeight;
-
-                    let newX = coords.clientX - offsetX;
-                    let newY = coords.clientY - offsetY;
-
-                    if (newX < SNAP_DISTANCE) {
-                        draggableBox.style["max-width"] = "100px";
-                        newX = 0;
-                    }
-
-                    else if (newY + boxHeight > viewportHeight - SNAP_DISTANCE) {
-                        newY = viewportHeight - boxHeight;
-                    }
-
-                    newX = Math.max(0, Math.min(newX, viewportWidth - boxWidth));
-                    newY = Math.max(document.getElementById('top-side').offsetHeight, Math.min(newY, viewportHeight - boxHeight));
-
-                    draggableBox.style.left = `${newX}px`;
-                    draggableBox.style.top = `${newY}px`;
-
-                    APPLICATION_CONTEXT.setOption(`${id}-PositionLeft`, newX);
-                    APPLICATION_CONTEXT.setOption(`${id}-PositionTop`, newY);
-                };
-
-                document.addEventListener('mousemove', moveDrag);
-                document.addEventListener('touchmove', moveDrag, { passive: false });
-
-                const endDrag = () => {
-                    if (isDragging) {
-                        isDragging = false;
-                        draggableBox.classList.remove('dragging');
-                    }
-                };
-
-                document.addEventListener('mouseup', endDrag);
-                document.addEventListener('touchend', endDrag);
-                document.addEventListener('touchcancel', endDrag);
-
-                document.addEventListener('mouseleave', (e) => {
-                    if (isDragging && e.buttons === 1) {
-                        endDrag();
-                    }
-                });
+                // if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
+                //     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
+                // }
+                //
+                // // snapping  to left side if set in cookies
+                // if (APPLICATION_CONTEXT.AppCache.get(`toolbar-${ownerPluginId}-PositionLeft`) == 0){
+                //     document.getElementById(`toolbar-${ownerPluginId}`).style["max-width"] = "100px";
+                // }
             },
             /**
              * Show desired toolBar menu. Also opens the toolbar if closed.

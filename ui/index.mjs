@@ -28,7 +28,11 @@ import { MultiPanelMenuTab } from "./classes/components/multiPanelMenuTab.mjs";
 import { MultiPanelMenu } from "./classes/components/multiPanelMenu.mjs";
 import { FullscreenMenu } from "./classes/components/fullscreenMenu.mjs";
 import { TabsMenu } from "./classes/components/tabsMenu.mjs";
-import { Toolbar } from "./classes/components/toolbar.mjs";
+import { Toolbar } from "./classes/components/toolbar/toolbar.mjs";
+import { ToolbarItem} from "./classes/components/toolbar/toolbarItem.mjs";
+import { ToolbarSeparator } from "./classes/components/toolbar/toolbarSeparator.mjs";
+import { ToolbarGroup } from "./classes/components/toolbar/toolbarGroup.mjs";
+import { ToolbarChoiceGroup } from "./classes/components/toolbar/toolbarChoiceGroup.mjs";
 import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { ShaderSideMenu } from "./classes/components/shaderSideMenu.mjs";
 import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
@@ -39,8 +43,49 @@ import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mj
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
 
+// COMPONENTS
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
 import { AppBar } from "./services/appBar.mjs";
+import { FloatingManager } from "./services/floatingManager.mjs";
+
+class ServiceContainer {
+    _globalTooltip = null;
+    _appBar = null;
+    _floatingManager = null;
+
+    /**
+     * Gets the GlobalTooltip service.
+     * Instantiates it on the first call.
+     */
+    get GlobalTooltip() {
+        if (!this._globalTooltip) {
+            this._globalTooltip = new GlobalTooltip();
+        }
+        return this._globalTooltip;
+    }
+
+    /**
+     * Gets the AppBar service.
+     * Instantiates it on the first call.
+     */
+    get AppBar() {
+        if (!this._appBar) {
+            this._appBar = new AppBar();
+        }
+        return this._appBar;
+    }
+
+    /**
+     * Gets the FloatingManager service.
+     * Instantiates it on the first call.
+     */
+    get FloatingManager() {
+        if (!this._floatingManager) {
+            this._floatingManager = new FloatingManager();
+        }
+        return this._floatingManager;
+    }
+}
 
 const UI = {
     // Elements
@@ -49,13 +94,12 @@ const UI = {
     StretchGrid, Input, Badge, Title, Collapse,
 
     // Components
-    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
-    Toolbar, ShaderLayer, ShaderSideMenu, FloatingWindow,
-    MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
-    Explorer,
+    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,
+    ShaderSideMenu, FloatingWindow, MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
+    Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup,
 
-    // Services
-    GlobalTooltip, AppBar
+    // Services -> instantiated
+    Services: new ServiceContainer()
 };
 
 globalThis.UI = UI;
