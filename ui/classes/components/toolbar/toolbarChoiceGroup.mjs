@@ -2,39 +2,35 @@ import { BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Dropdown } from "../../elements/dropdown.mjs";
 import { FAIcon } from "../../elements/fa-icon.mjs";
 import { ToolbarItem } from "./toolbarItem.mjs";
-import { Join } from "../../elements/join.mjs";
 import van from "../../../vanjs.mjs";
 
 /**
  * @class ToolbarChoiceGroup
- * @extends BaseComponent
- * @description A compact radio group: a main "fire" button that executes the
- * currently selected tool, plus a small expand arrow that opens a dropdown
- * with all available tools.
+ * @extends BaseSelectableComponent
+ * @description A compact radio group implemented as a single Dropdown whose
+ * header always shows the currently selected tool (icon + tooltip). Parents
+ * treat it as a single selectable "slot" via setActiveInParent(active).
  *
- * Parent ToolbarGroups treat this as a single selectable slot via
- * setActiveInParent(active).
+ * Children must be ToolbarItem instances.
  */
 class ToolbarChoiceGroup extends BaseSelectableComponent {
     constructor(options = undefined, ...children) {
         options = super(options, ...children).options;
-        // defaultSelected is a logical ID (itemID). If not provided, we will pick it in create()
+        // logical ID of the selected item (uses child.itemID || child.id)
         this._selectedId = van.state(this.options.defaultSelected ?? null);
-        this._headerIcon = null;   // FAIcon used by main fire button
-        this._dropdown = null;     // Dropdown instance
-        this._join = null;         // Join (fire + expand)
-        this._items = [];          // [{id,label,icon,_childItem}]
-        this._fireButton = null;   // ToolbarItem
+        this._dropdown = null;      // Dropdown instance
+        this._items = [];           // [{id,itemID,label,icon,_childItem}]
     }
 
     create() {
         const childItems = this._children.filter(c => c instanceof ToolbarItem);
+
         const defaultKey = this.options.defaultSelected;
         const defaultItem =
             (defaultKey != null
                     ? (
-                        childItems.find(c => c.itemID === defaultKey) ||
-                        childItems.find(c => c.id === defaultKey)
+                        childItems.find(c => (c.options.itemID ?? c.id) === defaultKey)
+                        || childItems.find(c => c.id === defaultKey)
                     )
                     : null
             ) || childItems[0];
@@ -44,33 +40,34 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
             return document.createElement("div");
         }
 
-        this._selectedId.val = defaultItem.itemID || defaultItem.id;
+        const defaultItemKey = defaultItem.options.itemID ?? defaultItem.id;
+        this._selectedId.val = defaultItemKey;
 
         // icon name from child
         const defaultIconName = defaultItem.options.icon instanceof FAIcon
             ? defaultItem.options.icon.options.name
             : defaultItem.options.icon;
 
-        this._headerIcon = new FAIcon({ name: defaultIconName });
-
-        // normalize items
+        // normalize items so we can map between logical IDs and ToolbarItems
         this._items = childItems.map(ci => {
+            const key = ci.options.itemID ?? ci.id;
             const iconName = ci.options.icon instanceof FAIcon
                 ? ci.options.icon.options.name
                 : ci.options.icon;
+
             return {
-                id: ci.id,
-                itemID: ci.itemID || ci.id,
+                id: key,
+                itemID: key,
                 label: ci.options.label,
                 icon: iconName,
                 _childItem: ci
             };
         });
 
-        // dropdown with expand arrow
+        // single dropdown; header icon will be driven by activeSelection
         this._dropdown = new Dropdown({
-            id: this.id + "-dd",
-            icon: new FAIcon({ name: "fa-angle-down" }),
+            id: this.id,
+            icon: new FAIcon({ name: defaultIconName }),
             title: defaultItem.options.label,
             items: this._items.map(item => ({
                 id: item.itemID,
@@ -82,95 +79,69 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
                     this.setSelected(data.itemID ?? data.id, true, true);
                 }
             })),
-            closeOnItemClick: true
+            activeSelection: defaultItemKey, // header tracks selection
+            closeOnItemClick: true,
+            placement: "below"
         });
 
-        // main fire button – fires currently selected item
-        this._fireButton = new ToolbarItem({
-            id: this.id + "-fire",
-            icon: this._headerIcon,
-            label: defaultItem.options.label,
-            onClick: (e) => this._fireCurrent(e)
-        });
+        const el = this._dropdown.create();
 
-        // join them together so they look like a single control
-        this._join = new Join({
-            id: this.id,
-            style: Join.STYLE.HORIZONTAL
-        }, this._fireButton, this._dropdown);
-
-        const el = this._join.create();
-
-        // Make dropdown trigger look like the right half of the same split button
+        // make the header look like a toolbar button
         this._dropdown.headerButton.setClass(
             "base",
-            "btn btn-square btn-sm join-item px-2"
+            "btn btn-square btn-sm join-item"
         );
-        this._dropdown.iconOnly();
+        this._dropdown.iconOnly(); // only show the icon; tooltip has the label
 
-        // follow toolbar orientation (vertical -> arrow under icon)
+        const headerId = this._dropdown.headerButton.id;
+
+        // adapt width to toolbar orientation:
+        // horizontal -> square; vertical -> full width
         queueMicrotask(() => {
             const root = el.closest("[data-toolbar-root]");
             if (!root) return;
 
-            const handler = (e) => {
-                const { dir } = e.detail;
-                this._join.set(dir === "vertical" ? Join.STYLE.VERTICAL : Join.STYLE.HORIZONTAL);
+            const apply = (dir) => {
+                const btnEl = document.getElementById(headerId);
+                if (!btnEl) return;
+
+                if (dir === "vertical") {
+                    btnEl.classList.add("w-full");
+                    btnEl.classList.remove("btn-square");
+                } else {
+                    btnEl.classList.remove("w-full");
+                    btnEl.classList.add("btn-square");
+                }
             };
 
-            root.addEventListener("toolbar:measure", handler);
-            handler({ detail: { dir: root.classList.contains("flex-col") ? "vertical" : "horizontal" } });
-        });
+            const handler = (e) => apply(e.detail.dir);
 
-        // make menu selection match initial state
-        this._dropdown.setSelected(this._selectedId.val);
+            root.addEventListener("toolbar:measure", handler);
+            // initial orientation
+            apply(root.classList.contains("flex-col") ? "vertical" : "horizontal");
+        });
 
         return el;
     }
 
     /**
-     * Fire the currently selected child tool:
-     *  - calls this.options.onChange(id)
-     *  - calls the underlying ToolbarItem.onClick
-     */
-    _fireCurrent(e) {
-        const id = this._selectedId.val;
-        if (!id) return;
-
-        const item = this._items.find(i => i.itemID === id || i.id === id);
-        if (!item) return;
-
-        const key = item.itemID || item.id;
-        this.options.onChange?.(key);
-        item._childItem?.options.onClick?.(e);
-    }
-
-    /**
      * Programmatic selection of an internal item.
-     * @param {string} id
-     * @param {boolean} [fireOnChange=true]
-     * @param {boolean} [fireChildClick=false]
+     * @param {string} id logical item ID (child.options.itemID or child.id)
+     * @param {boolean} [fireOnChange=true] whether to call this.options.onChange
+     * @param {boolean} [fireChildClick=false] whether to call underlying ToolbarItem.onClick
      */
     setSelected(id, fireOnChange = true, fireChildClick = false) {
-        const item =this._items.find(i => i.itemID === id) ||
-            this._items.find(i => i.id === id);
-        if (!item) return;
+        const item = this._items.find(i => i.itemID === id || i.id === id);
+        if (!item) {
+            return;
+        }
 
         const key = item.itemID || item.id;
         this._selectedId.val = key;
 
-        // update icon & tooltips
-        if (this._headerIcon) {
-            this._headerIcon.changeIcon(item.icon);
-        }
-
-        const fireBtnEl = document.getElementById(this.id + "-fire");
-        if (fireBtnEl) fireBtnEl.title = item.label || "";
-
         if (this._dropdown) {
+            // Dropdown.setSelected handles header icon/title + list highlight
             this._dropdown.setSelected(key);
-            const btn = document.getElementById(this._dropdown.headerButton.id);
-            if (btn) btn.title = item.label || "";
         }
 
         if (fireOnChange) {
@@ -186,9 +157,11 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
      * Does NOT change which internal item is selected.
      */
     setActiveInParent(active) {
-        const el = document.getElementById(this.id + "-fire");
-        if (!el) return;
-        el.classList.toggle("btn-primary", !!active);
+        if (!this._dropdown) return;
+        const btnEl = document.getElementById(this._dropdown.headerButton.id);
+        if (!btnEl) return;
+        btnEl.classList.toggle("btn-active", !!active);
+        btnEl.classList.toggle("btn-primary", !!active);
     }
 }
 

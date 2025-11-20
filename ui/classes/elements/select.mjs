@@ -10,23 +10,24 @@ export class Select extends BaseComponent{
         this.title = options["title"] || "";
         this.selected = options["selected"] || null;
         this.onChange = options["onchange"] || (() => {});
+        this.classMap["base"] = "select select-bordered select-xs max-w-xs";
     }
 
     create() {
         return div({},
             this.title,
-            select({ 
-                    class: "select select-bordered select-xs max-w-xs",
+            select(
+                {
+                    ...this.commonProperties,
                     onchange: this.onChange,
-                    id: this.id,
                     style: "margin: 0.2rem;",
+                    ...this.extraProperties,
                 },
                 ...this._children.map(o => {
                     return option({
                         value: o.value || "",
                         selected: o.value === this.selected ? "selected" : "",
                         hidden: o.hidden || "",
-                        text: o.text || ""
                     });
                 })
             )

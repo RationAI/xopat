@@ -187,11 +187,19 @@ export class FloatingWindow extends BaseComponent {
         if (this._bodyEl) this._bodyEl.innerHTML = "";
     }
 
-    opened() {
+    isOpened() {
         if (this._external) {
             return isWindowOpened(this._childWindow);
         }
         return !!document.getElementById(this.id);
+    }
+
+    open() {
+        if (!this._bodyEl) {
+            this.attachTo(document.body);
+        } else {
+            this.focus();
+        }
     }
 
     close() {

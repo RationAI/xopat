@@ -379,7 +379,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         /**
          * @returns {boolean} true if opened
          */
-        opened: function () {
+        isOpened: function () {
             return this._calls.length > 0;
         },
 
@@ -419,7 +419,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
         //TODO: allow toggle to respect the viewport, e.g. switch vertical/horizontal or switch position
         // if too close to edges
         _toggle: function(mouseEvent, optionsGetter) {
-            const opened = this.opened();
+            const opened = this.isOpened();
 
             if (mouseEvent === undefined) {
                 if (opened) {

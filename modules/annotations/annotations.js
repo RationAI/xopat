@@ -44,7 +44,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {OSDAnnotations.FabricWrapper}
      */
     get fabric() {
-        return OSDAnnotations.FabricWrapper.instance(this._activeViewer);
+        return OSDAnnotations.FabricWrapper.instance(this.viewer);
     }
 
     /**

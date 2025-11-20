@@ -1,9 +1,9 @@
-import van from "../../vanjs.mjs";Button
+import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
-import { Button } from "./buttons.mjs";
-import { FAIcon } from "./fa-icon.mjs";
+import {Button} from "./buttons.mjs";
+import {FAIcon} from "./fa-icon.mjs";
 
-const { div, ul, li, a, span } = van.tags;
+const { div, ul, li, a, span, i } = van.tags;
 
 /**
  * Items API
@@ -25,7 +25,6 @@ const { div, ul, li, a, span } = van.tags;
  * todo share API with menu tab!
  */
 class Dropdown extends BaseSelectableComponent {
-    // todo:  _children? use instead of items...
     constructor(options = undefined, ..._children /* ignored */) {
         options = super(options).options;
         // existing options kept
@@ -34,8 +33,9 @@ class Dropdown extends BaseSelectableComponent {
         this.parentId = options["parentId"] || "";
         this.onClick = options["onClick"] || (() => {});
         this._fmToken = null;
+        this.classMap["base"] = "dropdown join-item";
 
-        this.items = {}
+        this.items = {};
         if (Array.isArray(options.items)) {
             for (let item of options.items) {
                 this.items[item.id] = item;
@@ -44,9 +44,20 @@ class Dropdown extends BaseSelectableComponent {
         this.sections = (options.sections || []).slice().sort((a,b)=>(a.order||0)-(b.order||0));
         if (!this.sections.length) this.sections = [{ id: "default", title: "" }];
 
-        this.selectedId = null; // todo find selection! this.items.find(i => i.selected)?.id ||
+        this._useActiveSelection = Object.prototype.hasOwnProperty.call(options, "activeSelection");
+        this.activeSelectionId = options.activeSelection ?? null;
+
+        this.selectedId = this._useActiveSelection
+            ? (this.activeSelectionId || null)
+            : null; // todo find selection! this.items.find(i => i.selected)?.id ||
+
         this.closeOnItemClick = options.closeOnItemClick ?? true;
         this.widthClass = options.widthClass || "w-52";
+
+        // header helpers
+        this._headerIconComp = null;
+        this._headerLabelSpan = null;
+
         this.headerButton = this.createButton(options);
         this._contentEl = null;            // dropdown-content container
         this._sectionMap = new Map();      // sectionId -> UL element
@@ -54,15 +65,32 @@ class Dropdown extends BaseSelectableComponent {
 
     /** keep old helper API */
     createButton() {
-        const inIcon = (this.icon instanceof BaseComponent) ? this.icon : new FAIcon({ name: this.icon });
-        const b = new Button({
+        const inIcon = (this.icon instanceof BaseComponent)
+            ? this.icon
+            : new FAIcon({ name: this.icon });
+
+        this._headerIconComp = inIcon;
+        this._headerLabelSpan = span(
+            this.title
+        );
+
+        this._dropdownIcon = this._useActiveSelection ? i( { "data-dropdown-label": "1" },
+            new FAIcon('fa-caret-down').create()) : undefined;
+
+        return new Button({
             id: this.parentId + "-b-" + this.id,
             size: Button.SIZE.SMALL,
-            extraProperties: { title: this.title },
-        }, inIcon, span(this.title));
-        return b;
+            extraProperties: {title: this.title, style: ""},
+            extraClasses: {flex: "flex flex-col items-center"},
+        }, inIcon, this._headerLabelSpan, this._dropdownIcon);
     }
-    iconOnly()   { this.headerButton.iconOnly();   }
+    iconOnly() {
+        this.headerButton.iconOnly();
+        if (this._useActiveSelection) {
+            this.headerButton.setExtraProperty("style", "min-width:58px;")
+        }
+        this._iconOnly = true;
+    }
     titleIcon()  { this.headerButton.titleIcon();  }
     titleOnly()  { this.headerButton.titleOnly();  }
     iconRotate() { this.headerButton.iconRotate(); }
@@ -107,6 +135,25 @@ class Dropdown extends BaseSelectableComponent {
             });
             UI.Services.FloatingManager.bringToFront(this._fmToken);
         });
+    }
+    _updateHeaderFromItem(item) {
+        if (!item) return;
+
+        // text label
+        if (this._headerLabelSpan && typeof item.label === "string") {
+            this._headerLabelSpan.textContent = item.label;
+        }
+
+        // tooltip / title
+        const btnEl = document.getElementById(this.headerButton.id);
+        if (btnEl && typeof item.label === "string") {
+            btnEl.title = item.label;
+        }
+
+        // icon
+        if (this._headerIconComp instanceof FAIcon && typeof item.icon === "string") {
+            this._headerIconComp.changeIcon(item.icon);
+        }
     }
     _removeFocus() {}
 
@@ -172,16 +219,50 @@ class Dropdown extends BaseSelectableComponent {
         this.items[item.id] = { ...item, section: sectionId };
     }
 
+
     setSelected(id) {
         this.selectedId = id;
-        if (!this._contentEl) return;
-        this._contentEl.querySelectorAll("[data-item-id]").forEach(el => {
-            const on = el.dataset.itemId === id;
-            el.classList.toggle("bg-primary/20", on);
-            el.classList.toggle("text-primary-content", on);
-            el.setAttribute("aria-current", on ? "true" : "false");
-        });
+
+        // update list highlight
+        if (this._contentEl) {
+            this._contentEl
+                .querySelectorAll("[data-item-id]")
+                .forEach(li => {
+                    const isSelected = li.getAttribute("data-item-id") === id;
+                    li.setAttribute("aria-current", isSelected ? "true" : "false");
+                    li.classList.toggle("bg-primary/20", isSelected);
+                    li.classList.toggle("text-primary-content", isSelected);
+                });
+        }
+
+        // if activeSelection mode is on, keep header in sync too
+        if (this._useActiveSelection && id && this.items[id]) {
+            this.activeSelectionId = id;
+            this._updateHeaderFromItem(this.items[id]);
+        }
     }
+
+    // setSelected(id) {
+    //     this.selectedId = id;
+    //     if (!this._contentEl) return;
+    //     this._contentEl.querySelectorAll("[data-item-id]").forEach(el => {
+    //         const on = el.dataset.itemId === id;
+    //         el.classList.toggle("bg-primary/20", on);
+    //         el.classList.toggle("text-primary-content", on);
+    //         el.setAttribute("aria-current", on ? "true" : "false");
+    //     });
+    // }
+    //
+    // setActiveSelection(id) {
+    //     this.activeSelectionId = id;
+    //     this.selectedId = id;
+    //     this.setSelected(id);
+    //
+    //     const item = this.items[id];
+    //     if (item) {
+    //         this._updateHeaderFromItem(item);
+    //     }
+    // }
 
     /* ---------------- rendering ---------------- */
 
@@ -191,6 +272,8 @@ class Dropdown extends BaseSelectableComponent {
 
     _renderItem(item) {
         const selected = (this.selectedId && this.selectedId === item.id) || item.selected;
+
+        const self = this; // capture component instance
 
         const attrs = {
             role: "menuitem",
@@ -206,8 +289,14 @@ class Dropdown extends BaseSelectableComponent {
             ].join(" "),
             onclick: (e) => {
                 if (!item.href) e.preventDefault();
+
                 const keepOpen = item.onClick?.(e, item) === true;
-                if (this.closeOnItemClick && !keepOpen) this.close();
+
+                if (self._useActiveSelection) {
+                    self.setSelected(item.id);
+                }
+
+                if (self.closeOnItemClick && !keepOpen) self.close();
             }
         };
 
@@ -290,6 +379,10 @@ class Dropdown extends BaseSelectableComponent {
         // Rebuild list
         this._rebuildContent();
 
+        if (this._useActiveSelection && this.activeSelectionId && this.items[this.activeSelectionId]) {
+            this.setSelected(this.activeSelectionId);
+        }
+
         // ---- NEW: smart positioner ----
         const place = () => {
             const host = trigger.firstChild /* header button root */ || trigger;
@@ -323,19 +416,30 @@ class Dropdown extends BaseSelectableComponent {
             const mh = menu.offsetHeight;
             const margin = 6;
 
-            // decide vertical vs horizontal toolbar orientation
             const toolbarRoot = host.closest("[data-toolbar-root]");
             const verticalToolbar = !!toolbarRoot && toolbarRoot.classList.contains("flex-col");
 
-            let left, top;
+// decide which side we *want* based on placement option
+            const placement = this.placement; // "auto" | "below" | "right"
 
-            if (verticalToolbar) {
-                // vertical toolbar -> open to the right
+            let openRight;
+            if (placement === "right") {
+                openRight = true;
+            } else if (placement === "below") {
+                openRight = false;
+            } else {
+                // auto: keep your old behaviour – right in vertical toolbars, below otherwise
+                openRight = verticalToolbar;
+            }
+
+            let left, top;
+            if (openRight) {
+                // open to the right of the trigger
                 left = (hostRect.right - contRect.left) + margin;
                 top  = (hostRect.top   - contRect.top);
             } else {
-                // horizontal toolbar / normal dropdown -> open below
-                left = (hostRect.left - contRect.left);
+                // open below the trigger
+                left = (hostRect.left   - contRect.left);
                 top  = (hostRect.bottom - contRect.top) + margin;
             }
 
@@ -377,17 +481,17 @@ class Dropdown extends BaseSelectableComponent {
             e.preventDefault();
             e.stopPropagation();
 
-            // invoke external onClick if defined
             if (typeof this.onClick === "function") {
                 try {
-                  this.onClick(e);
+                    this.onClick(e);
                 } catch (err) {
-                   console.error("Dropdown onClick handler failed:", err);
+                    console.error("Dropdown onClick handler failed:", err);
                 }
             }
             this._open(trigger, place);
         });
-        return div({ class: "dropdown join-item", onclick: this.onClick }, trigger, this._contentEl);
+
+        return div({ ...this.commonProperties, onclick: this.onClick, ...this.extraProperties}, trigger, this._contentEl);
     }
 
 }

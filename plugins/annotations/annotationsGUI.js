@@ -84,7 +84,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
 		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
 		this._commentsOpened = this._commentsDefaultOpened;
-
 		await this.setupFromParams();
 
 		this.context.initPostIO();
@@ -338,7 +337,6 @@ ${UIComponents.Elements.checkBox({
                 icon: modes.AUTO.getIcon(),
                 label: modes.AUTO.getDescription(),
                 onClick: () => {
-                    gModes.setSelected(modes.AUTO.getId());
                     this.switchModeActive(modes.AUTO.getId());
                 }
             }).attachTo(gModes);
@@ -348,33 +346,30 @@ ${UIComponents.Elements.checkBox({
                 itemID: "cg-shapes",
                 defaultSelected: factories[0]?.id || "none",
                 onChange: (fid) => {
-                    gModes.setSelected("cg-shapes"); // mark this top-level slot as active
                     this.switchModeActive(modes.CUSTOM.getId(), fid, true);
                 }
             }, ...factories.map(f => new ui.ToolbarItem({
-                id: f.id,
+                itemID: f.factoryID,
                 icon: f.getIcon(),
                 label: `${modes.CUSTOM.getDescription()}: ${f.title()}`,
             }))).attachTo(gModes);
 
             // 3) Brush sub-group – when user picks add/remove, select "g-brush" slot
-            this._gBrush = new ui.ToolbarGroup({ id: "g-brush", selectable: true },
+            this._gBrush = new ui.ToolbarGroup({ id: "g-brush", itemID: "g-brush", selectable: true },
                 new ui.ToolbarItem({
                     itemID: modes.FREE_FORM_TOOL_ADD.getId(),
                     icon: modes.FREE_FORM_TOOL_ADD.getIcon(),
                     label: modes.FREE_FORM_TOOL_ADD.getDescription(),
                     onClick: () => {
-                        gModes.setSelected("g-brush");
                         this.switchModeActive(modes.FREE_FORM_TOOL_ADD.getId());
                     },
                     extraClasses: { "icon": "thumb-add" }  // todo how to ensure no hacky add-ons
                 }),
                 new ui.ToolbarItem({
-                    itemID: modes.FREE_FORM_TOOL_ADD.getId(),
+                    itemID: modes.FREE_FORM_TOOL_REMOVE.getId(),
                     icon: modes.FREE_FORM_TOOL_REMOVE.getIcon(),
                     label: modes.FREE_FORM_TOOL_REMOVE.getDescription(),
                     onClick: () => {
-                        gModes.setSelected("g-brush");
                         this.switchModeActive(modes.FREE_FORM_TOOL_REMOVE.getId());
                     },
                     extraClasses: { "icon": "thumb-remove" } // todo how to ensure no hacky add-ons
@@ -386,7 +381,6 @@ ${UIComponents.Elements.checkBox({
                     itemID: "cg-auto",
                     defaultSelected: modes.MAGIC_WAND.getId(),
                     onChange: (id) => {
-                        gModes.setSelected("cg-auto");
                         this.switchModeActive(id);
                     }
                 },
@@ -401,27 +395,43 @@ ${UIComponents.Elements.checkBox({
                     label: modes.FREE_FORM_TOOL_CORRECT.getDescription()
                 })
             ).attachTo(gModes);
-
-
-            const modeOptions = new ui.Dropdown({
-                id: "mode-options",
-                icon: "fa-sliders",
-                title: "Mode Options",
-                items: [{
-                    id: "custom-html",
-                    label: "Advanced",
-                    icon: "fa-sliders",
-                    onClick: () => true   // keep open
-                }]
-            });
-            modeOptions.headerButton.setClass("base","btn btn-square join-item");
-            modeOptions.iconOnly();
-            const htmlWrap = new ui.RawHtml({}, this.context.mode.customHtml() || "");
-            htmlWrap.attachTo(modeOptions);  // appends to dropdown content
             this._gModes = gModes;
 
+            this._htmlWrap = new UI.RawHtml({
+                id: `${this.id}-mode-options-html`,
+                extraClasses: {
+                    base: "w-full h-full text-sm relative"
+                }
+            }, this.context.mode.customHtml() || "");
+            this._modeOptionsWindow = new UI.FloatingWindow({
+                id: `${this.id}-mode-options`,
+                icon: 'fa-sliders',
+                title: "Mode options",
+                width: 420,
+                height: 260,
+                startLeft: 80,
+                startTop: window.innerHeight - 360,
+                resizable: true,
+                closable: true,
+                onClose: () => {
+                    this._forceCloseModeOptions = true;
+                }
+            }, this._htmlWrap);
+
+            const modeOptionsBtn = new UI.ToolbarItem({
+                id: "mode-options",
+                itemID: "mode-options",
+                icon: "fa-sliders",
+                label: "Mode Options",
+                onClick: () => {
+                    const opened = this._modeOptionsWindow.isOpened();
+                    this._forceCloseModeOptions = this._forceCloseModeOptions || !opened;
+                    this._modeOptionsWindow.isOpened() ? this._modeOptionsWindow.close() : this._modeOptionsWindow.open();
+                }
+            });
+
             USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
-                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), modeOptions], 'draw');
+                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), modeOptionsBtn], 'draw');
         }, 2000);
 
 		USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-shared", "Export/Import",
@@ -1085,40 +1095,39 @@ ${UIComponents.Elements.select({
 		});
 	}
 
-	switchModeActive(id, factory=undefined, isLeftClick) {
-		if (this.context.historyManager.isOngoingEdit()) return;
-		if (this.context.mode.getId() === id) {
-			if (id === "auto") return;
+    switchModeActive(id, factory = undefined, isLeftClick) {
+        if (this.context.historyManager.isOngoingEdit()) return;
 
-			// in case mode does not change, check explicitly custom mode where factory type might change
-			if (id === "custom") {
-				const preset = this.context.presets.getActivePreset(isLeftClick);
-				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
-				if (!preset && !otherPreset) {
-					return;
-				}
+        const currentId = this.context.mode.getId();
 
-				this.context.setModeById("auto");  // this forces re-initialization if some object was being created
-				if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
-				if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
-				this.context.setModeById("custom");
-				return;
-			}
-			this.context.setModeById("auto");
-			$('#auto-annotation-mode').prop('checked', true).trigger('change');
-		} else {
-			// if custom mode also change factories, change both left and right uniformly to not confuse users
-			if (id === "custom" && factory) {
-				const preset = this.context.presets.getActivePreset(isLeftClick);
-				const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
-				if (preset || otherPreset) {
-					if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
-					if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
-				}
-			}
-			this.context.setModeById(id);
-		}
-	}
+        if (currentId === id) {
+            // only special-case CUSTOM (change factory while staying in custom)
+            if (id === "custom") {
+                const preset = this.context.presets.getActivePreset(isLeftClick);
+                const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+                if (!preset && !otherPreset) return;
+
+                this.context.setModeById("auto");  // force re-init
+                if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+                if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+                this.context.setModeById("custom");
+            }
+            // For all non-custom tools: clicking again is a no-op
+            return;
+        }
+
+        // mode actually changed
+        if (id === "custom" && factory) {
+            const preset = this.context.presets.getActivePreset(isLeftClick);
+            const otherPreset = this.context.presets.getActivePreset(!isLeftClick);
+            if (preset || otherPreset) {
+                if (preset) this.updatePresetWith(preset.presetID, 'objectFactory', factory);
+                if (otherPreset) this.updatePresetWith(otherPreset.presetID, 'objectFactory', factory);
+            }
+        }
+
+        this.context.setModeById(id);
+    }
 
 	switchMenuList(type) {
 		const presetListButton = $("#preset-list-button-mp");
@@ -1295,8 +1304,12 @@ ${UIComponents.Elements.select({
             const modes  = this.context.Modes;
             const modeId = mode.getId();
 
-            // update custom HTML inside the dropdown
-            this._htmlWrap.setHtml(mode.customHtml() || "");  // however your RawHtml exposes this
+            if (this._htmlWrap) {
+                if (!this._forceCloseModeOptions && !this._modeOptionsWindow.isOpened()) {
+                    this._modeOptionsWindow.open();
+                }
+                this._htmlWrap.setHtml(this.context.mode.customHtml() || "");
+            }
 
             // reflect current mode into the toolbar
             if (modeId === modes.AUTO.getId()) {
@@ -1315,10 +1328,7 @@ ${UIComponents.Elements.select({
 
                 // brushes live in gBrush
                 this._gModes.setSelected("g-brush", false);
-                this._gBrush.setSelected(
-                    modeId === modes.FREE_FORM_TOOL_ADD.getId() ? "brush-add" : "brush-rem",
-                    false
-                );
+                this._gBrush.setSelected(modeId, false);
 
             } else if (modeId === modes.CUSTOM.getId()) {
 

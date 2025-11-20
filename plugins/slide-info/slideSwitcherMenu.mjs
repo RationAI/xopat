@@ -48,7 +48,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
 
         // Ensure we don't keep re-initializing the explorer
-        if (!this._fw.opened()) this._fw.attachTo(document.body);
+        // todo does not use the API of plugins, which attaches the plugin class marker
+        if (!this._fw.isOpened()) this._fw.attachTo(document.body);
         else this._fw.focus();
     }
 
@@ -129,7 +130,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
 
     close() { this._fw && this._fw.close(); }
-    opened() { return this._fw && this._fw.opened(); }
+    isOpened() { return this._fw && this._fw.isOpened(); }
 
     async _openCurrentSelection() {
         const loadingTimer = setTimeout(() => USER_INTERFACE.Loading.show(), 500);
@@ -192,7 +193,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
 
         this._levels = this._buildLevels();
-        if (!this.opened()) return;
+        if (!this.isOpened()) return;
         this.explorer.reconfigure({ levels: this._levels });
 
         // preserve original post-render sync

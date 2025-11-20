@@ -52,7 +52,7 @@ class ToolbarItem extends BaseSelectableComponent {
      * @param {boolean} selected
      */
     setSelected(selected) {
-        this._button.toggleClass("selection", "btn-primary", !!selected);
+        this._button.toggleClass("selection", "btn-primary", selected);
     }
 
     /**

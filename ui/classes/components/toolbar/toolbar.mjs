@@ -69,6 +69,9 @@ class Toolbar extends BaseComponent {
         this._edgeThreshold = Number.isFinite(options.edgeThreshold) ? Number(options.edgeThreshold) : 96;
         this._horizontalOnly = !!options.horizontalOnly;
 
+        const wMin = this.options.horizontalOnly ? "min-w-max" : "";
+        this.classMap["base"] = `draggable flex flex-col bg-transparent pointer-events-none ${wMin} ${this.options.pluginRootClass || ""}`;
+
         // buffer children into tabs
         for (let i of args) this.addToToolbar(i);
         this._children = [];
@@ -154,18 +157,17 @@ class Toolbar extends BaseComponent {
     create() {
         const left = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50));
         const top  = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50));
-        const wMin = this.options.horizontalOnly ? "min-w-max" : "";
 
         this._outerEl = div(
             {
-                id: `${this.id}`,
-                class: `draggable flex flex-col bg-transparent pointer-events-none ${wMin} ${this.options.pluginRootClass || ""}`,
+                ...this.commonProperties,
                 style: `
         position: fixed;
         left: ${left}px;
         top: ${top}px;
         display: ${this.display};
-      `
+            `,
+                ...this.extraProperties,
             },
             div({ class: "spacer flex flex-grow width-full place-content-center" },
                 div({
@@ -182,7 +184,7 @@ class Toolbar extends BaseComponent {
                     onclick: () => this.toggleVisible()
                 }, i({ class: "fa-auto fa-xmark" }))
             ),
-            div({ "data-toolbar-root": "", class: "pointer-events-auto" }, this.body.create())
+            div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-1 rounded-md" }, this.body.create())
         );
 
         this._rootWrap = this._outerEl.querySelector("[data-toolbar-root]");

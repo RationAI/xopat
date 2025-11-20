@@ -78,9 +78,7 @@ class ToolbarGroup extends BaseComponent {
                     const slotKey = child.itemID || child.id;
                     const isActive = !!current && slotKey === current;
 
-                    if (child instanceof ToolbarItem) {
-                        child.setSelected(isActive);
-                    } else if (typeof child.setActiveInParent === "function") {
+                    if (typeof child.setActiveInParent === "function") {
                         child.setActiveInParent(isActive);
                     }
                 });
@@ -105,10 +103,16 @@ class ToolbarGroup extends BaseComponent {
     }
 
     /**
-     * Programmatically select one of the group's slots.
-     * Pass `null` to clear visual selection (child internal selection is kept).
+     * Select a child inside this group by itemID.
+     * Pass `null` to clear selection.
      */
     setSelected(id) {
+        const item = this._children.find(i => i.itemID === id || i.id === id);
+        if (!item) {
+            this._selectedId.val = id;
+            return;
+        }
+
         // External API: `id` is the logical itemID. For backwards compatibility
         // callers can still use the child's DOM id when no custom itemID is used.
         this._selectedId.val = id;
@@ -122,13 +126,15 @@ class ToolbarGroup extends BaseComponent {
      * We use DaisyUI-ish border/rounded styling instead of a ring.
      */
     setActiveInParent(active) {
-        // border looks weird, removed
-        // const el = this._rootEl || document.getElementById(this.id);
-        // if (!el) return;
-        // el.classList.toggle("border", !!active);
-        // el.classList.toggle("border-primary", !!active);
-        // el.classList.toggle("rounded-box", !!active);
-        // el.classList.toggle("p-0.5", !!active);
+        const current = this._selectedId.val;
+        this._children.forEach(child => {
+            const slotKey = child.itemID || child.id;
+            const isActive = active && !!current && slotKey === current;
+
+            if (typeof child.setActiveInParent === "function") {
+                child.setActiveInParent(isActive);
+            }
+        });
     }
 
     static generateCode() {

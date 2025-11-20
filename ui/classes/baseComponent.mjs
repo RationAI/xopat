@@ -430,11 +430,11 @@ export class BaseComponent {
 
 /**
  * @typedef {BaseUIOptions} SelectableUIOptions
- * @property {string} [itemID] - The selection ID
+ * @property {string|false} [itemID] - The selection ID, or false to remove any selection.
  */
 export class BaseSelectableComponent extends BaseComponent {
     constructor(options, ...args) {
-        options = super(options, ...args);
+        options = super(options, ...args).options;
         this.itemID = options.itemID || this.id;
     }
 
