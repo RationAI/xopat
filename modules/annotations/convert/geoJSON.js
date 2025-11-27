@@ -10,7 +10,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
 
     //linear ring has the first and last vertex equal, geojson uses arrays
     _asGEOJsonFeature(object, type="Polygon", deleteProps=[], asLinearRing=false) {
-        const factory = this.context.getAnnotationObjectFactory(object.factoryID);
+        const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
         const poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS)
         if (poly?.length > 0) {
             if (asLinearRing) { //linear ring
@@ -87,7 +87,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             return object;
         },
         "ruler": (object) => {
-            const factory = this.context.getAnnotationObjectFactory(object.factoryID);
+            const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
             return {
                 geometry: {

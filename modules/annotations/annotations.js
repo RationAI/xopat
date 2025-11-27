@@ -556,6 +556,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	setAnnotationCommonVisualProperty(propertyName, propertyValue) {
         for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+			instance.module.presets.setCommonVisualProp(propertyName, propertyValue);
             instance.updateAnnotationVisuals();
         }
 	}

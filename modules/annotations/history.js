@@ -265,6 +265,19 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
           }
         
           /* Layers */
+          #history-board-for-annotations-body .history-selected[data-type="layer"] {
+            position: relative;
+          }
+          #history-board-for-annotations-body .history-selected[data-type="layer"]::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 16px;
+            height: 28px;
+            background: rgba(60,180,90,0.18);
+            pointer-events: none;
+          }
           .history-selected[data-type="layer"] > .d-flex {
             background: rgba(60,180,90,0.18);
           }
@@ -287,11 +300,27 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             opacity: 1; pointer-events: auto;
           }
 
-          /* Indentation: indent items inside layer containers, not board-level */
           #history-board-for-annotations-body [id^="annotation-log-layer-"] {
-            padding-left: 16px;
-            min-height: 10px; /* enables drop into empty layer */
+            padding-left: 0px;
+            min-height: 10px;
             border-left: 1px dashed transparent;
+          }
+
+          /* Flush annotation row background to layer border; keep content indented */
+          #history-board-for-annotations-body [id^="annotation-log-layer-"] > [data-type="annotation"] {
+            position: relative;
+            margin-left: -16px;          /* extend background left */
+            padding-left: 26px;          /* visible icon/text indent */
+            width: calc(100% + 16px);    /* compensate width */
+            box-sizing: border-box;
+            background: transparent;
+          }
+
+          #history-board-for-annotations-body #layer-logs > [data-type="layer"] {
+             margin-left: 0;             /* avoid overflowing outside the board */
+             padding-left: 16px;         /* keep visible content indented */
+             width: 100%;                /* full length within the board */
+             box-sizing: border-box;        
           }
 
           /* Hover targets for drop */
@@ -2037,6 +2066,6 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
 
     _emitLayerObjectsChanged(layerId) {
         if (!layerId) return;
-        this._context.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
+        this._context.fabric.raiseEvent('layer-objects-changed', { layerId: String(layerId) });
     }
 };

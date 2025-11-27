@@ -1,6 +1,6 @@
 OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "rect", "rect");
+    constructor(context, presetManager) {
+        super(context, presetManager, "rect", "rect");
         this._origX = null;
         this._origY = null;
         this._current = null;
@@ -1820,8 +1820,9 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     configure(object, options) {
-        super.configure(object, options);
-        object.fillRule = "evenodd";
+        const obj = super.configure(object, options);
+        obj.fillRule = "evenodd";
+        return obj;
     }
 
     _createPathFromPoints(multiPoints) {
@@ -1992,7 +1993,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return fabric.util.transformPoint(
             { x, y },
             fabric.util.multiplyTransformMatrices(
-                fabricObject.fabric.canvas.viewportTransform,
+                fabricObject.canvas.viewportTransform,
                 fabricObject.calcTransformMatrix()
             )
         );

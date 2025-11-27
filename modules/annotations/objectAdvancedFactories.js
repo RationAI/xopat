@@ -45,6 +45,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             this._configureParts(instance.item(0), instance.item(1), options);
             this._configureWrapper(instance, instance.item(0), instance.item(1), options);
         }
+        return instance;
     }
 
     /**
@@ -352,7 +353,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        const line = obj._objects ? obj._objects[0] : [];
+        const line = obj.objects ? obj.objects[0] : [];
 
         let x1 = line.x1;
         let y1 = line.y1;

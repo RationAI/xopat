@@ -100,19 +100,35 @@ OSDAnnotations.Convertor = class {
         return parserCls;
     }
 
-    /**
-     * Encodes the annotation data using asynchronous communication.
-     * @param options
-     * @param context
-     * @param withAnnotations
-     * @param withPresets
-     * @returns serialized or plain list of strings of objects based on this.options.serialize:
-     * {
-     *     objects: [...serialized annotations... ],
-     *     presets: [...serialzied presets... ],
-     * }
-     *
-     */
+ /**
+ * Encodes the annotation data using asynchronous communication.
+ * @param {Object} options
+ * @param {string} options.format
+ *      Format ID of the converter to use.
+ * @param {boolean} [options.exportsObjects]
+ *      Whether annotation objects should be exported.
+ * @param {boolean} [options.exportsPresets]
+ *      Whether annotation presets should be exported.
+ * @param {boolean} [options.scopeSelected=false]
+ *      If true, only currently selected annotations/layers are exported.
+ *      Throws EXPORT_NO_SELECTION if nothing is selected.
+ * @param {{x:number, y:number}} [options.imageCoordinatesOffset]
+ *      Optional image coordinate offset applied on export/import.
+ * @param {boolean} [options.serialize]
+ *      Optimization flag: if true, converters may return non-serialized data and encodeFinalize() will serialize them.
+ * @param {OSDAnnotations} context
+ *      Annotations module instance.
+ * @param {boolean} withAnnotations
+ *      Request exporting annotation objects.
+ * @param {boolean} withPresets
+ *      Request exporting presets.
+ *
+ * @returns serialized or plain list of strings of objects based on this.options.serialize:
+ * {
+ *     objects: [...serialized annotations... ],
+ *     presets: [...serialized presets... ],
+ * }
+ */
     static async encodePartial(options, context, withAnnotations=true, withPresets=true) {
         const parserCls = this.get(options.format);
         const exportAll = parserCls.includeAllAnnotationProps;
@@ -120,6 +136,32 @@ OSDAnnotations.Convertor = class {
         options.exportsObjects = withAnnotations && parserCls.exportsObjects;
         options.exportsPresets = withPresets && parserCls.exportsPresets;
 
+        let selectedIds = new Set();
+        if (options.exportsObjects && options.scopeSelected) {
+            const selectedAnns = (context.getSelectedAnnotations?.() || []);
+            const layers = (context.getSelectedLayers?.() || [])
+                .filter(Boolean);
+
+            const layerAnns = layers.length
+                ? layers.flatMap(l => l.getObjects?.() || [])
+                : [];
+
+            const pushUnique = (arr) => {
+                for (const o of arr) {
+                    const id = String(o?.id ?? '');
+                    if (id) selectedIds.add(id);
+                }
+            };
+
+            pushUnique(selectedAnns);
+            pushUnique(layerAnns);
+			if (!selectedIds.size) {
+                const err = new Error('No annotations selected');
+                err.code = 'EXPORT_NO_SELECTION';
+                throw err;
+            }
+        }
+        
         const annotationsGetter = (...exportedProps) => {
             if (!options.exportsObjects) return undefined;
             let objs = context.toObject(
@@ -129,17 +171,15 @@ OSDAnnotations.Convertor = class {
                 ...exportedProps
             ).objects;
 
-            const ids = options?.filter?.ids;
-            if (Array.isArray(ids) && ids.length) {
-                const set = new Set(ids.map(String));
-                objs = objs.filter(o => set.has(String(o.id)));
+            if (options.scopeSelected && selectedIds.size) {
+                objs = objs.filter(o => selectedIds.has(String(o.id)));
             }
             return objs;
         };
 
         const encoded = await new parserCls(context, options).encodePartial(
             annotationsGetter,
-            () => context.presets.toObject()
+            () => context.module.presets.toObject()
         );
         encoded.format = options.format;
         return encoded;

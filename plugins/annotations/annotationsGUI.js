@@ -1698,12 +1698,10 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * @param withPresets
 	 * @return {Promise<*>}
 	 */
-	async getExportData(preferredFormat = null, withObjects=true, withPresets=true, scope='all', selected=[]) {
+	async getExportData(preferredFormat = null, withObjects=true, withPresets=true) {
 		const ioArgs = { ...this._ioArgs };
         ioArgs.format = preferredFormat || this._defaultFormat;
-        if (withObjects && scope === 'selected') {
-            ioArgs.filter = { ids: selected };
-        }
+		ioArgs.scopeSelected = this.exportOptions.scope === 'selected' || false;
         return this.context.fabric.export(ioArgs, withObjects, withPresets);
 	}
 
@@ -1712,48 +1710,20 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	exportToFile(withObjects=true, withPresets=true) {
 		const toFormat = this.exportOptions.format;
-
-		let scope = 'all';
-        let selectedItems = [];
-        if (withObjects) {
-            scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
-            if (scope === 'selected') {
-                const selectedAnns = (this.context.fabric.getSelectedAnnotations?.() || []);
-                const layers = (this.context.fabric.getSelectedLayers?.() || [])
-                    .filter(Boolean);
-                const layerAnns = layers.length
-                    ? layers.flatMap(l => l.getObjects?.() || [])
-                    : [];
-
-                const seen = new Set();
-                const pushUnique = (arr) => {
-                    for (const o of arr) {
-                        const key = String(o?.incrementId ?? '');
-                        if (!key || seen.has(key)) continue;
-                        seen.add(key);
-                        selectedItems.push(o);
-                    }
-                };
-                pushUnique(selectedAnns);
-                pushUnique(layerAnns);
-
-				if (!selectedItems.length) {
-                    Dialogs.show("No annotations selected to export.", 2500, Dialogs.MSG_WARN);
-                    return;
-                }
-            }
-        }
-
-		selectedItems = selectedItems.map(o => o.id);
-        const scopeSuffix = withObjects && scope === 'selected' ? "-selection" : "";
+        const scopeSuffix = withObjects && this.exportOptions.scope === 'selected' ? "-selection" : "";
 		const name = APPLICATION_CONTEXT.referencedName(true)
 			+ "-" + UTILITIES.todayISOReversed() + "-"
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
 			+ scopeSuffix;
 
-		this.getExportData(toFormat, withObjects, withPresets, scope, selectedItems).then(result => {
+		this.getExportData(toFormat, withObjects, withPresets).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
+			if (e?.code === 'EXPORT_NO_SELECTION') {
+				Dialogs.show("No annotations selected to export.", 2500, Dialogs.MSG_WARN);
+                return;
+			}
+
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});

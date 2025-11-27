@@ -51,7 +51,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             preset = this._presetReplacer;
         }
 
-        const factory = this.context.getAnnotationObjectFactory(object.factoryID);
+        const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
         let poly = factory?.toPointArray(object, OSDAnnotations.AnnotationObjectFactory.withArrayPoint, fabric.Object.NUM_FRACTION_DIGITS);
         let coordinates;
 
@@ -161,23 +161,23 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     decoders = {
         Point: (object, featureParentDict) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("point");
-            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.context.presets.getCommonProperties());
+            return factory.create({x: object.coordinates[0], y: object.coordinates[1]}, this.context.module.presets.getCommonProperties());
         },
         MultiPoint: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Point"),
         LineString: (object, featureParentDict) => {
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polyline");
-            return factory.create(this._toNativeRing(object.coordinates, false), this.context.presets.getCommonProperties());
+            return factory.create(this._toNativeRing(object.coordinates, false), this.context.module.presets.getCommonProperties());
         },
         MultiLineString: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "LineString"),
         Polygon: (object, featureParentDict) => {
             if (object.coordinates.length > 1) {
                 let factory = OSDAnnotations.instance().getAnnotationObjectFactory("multipolygon");
                 const rings = object.coordinates.map(ring => this._toNativeRing(ring));
-                return factory.create(rings, this.context.presets.getCommonProperties());
+                return factory.create(rings, this.context.module.presets.getCommonProperties());
             }
 
             let factory = OSDAnnotations.instance().getAnnotationObjectFactory("polygon");
-            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.context.presets.getCommonProperties());
+            return factory.create(this._toNativeRing(object.coordinates[0] || []), this.context.module.presets.getCommonProperties());
         },
         MultiPolygon: (object, featureParentDict) => this._decodeMulti(object, featureParentDict, "Polygon"),
         GeometryCollection: (object, featureParentDict) => {
@@ -210,7 +210,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         if (!this.options.exportsObjects) return result;
         this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
         this._presetReplacer = this.options.trimToDefaultPresets ?
-            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context) : false;
+            OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context.module) : false;
         this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
 
         const annotations = annotationsGetter();
@@ -273,7 +273,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                 // define if not exists
                 if (!presets[pid]) {
                     presets[pid] = builtInPreset || {
-                        color: this.context.presets.randomColorHexString(),
+                        color: this.context.module.presets.randomColorHexString(),
                         factoryID: "polygon",
                         presetID: pid,
                         meta: {

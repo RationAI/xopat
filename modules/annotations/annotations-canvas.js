@@ -360,8 +360,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
                 objects[i].lockScalingY = false;
                 objects[i].lockUniScaling = false;
             }
-            if (this.cachedTargetCanvasSelection) {
-                const selection = this.cachedTargetCanvasSelection;
+            if (this._cachedTargetCanvasSelection) {
+                const selection = this._cachedTargetCanvasSelection;
                 if (selection.type === 'activeSelection') {
                     selection.getObjects().forEach(obj => {
                         this.selectAnnotation(obj, true);
@@ -373,7 +373,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
                 }
             }
         } else {
-            this.cachedTargetCanvasSelection = this.canvas.getActiveObject();
+            this._cachedTargetCanvasSelection = this.canvas.getActiveObject();
             for (let i = 0; i < objects.length; i++) {
                 //set all objects as invisible and lock in position
                 objects[i].visible = false;
@@ -401,7 +401,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
      * @return {OSDAnnotations.Layer} layer it belongs to
      */
     checkLayer(ofObject) {
-        if (ofObject.hasOwnProperty("layerID") && String(ofObject.layerID) && !this._layers.hasOwnProperty(ofObject.layerID)) {
+        if (!this._layers.hasOwnProperty(ofObject.layerID) && ofObject.hasOwnProperty("layerID") && String(ofObject.layerID)) {
             this._createLayer({id: ofObject.layerID, _objects: []});
         }
     }
@@ -409,6 +409,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     /**
      * Set current active layer
      * @param layer layer to set
+     * @event active-layer-changed
      */
     setActiveLayer(layer) {
         if (typeof layer === 'number') layer = this._layers[layer];
@@ -422,7 +423,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
     /**
      * Unset the current active layer (keeps selection intact)
-     * @param {boolean} silent do not emit event
+     * @event active-layer-changed
      */
     unsetActiveLayer() {
         if (!this._layer) return;
@@ -506,6 +507,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
     /**
      * Emit selection change event
+     * @event layer-selection-changed
      * @private
      */
     _emitLayerSelectionChanged(layerIds, isSelected) {
@@ -545,7 +547,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
         const data = layer.toObject();
         if (this.module.historyManager) {
-            data._position = this.module.historyManager.getBoardIndex('layer', layerId);
+            data.position = this.module.historyManager.getBoardIndex('layer', layerId);
         }
         return data;
     }
@@ -651,15 +653,61 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     }
 
     /**
-     * Delete object without knowledge of its identity (fully-fledged annotation or helper one)
-     * @param {fabric.Object} o
-     * @param _raise @private
-     * @return {boolean} true if object was deleted
+     * Delete object(s) depending on their kind:
+     * - Layer: delete via history.
+     * - Helper annotations: delete immediately (no history).
+     * - Full annotations: delete via history.
+     *
+     * Accepts a single annotation, an array of annotations, or any container with an `_objects` array
+     * (e.g., ActiveSelection, Group, Canvas, or a plain object).
+     * 
+     * @param {fabric.Object|fabric.Object[]|fabric.ActiveSelection|Object|OSDAnnotations.Layer} target
+     * @param {boolean} [_raise=true]
+     * @return {boolean} true if processed
      */
-    deleteObject(o, _raise=true) {
-        // this._deletedObject = o;
-        if (this.isAnnotation(o)) return this.deleteAnnotation(o, _raise);
-        return this.deleteHelperAnnotation(o);
+    deleteObject(target, _raise=true) {
+        if (!target) return false;
+
+        function handleAnnotation(annot) {
+            // If full annotation, keep it (returned for filtering)
+            if (this.isAnnotation(annot)) return annot;
+            // Otherwise delete helper and drop from filtering
+            this.deleteHelperAnnotation(annot);
+            return undefined;
+        }
+
+        if (target.type === 'layer') {
+            this.deleteLayer(target.id);
+            return true;
+        }
+
+        const boundHandle = handleAnnotation.bind(this);
+
+        const targetAnnots = []
+        const targets = Array.isArray(target)
+            ? target
+            : target._objects && Array.isArray(target._objects)
+                ? target._objects
+                : [target];
+
+        targetAnnots.push(...targets.map(boundHandle).filter(Boolean));
+
+        for (const obj of targetAnnots) {
+            if (obj.layerID) {
+                const layer = this.getLayer(obj.layerID);
+                obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
+            } else {
+                obj._position = this.module.historyManager.getBoardIndex('annotation', obj.incrementId);
+            }
+        }
+        targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
+
+        this.module.history.push(
+            () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
+            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise))
+        )
+
+        return true;
     }
 
     /**
@@ -799,14 +847,14 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     }
 
     _createLayer(layerData) {
-        const restoredLayer = new OSDAnnotations.Layer(this, layerData.id);
+        const restoredLayer = new OSDAnnotations.Layer(this.module, layerData.id);
 
         for (let [key, value] of Object.entries(layerData)) {
             restoredLayer[key] = value;
         }
 
         this._layers[layerData.id] = restoredLayer;
-        const boardIndex = restoredLayer.hasOwnProperty("_position") ? restoredLayer._position : undefined;
+        const boardIndex = restoredLayer.hasOwnProperty("position") ? restoredLayer.position : undefined;
         this.module.historyManager.addLayerToBoard(restoredLayer, boardIndex);
 
         for (let obj of layerData._objects) {
@@ -1248,6 +1296,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
     /**
      * Emit annotation selection change
+     * @event annotation-selection-changed
      */
     _emitAnnotationSelectionChanged(annotationIds, isSelected, fromCanvas) {
         const ids = Array.isArray(annotationIds)
@@ -1332,7 +1381,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         }
 
         const combined = [
-            ...layersData.map(ld => ({ type: "layer", data: ld, pos: ld._position })),
+            ...layersData.map(ld => ({ type: "layer", data: ld, pos: ld.position })),
             ...annToDelete.map(a => ({ type: "annotation", data: a, pos: a._position }))
         ].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
 
@@ -1407,15 +1456,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             return;
         }
 
-        if (activeObject.type === 'activeSelection') {
-            activeObject.getObjects().forEach(obj => {
-                // todo this overloads history, needs to do in one step
-                this.deleteObject(obj);
-            });
-            this.canvas.requestRenderAll();
-        } else {
-            this.deleteObject(activeObject);
-        }
+        this.deleteObject(activeObject);
     }
 
     /**
@@ -1430,11 +1471,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         let objects = this.canvas.getObjects();
         if (!objects || objects.length === 0) return;
 
-        let objectsLength = objects.length;
-        for (let i = 0; i < objectsLength; i++) {
-            //todo this overloads history, needs to do in one step
-            this.deleteObject(objects[objectsLength - i - 1]);
-        }
+        this.deleteObject(objects);
     }
 
     /**
@@ -1963,7 +2000,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             for (let obj of fabricObjects) {
                 initObject(obj);
             }
-            self.historyManager.assignIDs(_this.getObjects());
+            self.module.historyManager.assignIDs(_this.getObjects());
         });
     }
 
