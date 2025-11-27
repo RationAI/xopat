@@ -416,7 +416,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     renderAllControls(ofObject) {
-        const controls = {};
+        const baseControls = fabric.Object.prototype.controls || {};
+        const controls = { ...baseControls};
 
         controls.private = this.renderIcon(
             (obj) => obj.private ? 'visibility_lock' : 'visibility',

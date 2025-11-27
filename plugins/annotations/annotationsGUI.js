@@ -1223,6 +1223,9 @@ ${UIComponents.Elements.select({
 			}
 		});
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
+		this.annotationsEnabledEditModeHandler = this.annotationsEnabledEditModeHandler.bind(this);
+		this.context.addHandler('enabled-edit-mode', this.annotationsEnabledEditModeHandler);
+		
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
 		this.context.addHandler('preset-delete', e => {
@@ -1571,6 +1574,40 @@ ${UIComponents.Elements.select({
 		}
 	}
 
+	annotationsEnabledEditModeHandler(e) {
+		let nodeToolBar = document.getElementById('annotations-tool-bar-content');
+		let nodeVisibility = document.getElementById('enable-disable-annotations');
+		let nodeSave = document.getElementById('server-primary-save');
+		let nodeExport = document.getElementById('show-annotation-export');
+		let nodeUrl = document.getElementById('copy-url');
+
+		if (e.inEditMode) { 
+			this._toggleEnabledStyle(nodeToolBar, false);
+			this._toggleEnabledStyle(nodeVisibility, false);
+			this._toggleEnabledStyle(nodeSave, false);
+			this._toggleEnabledStyle(nodeExport, false);
+			this._toggleEnabledStyle(nodeUrl, false);
+		} else {
+			this._toggleEnabledStyle(nodeToolBar, true);
+			this._toggleEnabledStyle(nodeVisibility, true);
+			this._toggleEnabledStyle(nodeSave, true);
+			this._toggleEnabledStyle(nodeExport, true);
+			this._toggleEnabledStyle(nodeUrl, true);
+		}
+	}
+
+	_toggleEnabledStyle(node, on) {
+		if (on) {
+			node.style.pointerEvents = 'auto';
+			node.style.opacity = null;
+			node.ariaDisabled = 'false';
+		} else {
+			node.style.pointerEvents = 'none';
+			node.style.opacity = '0.5';
+			node.ariaDisabled = 'true';
+		}
+	}
+
 	//todo event handler prevent default / return false?
 	_errorHandlers = {
 		W_NO_PRESET: (e) => {
@@ -1595,22 +1632,18 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 
 	_toggleEnabled(node) {
 		let self = $(node);
+		let nodeToolBar = document.getElementById('annotations-tool-bar-content');
+
 		if (this.context.disabledInteraction) {
 			this.context.enableAnnotations(true);
 			self.html('visibility');
 			self.attr('data-ref', 'on');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'auto';
-			node.style.opacity = null;
-			node.ariaDisabled = 'true';
+			this._toggleEnabledStyle(nodeToolBar, true);
 		} else {
 			this.context.enableAnnotations(false);
 			self.html('visibility_off');
 			self.attr('data-ref', 'off');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'none';
-			node.style.opacity = '0.5';
-			node.ariaDisabled = 'false';
+			this._toggleEnabledStyle(nodeToolBar, false);
 		}
 	}
 

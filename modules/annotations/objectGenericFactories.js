@@ -84,6 +84,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._left = theObject.left;
         this._top = theObject.top;
         theObject.set({
+            hasControls: true,
             lockMovementX: false,
             lockMovementY: false,
             hasRotatingPoint: false,
@@ -97,7 +98,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
-            lockMovementX: true, lockMovementY: true});
+            hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
         });
@@ -301,7 +302,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
-            hasControls: true, lockMovementX: true, lockMovementY: true});
+            hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, rx: rx, ry: ry
         });
@@ -523,8 +524,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         delete visualProperties["strokeWidth"];
         delete visualProperties["originalStrokeWidth"];
         visualProperties.hasBorders = true;
+        visualProperties.text = this._context.fabric.getAnnotationDescription(ofObject, "category", true, false);
         // no support for internal logics, text driven its own scaling, just set the rest
         ofObject.set(visualProperties);
+        this._context.fabric.rerender();
     }
 
     applySelectionStyle(ofObject) {

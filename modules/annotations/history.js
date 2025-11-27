@@ -85,6 +85,10 @@ OSDAnnotations.AnnotationHistoryManager = class {
         return `log-object-${label}`;
     }
 
+    getHistoryHeaderElementId() {
+        return 'history-board-for-annotations-header';
+    }
+
     /**
      * Open external menu window with the history toolbox
      * focuses window if already opened.
@@ -229,7 +233,10 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     getHistoryWindowHeadHtml() {
+        const headId = this.getHistoryHeaderElementId();
+
         return `
+        <div id="${headId}">
         <style>
           .history-head-sep {
             display:inline-block;
@@ -361,6 +368,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         <span id="history-refresh" class="material-icons btn-pointer no-select" onclick="${this._globalSelf}.refresh()" 
               title="Refresh board (fix inconsistencies).">refresh</span>
         ${this.getWindowSwapButtonHtml()}
+        </div>
         `;
     }
 
@@ -555,6 +563,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _syncLoad() {
         this.initBoardSortable();
         this.refresh();
+        this.setHistoryState(this._context.history.canUndo(), this._context.history.canRedo());
 
         let active = this._context.fabric.canvas.getActiveObject();
         if (active) {
@@ -1208,6 +1217,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     }
 
     moveAnnotationInBoard(annotationId, direction) {
+        if (this.isOngoingEdit()) return;
+
         const annotation = this._context.fabric.findObjectOnCanvasByIncrementId(annotationId);
         if (!annotation) return;
 
@@ -1354,16 +1365,19 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
     _setControlsVisuallyEnabled(enabled) {
         let ctx = this.winContext();
         if (ctx) {
-            let header = ctx.document.getElementById("window-header");
+            const headId = this.getHistoryHeaderElementId();
+            let header = ctx.document.getElementById(headId);
+            
             if (!header) return; //todo test window mode hidden why it gets here ctx should be null
             if (enabled) {
-                ctx.document.body.style.background = "transparent";
-                header.style.filter = "none";
-            } else {
-                ctx.document.body.style.background = "#eb7777";
-                header.readonly = true;
-                header.style.filter = "contrast(0.5)";
-            }
+			    header.style.pointerEvents = 'auto';
+			    header.style.opacity = null;
+			    header.ariaDisabled = 'false';
+		    } else {
+		    	header.style.pointerEvents = 'none';
+		    	header.style.opacity = '0.5';
+		    	header.ariaDisabled = 'true';
+		    }
         }
     }
 
@@ -1684,13 +1698,19 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             let objmeta = object.meta || {};
             let objCategory = objmeta.category || categoryDesc;
 
+            const labelStr = String(object.label);
+            let displayValue = objCategory ? String(objCategory) : "";
+            if (displayValue.length && !displayValue.endsWith(` ${labelStr}`)) {
+                displayValue += ` ${labelStr}`;
+            }
+
             mainRowContent = `
                 <label class="show-hint d-block py-1" style="white-space: nowrap; padding-left:0;">
                     <input type="text"
                         class="form-control border-0"
                         readonly
                         style="background:transparent;color: inherit; display:inline-block; padding-left:0"
-                        value="${objCategory} ${object.label}"
+                        value="${displayValue}"
                         name="category">
                 </label>`;
         } else {
@@ -1750,6 +1770,12 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         return html;
     }
 
+    _stripLabelSuffix(val, label) {
+        if (typeof val !== 'string') return val;
+        const suffix = ` ${String(label)}`;
+        return val.endsWith(suffix) ? val.slice(0, -suffix.length) : val;
+    }
+
     _boardItemEdit(self, focusBBox, object) {
         // todo docs, return bool if allowed
         let cancelAction = false;
@@ -1782,14 +1808,21 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             let factory = this._context.getAnnotationObjectFactory(object.factoryID);
 
             if (factory && factory.isEditable()) {
+                this._context.fabric.clearAnnotationSelection();
+                this._context.fabric.selectAnnotation(object);
+
                 factory.edit(object);
                 if (updateUI) this._disableForEdit();
 
                 const $self = (self && self.jquery) ? self : $(self);
                 $self.parent().find("input").each((e, t) => {
+                    if (t.name === 'category') {
+                        t.value = this._stripLabelSuffix(t.value, object.label);
+                    }
                     $(t).removeAttr('readonly');
                 });
                 $self.html('save');
+                $self.css('color', '#d32f2f');
 
                 this._editSelection = {
                     incrementId: incrementId,
@@ -1827,9 +1860,19 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             if (obj) {
                 if (!obj.meta) obj.meta = {};
                 inputs.each((e, t) => {
-                    if (!metadata[t.name] || metadata[t.name].value != t.value) {
-                        obj.meta[t.name] = t.value;
+                    let v = t.value;
+                    if (t.name === 'category') {
+                        v = this._stripLabelSuffix(v, obj.label);
                     }
+
+                    if (
+                        !metadata[t.name] ||
+                        metadata[t.name].value !== v ||
+                        (metadata[t.name].value === "" && v === "")
+                    ) {
+                        obj.meta[t.name] = v;
+                    }
+
                     $(t).attr('readonly', "true");
                 });
 
@@ -1842,6 +1885,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
                 inputs.each((e, t) => t.readonly = true);
             }
             self.html('edit');
+            self.css('color', '');
 
             if (!switches) this._enableAfterEdit();
             this._emitLayerObjectsChanged(obj.layerID);
@@ -1857,6 +1901,8 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         this._context.setMouseOSDInteractive(true);
         this._context.enableInteraction(true);
         this._setSortableEnabled(true);
+        
+        this._context.raiseEvent('enabled-edit-mode', { inEditMode: false });
     }
 
     _disableForEdit() {
@@ -1864,6 +1910,8 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         this._context.setMouseOSDInteractive(false);
         this._context.enableInteraction(false);
         this._setSortableEnabled(false);
+
+        this._context.raiseEvent('enabled-edit-mode', { inEditMode: true });
     }
 
     _setSortableEnabled(enabled) {
