@@ -96,56 +96,67 @@ export class BaseComponent {
     }
 
     /**
-     *
      * @param {*} element - The element to attach the component to
+     * @return {BaseComponent} builder pattern
      */
     attachTo(element) {
-    this.refreshClassState();
-    this.refreshPropertiesState();
+        this.refreshClassState();
+        this.refreshPropertiesState();
 
-        // Treat component-like objects as components even if instanceof fails
-        const looksLikeComponent = element && (element instanceof BaseComponent || (typeof element.create === 'function' && element.id));
+        // Accept true BaseComponent instances and component-like objects
+        const isComponentLike = (el) => {
+            return !!el && (el instanceof BaseComponent || (typeof el === "object" && typeof el.create === "function" && typeof el.id === "string"));
+        };
 
-        if (looksLikeComponent) {
+        if (isComponentLike(element)) {
             const mount = document.getElementById(element.id);
             if (mount === null) {
-                // parent not mounted yet — queue child
-                if (Array.isArray(element._children)) element._children.push(this);
-                else console.warn('attachTo: parent component has no _children array, cannot queue child', element);
-                return;
+                element._children.push(this);
+            } else {
+                mount.append(this.create());
+            }
+        } else {
+            // Resolve mount target from id/string or direct reference
+            let mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
+
+            // If we got a jQuery/Cash wrapper, unwrap to the first DOM node
+            // (supports libraries exposing .jquery flag or .get/.[0])
+            if (mount && (mount.jquery || typeof mount.get === "function" || Array.isArray(mount))) {
+                const candidate = typeof mount.get === "function" ? mount.get(0) : (Array.isArray(mount) ? mount[0] : mount[0]);
+                if (candidate) mount = candidate;
             }
 
-            // Ensure mount is a DOM node (or at least has append)
-            if (!(mount instanceof Node) && typeof mount.append !== 'function') {
-                console.error('attachTo: resolved mount is not attachable (expected DOM node):', mount);
-                van.add(element, this.create());
-                return;
+            if (!mount) {
+                console.error(`Element ${element} not found`);
+                try {
+                    van.add(element, this.create());
+                } catch (_) { /* noop: element may be invalid for van.add */ }
+            } else if (typeof mount.append === "function") {
+                mount.append(this.create());
+            } else if (mount.nodeType || mount instanceof Node) {
+                // Fallback for very old environments where append may be missing
+                const created = this.create();
+                if (mount.appendChild) mount.appendChild(created);
+                else {
+                    try { mount.innerHTML += created.outerHTML || String(created); } catch (_) {}
+                }
+            } else {
+                // Last resort: try jQuery-style append if available or log a clearer error
+                try { mount.append(this.create()); }
+                catch (e) {
+                    console.error("Failed to attach component: unsupported mount target", mount);
+                    console.error(e);
+                }
             }
-
-            mount.append(this.create());
-            return;
         }
-
-        const mount = typeof element === "string" ? document.getElementById(element) : element;
-
-        if (!mount) {
-            console.error(`Element ${element} not found`);
-            van.add(element, this.create());
-            return;
-        }
-
-        if (!(mount instanceof Node) && typeof mount.append !== 'function') {
-            console.error('attachTo: provided mount is not attachable (expected DOM node):', mount);
-            van.add(element, this.create());
-            return;
-        }
-
-        mount.append(this.create());
+        return this;
     }
 
     /**
-     *
      * @param {*} element - The element to prepend the component to
+     * @return {BaseComponent} builder pattern
      */
     prependedTo(element) {
         this.refreshClassState();
@@ -170,6 +181,7 @@ export class BaseComponent {
                 mount.prepend(this.create());
             }
         }
+        return this;
     }
 
     /**
@@ -219,12 +231,25 @@ export class BaseComponent {
     refreshClassState() {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
-    
+
     refreshPropertiesState() {
         for (let key in this.propertiesStateMap) {
             this.propertiesStateMap[key].val = this.propertiesMap[key] instanceof Object ? this.propertiesMap[key].join(" ") : this.propertiesMap[key];
         }
     }
+    /**
+     *
+     * @param  {...any} properties - functions to set the state of the component
+     */
+    set(...properties) {
+        for (let property of properties) {
+            property.call(this);
+        }
+    }
+    /**
+     *
+     * @param  {...any} children - children to add to the component
+     */
     addChildren(...children) {
         this._children.push(...children);
     }
@@ -273,6 +298,22 @@ export class BaseComponent {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
 
+    /**
+     * Toggle the class of the component
+     * @param {string} key
+     * @param {string} value
+     * @param {boolean} on if true, set class
+     */
+    toggleClass(key, value, on=true) {
+        this.classMap[key] = on ? value : "";
+        this.classState.val = Object.values(this.classMap).join(" ");
+    }
+
+    /**
+     * Set attribute property to the element
+     * @param {string} key attribute name
+     * @param {string} value
+     */
     setExtraProperty(key, value) {
         this.propertiesMap[key] = value;
         let stateMap = this.propertiesStateMap[key];
@@ -402,10 +443,6 @@ export class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
-        // internal helper: call provided option functions in the component context
-        try {
-            // proto chain logging removed (diagnostic)
-        } catch (e) { /* ignore */ }
         for (let prop of names) {
             const option = options[prop];
             try {
@@ -417,5 +454,20 @@ export class BaseComponent {
 
         this.refreshClassState();
         this.refreshPropertiesState();
+    }
+}
+
+/**
+ * @typedef {BaseUIOptions} SelectableUIOptions
+ * @property {string} [itemID] - The selection ID
+ */
+export class BaseSelectableComponent extends BaseComponent {
+    constructor(options, ...args) {
+        options = super(options, ...args);
+        this.itemID = options.itemID || this.id;
+    }
+
+    setSelected(itemID) {
+        throw new Error("Component must override setSelected method");
     }
 }
