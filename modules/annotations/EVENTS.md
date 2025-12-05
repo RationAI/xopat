@@ -70,14 +70,22 @@ type AnnotationComment = {
     id: string;
     name: string;
   };
+  reference: string;
   content: string;
-  createdAt: Date;
+  replyTo?: string;
+  createdAt: number;
+  modifiedAt: number;
   removed?: boolean;
 }
 ```
 
-##### annotation-delete-comment | ``{object: fabric.Object, commentId: string}``
+##### annotation-delete-comment | ``{object: fabric.Object, comment: AnnotationComment}``
 This event is fired when a comment is deleted, one by one.
+See `annotation-add-comment` for `AnnotationComment` definition.
+
+##### annotation-updated-comment | ``{object: fabric.Object, commentId: string, newComment: AnnotationComment | null}``
+This event is fired when comment data gets updated and is expected to re-render. `newComment` will be `null` if the comment was deleted.
+See `annotation-add-comment` for `AnnotationComment` definition.
 
 ##### comments-control-clicked
 This event is fired when user clicks the control for comments

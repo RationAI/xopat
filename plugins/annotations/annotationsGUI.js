@@ -16,17 +16,19 @@ class AnnotationsGUI extends XOpatPlugin {
 	 */
 
 	/**
-	 * @typedef {{
-	 * 	id: string,
-	 * 	author: {
-	 * 		id: string,
-	 * 		name: string,
-	 * 	},
-	 * 	content: string,
-	 * 	createdAt: Date,
-	 *  replyTo?: string,
-	 * 	removed?: boolean,
-	 * }} AnnotationComment
+   * @typedef {{
+   * 	  id: string;
+   *    author: {
+   *      id: string;
+   *      name: string;
+   *    };
+   *    reference: string;
+   *    content: string;
+   *    replyTo?: string;
+   *    createdAt: number;
+   *    modifiedAt: number;
+   *    removed?: boolean;
+   * }} AnnotationComment
 	 */
 
 	static annotationMenuIconOrder = [
@@ -404,6 +406,7 @@ ${UIComponents.Elements.select({
 
 		this.context.addHandler('author-annotation-styling-toggle', e => this._toggleStrokeStyling(e.enable))
 		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
+		this.context.addHandler('annotation-updated-comment', () => this._renderComments())
 		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
@@ -520,14 +523,16 @@ ${UIComponents.Elements.select({
 				name: this.user.name,
 			},
 			content: commentText,
-			createdAt: new Date(),
+			createdAt: Date.now(),
+			modifiedAt: Date.now(),
 			removed: false,
 		};
 		
-		this.context.addComment(this._selectedAnnot, comment);
 		this.context.canvas.requestRenderAll();
 		this._renderSingleComment(comment);
 		input.value = '';
+
+		this.context.addComment(this._selectedAnnot, comment);
 		
 		const commentsList = document.getElementById('comments-list');
 		if (commentsList) {
@@ -592,6 +597,8 @@ ${UIComponents.Elements.select({
 			commentsList.appendChild(noCommentsElement);
 			return;
 		}
+
+		console.log('comments before render', comments);
 
 		const roots = [];
 		const replies = [];
@@ -681,7 +688,7 @@ ${UIComponents.Elements.select({
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
-		const isAuthor = this.user.id === comment.author.id;
+		const isAuthor = this.user.id === (this.context.mapAuthorCallback?.(comment.author.id) ?? comment.author.id);
 		const deleteButtonHtml = isAuthor ? 
 			`<button class="relative" title="Delete comment" data-confirmed="false">
 				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
@@ -716,7 +723,7 @@ ${UIComponents.Elements.select({
 			deleteButton.addEventListener('click', (event) => {
 				const confirmed = event.currentTarget.dataset.confirmed === 'true';
 				if (confirmed) {
-					this._deleteComment(comment.id);
+					this._deleteComment(comment);
 				} else {
 					event.currentTarget.dataset.confirmed = 'true';
 					event.currentTarget.querySelector('.delete-hint').classList.remove('hidden');
@@ -790,22 +797,24 @@ ${UIComponents.Elements.select({
 	 */
 	_addReplyComment(parentId, text) {
 		const id = crypto.randomUUID();
-		const newComment = {
+		const comment = {
 			id,
 			author: { id: this.user.id, name: this.user.name },
 			content: text,
-			createdAt: new Date(),
+			createdAt: Date.now(),
+			modifiedAt: Date.now(),
 			replyTo: parentId,
 			removed: false
 		};
 		if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
-		this._selectedAnnot.comments.push(newComment);
+		this.context.canvas.requestRenderAll();
 		this._renderComments();
+
+		this.context.addComment(this._selectedAnnot, comment);
 
 		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
 		if (addedComment) addedComment.scrollIntoView({ block: "end" });
 
-		this.context.canvas.requestRenderAll();
 	}
 
 	/**
@@ -843,13 +852,13 @@ ${UIComponents.Elements.select({
 
 	/**
 	 * Delete a comment by ID
-	 * @param {string} commentId - ID of the comment to delete
+	 * @param {AnnotationComment} comment - Deleted comment
 	 */
-	_deleteComment(commentId) {
+	_deleteComment(comment) {
+		const commentId = comment.id;
 		this.context.deleteComment(this._selectedAnnot, commentId);
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
-		const comment = this._selectedAnnot.comments.find(c => c.id === commentId);
 		const commentParent = this._selectedAnnot.comments.find(c => c.id === comment.replyTo)
 		const commentEl = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
 

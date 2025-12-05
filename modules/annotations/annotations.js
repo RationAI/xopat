@@ -5,15 +5,17 @@
  * @typedef {{x: number, y: number}} Point
  * 
  * @typedef {{
- * 	id: string,
- * 	author: {
- * 		id: string,
- * 		name: string,
- * 	},
- * 	content: string,
- * 	createdAt: Date,
- *  replyTo?: string,
- * 	removed?: boolean,
+ * 	  id: string;
+ *    author: {
+ *      id: string;
+ *      name: string;
+ *    };
+ *    reference: string;
+ *    content: string;
+ *    replyTo?: string;
+ *    createdAt: number;
+ *    modifiedAt: number;
+ *    removed?: boolean;
  * }} AnnotationComment
  * 
  * @typedef {{
@@ -943,6 +945,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	 */
 	addComment(annotation, comment) {
 		if (!annotation.comments) annotation.comments = [];
+		comment.reference = annotation.id;
 		annotation.comments.push(comment);
 		this.raiseEvent('annotation-add-comment', {object: annotation, comment});
 	}
@@ -957,9 +960,32 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		if (!annotation.comments) return false;
 		const found = annotation.comments.findIndex(c => c.id === commentId);
 		if (found === -1) return false;
-		// annotation.comments.splice(found, 1);
-		annotation.comments[found].removed = true; 
-		this.raiseEvent('annotation-delete-comment', {object: annotation, commentId});
+		const [comment] = annotation.comments.splice(found, 1);
+		// annotation.comments[found].removed = true;
+		this.raiseEvent('annotation-delete-comment', {object: annotation, comment});
+		return true;
+	}
+
+	/**
+	 * Update or remove a specific comment on an annotation by replacing it entirely.
+	 * @param {fabric.Object} annotation Parent annotation object containing the comments array.
+	 * @param {string} commentId ID of the comment to update.
+	 * @param {AnnotationComment | null} newComment Complete replacement comment object (if `newComment.id` is missing, use old ID). `null` to remove comment.
+	 */
+	commentUpdated(annotation, commentId, newComment) {
+		if (newComment === undefined || !annotation) return;
+		const idx = annotation.comments?.findIndex(c => c.id === commentId) ?? -1;
+
+		if (newComment === null) {
+			annotation.comments.splice(idx, 1);
+		} else if (idx === -1) {
+			if (!newComment.id) newComment.id = commentId;
+			annotation.comments.push(newComment);
+		} else {
+			if (!newComment.id) newComment.id = commentId;
+			annotation.comments[idx] = newComment;
+		}
+		this.raiseEvent('annotation-updated-comment', {object: annotation, commentId, newComment});
 		return true;
 	}
 
@@ -1514,7 +1540,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Set a callback to get author ID in form matching XOpatUser.id
-	 * @param {(fabricjs.Object) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
+	 * @param {(fabricjs.Object | string) => string | null} callback Function used to return expected author ID, or null to skip computation for this user.
 	 */
 	setAuthorGetter(callback) {
 		this.mapAuthorCallback = callback;
