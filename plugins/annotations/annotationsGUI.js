@@ -598,8 +598,6 @@ ${UIComponents.Elements.select({
 			return;
 		}
 
-		console.log('comments before render', comments);
-
 		const roots = [];
 		const replies = [];
 		comments.forEach(comment => {
@@ -610,7 +608,7 @@ ${UIComponents.Elements.select({
 			}
 		});
 		roots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-		replies.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+		replies.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 		
 		const rootMap = new Map(roots.filter(c => !c.removed).map(c => [c.id, c]));
 		const renderedRemoved = new Set();
@@ -683,6 +681,7 @@ ${UIComponents.Elements.select({
 
 		if (comment.replyTo) {
 			commentElement.style.marginLeft = '2em';
+			commentElement.dataset.replyTo = comment.replyTo;
 		}
 
 		const createdAt = new Date(comment.createdAt);
@@ -777,12 +776,20 @@ ${UIComponents.Elements.select({
 		// insert replies after parent
 		if (parentId) {
 			const parentEl = commentsList.querySelector(`[data-comment-id="${parentId}"]`);
-			if (parentEl && parentEl.nextSibling) {
-				commentsList.insertBefore(commentElement, parentEl.nextSibling);
-			} else if (parentEl) {
-				commentsList.appendChild(commentElement);
+			if (parentEl) {
+				let targetNode = parentEl;
+				let nextNode = targetNode.nextSibling;
+				while (nextNode && nextNode.dataset && nextNode.dataset.replyTo === parentId) {
+					targetNode = nextNode;
+					nextNode = nextNode.nextSibling;
+				}
+				
+				if (targetNode.nextSibling) {
+					commentsList.insertBefore(commentElement, targetNode.nextSibling);
+				} else {
+					commentsList.appendChild(commentElement);
+				}
 			} else {
-				// If parent is not found, just append (should not happen with new logic)
 				commentsList.appendChild(commentElement);
 			}
 		} else {
@@ -808,9 +815,9 @@ ${UIComponents.Elements.select({
 		};
 		if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
 		this.context.canvas.requestRenderAll();
-		this._renderComments();
 
 		this.context.addComment(this._selectedAnnot, comment);
+		this._renderSingleComment(comment, parentId);
 
 		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
 		if (addedComment) addedComment.scrollIntoView({ block: "end" });
@@ -863,14 +870,20 @@ ${UIComponents.Elements.select({
 		const commentEl = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
 
 		const hasReplies = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === commentId);
+		const isParentRemoved = !commentParent || commentParent.removed;
+		const hasSiblings = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === comment.replyTo);
+
 		const removeParentPlaceholder =
 			comment.replyTo &&
-			!this._selectedAnnot.comments.some(c => !c.removed && comment.replyTo === c.id) &&
-			commentParent?.removed
+			!hasSiblings &&
+			isParentRemoved;
 
 		if (removeParentPlaceholder) {
-			const commentParentId = commentParent?.id;
-			if (commentParentId) commentsList.querySelector(`[data-comment-id="${commentParentId}"]`).remove();
+			const commentParentId = comment.replyTo;
+			if (commentParentId) {
+				const placeholder = commentsList.querySelector(`[data-comment-id="${commentParentId}"]`);
+				if (placeholder) placeholder.remove();
+			}
 		}
 		
 		if (commentEl) {
