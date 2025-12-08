@@ -178,7 +178,17 @@ export class Explorer extends BaseComponent {
         ].join(" ");
 
         // Data/config
-        this.levels = Array.isArray(opts.levels) ? opts.levels.slice() : [];
+        if (Array.isArray(opts.levels)) {
+            this.levels = opts.levels.slice();
+        } else if (typeof opts.levels === "object" && opts.levels !== null) {
+            this.levels = {
+                isDynamic: true,
+                level: opts.levels,
+            };
+        } else {
+            this.levels = [];
+        }
+
         this.onPathChange = typeof opts.onPathChange === "function" ? opts.onPathChange : null;
 
         // ⬅️ Remember page per levelId (only used for mode:"page")
@@ -201,6 +211,15 @@ export class Explorer extends BaseComponent {
         this._loadAndRender = this._loadAndRender.bind(this);
         this._renderLevelView = this._renderLevelView.bind(this);
         this._debouncedSearch = this._debouncedSearch.bind(this);
+    }
+
+    _getLevel(levelIndex) {
+        if (!this.levels) return null;
+        if (Array.isArray(this.levels)) return this.levels[levelIndex] || null;
+
+        if (this.levels.isDynamic) return this.levels.level;
+
+        return null;
     }
 
     getItem(index) {
@@ -226,14 +245,17 @@ export class Explorer extends BaseComponent {
     }
 
     _bucketKey(levelIndex, parentItem, search) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const parentKey = this._parentKey(levelIndex, parentItem);
+        if (this.levels.isDynamic)
+            return `DYNAMIC::${parentKey}::${search || ""}`;
+
         return `${lvl?.id || levelIndex}::${parentKey}::${search || ""}`;
     }
 
     _parentKey(levelIndex, parentItem) {
         if (levelIndex === 0) return "ROOT";
-        const prevLvl = this.levels[levelIndex - 1];
+        const prevLvl = this._getLevel(levelIndex - 1);
         if (!parentItem) return "NULLPARENT";
 
         // 1) Prefer custom keyOf if available
@@ -270,13 +292,14 @@ export class Explorer extends BaseComponent {
 
     _ensureBucket(levelIndex, parentItem, search) {
         const k = this._bucketKey(levelIndex, parentItem, search);
+        const lvl = this._getLevel(levelIndex);
         let b = this._store.get(k);
         if (!b) {
             b = {
                 pages: new Map(),
                 total: undefined,
                 virtualOffset: 0,
-                mode: this.levels[levelIndex]?.mode || "page",
+                mode: lvl?.mode || "page",
                 currentPage: 0,            // ⬅️ single source of truth for current page
             };
             this._store.set(k, b);
@@ -304,7 +327,7 @@ export class Explorer extends BaseComponent {
 
     /** Navigate into next level; before leaving, remember the page of the current level (if paged). */
     async _navigate(levelIndex, item) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         if (!lvl) return;
 
         // ⬅️ Snapshot current page for this level (only matters for mode:"page")
@@ -325,7 +348,7 @@ export class Explorer extends BaseComponent {
     /** Load and render the requested level, restoring remembered page when applicable. */
     async _loadAndRender(levelIndex, { replace = false } = {}) {
         const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const host = document.getElementById(this.id);
         if (!host || !lvl) return;
 
@@ -365,7 +388,7 @@ export class Explorer extends BaseComponent {
     }
 
     async _fetchPage(levelIndex, parent, bucket, pageNo) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
         const provider = this._pickProvider(lvl);
 
@@ -381,7 +404,7 @@ export class Explorer extends BaseComponent {
     }
 
     async _fetchVirtualBatch(levelIndex, parent, bucket, append = true) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 64);
         const provider = this._pickProvider(lvl);
         const offset = append ? bucket.virtualOffset : 0;
@@ -480,6 +503,8 @@ export class Explorer extends BaseComponent {
                 a({
                         class: "link",
                         onclick: () => {
+                            this._path = [];
+                            this._viewState.clear();
                             this._loadAndRender(0, { replace: true });
                         }
                     },
@@ -490,9 +515,9 @@ export class Explorer extends BaseComponent {
 
         this._path.forEach((p, i) => {
             i = i + 1; // root is implicit 0
-            const lvl = this.levels[p.levelIndex];
+            const lvl = this._getLevel(p.levelIndex);
             const label = this._labelFor(lvl, p.item) || `Level ${lvl?.title || lvl?.id || i}`;
-            const isLast = this._path.length >= i;
+            const isLast = (i === this._path.length);
             const onclick = isLast ? undefined : () => {
                 // Truncate path and render that level; remembered page for that level will be used
                 this._path = this._path.slice(0, i);
@@ -516,7 +541,7 @@ export class Explorer extends BaseComponent {
                     const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
                     const key = this._bucketKey(levelIndex, parent, this._search);
                     this._store.delete(key);
-                    const lvl = this.levels[levelIndex];
+                    const lvl = this._getLevel(levelIndex);
                     if (lvl?.id) this._viewState.delete(lvl.id); // ⬅️ forget page on new search
                     this._loadAndRender(levelIndex, { replace: true });
                 }, 250)
@@ -534,7 +559,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderLevelView(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         if (!lvl) {
             return div({ class: "p-4 text-base-content/60" }, "No further levels.");
         }
@@ -554,7 +579,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderPagedList(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
 
         // Source of truth: bucket.currentPage
@@ -772,7 +797,7 @@ export class Explorer extends BaseComponent {
 
 
     _renderVirtualList(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const listEl = ul({ class: "menu p-1 gap-1" });
 
         // Virtual mode: no remembering required
@@ -860,7 +885,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderItemPlaceholder(levelIndex, item, idx, pageNo) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
         const ph = li({
             class: "skeleton h-10 rounded-md",
@@ -872,7 +897,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderItemLi(levelIndex, item, idx, { heavy = false, pageNo = 0 } = {}) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const idxMap = this._lastIndexMaps[levelIndex] || (this._lastIndexMaps[levelIndex] = new WeakMap());
         try { idxMap.set(item, idx); } catch {}
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
