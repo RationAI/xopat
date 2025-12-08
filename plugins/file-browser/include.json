@@ -1,0 +1,12 @@
+{
+  "id": "file-browser",
+  "name": "File browser",
+  "author": "Vendula Penazova",
+  "version": "1.0.0",
+  "description": "",
+  "includes": [
+    "file-browser.js"
+  ],
+  "modules": [],
+  "wsi-server": "http://localhost:8080"
+}
