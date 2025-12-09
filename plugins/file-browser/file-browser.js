@@ -2,7 +2,7 @@ addPlugin('file-browser', class extends XOpatPlugin {
     constructor(id) {
         super(id);
 
-        this.wsi_server = "http://localhost:8080";
+        this.wsi_server = "http://localhost:8080"; // TODO
 
         this.integrateWithPlugin("slide-info", async (info) => {
             this.slideMenu = info.menu;
@@ -17,6 +17,16 @@ addPlugin('file-browser', class extends XOpatPlugin {
                     const items = [];
                     const contextPath = parent?.path || "";
 
+                    const normPath = (p) => (p || "").replace(/^\/+/, "");
+                    const makeSlideItem = (rawPath) => {
+                        const norm = normPath(rawPath);
+                        return {
+                            type: "slide",
+                            path: norm,
+                            label: norm.split("/").pop(),
+                        };
+                    };
+
                     try {
                         const url = new URL(`${this.wsi_server}/v3/cases/`);
                         url.searchParams.set("context", contextPath);
@@ -28,12 +38,11 @@ addPlugin('file-browser', class extends XOpatPlugin {
                             const cases = await res.json();
 
                             for (const c of cases || []) {
-                                const raw = (c.local_id || c.id || "").replace(/^\/+/, "");
-
+                                const normId = normPath(c.local_id || c.id);
                                 items.push({
                                     type: "case",
-                                    label: raw.split("/").pop(),
-                                    path: raw,
+                                    label: normId.split("/").pop(),
+                                    path: normId,
                                     slides: Array.isArray(c.slides) ? c.slides.slice() : [],
                                 });
                             }
@@ -53,11 +62,7 @@ addPlugin('file-browser', class extends XOpatPlugin {
                             } else {
                                 const slides = await res.json();
                                 for (const c of slides || []) {
-                                    items.push({
-                                        type: "slide",
-                                        label: (c.local_id || c.id || "").replace(/^\//, ""),
-                                        path: (c.local_id || c.id || "").replace(/^\//, ""),
-                                    });
+                                    items.push(makeSlideItem(c.local_id || c.id));
                                 }
                             }
                         } catch (err) {
@@ -67,13 +72,7 @@ addPlugin('file-browser', class extends XOpatPlugin {
 
                     if (parent && Array.isArray(parent.slides)) {
                         for (const slidePath of parent.slides) {
-                            const normPath = (slidePath || "").replace(/^\/+/, "");
-                            items.push({
-                                type: "slide",
-                                label: normPath.split("/").pop(),
-                                path: normPath,
-                                rel_path: normPath,
-                            });
+                            items.push(makeSlideItem(slidePath));
                         }
                     }
 
@@ -97,6 +96,10 @@ addPlugin('file-browser', class extends XOpatPlugin {
                 canOpen(item) {
                     return item.type === "case";
                 },
+
+                keyOf(item) {
+                    return item.path || item.label || "ROOT";
+                }
             };
 
             const bgItemGetter = (item) => {
@@ -117,19 +120,3 @@ addPlugin('file-browser', class extends XOpatPlugin {
         });
     }
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
