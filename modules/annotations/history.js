@@ -26,14 +26,14 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._boardItems = [];
 
         this._context.addFabricHandler('layer-selection-changed', e => {
-            this._updateSelectedLayersVisual(e.ids, e.isSelected);
+            this._updateSelectionVisuals(e.selected, e.deselected, 'layer');
         });
         this._context.addFabricHandler('active-layer-changed', e => {
-            this._updateActiveLayerVisual(e.id);
+            this._updateActiveLayerVisual(e.layer);
         });
         this._context.addFabricHandler('annotation-selection-changed', e => {
-            if (e.fromCanvas) this._syncSelectionFromCanvas(e.ids, e.isSelected);
-            this._updateSelectedAnnotationsVisual(e.ids, e.isSelected);
+            if (e.fromCanvas) this._syncSelectionFromCanvas(e.selected, e.deselected);
+            this._updateSelectionVisuals(e.selected, e.deselected, 'annotation');
         });
         this._context.addFabricHandler('layer-objects-changed', e => {
             if (!e?.layerId) return;
@@ -398,6 +398,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         this._clearDomSelection(boardEl);
 
         this._performAtJQNode("layer-logs", node => node.html(""));
+        this._boardItems = this._boardItems.filter(Boolean);
 
         for (const item of this._boardItems) {
             if (item.type === "layer") {
@@ -415,16 +416,16 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             }
         }
 
-        const selectedAnnots = this._context.fabric.getSelectedAnnotationIds();
-        const selectedLayers = this._context.fabric.getSelectedLayerIds();
+        const selectedAnnots = this._context.fabric.getSelectedAnnotations();
+        const selectedLayers = this._context.fabric.getSelectedLayers();
         const activeLayer = this._context.fabric.getActiveLayer();
 
         this._syncSortableSelection(selectedAnnots, 'annotation');
         this._syncSortableSelection(selectedLayers, 'layer');
 
-        this._updateSelectedLayersVisual(selectedLayers, true);
-        this._updateSelectedAnnotationsVisual(selectedAnnots, true);
-        this._updateActiveLayerVisual(activeLayer?.id);
+        this._updateSelectionVisuals(selectedAnnots, [], 'annotation');
+        this._updateSelectionVisuals(selectedLayers, [], 'layer');
+        this._updateActiveLayerVisual(activeLayer);
     }
 
     _refreshAnnotationInBoard(annotation) {
@@ -433,13 +434,14 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         }
     }
 
-    _syncSortableSelection(ids, type) {
+    _syncSortableSelection(objects, type) {
         const container = this._getNode(this.getLayerContainerId());
-        if (!container || !Sortable.get(container) || ids === null || ids === undefined) return;
+        if (!container || !Sortable.get(container) || objects === null || objects === undefined) return;
 
-        const list = Array.isArray(ids) ? ids : [ids];
+        const list = Array.isArray(objects) ? objects : [objects];
 
-        for (const id of list) {
+        for (const obj of list) {
+            const id = type === 'annotation' ? obj.incrementId : obj.id;
             const el = container.querySelector(`[data-type="${type}"][data-id="${String(id)}"]`);
             if (el && !el.classList.contains('history-selected')) {
                 Sortable.utils.select(el);
@@ -741,6 +743,11 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (evt?.item && Array.isArray(evt.items) && !evt.items.includes(evt.item)) {
             this.refresh();
             this._toggleDropHover(this._lastDropHover, false);
+            Dialogs.show(
+                "You have selected different annotations than the one you are trying to move.",
+                3500,
+                Dialogs.MSG_WARN
+            );
             return true;
         }
 
@@ -830,6 +837,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             this._handleBoardAction(type, Number(id), 'deselect');
             return;
         } else if (oe?.shiftKey) {
+            Sortable.utils.select(item);
             return; // do nothing
         }
 
@@ -855,6 +863,8 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         };
 
         const handler = (e) => {
+            if (this.isOngoingEdit()) return;
+
             const t = e.target;
             const item = t.closest('[data-type="layer"], [data-type="annotation"]');
             if (item || shouldIgnore(t)) return;
@@ -1485,26 +1495,32 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         input.select();
     }
 
-    _syncSelectionFromCanvas(ids, isSelected) {
-        let container = this._getNode(this.getLayerContainerId());
-        if (!container || !ids || !Sortable.get(container)) return;
+    _syncSelectionFromCanvas(selected, deselected) {
+        let baseContainer = this._getNode(this.getLayerContainerId());
+        if (!baseContainer || (!selected && !deselected) || !Sortable.get(baseContainer)) return;
 
-        if (!Array.isArray(ids)) ids = [ids];
+        if (!Array.isArray(selected)) selected = [selected];
+        if (!Array.isArray(deselected)) deselected = [deselected];
 
-        for (const id of ids) {
-            let obj = this._context.fabric.findObjectOnCanvasByIncrementId(Number(id));
-            container = obj.hasOwnProperty("layerID") && obj.layerID ? this._getNode(this.getAnnotationContainerId(obj.layerID)) : container;
-
-            if (!container || !Sortable.get(container)) continue;
-            const el = container.querySelector(`[data-type="annotation"][data-id="${id}"]`);
-            if (!el) continue;
-
-            if (isSelected) {
-                Sortable.utils.select(el);
-            } else {
-                Sortable.utils.deselect(el);
+        const process = (items, action) => {
+            for (const annot of items) {
+              const container = (annot && annot.hasOwnProperty('layerID') && annot.layerID)
+                ? this._getNode(this.getAnnotationContainerId(annot.layerID))
+                : baseContainer;
+              if (!container) continue;
+            
+              const sortable = Sortable.get(container);
+              if (!sortable || !annot || !String(annot.incrementId)) continue;
+            
+              const el = container.querySelector(`[data-type="annotation"][data-id="${annot.incrementId}"]`);
+              if (!el) continue;
+            
+              action(el);
             }
-        }
+        };
+
+        process(selected, Sortable.utils.select);
+        process(deselected, Sortable.utils.deselect);
     }
 
     _clearAllSelectionVisuals() {
@@ -1514,55 +1530,59 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         container.querySelectorAll('[data-type="layer"], [data-type="annotation"]').forEach(el => {
             el.classList.remove('history-selected', 'history-layer-current');
         });
-        this._updateDeleteLayerHeaderButton();
+        this._updateDeleteSelectionHeaderButton();
     }
 
-    _updateActiveLayerVisual(activeLayerId) {
+    _updateActiveLayerVisual(activeLayer) {
         const container = this._getNode(this.getLayerContainerId());
         if (!container) return;
 
         container.querySelectorAll('.history-layer-current')
             .forEach(el => el.classList.remove('history-layer-current'));
-        if(!activeLayerId) return;
+        if(!activeLayer) return;
 
-        const el = container.querySelector(`[data-type="layer"][data-id="${String(activeLayerId)}"]`);
+        const el = container.querySelector(`[data-type="layer"][data-id="${String(activeLayer.id)}"]`);
         if (el) el.classList.add('history-layer-current');
     }
 
-    _updateSelectedLayersVisual(layerIds, isSelected) {
+    _updateSelectionVisuals(selected, deselected, type) {
         const container = this._getNode(this.getLayerContainerId());
-        if (!container || !layerIds) return;
-        if (!Array.isArray(layerIds)) layerIds = [layerIds];
+        if (!container || (!selected && !deselected)) return;
 
-        for (const id of layerIds) {
-            const el = container.querySelector(`[data-type="layer"][data-id="${id}"]`);
-            if (el) el.classList.toggle('history-selected', isSelected);
+        if (!Array.isArray(selected)) selected = [selected];
+        if (!Array.isArray(deselected)) deselected = [deselected];
+
+        for (const obj of selected) {
+            const id = type === 'annotation' ? obj.incrementId : obj.id;
+            const el = container.querySelector(`[data-type="${type}"][data-id="${id}"]`);
+            if (el) el.classList.add('history-selected');
         }
-        this._updateDeleteLayerHeaderButton();
+        for (const obj of deselected) {
+            const id = type === 'annotation' ? obj.incrementId : obj.id;
+            const el = container.querySelector(`[data-type="${type}"][data-id="${id}"]`);
+            if (el) el.classList.remove('history-selected');
+        }
+        this._updateDeleteSelectionHeaderButton();
     }
 
-    _updateSelectedAnnotationsVisual(annotationIds, isSelected) {
-        const container = this._getNode(this.getLayerContainerId());
-        if (!container || !annotationIds) return;
-        if (!Array.isArray(annotationIds)) annotationIds = [annotationIds];
-
-        for (const id of annotationIds) {
-            const el = container.querySelector(`[data-type="annotation"][data-id="${id}"]`);
-            if (el) el.classList.toggle('history-selected', isSelected);
-        }
-        this._updateDeleteLayerHeaderButton();
-    }
-
-    _updateDeleteLayerHeaderButton() {
+    _updateDeleteSelectionHeaderButton(disable=false) {
         const ctx = this.winContext();
         if (!ctx) return;
         const btn = ctx.document.getElementById('history-delete-selection');
         if (!btn) return;
 
+        if (disable) {
+		    btn.style.opacity = '0.5';
+            btn.style.pointerEvents = 'none';
+            btn.ariaDisabled = 'true';
+            return;
+        }
+
         const hasAnySelection =
             (this._context.fabric.getSelectedLayerIds()?.length || 0) > 0 ||
-            (this._context.fabric.getSelectedAnnotationIds()?.length || 0) > 0;
+            (this._context.fabric.getSelectedAnnotations()?.length || 0) > 0;
 
+        btn.style.ariaDisabled = false;
         btn.style.color = hasAnySelection ? 'var(--color-icon-primary)' : 'var(--color-icon-tertiary)';
         btn.style.pointerEvents = hasAnySelection ? 'auto' : 'none';
         btn.title = 'Delete Selection';
@@ -1808,10 +1828,11 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             let factory = this._context.getAnnotationObjectFactory(object.factoryID);
 
             if (factory && factory.isEditable()) {
-                this._context.fabric.clearAnnotationSelection();
-                this._context.fabric.selectAnnotation(object);
+                //this._context.fabric.clearAnnotationSelection(true);
+                this._context.fabric.selectAnnotation(object, true, true);
 
                 factory.edit(object);
+                object.set({ hoverCursor: 'move' });
                 if (updateUI) this._disableForEdit();
 
                 const $self = (self && self.jquery) ? self : $(self);
@@ -1877,6 +1898,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
                 });
 
                 //if target was set, object could have been edited, update
+                obj.set({ hoverCursor: 'default' });
                 let factory = this._context.getAnnotationObjectFactory(obj.factoryID);
                 factory.recalculate(obj);
             } else {
@@ -1889,6 +1911,8 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
 
             if (!switches) this._enableAfterEdit();
             this._emitLayerObjectsChanged(obj.layerID);
+            this._updateDeleteSelectionHeaderButton();
+
         } catch (e) {
             console.warn(e);
         }
@@ -1897,19 +1921,19 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
     }
 
     _enableAfterEdit() {
-        $('#history-board-for-annotations .Box-header').css('background', 'none');
         this._context.setMouseOSDInteractive(true);
         this._context.enableInteraction(true);
         this._setSortableEnabled(true);
+        this._updateDeleteSelectionHeaderButton(false);
         
         this._context.raiseEvent('enabled-edit-mode', { inEditMode: false });
     }
 
     _disableForEdit() {
-        $('#history-board-for-annotations .Box-header').css('background', 'var(--color-merge-box-error-indicator-bg)');
         this._context.setMouseOSDInteractive(false);
         this._context.enableInteraction(false);
         this._setSortableEnabled(false);
+        this._updateDeleteSelectionHeaderButton(true);
 
         this._context.raiseEvent('enabled-edit-mode', { inEditMode: true });
     }

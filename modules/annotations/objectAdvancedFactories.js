@@ -355,10 +355,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     toPointArray(obj, converter, digits=undefined, quality=1) {
         const line = obj.objects ? obj.objects[0] : [];
 
-        let x1 = line.x1;
-        let y1 = line.y1;
-        let x2 = line.x2;
-        let y2 = line.y2;
+        let x1 = line.x1 + obj.left + obj.width/2;
+        let y1 = line.y1 + obj.top + obj.height/2;
+        let x2 = line.x2 + obj.left + obj.width/2;
+        let y2 = line.y2 + obj.top + obj.height/2;
 
         if (digits !== undefined) {
             x1 = parseFloat(x1.toFixed(digits));

@@ -772,10 +772,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		};
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			if (this.isHighlight) {
-                object.set({
-                    strokeWidth: (object.originalStrokeWidth / graphicZoom) * 7,
-                    strokeDashArray: [object.strokeWidth * 4, object.strokeWidth * 2]
+                this.set({
+                    strokeWidth: (this.originalStrokeWidth / zoom) * 7,
+                    strokeDashArray: [this.strokeWidth * 4, this.strokeWidth * 2]
                 });
+				return;
             }
 			this._factory()?.onZoom(this, zoom, _realZoom);
 		}
@@ -1540,7 +1541,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 	handleClickUp(o, point, isLeftClick, objectFactory) {
 		let result = this.context.freeFormTool.finish();
 		if (result) {
-            this.context.fabric.selectAnnotation(result, true);
+			this.context.fabric.rerender();
 		}
 		return true;
 	}

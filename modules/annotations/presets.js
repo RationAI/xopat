@@ -541,9 +541,9 @@ OSDAnnotations.PresetManager = class {
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
-        const layerID = this._context.fabric.getActiveLayer()?.id;
+        //const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: layerID,
+            layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });

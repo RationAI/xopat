@@ -58,7 +58,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleClickUp(o, point, isLeftClick, objectFactory) {
         if (this._allowCreation && this.result) {
             delete this.result.strokeDashArray;
-            this.context.fabric.promoteHelperAnnotation(this.result);
+            this.context.fabric.deleteHelperAnnotation(this.result);
+            this.context.fabric.addAnnotation(this.result);
             this.result = null;
             this._allowCreation = false;
         } else {

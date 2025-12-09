@@ -769,6 +769,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
         });
     }
 
+
+    /**
+     * Resolve annotation text from preset metadata (category) and render it on the object.
+     * Intended for text-based objects.
+     * @param {*} ofObject
+     */
+    renderPresetText(ofObject) {
+    }
+
     /**
      * Create array of points - approximation of the object shape. This method should be overridden.
      * For groups, it should return the best possible approximation via single array of points

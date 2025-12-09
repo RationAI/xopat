@@ -150,6 +150,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
      * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
+        if (this.module.historyManager.isOngoingEdit()) this.module.historyManager._boardItemSave();
+
         if (!options?.format) options.format = "native";
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
         options.serialize = false;
@@ -408,7 +410,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
     /**
      * Set current active layer
-     * @param layer layer to set
+     * @param {OSDAnnotations.Layer|number} layer layer instance or id
      * @event active-layer-changed
      */
     setActiveLayer(layer) {
@@ -417,7 +419,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this._layer.setActive(true);
 
         this.raiseEvent('active-layer-changed', {
-            id: String(this._layer.id)
+            layer: this._layer
         });
     }
 
@@ -431,14 +433,13 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this._layer = undefined;
 
         this.raiseEvent('active-layer-changed', {
-            id: undefined
+            layer: undefined
         });
     }
 
     /**
-     * Select a layer (optionally append for multi-selection).
+     * Select a layer, supports multi selection
      * @param {OSDAnnotations.Layer|number} layer layer instance or id
-     * @param {boolean} append true to keep existing selection and add this one
      * @param {boolean} silent do not emit event
      */
     selectLayer(layer, silent=false) {
@@ -449,44 +450,41 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             this._selectedLayers.add(layer.id);
             layer.setActive(true);
 
-            if (!silent) this._emitLayerSelectionChanged(layer.id, true);
+            if (!silent) this._emitLayerSelectionChanged([layer], []);
         }
     }
 
     /**
-     * Deselect a specific layer (if it was active, active layer becomes last remaining or undefined)
-     * @param {number} layerId
-     * @param {boolean} silent
+     * Deselect a specific layer (if it was active, active layer becomes last remaining or none)
+     * @param {OSDAnnotations.Layer|number} layer layer instance or id
+     * @param {boolean} silent do not emit event
      */
-    deselectLayer(layerId, silent=false) {
-        layerId = String(layerId);
-        if (!this._selectedLayers.has(layerId)) return;
-        const layer = this._layers[layerId];
-        this._selectedLayers.delete(layerId);
-        if (layer) layer.setActive(false);
+    deselectLayer(layer, silent=false) {
+        layer = typeof layer === 'number' ? this._layers[layer] : layer;
+        if (!layer || !this._selectedLayers.has(layer.id)) return;
 
-        if (this._layer && this._layer.id === layerId) {
+        this._selectedLayers.delete(layer.id);
+        layer.setActive(false);
+
+        if (this._layer && this._layer.id === layer.id) {
             const last = Array.from(this._selectedLayers).at(-1);
             last ? this.setActiveLayer(Number(last)) : this.unsetActiveLayer();
         }
-        if (!silent) this._emitLayerSelectionChanged(layerId, false);
+        if (!silent) this._emitLayerSelectionChanged([], [layer]);
     }
 
     /**
      * Clear all layer selection (no active layer afterwards)
-     * @param {boolean} silent
+     * @param {boolean} silent do not emit event
      */
     clearLayerSelection(silent=false) {
-        if (this._selectedLayers.size === 0) return;
-        const ids = this.getSelectedLayerIds();
+        const deselect = this.getSelectedLayers();
+        if (deselect.length === 0) return;
 
-        this._selectedLayers.forEach(id => {
-            const l = this._layers[id];
-            if (l) l.setActive(false);
-        });
-
+        deselect.forEach(layer => layer.setActive(false));
         this._selectedLayers.clear();
-        if (!silent) this._emitLayerSelectionChanged(ids, false);
+
+        if (!silent) this._emitLayerSelectionChanged([], deselect);
     }
 
     /**
@@ -506,18 +504,20 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     }
 
     /**
-     * Emit selection change event
+     * Emit layer selection change event
      * @event layer-selection-changed
      * @private
      */
-    _emitLayerSelectionChanged(layerIds, isSelected) {
-        const ids = Array.isArray(layerIds)
-            ? layerIds.map(String)
-            : (layerIds !== undefined && layerIds !== null ? String(layerIds) : layerIds);
+    _emitLayerSelectionChanged(selected, deselected) {
+        const norm = v => (v === undefined || v === null) ? [] : (Array.isArray(v) ? v : [v]);
+
+        const sel = norm(selected);
+        const desel = norm(deselected);
+        if (sel.length === 0 && desel.length === 0) return;
 
         this.raiseEvent('layer-selection-changed', {
-            ids: ids,
-            isSelected: isSelected
+            selected: sel,
+            deselected: desel
         });
     }
 
@@ -806,8 +806,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this.addAnnotationToLayer(annotation, layerIndex);
 
         if (!_dangerousSkipHistory) this.module.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
-        // this.clearAnnotationSelection(true);
-        // this.selectAnnotation(annotation, true);
+        //this.clearAnnotationSelection(true);
+        this.selectAnnotation(annotation, true, true);
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
         this.canvas.requestRenderAll();
@@ -837,8 +837,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         if (updateUI) {
             this.module.historyManager.addAnnotationToBoard(next, previous, boardIndex);
 
-            // this.clearAnnotationSelection(true);
-            // this.selectAnnotation(next, true);
+            //this.clearAnnotationSelection(true);
+            this.selectAnnotation(next, true, true);
             this.raiseEvent('annotation-replace', {previous, next});
             this.module.raiseEvent('history-change');
         }
@@ -1184,12 +1184,12 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     }
 
     /**
-     * Get array of selected annotation IDs (incrementId as strings)
+     * Get array of selected annotations internalIDs
      * @returns {string[]}
      */
     getSelectedAnnotationIds() {
         return this.getSelectedAnnotations()
-            .map(obj => String(obj.incrementId))
+            .map(obj => String(obj.internalID))
             .filter(Boolean);
     }
 
@@ -1208,24 +1208,33 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
     /**
      * Select an annotation by object or incrementId; supports multi-select.
-     * @param {fabric.Object|number|string} annotation
+     * @param {fabric.Object|number|string} annotation object or incrementId of the annotation to select
      * @param {boolean} [fromCanvas=false] if the selection event originates on canvas, set true
      * @returns {void}
      */
-    selectAnnotation(annotation, fromCanvas=false) {
+    selectAnnotation(annotation, fromCanvas=false, clearPrevious=false) {
         //todo fix this method
+
+        //let deselect = [];
+        //if (clearPrevious) {
+        //    deselect = this.__selectionSnapshot || [];
+        //    deselect = deselect.filter(x => { return x.internalID !== annotation.internalID });
+        //    this.__selectionSnapshot = [];
+        //    this.canvas.discardActiveObject();
+        //}
+
         if (annotation === null || annotation === undefined) return;
         const obj = typeof annotation === 'object' ?
             annotation : this.findObjectOnCanvasByIncrementId(Number(annotation));
 
         if (!obj) return;
         const canvas = this.canvas;
-        const baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
-        if (!baseIds.includes(obj.incrementId)) baseIds.push(obj.incrementId);
-        this._applySelectionFromIds(baseIds, true);
+        let baseAnnotations = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot || []) : this.getSelectionSnapshot();
+        if (!baseAnnotations.includes(obj)) baseAnnotations.push(obj);
+        this._applySelection(baseAnnotations);
 
         canvas.requestRenderAll();
-        this._emitAnnotationSelectionChanged(baseIds, true, fromCanvas);
+        this._emitAnnotationSelectionChanged(baseAnnotations, deselect, fromCanvas);
     }
 
 
@@ -1233,7 +1242,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
      * Deselect an annotation by incrementId.
      * Handles single and multi-selection.
      * @param {fabric.Object|string|number} object object or incrementId of the annotation to deselect
-     * @param {boolean} [fromCanvas=false]
+     * @param {boolean} [fromCanvas=false] if the deselection event originates on canvas, set true
      * @returns {void}
      */
     deselectAnnotation(object, fromCanvas=false) {
@@ -1241,12 +1250,12 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         const obj = typeof object === 'object' ? object : this.findObjectOnCanvasByIncrementId(object);
         if (!obj) return;
 
-        let baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
-        baseIds = baseIds.filter(x => x !== obj.incrementId);
-        this._applySelectionFromIds(baseIds);
+        let baseAnnotations = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot || []) : this.getSelectionSnapshot();
+        baseAnnotations = baseAnnotations.filter(x => x.internalID !== obj.internalID);
+        this._applySelection(baseAnnotations);
 
         canvas.requestRenderAll();
-        this._emitAnnotationSelectionChanged(baseIds, false, fromCanvas);
+        this._emitAnnotationSelectionChanged(baseAnnotations, [obj], fromCanvas);
     }
 
     /********************* PRIVATE **********************/
@@ -1254,8 +1263,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     getSelectionSnapshot() {
         const active = this.canvas.getActiveObject();
         if (!active) return [];
-        if (active.type === 'activeSelection') return active._objects.map(o => o.incrementId);
-        return [active.incrementId];
+        if (active.type === 'activeSelection') return active._objects;
+        return [active];
     }
 
     clearSelectionSnapshot(keepCached=false) {
@@ -1263,26 +1272,27 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         this.__snapshotIsModifierToggle = false;
     }
 
-    _applySelectionFromIds(ids) {
+    _applySelection(annotations) {
         const canvas = this.canvas;
-        if (!ids || ids.length === 0) {
+        if (!annotations || annotations.length === 0) {
+            this.removeHighlight();
             canvas.discardActiveObject();
             canvas.requestRenderAll();
             return;
         }
-        const objs = ids
-            .map(id => this.findObjectOnCanvasByIncrementId(Number(id)))
-            .filter(Boolean);
 
-        if (objs.length === 1) {
-            const obj = objs[0];
+        if (annotations.length === 1) {
+            const obj = annotations[0];
+            this.highlightAnnotation(obj);
             canvas.setActiveObject(obj);
             this.__selectionSnapshot = [obj];
         } else {
+            this.highlightAnnotation(annotations[annotations.length - 1]);
+
             // active is single object, convert to ActiveSelection
             const sel = new fabric.ActiveSelection([], { canvas });
             // Build selection incrementally to keep child positions intact
-            for (let o of objs) {
+            for (let o of annotations) {
                 sel.addWithUpdate(o);
             }
             sel.hasBorders = false;
@@ -1298,32 +1308,36 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
      * Emit annotation selection change
      * @event annotation-selection-changed
      */
-    _emitAnnotationSelectionChanged(annotationIds, isSelected, fromCanvas) {
-        const ids = Array.isArray(annotationIds)
-            ? annotationIds.map(id => String(id))
-            : (annotationIds !== undefined && annotationIds !== null ? String(annotationIds) : annotationIds);
+    _emitAnnotationSelectionChanged(selected, deselected, fromCanvas) {
+        const norm = (v) => 
+            (v === undefined || v === null) ? [] : (Array.isArray(v) ? v : [v]);
 
-        // todo selection event collision
+        const sel = norm(selected);
+        const desel = norm(deselected);
+
+        if (sel.length === 0 && desel.length === 0) return;
+
         this.raiseEvent('annotation-selection-changed', {
-            ids: ids,
-            isSelected: isSelected,
-            fromCanvas: fromCanvas
+          selected: sel,
+          deselected: desel,
+          fromCanvas
         });
     }
 
     /**
      * Clear all annotation selection
+     * @param {boolean} [fromCanvas=false] if the clear selection event originates on canvas, set true
      */
     clearAnnotationSelection(fromCanvas=false) {
         this.__selectionSnapshot = [];
-        const selected = this.getSelectedAnnotationIds();
-        if (!selected.length) return;
+        const deselect = this.getSelectedAnnotationIds();
+        this.removeHighlight();
+        if (!deselect.length) return;
 
         this.canvas.discardActiveObject();
         this.canvas.requestRenderAll();
-        // this.__oldSelection = null;
 
-        this._emitAnnotationSelectionChanged(selected, false, fromCanvas);
+        this._emitAnnotationSelectionChanged([], deselect, fromCanvas);
     }
 
     /**
@@ -1337,15 +1351,15 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         if (!object) return false;
 
         if (Array.isArray(reference)) {
-            return reference.find(x => x.incrementId === object.incrementId);
+            return reference.find(x => x.internalID === object.internalID);
         }
 
         const active = reference || this.canvas.getActiveObject();
         if (!active) return false;
         if (active.type === 'activeSelection') {
-            return !!(active._objects && active._objects.find(x => x.incrementId === object.incrementId));
+            return !!(active._objects && active._objects.find(x => x.internalID === object.internalID));
         }
-        return active.incrementId === object.incrementId;
+        return active.internalID === object.internalID;
     }
 
     /**
@@ -1477,9 +1491,10 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     /**
      * Update single object visuals
      * @param {fabric.Object} object
-     * @return {boolean} true on update success
+     * @param {Array} [selection=null] current selection array
+     * @return {boolean} true if visuals were updated
      */
-    updateSingleAnnotationVisuals(object) {
+    updateSingleAnnotationVisuals(object, selection=null) {
         if (object.isHighlight) return false;
 
         let preset = this.module.presets.get(object.presetID);
@@ -1487,8 +1502,9 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             const factory = this.module.getAnnotationObjectFactory(object.factoryID);
             const visuals = {...this.module.presets.commonAnnotationVisuals};
             factory.updateRendering(object, preset, visuals, visuals);
+            factory.renderPresetText(object);
 
-            const isSelected = this.isAnnotationSelected(object);
+            const isSelected = this.isAnnotationSelected(object, selection);
             if (isSelected) factory?.applySelectionStyle?.(object, this);
             return true;
         }
@@ -1513,12 +1529,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
         // todo this event is called too often when clicking, the update should be preformed once to reflect the correct state - e.g. prevent by flag, or add deferred execution
         this.addHandler('annotation-selection-changed', (payload) => {
-            const ids = Array.isArray(payload.ids) ? payload.ids : [payload.ids];
-
-            ids.forEach(id => {
-                const annotation = _this.findObjectOnCanvasByIncrementId(Number(id));
-                if (annotation) _this.updateSingleAnnotationVisuals(annotation);
-            });
+            let annotations = payload.selected.concat(payload.deselected);
+            annotations.forEach(annot => _this.updateSingleAnnotationVisuals(annot, payload.selected));
         });
 
         this.viewer.addHandler('screenshot', e => {
@@ -1800,6 +1812,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
     _objectClicked(event, point) {
 
         try {
+       		const polygonUtils = OSDAnnotations.PolygonUtilities;
+
             let clickedObject = event.target;
             const originalEvent = event.e;
             // non-user event, selection fired by the system (e.g. annotation added to canvas)
@@ -1808,35 +1822,27 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
             // const isOnActive = !!(active && active.containsPoint && active.containsPoint(pointer));
 
             if (clickedObject.type === 'activeSelection') {
-                // todo simona moved code here to compute only when needed, select one to use
-
                 const pointer = this.canvas.getPointer(event);
 
-                // const point = new OpenSeadragon.Point(originalEvent.x, originalEvent.y);
-                // const pointer = this.viewer.scalebar.getReferencedTiledImage().imageToWindowCoordinates(point);
-
-                // todo simona removed pointer creation here, re-using the created one above, either we use image-coords-level pointer or window, don't create a third one, if you prefer creation of
-                //  fabric pointer, create it above
                 for (const obj of clickedObject._objects) {
                     let currObj = {
-                        left: obj.left + clickedObject.left + (clickedObject.width / 2),
-                        top: obj.top + clickedObject.top + (clickedObject.height / 2),
+                        x: obj.left + clickedObject.left + (clickedObject.width / 2),
+                        y: obj.top + clickedObject.top + (clickedObject.height / 2),
                         width: obj.width,
                         height: obj.height
-                    }
+                    };
 
-                    if (
-                        pointer.x >= currObj.left &&
-                        pointer.x <= currObj.left + currObj.width &&
-                        pointer.y >= currObj.top &&
-                        pointer.y <= currObj.top + currObj.height
-                    ) {
+                    const point = {
+                        x: pointer.x,
+                        y: pointer.y,
+                        width: 1,
+                        height: 1
+                    };
+                    
+                    if (polygonUtils.intersectAABB(currObj, point)) {
                         // todo simona this needs to do fine selection upon AAB hit similar to what brush tool does, but RN it is point VS polygon - simpler
-
                         // select only if not already selected
-                        if (clickedObject !== obj) {
-                            clickedObject = obj;
-                        }
+                        if (clickedObject !== obj) clickedObject = obj;
                         break;
                     }
                 }
@@ -1867,15 +1873,6 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
             if (originalEvent.ctrlKey || originalEvent.metaKey || originalEvent.shiftKey) {
                 this.__snapshotIsModifierToggle = true;
-                //
-                // // check old selection
-                // const isSelected = this.isAnnotationSelected(clickedObject, this.__oldSelection);
-                // // If the mode does not allow, skip
-                // if (isSelected && this.module.mode.objectDeselected(event, object)) {
-                //	 this.deselectAnnotation(clickedObject, true);
-                // } else if (!isSelected && this.module.mode.objectSelected(event, object)) {
-                //	 this.selectAnnotation(clickedObject, true);
-                // }
 
                 const ref = this.__selectionSnapshot || [];
                 const isSelected = this.isAnnotationSelected(clickedObject, ref);
@@ -1894,8 +1891,8 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
 
             this.__snapshotIsModifierToggle = false;
             // todo: this calls the event with updates TWICE -> it would be better to have a single event with all the updates
-            this.clearAnnotationSelection(true);
-            this.selectAnnotation(clickedObject, true);
+            //this.clearAnnotationSelection(true);
+            this.selectAnnotation(clickedObject, true, true);
         } catch (e) {
             console.error(e);
         }

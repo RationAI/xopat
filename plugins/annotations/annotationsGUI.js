@@ -272,11 +272,13 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 			`
 <div class="d-flex flex-row mt-1 width-full">
 <div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
+<div id="annotations-outline-control">
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
 				classes: "pl-2",
 				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
+</div>
 </div>
 <div class="d-flex flex-row mt-1 width-full">
 <div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
@@ -1577,22 +1579,16 @@ ${UIComponents.Elements.select({
 	annotationsEnabledEditModeHandler(e) {
 		let nodeToolBar = document.getElementById('annotations-tool-bar-content');
 		let nodeVisibility = document.getElementById('enable-disable-annotations');
-		let nodeSave = document.getElementById('server-primary-save');
-		let nodeExport = document.getElementById('show-annotation-export');
-		let nodeUrl = document.getElementById('copy-url');
+		let nodeOutline = document.getElementById('annotations-outline-control');
 
 		if (e.inEditMode) { 
 			this._toggleEnabledStyle(nodeToolBar, false);
 			this._toggleEnabledStyle(nodeVisibility, false);
-			this._toggleEnabledStyle(nodeSave, false);
-			this._toggleEnabledStyle(nodeExport, false);
-			this._toggleEnabledStyle(nodeUrl, false);
+			this._toggleEnabledStyle(nodeOutline, false);
 		} else {
 			this._toggleEnabledStyle(nodeToolBar, true);
 			this._toggleEnabledStyle(nodeVisibility, true);
-			this._toggleEnabledStyle(nodeSave, true);
-			this._toggleEnabledStyle(nodeExport, true);
-			this._toggleEnabledStyle(nodeUrl, true);
+			this._toggleEnabledStyle(nodeOutline, true);
 		}
 	}
 

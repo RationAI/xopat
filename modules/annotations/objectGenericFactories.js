@@ -524,9 +524,13 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         delete visualProperties["strokeWidth"];
         delete visualProperties["originalStrokeWidth"];
         visualProperties.hasBorders = true;
-        visualProperties.text = this._context.fabric.getAnnotationDescription(ofObject, "category", true, false);
         // no support for internal logics, text driven its own scaling, just set the rest
         ofObject.set(visualProperties);
+        this._context.fabric.rerender();
+    }
+
+    renderPresetText(ofObject) {
+        ofObject.text = this._context.fabric.getAnnotationDescription(ofObject, "category", true, false);
         this._context.fabric.rerender();
     }
 
@@ -956,12 +960,16 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
     edit(theObject) {
         this._origPoints = [...theObject.points];
+        this._left = theObject.left;
+        this._top = theObject.top;
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
+        theObject.lockMovementX = false;
+        theObject.lockMovementY = false;
         theObject.objectCaching = false;
         theObject.transparentCorners = false;
         theObject.controls = theObject.points.reduce(function(acc, point, index) {
@@ -1018,14 +1026,44 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     recalculate(theObject, ignoreReplace=false) {
+        const finalLeft = theObject.left;
+        const finalTop = theObject.top;
+
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
+        theObject.lockMovementX = true;
+        theObject.lockMovementY = true;
 
-        if (!theObject.points.every(
-            (value, index) => value === this._origPoints[index])) {
-            let newObject = this.copy(theObject, theObject.points);
+        const startLeft = this._left ?? finalLeft;
+        const startTop = this._top ?? finalTop;
+        const dx = finalLeft - startLeft;
+        const dy = finalTop - startTop;
+
+        theObject.set({ left: startLeft, top: startTop });
+        theObject.setCoords();
+
+        const moved = dx !== 0 || dy !== 0;
+        const pointsChanged = !theObject.points.every((p, i) => {
+            const o = this._origPoints?.[i];
+            return o && o.x === p.x && o.y === p.y;
+        });
+
+        if (moved || pointsChanged) {
+            if (moved) {
+                theObject.points = theObject.points.map(p => ({
+                    x: p.x + dx,
+                    y: p.y + dy
+                }));
+            }
+
+            const newObject = this.copy(theObject, {
+                points: theObject.points,
+                left: finalLeft,
+                top: finalTop
+            });
             theObject.points = this._origPoints;
+            theObject.setCoords();
 
             if (!ignoreReplace) {
                 this._context.fabric.replaceAnnotation(theObject, newObject);
@@ -1958,6 +1996,8 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
 
     edit(theObject) {
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
+        this._left = theObject.left;
+        this._top = theObject.top;
 
         const self = this;
         theObject.cornerStyle = 'circle';
@@ -1965,6 +2005,8 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         theObject.hasControls = true;
         theObject.objectCaching = false;
         theObject.transparentCorners = false;
+        theObject.lockMovementX = false;
+        theObject.lockMovementY = false;
 
         const controls = {};
         for (let r = 0; r < theObject.points.length; r++) {
@@ -2051,20 +2093,48 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     recalculate(theObject) {
+        const finalLeft = theObject.left;
+        const finalTop = theObject.top;
+
         theObject.controls = fabric.Object.prototype.controls;
         theObject.hasControls = false;
         theObject.strokeWidth = this._presets.getCommonProperties().strokeWidth;
+        theObject.lockMovementX = true;
+        theObject.lockMovementY = true;
 
-        if (this._pointsChanged) {
-            const newObject = this.copy(theObject, theObject.points);
+        const startLeft = this._left ?? finalLeft;
+        const startTop = this._top ?? finalTop;
+        const dx = finalLeft - startLeft;
+        const dy = finalTop - startTop;
 
-            const originalPointsCopy = this._origPoints.map(r => r.map(p => ({ x: p.x, y: p.y })));
+        theObject.set({ left: startLeft, top: startTop });
+        theObject.setCoords();
+
+        const moved = dx !== 0 || dy !== 0;
+        
+        if (moved || this._pointsChanged) {
+            if (moved) {
+                theObject.points = theObject.points.map(r =>
+                    r.map(p => ({ x: p.x + dx, y: p.y + dy }))
+                );
+            }
+
+            const newObject = this.copy(theObject, {
+                points: theObject.points,
+                left: finalLeft,
+                top: finalTop
+            });
+
+            const originalPointsCopy = this._origPoints?.map(r => r.map(p => ({ x: p.x, y: p.y })));
             theObject.points = originalPointsCopy;
             this.setPoints(theObject, originalPointsCopy);
 
             this._context.fabric.replaceAnnotation(theObject, newObject);
         }
+
         this._origPoints = null;
         this._pointsChanged = false;
+        this._left = undefined;
+        this._top = undefined;
     }
 };
