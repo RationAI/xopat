@@ -13,38 +13,44 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this.oldMask = null;
         this.mask = null;
         //this._buttonActive = false;
-
+        this._lastViewportKey = null;
         this._scrollZoom = this.scrollZooming.bind(this);
 
-        const shaders = VIEWER.drawer.renderer.getShaderLayerOrder();
+        const shaders = this.context.viewer.drawer.renderer.getShaderLayerOrder();
         this._selectedShader = shaders[0];
         this.disabled = !shaders.length;
 
-        VIEWER.addHandler('visualization-used', () => {
+        VIEWER_MANAGER.broadcastHandler('visualization-used', () => {
+            this.prepareShaderConfig();
             this._invalidData = Date.now();
         });
+
+        const debug = document.createElement('canvas')
+        this.ddeb = debug.getContext('2d');
+        debug.style.width = "300px";
+        debug.style.height = "300px";
+        debug.style.position = "absolute";
+        window.document.body.appendChild(debug);
     }
 
-    async refreshDrawer() {
+    prepareShaderConfig() {
         // for some reason change in drawer completely wrongs the logics
         // of reading the texture, so the drawer must be recreated
 
-        if (this.drawer) {
-            this.drawer.destroy();
+        if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
+            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
         }
 
-        this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(VIEWER);
-        const shaders = VIEWER.drawer.renderer.getAllShaders();
+        const shaders = this.context.viewer.drawer.renderer.getAllShaders();
         const result = {};
-        if (shaders[this._selectedShader]) {
-            result[this._selectedShader] = shaders[this._selectedShader].getConfig();
-        } else {
-            for (let id in shaders) {
-                result[id] = shaders[id].getConfig();
-            }
+
+        const selectedShader = shaders[this._selectedShader];
+        for (let id in shaders) {
+            // If selection, keep the same amount of shaders, but except the target one make them vanish
+            // todo masks are not accounted for! make some flex drawer utility that solves this
+            result[id] = !selectedShader || id === this._selectedShader ? shaders[id].getConfig() : { type: 'identity', visible: 0, dataReferences: [0]};
         }
-        this.drawer.overrideConfigureAll(result);
-        await this.drawer._requestRebuild(0, true);
+        this._renderConfig = result;
     }
 
     setLayer(index, key) {
@@ -76,23 +82,30 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this._isLeft = isLeftClick;
     }
 
-    prepareViewportScreenshot(x, y, w, h) {
+    async prepareViewportScreenshot(x, y, w, h) {
+        const viewer = this.context.viewer;
         x = x || 0;
         y = y || 0;
-        w = w || Math.round(VIEWER.drawer.canvas.width);
-        h = h || Math.round(VIEWER.drawer.canvas.height);
+        w = w || Math.round(viewer.drawer.canvas.width);
+        h = h || Math.round(viewer.drawer.canvas.height);
 
-        this.data = null;
         this._invalidData = true;
-        this.drawer.draw(VIEWER.world._items);
 
-        // end
-        const data = new Uint8Array(w * h * 4);         // RGBA8
-        const gl = this.drawer.renderer.gl;
+        // todo this call needs to go to the renderer
+        this.drawer.renderer.gl.clear(this.drawer.renderer.gl.COLOR_BUFFER_BIT);
+        await this.drawer.drawWithConfiguration(
+            viewer.world._items,
+            this._renderConfig,
+            viewer.drawer,
+            { x: w, y: h }
+        );
+
+        const data = new Uint8Array(w * h * 4); // RGBA8
+        const gl   = this.drawer.renderer.gl;
         gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
         gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
-        // vertical swap
+        // vertical flip
         const row = w * 4;
         const tmp = new Uint8Array(row);
         for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
@@ -101,42 +114,72 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             data.set(tmp, b);
         }
 
+        // debug canvas
+        this.ddeb.canvas.width  = w;
+        this.ddeb.canvas.height = h;
+        const imgData = new ImageData(new Uint8ClampedArray(data.buffer), w, h);
+        this.ddeb.drawImage(this.drawer.renderer.canvas, 0, 0, w, h);
+
         this.data = {
-            width: w,
+            width:  w,
             height: h,
-            data: data,
-            bytes:4,
+            data:   data,
+            bytes:  4,
             rawData: data,
             binaryMask: new Uint8ClampedArray(w * h)
-        }
+        };
         this._invalidData = false;
         return this.data;
     }
 
-    _process(o) {
-        if (!this.data) return;
+    async _process(o) {
+        const viewer = this.context.viewer;
 
-        if (this._invalidData) {
-            this.prepareViewportScreenshot();
+        // Build a simple key from current viewport
+        const b = viewer.viewport.getBoundsNoRotateWithMargins(true);
+        const key = [
+            b.x, b.y, b.width, b.height,
+            viewer.viewport.getRotation(true),
+            viewer.viewport.getZoom(true)
+        ].join(",");
+
+        const needsNewScreenshot =
+            !this.data ||
+            this._invalidData ||
+            this._lastViewportKey !== key;
+
+        if (needsNewScreenshot) {
+            await this.prepareViewportScreenshot();
+            this._lastViewportKey = key;
         }
+
+        if (!this.data) return; // still nothing? bail out
 
         if (this.addMode && !this.oldMask) {
             this.oldMask = this.mask;
         }
-        const ref = VIEWER.scalebar.getReferencedTiledImage();
+        const ref    = viewer.scalebar.getReferencedTiledImage();
         const oldMask = this.oldMask && this.oldMask.data;
-        const ratio = OpenSeadragon.pixelDensityRatio;
+        const ratio  = OpenSeadragon.pixelDensityRatio;
 
-        this.mask = this.MagicWand.floodFill(this.data, Math.round(o.x*ratio), Math.round(o.y*ratio), this.threshold,
-            this.threshold, oldMask, true);
+        this.mask = this.MagicWand.floodFill(
+            this.data,
+            Math.round(o.x * ratio),
+            Math.round(o.y * ratio),
+            this.threshold,
+            this.threshold,
+            oldMask,
+            true
+        );
 
         if (this.mask) this.mask = this.MagicWand.gaussBlurOnlyBorder(this.mask, 5, oldMask);
         if (this.addMode && oldMask) {
             this.mask = this.mask ? this._concatMasks(this.mask, oldMask) : oldMask;
         }
         this.mask.bounds.minX = this.mask.bounds.minY = 0;
-        var cs = this.MagicWand.traceContours(this.mask);
+        let cs = this.MagicWand.traceContours(this.mask);
         cs = this.MagicWand.simplifyContours(cs, 0, 30);
+
         let largest, count = 0;
         for (let line of cs) {
             if (!line.inner && line.points.length > count) {
@@ -144,13 +187,18 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
                 count = largest.length;
             }
         }
+
         const factory = this.context.getAnnotationObjectFactory("polygon");
         if (this.result) {
             this.context.fabric.deleteHelperAnnotation(this.result);
         }
 
         if (largest && factory) {
-            largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)));
+            largest = largest.map(pt =>
+                ref.windowToImageCoordinates(
+                    new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)
+                )
+            );
             const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
             visualProps.strokeDashArray = [15, 15];
             this.result = factory.create(largest, visualProps);
@@ -231,11 +279,10 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     }
 
     setFromAuto() {
-        this.refreshDrawer().then(() => {
-            this.prepareViewportScreenshot();
-        });
+        this.prepareShaderConfig();
+        this.prepareViewportScreenshot();
 
-        VIEWER.addHandler('animation-finish', this._scrollZoom);
+        this.context.viewer.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
         this.context.fabric.canvas.hoverCursor = "crosshair";
         this.context.fabric.canvas.defaultCursor = "crosshair";
@@ -249,11 +296,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         }
         this.data = null;
 
-        VIEWER.removeHandler('animation-finish', this._scrollZoom);
+        this.context.viewer.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
-        this.drawer.destroy();
-        this.drawer = null;
         return true;
     }
 
@@ -275,15 +320,14 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
     setShaderToDetectFrom(value) {
         this._selectedShader = value;
-        this.refreshDrawer().then(() => {
-            this._invalidData = Date.now();
-        });
+        this.prepareShaderConfig();
+        this._invalidData = Date.now();
     }
 
     customHtml() {
         let options;
-        for (let shaderId of VIEWER.drawer.renderer.getShaderLayerOrder()) {
-            const config = VIEWER.drawer.renderer.getShaderLayerConfig(shaderId);
+        for (let shaderId of this.context.viewer.drawer.renderer.getShaderLayerOrder()) {
+            const config = this.context.viewer.drawer.renderer.getShaderLayerConfig(shaderId);
             if (this._selectedShader === shaderId) {
                 options += `<option value='${shaderId}' selected>${config.name}</option>`;
             } else {

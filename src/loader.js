@@ -70,11 +70,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         return REGISTERED_PLUGINS === undefined;
     }
 
-    window.showPluginError = function (id, e) {
+    window.showPluginError = function (id, e, loaded=undefined) {
         // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
-            $(`#load-plugin-${id}`).html("");
+            if (loaded) $(`#load-plugin-${id}`).html("");
             return;
         }
         $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
@@ -300,7 +300,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         REQUIRED_SINGLETONS.add(SingletonClass);
         if (window.VIEWER_MANAGER) {
             for (let v of VIEWER_MANAGER.viewers) {
-                if (v.isOpen() && !this._getSingleton(SingletonClass.IDD, viewer)) {
+                if (v.isOpen() && !this._getSingleton(SingletonClass.IDD, v)) {
                     SingletonClass.instance(v);
                 }
             }
@@ -2391,7 +2391,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             let plugin = PLUGINS[pid];
             if (plugin) {
-                showPluginError(plugin.id, plugin.error);
+                showPluginError(plugin.id, plugin.error, plugin.loaded);
             }
         }
 

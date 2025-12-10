@@ -33,6 +33,7 @@ import { ToolbarItem} from "./classes/components/toolbar/toolbarItem.mjs";
 import { ToolbarSeparator } from "./classes/components/toolbar/toolbarSeparator.mjs";
 import { ToolbarGroup } from "./classes/components/toolbar/toolbarGroup.mjs";
 import { ToolbarChoiceGroup } from "./classes/components/toolbar/toolbarChoiceGroup.mjs";
+import { ToolbarPanelButton } from "./classes/components/toolbar/toolbarPanelButton.mjs";
 import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { ShaderSideMenu } from "./classes/components/shaderSideMenu.mjs";
 import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
@@ -96,7 +97,7 @@ const UI = {
     // Components
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,
     ShaderSideMenu, FloatingWindow, MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
-    Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup,
+    Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton,
 
     // Services -> instantiated
     Services: new ServiceContainer()

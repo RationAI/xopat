@@ -2,25 +2,16 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     constructor(context) {
         super(context, "viewport-segmentation", "fa-border-top-left", "🆄  viewport segmentation");
         this.MagicWand = OSDAnnotations.makeMagicWand();
-        this.ref = VIEWER.scalebar.getReferencedTiledImage();
 
         this.annotations = [];
         this._lastAlpha = null;
         this.ratio = OpenSeadragon.pixelDensityRatio;
+        this._tiRef = null;
 
-        VIEWER.addHandler('visualization-used', () => {
+        VIEWER_MANAGER.broadcastHandler('visualization-used', () => {
+            this.prepareShaderConfig();
             this._invalidData = Date.now();
         });
-
-        this.drawer = new OpenSeadragon.Drawer({
-            viewer:             VIEWER,
-            viewport:           VIEWER.viewport,
-            element:            VIEWER.canvas,
-            debugGridColor:     VIEWER.debugGridColor
-        });
-        this.drawer.canvas.style.setProperty('z-index', '-999');
-        this.drawer.canvas.style.setProperty('visibility', 'hidden');
-        this.drawer.canvas.style.setProperty('display', 'none');
 
         this.disabled = APPLICATION_CONTEXT.config.visualizations.length < 1;
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length;
@@ -55,7 +46,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._isLeft = isLeftClick;
     }
 
-    handleMouseHover(event, point) {
+    async handleMouseHover(event, point) {
         if (!this.context.presets.left || this.isZooming) {
             this._invalidData = Date.now();
             return;
@@ -64,8 +55,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._isLeft = true;
 
         if (this._invalidData) {
-            const { x, y, w, h } = this._getViewportScreenshotDimensions();
-            this._prepareViewportScreenshot(x, y, w, h);
+            await this.prepareViewportScreenshot();
         }
 
         if (!this.data) return;
@@ -95,10 +85,9 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     setFromAuto() {
-        this.drawer.canvas.style.setProperty('display', 'block');
-
-        const { x, y, w, h } = this._getViewportScreenshotDimensions();
-        this._prepareViewportScreenshot(x, y, w, h);
+        this._tiRef = this.context.viewer.scalebar.getReferencedTiledImage();
+        this.prepareShaderConfig();
+        this.prepareViewportScreenshot();
 
         this.context.setOSDTracking(false);
         this.context.fabric.canvas.hoverCursor = "crosshair";
@@ -113,8 +102,6 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         }
 
         this.data = null;
-        this.drawer.canvas.style.setProperty('display', 'none');
-
         if (temporary) return false;
         this.context.setOSDTracking(true);
         return true;
@@ -128,45 +115,65 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return e.code === "KeyU";
     }
 
-    _prepareViewportScreenshot(x, y, w, h) {
-        const canvasW = Math.round(VIEWER.drawer.canvas.width);
-        const canvasH = Math.round(VIEWER.drawer.canvas.height);
+    prepareShaderConfig() {
+        // for some reason change in drawer completely wrongs the logics
+        // of reading the texture, so the drawer must be recreated
 
-        if (x < 0) {
-            w += x;
-            x = 0;
+        if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
+            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
         }
 
-        if (y < 0) {
-            h += y;
-            y = 0;
+        const shaders = this.context.viewer.drawer.renderer.getAllShaders();
+        const result = {};
+        if (shaders[this._selectedShader]) {
+            result[this._selectedShader] = shaders[this._selectedShader].getConfig();
+        } else {
+            for (let id in shaders) {
+                result[id] = shaders[id].getConfig();
+            }
         }
+        this._renderConfig = result;
+    }
 
-        w = Math.min(w, canvasW);
-        h = Math.min(h, canvasH);
+    async prepareViewportScreenshot(x, y, w, h) {
+        const viewer = this.context.viewer;
+        x = x || 0;
+        y = y || 0;
+        w = w || Math.round(viewer.drawer.canvas.width);
+        h = h || Math.round(viewer.drawer.canvas.height);
 
         this.contentSize = {x, y, w, h};
+        this._invalidData = true;
 
-        this.drawer.clear();
+        await this.drawer.drawWithConfiguration(
+            viewer.world._items,
+            this._renderConfig,
+            viewer.drawer,
+            { x: w, y: h }
+        );
 
-        // TODO: this does not work properly VIEWER.world.getItemAt(1)
-        const targetImage = VIEWER.world.getItemAt(this.tiledImageIndex);
-        if (!targetImage) return;
-        const oldDrawer = targetImage._drawer;
+        const data = new Uint8Array(w * h * 4); // RGBA8
+        const gl   = this.drawer.renderer.gl;
+        gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
-        targetImage._drawer = this.drawer;
-        targetImage.draw();
-        targetImage._drawer = oldDrawer;
-
-        const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
-        this.data = {
-            width: data.width,
-            height: data.height,
-            data: data.data,
-            bytes:4,
-            rawData: data,
-            binaryMask: null
+        // vertical flip
+        const row = w * 4;
+        const tmp = new Uint8Array(row);
+        for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
+            tmp.set(data.subarray(t, t + row));
+            data.copyWithin(t, b, b + row);
+            data.set(tmp, b);
         }
+
+        this.data = {
+            width:  w,
+            height: h,
+            data:   data,
+            bytes:  4,
+            rawData: data,
+            binaryMask: new Uint8ClampedArray(w * h)
+        };
         this._invalidData = false;
         return this.data;
     }
@@ -202,25 +209,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return { data: mask, width: width, height: height, bounds: bounds };
     }
 
-    _getViewportScreenshotDimensions() {
-        let contentSize = this.ref.viewport._contentSize;
-
-        let contentCoords = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(contentSize.x, contentSize.y));
-        contentCoords.x *= this.ratio;
-        contentCoords.y *= this.ratio;
-
-        let topLeftCoords = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(0, 0));
-        topLeftCoords.x *= this.ratio;
-        topLeftCoords.y *= this.ratio;
-
-        let viewportWidth = contentCoords.x - topLeftCoords.x;
-        let viewportHeight = contentCoords.y - topLeftCoords.y;
-
-        return { x: topLeftCoords.x, y: topLeftCoords.y, w: viewportWidth, h: viewportHeight };
-    }
-
     _getPixelAlpha(point) {
-        const windowPoint = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        const windowPoint = this._tiRef.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
         windowPoint.x *= this.ratio;
         windowPoint.y *= this.ratio;
 
@@ -314,7 +304,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
     _convertToImageCoordinates(points) {
         return points.map(point =>
-            this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
+            this._tiRef.windowToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
         );
     }
 }

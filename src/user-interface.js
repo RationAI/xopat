@@ -776,7 +776,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
 
                 let text = div({ class: "flex flex-col", style: "flex-grow: 1;" },
-                    div({ class: "text-lg font-semibold" }, plugin.name),
+                    div({ class: "text-lg font-semibold" }, plugin.name || plugin.id),
                     div({ class: "text-sm opacity-70" }, plugin.description),
                 );
 
@@ -785,7 +785,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     div({ class: "w-full flex selectable-image-row rounded-md cursor-pointer", onclick: function () {$(this.previousElementSibling).click()} },
                         icon,
                         text,
-                        actionPart,
+                        actionPart
                     ),
                     div({ id: `error-plugin-${plugin.id}`, class: "mx-2 mb-3 text-small" }),
                 );

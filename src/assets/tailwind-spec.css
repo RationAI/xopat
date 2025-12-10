@@ -111,17 +111,15 @@
     .thumb-remove::after {
         content: '';
         position: absolute;
-        bottom: 0.25rem;   /* adjust as needed */
-        right: 0.25rem;    /* adjust as needed */
+        bottom: 0.25rem;
+        right: 0.25rem;
         width: 1.5rem;
         height: 1.5rem;
-        border-radius: 9999px; /* full circle */
         display: inline-flex;
         align-items: center;
         justify-content: center;
         font-size: 0.75rem;
         font-weight: 700;
-        box-shadow: 0 0 0 2px #fff; /* white ring so it stands out over images */
     }
 
     .thumb-add::after {

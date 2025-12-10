@@ -73,11 +73,10 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setModeUsed("CUSTOM");
 		this.context.setModeUsed("FREE_FORM_TOOL_ADD");
 		this.context.setModeUsed("FREE_FORM_TOOL_REMOVE");
-		// TODO fix
+        // todo these are actually built-in, use as built-in
 		this.context.setCustomModeUsed("MAGIC_WAND", OSDAnnotations.MagicWand);
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
-		// todo fix
-		// this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
+		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
         this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
         this.context.commentsEnabled = this._commentsEnabled;
@@ -393,6 +392,11 @@ ${UIComponents.Elements.checkBox({
                     itemID: modes.FREE_FORM_TOOL_CORRECT.getId(),
                     icon: modes.FREE_FORM_TOOL_CORRECT.getIcon(),
                     label: modes.FREE_FORM_TOOL_CORRECT.getDescription()
+                }),
+                new ui.ToolbarItem({
+                    itemID: modes.VIEWPORT_SEGMENTATION.getId(),
+                    icon: modes.VIEWPORT_SEGMENTATION.getIcon(),
+                    label: modes.VIEWPORT_SEGMENTATION.getDescription()
                 })
             ).attachTo(gModes);
             this._gModes = gModes;
@@ -400,38 +404,24 @@ ${UIComponents.Elements.checkBox({
             this._htmlWrap = new UI.RawHtml({
                 id: `${this.id}-mode-options-html`,
                 extraClasses: {
-                    base: "w-full h-full text-sm relative"
+                    base: "w-full h-full text-sm"
                 }
             }, this.context.mode.customHtml() || "");
-            this._modeOptionsWindow = new UI.FloatingWindow({
-                id: `${this.id}-mode-options`,
-                icon: 'fa-sliders',
-                title: "Mode options",
-                width: 420,
-                height: 260,
-                startLeft: 80,
-                startTop: window.innerHeight - 360,
-                resizable: true,
-                closable: true,
-                onClose: () => {
-                    this._forceCloseModeOptions = true;
-                }
-            }, this._htmlWrap);
 
-            const modeOptionsBtn = new UI.ToolbarItem({
+            this._modeOptionsPanel = new UI.ToolbarPanelButton({
                 id: "mode-options",
                 itemID: "mode-options",
                 icon: "fa-sliders",
-                label: "Mode Options",
-                onClick: () => {
-                    const opened = this._modeOptionsWindow.isOpened();
-                    this._forceCloseModeOptions = this._forceCloseModeOptions || !opened;
-                    this._modeOptionsWindow.isOpened() ? this._modeOptionsWindow.close() : this._modeOptionsWindow.open();
+                label: "Mode options",
+                panelClass: "w-80 max-h-[60vh] overflow-y-auto space-y-2",
+                onToggle: (open) => {
+                    // remember if user explicitly closed it -> don't auto-reopen
+                    if (!open) this._forceCloseModeOptions = true;
                 }
-            });
+            }, this._htmlWrap);
 
             USER_INTERFACE.Tools.setMenu(this.id, "annotations-tool-bar", "Annotations",
-                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), modeOptionsBtn], 'draw');
+                [gHistory, new UI.ToolbarSeparator(), gModes, new UI.ToolbarSeparator(), this._modeOptionsPanel], 'draw');
         }, 2000);
 
 		USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "annotations-shared", "Export/Import",
@@ -1287,13 +1277,6 @@ ${UIComponents.Elements.select({
 		authorListContainer.html(authorItems);
 	}
 
-	_createHistoryInAdvancedMenu(focus = false) {
-		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
-		this.context.historyManager.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
-		this._openedHistoryMenu = true;
-		if (focus) USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
-	}
-
 	initHandlers() {
         // FIXME event no longer exist
 		//Add handlers when mode goes from AUTO and to AUTO mode (update tools panel)
@@ -1304,11 +1287,27 @@ ${UIComponents.Elements.select({
             const modes  = this.context.Modes;
             const modeId = mode.getId();
 
-            if (this._htmlWrap) {
-                if (!this._forceCloseModeOptions && !this._modeOptionsWindow.isOpened()) {
-                    this._modeOptionsWindow.open();
+            if (this._htmlWrap && this._modeOptionsPanel) {
+                const rawHtml = (this.context.mode.customHtml && this.context.mode.customHtml()) || "";
+                const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
+
+                if (hasHtml) {
+                    // put new HTML in, enable button
+                    this._htmlWrap.setHtml(rawHtml);
+                    this._modeOptionsPanel.setEnabled(true);
+
+                    if (!this._forceCloseModeOptions && !this._modeOptionsPanel.isOpen()) {
+                        this._modeOptionsPanel.open();
+                    }
+                } else {
+                    // cleanup: clear panel, close and disable button
+                    this._htmlWrap.setHtml("");
+                    this._modeOptionsPanel.close();
+                    this._modeOptionsPanel.setEnabled(false);
+
+                    // optional: remember that user now has it closed
+                    this._forceCloseModeOptions = true;
                 }
-                this._htmlWrap.setHtml(this.context.mode.customHtml() || "");
             }
 
             // reflect current mode into the toolbar

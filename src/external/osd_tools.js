@@ -297,12 +297,12 @@ OpenSeadragon.Tools = class {
                 if (ar < 1) size.x = size.x * ar;
                 else size.y = size.y / ar;
             }
-            const context = await drawer.drawWithConfiguration(images, {[bgConfig.id]: config}, size, {
+            const context = await drawer.drawWithConfiguration(images, {[bgConfig.id]: config}, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: 0,
                 zoom: 1.0 / bounds.width,
-            });
+            }, size);
             config.tiledImages = originalTiledImages;
             images.forEach(i => i.destroy());
             return context;
