@@ -8,5 +8,5 @@
     "file-browser.js"
   ],
   "modules": [],
-  "wsi-server": "http://localhost:8080"
+  "wsiService": "http://localhost:8080"
 }
