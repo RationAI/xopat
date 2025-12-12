@@ -2,7 +2,11 @@ addPlugin('file-browser', class extends XOpatPlugin {
     constructor(id) {
         super(id);
 
-        this.wsi_server = "http://localhost:8080"; // TODO
+        this.wsi_server = this.getStaticMeta('wsiService');
+        if (!this.wsi_server) {
+            console.warn('Wsi server not configured: exitting..');
+            return;
+        }
 
         this.integrateWithPlugin("slide-info", async (info) => {
             this.slideMenu = info.menu;
