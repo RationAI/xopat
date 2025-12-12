@@ -23,6 +23,21 @@ const HtmlRenderer = v => {
  */
 
 /**
+ * @typedef {object} UINamedItem The named item in UI.
+ * @property {string} [id] unique id
+ * @property {string} [icon] icon class (FA icons) or empty string if icon not desirable
+ * @property {string} [title] the item title
+ * @property {UIElement|undefined} [body] Returns body of the item, or falsey value if
+ * the item does not exist.
+ */
+
+/**
+ * @typedef {function} UINamedItemGetter
+ * @param {any} argument - use depends on the particular case
+ * @return UINamedItem
+ */
+
+/**
  * @class BaseComponent
  * @description The base class for all components
  */
@@ -380,6 +395,30 @@ export class BaseComponent {
         // Fallback: stringify
         console.warn(`Component ${typeof item} probably not parseable: stringified.`, item);
         return String(item);
+    }
+
+    /**
+     * Externally added components to the DOM must be wrapped by this function,
+     * so that upon failure they can be removed.
+     * @param {UIElement} element root node
+     * @param {XOpatElementID} componentId plugin or module ID that added the item
+     * @param {boolean} instantiateString turn strings into dom done - for compatibility reasons
+     */
+    static ensureTaggedAsExternalComponent(element, componentId, instantiateString=false) {
+        if (!element) return;
+
+        if (element instanceof BaseComponent) {
+            element.toggleClass('__base__', componentId + '-plugin-root', true);
+            return element;
+        }
+
+        if (typeof element === 'string') {
+            return `<div class="${componentId}-plugin-root">${element}</div>`;
+        }
+
+        // assume node
+        element.classList.add(componentId + '-plugin-root');
+        return element;
     }
 
     /**

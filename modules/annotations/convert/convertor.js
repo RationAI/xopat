@@ -103,7 +103,7 @@ OSDAnnotations.Convertor = class {
     /**
      * Encodes the annotation data using asynchronous communication.
      * @param options
-     * @param context
+     * @param {OSDAnnotations.FabricWrapper} context
      * @param withAnnotations
      * @param withPresets
      * @returns serialized or plain list of strings of objects based on this.options.serialize:
@@ -139,7 +139,7 @@ OSDAnnotations.Convertor = class {
 
         const encoded = await new parserCls(context, options).encodePartial(
             annotationsGetter,
-            () => context.presets.toObject()
+            () => context.module.presets.toObject()
         );
         encoded.format = options.format;
         return encoded;

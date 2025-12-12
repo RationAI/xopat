@@ -24,13 +24,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             this.prepareShaderConfig();
             this._invalidData = Date.now();
         });
-
-        const debug = document.createElement('canvas')
-        this.ddeb = debug.getContext('2d');
-        debug.style.width = "300px";
-        debug.style.height = "300px";
-        debug.style.position = "absolute";
-        window.document.body.appendChild(debug);
     }
 
     prepareShaderConfig() {
@@ -82,6 +75,17 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this._isLeft = isLeftClick;
     }
 
+    locksViewer(oldViewerRef, newViewerRef) {
+        const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
+        if (!willKeepViewer) {
+            this.oldMask = null;
+            if (this.result) {
+                this.context.fabric.deleteHelperAnnotation(this.result);
+            }
+        }
+        return willKeepViewer;
+    }
+
     async prepareViewportScreenshot(x, y, w, h) {
         const viewer = this.context.viewer;
         x = x || 0;
@@ -114,11 +118,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             data.set(tmp, b);
         }
 
-        // debug canvas
-        this.ddeb.canvas.width  = w;
-        this.ddeb.canvas.height = h;
-        const imgData = new ImageData(new Uint8ClampedArray(data.buffer), w, h);
-        this.ddeb.drawImage(this.drawer.renderer.canvas, 0, 0, w, h);
+        // todo make this available on ALL events! viewer relative position
+        this.offset = viewer.drawer.canvas.getBoundingClientRect();
 
         this.data = {
             width:  w,
@@ -164,8 +165,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         this.mask = this.MagicWand.floodFill(
             this.data,
-            Math.round(o.x * ratio),
-            Math.round(o.y * ratio),
+            Math.round((o.x - this.offset.x) * ratio),
+            Math.round((o.y - this.offset.y) * ratio),
             this.threshold,
             this.threshold,
             oldMask,
@@ -195,8 +196,9 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 
         if (largest && factory) {
             largest = largest.map(pt =>
-                ref.windowToImageCoordinates(
-                    new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)
+                // we must call viewerElementToImageCoordinates since we don't want to strip the offset of the viewer
+                ref.viewerElementToImageCoordinates(
+                    new OpenSeadragon.Point((pt.x) / ratio, (pt.y) / ratio)
                 )
             );
             const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);

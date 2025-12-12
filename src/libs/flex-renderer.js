@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-12-03
-//! Git commit: --4c5a8e3-dirty
+//! Built on 2025-12-12
+//! Git commit: --8e90ea9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -6423,16 +6423,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         }
 
         /**
-         * @param {TiledImage} tiledImage the tiled image that is calling the function
-         * @returns {Boolean} Whether this drawer requires enforcing minimum tile overlap to avoid showing seams.
-         * @private
-         */
-        minimumOverlapRequired(tiledImage) {
-            // return true if the tiled image is tainted, since the backup canvas drawer will be used.
-            return tiledImage.isTainted();
-        }
-
-        /**
          * Creates an HTML element into which will be drawn.
          * @private
          * @returns {HTMLCanvasElement} the canvas to draw into
@@ -6761,7 +6751,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         const Drawer = OpenSeadragon.FlexDrawer;
 
         const options = $.extend(true, {}, viewer.drawerOptions[Drawer.prototype.getType()]);
-        options.debug = true;
+        options.debug = false;
         options.htmlReset = undefined;
         options.htmlHandler = undefined;
         // avoid modification on navigator
@@ -8051,8 +8041,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-12-03
-//! Git commit: --4c5a8e3-dirty
+//! Built on 2025-12-12
+//! Git commit: --8e90ea9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8222,11 +8212,10 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2025-12-03
-//! Git commit: --4c5a8e3-dirty
+//! Built on 2025-12-12
+//! Git commit: --8e90ea9-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

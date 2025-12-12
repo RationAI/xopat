@@ -219,7 +219,7 @@ OpenSeadragon.Tools = class {
             const images = [];
             for (let source of imageSources) {
                 loadCount++;
-                viewer.instantiateTileImageClass({
+                viewer.instantiateTiledImageClass({
                     tileSource: source,
                     success: async e => {
                         if (exited) return;

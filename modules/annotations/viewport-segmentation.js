@@ -46,6 +46,14 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._isLeft = isLeftClick;
     }
 
+    locksViewer(oldViewerRef, newViewerRef) {
+        const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
+        if (!willKeepViewer) {
+            this._cleanState();
+        }
+        return willKeepViewer;
+    }
+
     async handleMouseHover(event, point) {
         if (!this.context.presets.left || this.isZooming) {
             this._invalidData = Date.now();
@@ -54,8 +62,22 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         this._isLeft = true;
 
-        if (this._invalidData) {
+        const viewer = this.context.viewer;
+        const b = viewer.viewport.getBoundsNoRotateWithMargins(true);
+        const key = [
+            b.x, b.y, b.width, b.height,
+            viewer.viewport.getRotation(true),
+            viewer.viewport.getZoom(true)
+        ].join(",");
+
+        const needsNewScreenshot =
+            !this.data ||
+            this._invalidData ||
+            this._lastViewportKey !== key;
+
+        if (needsNewScreenshot) {
             await this.prepareViewportScreenshot();
+            this._lastViewportKey = key;
         }
 
         if (!this.data) return;
@@ -96,10 +118,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     setToAuto(temporary) {
-        if (this.annotations) {
-            this.annotations.forEach(annotation => this.context.fabric.deleteHelperAnnotation(annotation));
-            this.annotations = [];
-        }
+        this._cleanState();
 
         this.data = null;
         if (temporary) return false;
@@ -157,6 +176,9 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
         gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
+        // todo make this available on ALL events! viewer relative position
+        this.offset = viewer.drawer.canvas.getBoundingClientRect();
+
         // vertical flip
         const row = w * 4;
         const tmp = new Uint8Array(row);
@@ -210,9 +232,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     _getPixelAlpha(point) {
-        const windowPoint = this._tiRef.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
-        windowPoint.x *= this.ratio;
-        windowPoint.y *= this.ratio;
+        const windowPoint = this._tiRef.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
 
         const outOfBounds =
             windowPoint.x < this.contentSize.x ||
@@ -281,10 +301,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const polygonFactory = this.context.getAnnotationObjectFactory("polygon");
         const multipolygonFactory = this.context.getAnnotationObjectFactory("multipolygon");
 
-        if (this.annotations) {
-            this.annotations.forEach(annotation => this.context.fabric.deleteHelperAnnotation(annotation));
-            this.annotations = [];
-        }
+        this._cleanState();
 
         const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
         visualProps.strokeDashArray = [15, 15];
@@ -302,9 +319,17 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this.annotations.forEach(annotation => this.context.fabric.addHelperAnnotation(annotation));
     }
 
+    _cleanState() {
+        if (this.annotations) {
+            this.annotations.forEach(annotation => this.context.fabric.deleteHelperAnnotation(annotation));
+            this.annotations = [];
+        }
+    }
+
     _convertToImageCoordinates(points) {
         return points.map(point =>
-            this._tiRef.windowToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
+            // we must call viewerElementToImageCoordinates since we don't want to strip the offset of the viewer
+            this._tiRef.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x / this.ratio, point.y / this.ratio))
         );
     }
 }

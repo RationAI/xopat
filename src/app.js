@@ -607,14 +607,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const magMicrons = microns || (micronsX + micronsY) / 2;
 
         // todo try read metadata about magnification and warn if we try to guess
-        const values = [2.4, 2, 1.2, 4, 0.6, 10, 0.3, 20, 0.15, 40];
+        const values = [4, 2, 2, 4, 1, 10, 0.5, 20, 0.25, 40]; // Micron values at magnification levels
         let index = 0, best = Infinity, mag;
         if (magMicrons) {
             while (index < values.length) {
                 const dev = Math.abs(magMicrons - values[index]);
+                // Select the best match with the smallest deviation
                 if (dev < best && dev < values[index]) {
                     best = dev;
-                    mag = values[index+1]
+                    mag = values[index + 1]; // Adjust to get the corresponding magnification
                 }
                 index += 2;
             }
@@ -633,7 +634,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             fontSize: "small",
             barThickness: 2,
             destroy: false,
-            magnification: mag
+            magnification: mag,
+            maxMagnification: 40
         });
         if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
             viewer.scalebar.setActive(false);
@@ -885,31 +887,32 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         if (successLoadedItemCount === 0) {
             viewer.toggleDemoPage(true, $.t('error.invalidDataHtml'));
-        } else {
-            // TODO propose fix in OpenSeadragon... also this might be a deadlock
-            // Fix indexing: OSD has race conditions when we call addTiledImage subsequently with defined indexes
-            const itemCount = world.getItemCount();
-            let index = 0, iterations = 0;
-            while (index < itemCount && iterations < itemCount*itemCount) {
-                const item = world.getItemAt(index);
-                if (item.__targetIndex !== index) {
-                    world.setItemIndex(item, item.__targetIndex);
-                    iterations++;
-                } else {
-                    index++;
-                }
-                // Set lossless if required
-                if (item.getConfig === undefined) {
-                    console.warn(`Item ${item} was specified without a config getter - this is a bug!`);
-                    item.getConfig = type => undefined;
-                }
-
-                const conf = item.getConfig("background");
-                if (item.source.hasOwnProperty("requireLossless") && conf?.hasOwnProperty("lossless")) {
-                    item.source.requireLossless(conf.lossless);
-                }
-            }
         }
+        // else {
+        //     // TODO propose fix in OpenSeadragon... also this might be a deadlock
+        //     // Fix indexing: OSD has race conditions when we call addTiledImage subsequently with defined indexes
+        //     const itemCount = world.getItemCount();
+        //     let index = 0, iterations = 0;
+        //     while (index < itemCount && iterations < itemCount*itemCount) {
+        //         const item = world.getItemAt(index);
+        //         if (item.__targetIndex !== index) {
+        //             world.setItemIndex(item, item.__targetIndex);
+        //             iterations++;
+        //         } else {
+        //             index++;
+        //         }
+        //         // Set lossless if required
+        //         if (item.getConfig === undefined) {
+        //             console.warn(`Item ${item} was specified without a config getter - this is a bug!`);
+        //             item.getConfig = type => undefined;
+        //         }
+        //
+        //         const conf = item.getConfig("background");
+        //         if (item.source.hasOwnProperty("requireLossless") && conf?.hasOwnProperty("lossless")) {
+        //             item.source.requireLossless(conf.lossless);
+        //         }
+        //     }
+        // }
 
         // todo check args, do we need to search for at least one valid reference image? test stacked mode + X bg overlays
         handleSyntheticEventFinishWithValidData(viewer, 0, 1);

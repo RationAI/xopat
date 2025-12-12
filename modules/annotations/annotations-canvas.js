@@ -18,6 +18,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this._dopperlGangerCount = 0;
         // todo move layers functionality?
 
+        // Rewrite with bind this arg to use in events
+        this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
 
         this._layers = {};					// all existing layers (id -> layer)
         this._layer = undefined;			// active layer (last selected)
@@ -28,6 +30,17 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
          * @type {OSDAnnotations}
          */
         this.module = OSDAnnotations.instance();
+
+        this.module.addHandler('mode-changed', e => {
+            if (e.mode === this.module.Modes.AUTO) {
+                if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
+
+                if (!e.mode.supportsEdgeNavigation()) {
+                    this.setCloseEdgeMouseNavigation(false);
+                    this.edgeNavDisabledByMode = true;
+                }
+            }
+        });
     }
 
     setMouseOSDInteractive(isOSDInteractive) {
@@ -1982,6 +1995,76 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             console.log("DISCARD", e, self.canvas.__eventListeners);
             return disc(e, t);
         };
+    }
+
+    setCloseEdgeMouseNavigation(enable) {
+        this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
+
+        if (enable !== this.edgeMouseInteractive && (!enable || this.module.mode.supportsEdgeNavigation())) {
+            this.edgeMouseInteractive = enable;
+
+            const viewer = this.viewer;
+            viewer.drawer.canvas.removeEventListener("mousemove", this._edgesMouseNavigation);
+            if (enable) {
+                viewer.drawer.canvas.addEventListener("mousemove", this._edgesMouseNavigation);
+            }
+
+            this.edgeNavDisabledByMode = false;
+        }
+
+        return this.edgeMouseInteractive;
+    }
+
+    _edgesMouseNavigation(e) {
+        if (this.module.mode !== this.module.Modes.AUTO) return;
+
+        const viewer = this.viewer;
+        const edgeThreshold = 20;
+        // Speed in screen pixels per mouse move event
+        const moveSpeedInPixels = 3;
+
+        // 1. Get viewer bounds to ensure we respect the canvas size, not window size
+        const bounds = viewer.element.getBoundingClientRect();
+
+        const mouseX = e.clientX;
+        const mouseY = e.clientY;
+
+        // Calculate distance from mouse to viewer edges
+        const distLeft = mouseX - bounds.left;
+        const distRight = bounds.right - mouseX;
+        const distTop = mouseY - bounds.top;
+        const distBottom = bounds.bottom - mouseY;
+
+        // Check if mouse is within the threshold distance of any edge
+        // AND ensures the mouse is actually inside the viewer (distance >= 0)
+        const isLeft = distLeft >= 0 && distLeft < edgeThreshold;
+        const isRight = distRight >= 0 && distRight < edgeThreshold;
+        const isTop = distTop >= 0 && distTop < edgeThreshold;
+        const isBottom = distBottom >= 0 && distBottom < edgeThreshold;
+
+        if (isLeft || isRight || isTop || isBottom) {
+            // Calculate direction vector (Center -> Mouse)
+            const center = viewer.viewport.getCenter(true);
+            const current = viewer.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(mouseX, mouseY));
+            let direction = current.minus(center);
+
+            // Normalize direction vector
+            const distance = Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2));
+            if (distance > 0) {
+                direction = direction.divide(distance);
+            }
+
+            // 2. Calculate delta in viewport coordinates based on fixed screen pixels
+            // deltaPointsFromPixels automatically adjusts for the current zoom level
+            const deltaPixels = new OpenSeadragon.Point(
+                direction.x * moveSpeedInPixels,
+                direction.y * moveSpeedInPixels
+            );
+            const deltaViewport = viewer.viewport.deltaPointsFromPixels(deltaPixels);
+
+            // Apply the pan
+            viewer.viewport.panBy(deltaViewport);
+        }
     }
 }
 requireViewerSingletonPresence(OSDAnnotations.FabricWrapper);

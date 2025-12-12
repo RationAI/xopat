@@ -170,13 +170,13 @@ class AnnotationsGUI extends XOpatPlugin {
 	 *****************************************************************************************************************/
 
 	setDrawOutline(enable) {
+        // todo no way to change this for a single viewer for now -> presets are global
 		this.context.setAnnotationCommonVisualProperty('modeOutline', enable);
 	}
 
-	setEdgeCursorNavigate(enable) {
-		enable = this.context.setCloseEdgeMouseNavigation(enable);
+	setEdgeCursorNavigate(enable, viewerId) {
+		enable = this.context.getFabric(viewerId)?.setCloseEdgeMouseNavigation(enable) || false;
 		this.setOption("edgeCursorNavigate", enable);
-
 		return enable;
 	}
 
@@ -257,46 +257,158 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
 		this.context.addHandler('annotation-deselected', e => this._annotationDeselected(e.object));
 
-        // todo where to put?
-        LAYOUT.addTab({
-            id: this.id,
-            title: 'Annotations',
-            icon: 'fa-question-circle',
-            body: [
-                new UI.RawHtml(`
-          <div class="float-right">
-<i class="fa-auto fa-eye p-1 mr-3" id="enable-disable-annotations" title="${this.t('onOff')}" data-ref="on"
-onclick="${this.THIS}._toggleEnabled(this)"></i>
-<button class="btn btn-outline btn-sm" id="server-primary-save" onclick="${this.THIS}.saveDefault();"><i class="fa-auto fa-floppy-disk pl-0 pr-1 v-align-text-top" style="font-size: 19px;"></i>Save</button>
-<button class="btn-pointer btn btn-sm mr-1 px-1 material-icons" title="More options" id="show-annotation-export" onclick="USER_INTERFACE.AppBar.Plugins.openSubmenu(\'${this.id}\', \'annotations-shared\');"><i class="fa-auto fa-ellipsis-vertical"></i></button>
-</div>
-<div class="d-flex flex-row mt-1 width-full">
-<div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
-${UIComponents.Elements.checkBox({
-                    label: this.t('outlineOnly'),
-                    classes: "pl-2",
-                    onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
-                    default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
-</div>
-<div class="d-flex flex-row mt-1 width-full">
-<div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
-${UIComponents.Elements.checkBox({
-                    label: 'Enable edge navigation',
-                    classes: "pl-2",
-                    onchange: `this.checked = ${this.THIS}.setEdgeCursorNavigate(!!this.checked)`,
-                    default: this.getOption("edgeCursorNavigate", true)})}
-</div>
-<div class="mt-2 border-1 border-top-0 border-left-0 border-right-0 color-border-secondary">
-<button id="preset-list-button-mp" class="btn rounded-0" aria-selected="true" onclick="${this.THIS}.switchMenuList('preset');">Classes</button>
-<button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
-<button id="author-list-button-mp" class="btn rounded-0" style="display: none;" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
-</div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
-<span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
-<div id="annotation-list-mp" class="mx-2" style="display: none;"></div>
-<div id="author-list-mp" class="mx-2" style="display: none;"><div id="author-list-inner-mp"></div></div>
-        `)
-            ]
+        this.registerViewerMenu(viewer => {
+
+            // 1. Top Icon Row (Enable, Save, Outline, EdgeNav, More)
+            const topRow = new UI.Div({ extraClasses: "flex flex-row items-center justify-between w-full mb-2 px-1" },
+                // Enable/Disable Eye
+                new UI.Button({
+                    id: "enable-disable-annotations",
+                    type: UI.Button.TYPE.NONE,
+                    extraClasses: "btn-square btn-sm",
+                    extraProperties: {
+                        title: this.t('onOff'),
+                        "data-ref": "on"
+                    },
+                    onClick: (e) => this._toggleEnabled(e.currentTarget)
+                }, new UI.FAIcon("fa-eye")),
+
+                // Outline Only (Toggle)
+                new UI.Button({
+                    id: "btn-toggle-outline",
+                    type: UI.Button.TYPE.NONE,
+                    extraClasses: `btn-square btn-sm ${this.context.getAnnotationCommonVisualProperty('modeOutline') ? "btn-active" : ""}`,
+                    extraProperties: { title: this.t('outlineOnly') },
+                    onClick: (e) => {
+                        const btn = e.target.closest("button");
+                        const isActive = btn.classList.toggle("btn-active");
+                        this.setDrawOutline(isActive);
+                    }
+                }, new UI.FAIcon("fa-vector-square")),
+
+                // Edge Navigation (Toggle)
+                new UI.Button({
+                    id: "btn-toggle-edge-nav",
+                    type: UI.Button.TYPE.NONE,
+                    extraClasses: `btn-square btn-sm ${this.getOption("edgeCursorNavigate", true) ? "btn-active" : ""}`,
+                    extraProperties: { title: "Enable edge navigation" },
+                    onClick: (e) => {
+                        const btn = e.target.closest("button");
+                        const isActive = btn.classList.toggle("btn-active");
+                        this.setEdgeCursorNavigate(isActive, viewer.uniqueId);
+                    }
+                }, new UI.FAIcon("fa-up-down-left-right")),
+
+                // Save
+                new UI.Button({
+                    id: "server-primary-save",
+                    title: 'Save',
+                    type: UI.Button.TYPE.NONE,
+                    style: UI.Button.STYLE.TITLEICON,
+                    extraClasses: "btn-square btn-sm",
+                    extraProperties: { title: "Save" },
+                    onClick: () => this.saveDefault()
+                }, new UI.FAIcon("fa-floppy-disk")),
+
+                // More Options
+                new UI.Button({
+                    id: "show-annotation-export",
+                    type: UI.Button.TYPE.NONE,
+                    extraClasses: "btn-square btn-sm",
+                    extraProperties: { title: "More options" },
+                    onClick: () => USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared')
+                }, new UI.FAIcon("fa-ellipsis-vertical"))
+            );
+
+// 2. Sliders Row (Border & Opacity side-by-side)
+            const slidersRow = new UI.Div({ extraClasses: "flex flex-row w-full gap-2 mb-2" },
+                // Border Slider
+                new UI.Div({ extraClasses: "flex-1" },
+                    new UI.Div({ extraClasses: "text-xs mb-1 opacity-70" }, "Border"),
+                    new UI.Input({
+                        id: "annotations-border-width",
+                        extraClasses: "range range-xs range-primary w-full",
+                        extraProperties: { type: "range", min: "1", max: "10", step: "1" }
+                    })
+                ),
+                // Opacity Slider
+                new UI.Div({ extraClasses: "flex-1" },
+                    new UI.Div({ extraClasses: "text-xs mb-1 opacity-70" }, "Opacity"),
+                    new UI.Input({
+                        id: "annotations-opacity",
+                        extraClasses: "range range-xs range-primary w-full",
+                        extraProperties: { type: "range", min: "0", max: "1", step: "0.1" }
+                    })
+                )
+            );
+
+// 3. Tabs Row (As Is)
+            const tabs = new UI.Join({
+                    style: UI.Join.STYLE.HORIZONTAL,
+                    extraClasses: "w-full border-b border-base-300"
+                },
+                new UI.Button({
+                    id: "preset-list-button-mp",
+                    extraClasses: "rounded-0 border-b-0 flex-1 btn-sm",
+                    extraProperties: { "aria-selected": "true" },
+                    onClick: () => this.switchMenuList('preset')
+                }, "Classes"),
+
+                new UI.Button({
+                    id: "annotation-list-button-mp",
+                    extraClasses: "rounded-0 border-b-0 flex-1 btn-sm",
+                    onClick: () => this.switchMenuList('annot')
+                }, "Annotations"),
+
+                new UI.Button({
+                    id: "author-list-button-mp",
+                    extraClasses: "rounded-0 border-b-0 flex-1 btn-sm",
+                    extraProperties: { style: "display: none;" },
+                    onClick: () => this.switchMenuList('authors')
+                }, "Authors")
+            );
+
+// 4. Content Areas (As Is)
+            const presetList = new UI.Div({ id: "preset-list-mp", extraClasses: "flex-1 pl-2 pr-1 mt-2 relative" },
+                new UI.Button({
+                        id: "preset-list-mp-edit",
+                        size: UI.Button.SIZE.TINY,
+                        extraClasses: "absolute top-0 right-4 border rounded shadow-sm z-10 bg-base-100",
+                        onClick: () => this.showPresets()
+                    },
+                    new UI.FAIcon({ name: "fa-pen-to-square", extraClasses: "text-xs mr-1" }),
+                    "Edit"
+                ),
+                new UI.Div({ id: "preset-list-inner-mp" })
+            );
+
+            const annotList = new UI.Div({
+                id: "annotation-list-mp",
+                extraClasses: "mx-2 mt-2",
+                extraProperties: { style: "display: none;" }
+            });
+
+            const authorList = new UI.Div({
+                    id: "author-list-mp",
+                    extraClasses: "mx-2 mt-2",
+                    extraProperties: { style: "display: none;" }
+                },
+                new UI.Div({ id: "author-list-inner-mp" })
+            );
+
+            return {
+                id: this.id,
+                title: 'Annotations',
+                icon: 'fa-question-circle',
+                body: new UI.Div({ extraClasses: "flex flex-col w-full h-full" },
+                    topRow,
+                    slidersRow,
+                    tabs,
+                    presetList,
+                    annotList,
+                    authorList
+                )
+            };
         });
 
         setTimeout(() => {
@@ -342,6 +454,7 @@ ${UIComponents.Elements.checkBox({
 
             // 2) Shapes choice dropdown
             this._shapeChoice = new ui.ToolbarChoiceGroup({
+                headerMode: "selectOrExpand",
                 itemID: "cg-shapes",
                 defaultSelected: factories[0]?.id || "none",
                 onChange: (fid) => {
@@ -1725,28 +1838,51 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 		}
 	};
 
-	_toggleEnabled(node) {
-        let self = $(node);
+    _toggleEnabled(btnElement) {
+        // btnElement is the <button> element passed from onClick
+        const icon = btnElement.querySelector('.fa-auto');
+        const toolBar = document.getElementById('annotations-tool-bar-content');
+
         if (this.context.disabledInteraction) {
+            // Currently disabled -> Enable
             this.context.enableAnnotations(true);
-            // eye
-            self[0].className = 'fa-auto fa-eye p-1 mr-3';
-            self.attr('data-ref', 'on');
-            let node = document.getElementById('annotations-tool-bar-content');
-            node.style.pointerEvents = 'auto';
-            node.style.opacity = null;
-            node.ariaDisabled = 'true';
+
+            // Update Icon to Eye
+            if (icon) {
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+
+            // Update Button State
+            btnElement.dataset.ref = 'on';
+
+            // Enable Toolbar content
+            if (toolBar) {
+                toolBar.style.pointerEvents = 'auto';
+                toolBar.style.opacity = '1';
+                toolBar.setAttribute('aria-disabled', 'false');
+            }
         } else {
+            // Currently enabled -> Disable
             this.context.enableAnnotations(false);
-            // eye-slash
-            self[0].className = 'fa-auto fa-eye-slash p-1 mr-3';
-            self.attr('data-ref', 'off');
-            let node = document.getElementById('annotations-tool-bar-content');
-            node.style.pointerEvents = 'none';
-            node.style.opacity = '0.5';
-            node.ariaDisabled = 'false';
+
+            // Update Icon to Eye Slash
+            if (icon) {
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            }
+
+            // Update Button State
+            btnElement.dataset.ref = 'off';
+
+            // Disable Toolbar content
+            if (toolBar) {
+                toolBar.style.pointerEvents = 'none';
+                toolBar.style.opacity = '0.5';
+                toolBar.setAttribute('aria-disabled', 'true');
+            }
         }
-	}
+    }
 
 	_annotationsDomRenderer(history, containerId) {
 		let headHtml = history.getHistoryWindowHeadHtml();

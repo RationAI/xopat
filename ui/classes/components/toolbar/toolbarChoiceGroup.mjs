@@ -81,7 +81,18 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
             })),
             activeSelection: defaultItemKey, // header tracks selection
             closeOnItemClick: true,
-            placement: "below"
+            placement: "below",
+
+            // --- new: split header behaviour ---
+            splitHeader: true,
+            onHeaderMainClick: () => {
+                // Icon click → re-trigger current selection logic
+                const currentId = this._selectedId.val;
+                if (currentId) {
+                    this.setSelected(currentId, true, true);
+                }
+            }
+            // onHeaderArrowClick not needed – default is just "open menu"
         });
 
         const el = this._dropdown.create();

@@ -35,14 +35,14 @@
  * Notes:
  * - Do not call this inside the viewer; use it if you want to reuse plugins/modules elsewhere.
  * - Example usage:
- *   const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
- *   await initPlugins();
+ * const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
+ * await initPlugins();
  *
  * @param ENV
  * @param {Object<string, XOpatElementRecord>} PLUGINS
- *   Registry object of plugins keyed by plugin id (from include.json).
+ * Registry object of plugins keyed by plugin id (from include.json).
  * @param {Object<string, XOpatElementRecord>} MODULES
- *   Registry object of modules keyed by module id (from include.json).
+ * Registry object of modules keyed by module id (from include.json).
  * @param {string} PLUGINS_FOLDER - Base URL or path where plugin folders reside (trailing slash optional).
  * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
  * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
@@ -535,6 +535,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
 
     /**
+     * @typedef {string} XOpatElementID
+     * Element ID unique to instance, either plugin or module id.
+     */
+
+    /**
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
      * available in docs due to its API nature.
@@ -543,6 +548,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      */
     class XOpatElement extends OpenSeadragon.EventSource {
 
+        /**
+         * @param {XOpatElementID} id
+         * @param {('plugin'|'module')} executionContextName
+         */
         constructor(id, executionContextName) {
             super();
 
@@ -620,9 +629,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Raise error event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         *   todo better warn mechanism:
-         *      -> simple way of module/plugin level context warns and errors (no feedback)
-         *      -> advanced way of event warnings (feedback with E code)
+         * todo better warn mechanism:
+         * -> simple way of module/plugin level context warns and errors (no feedback)
+         * -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -654,9 +663,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Raise warning event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         *   todo better warn mechanism:
-         *      -> simple way of module/plugin level context warns and errors (no feedback)
-         *      -> advanced way of event warnings (feedback with E code)
+         * todo better warn mechanism:
+         * -> simple way of module/plugin level context warns and errors (no feedback)
+         * -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -692,7 +701,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
          * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
          * @param {boolean} [options.inViewerContext=true] if true, the POST IO depends on the viewer context and
-         *    runs IO wrt. viewer lifecycle
+         * runs IO wrt. viewer lifecycle
          * @return {PostDataStore} data store reference, or false if import failed
          */
         async initPostIO(options = {}) {
@@ -748,7 +757,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Called to export data within 'export-data' event: automatically the post data store object
          * (returned from initPostIO()) is given the output of this method:
-         *   `await dataStore.set(options.exportKey || "", await this.exportData());`
+         * `await dataStore.set(options.exportKey || "", await this.exportData());`
          * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
          * upon the event 'export-data', or simply nest objects to fit a single output
          * @param key {string} the data contextual ID it was exported with, default empty string
@@ -767,7 +776,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
         /**
          * Called automatically within this.initPostIO if data available
-         *  note: parseImportData return value decides if data is parsed data or passed as raw string
+         * note: parseImportData return value decides if data is parsed data or passed as raw string
          * @param key {string} the data contextual ID it was exported with, default empty string
          * @param data {any} data
          */
@@ -808,9 +817,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string} moduleId
          * @param {{ (module: XOpatModuleSingleton | XOpatViewerSingletonModule): void }} callback
          * @param {ViewerLikeItem} [viewer] - if defined, XOpatViewerSingletonModule is listened for given
-         *   the desired viewer in question, otherwise global XOpatModuleSingleton
+         * the desired viewer in question, otherwise global XOpatModuleSingleton
          * @return {boolean} true if finished immediatelly, false if registered handler for the
-         *   future possibility of the module being loaded
+         * future possibility of the module being loaded
          */
         integrateWithSingletonModule(moduleId, callback, viewer = undefined) {
             const targetModule = singletonModule(moduleId);
@@ -828,6 +837,73 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 }
             });
             return false;
+        }
+
+        /**
+         * Register a menu item that attaches to every active viewer's right-side menu.
+         * The menu is automatically managed: created on viewer open, updated on content change,
+         * and removed on destroy/reset.
+         *
+         * todo move all UI to UI
+         *
+         * @param {UINamedItemGetter} getter receives the viewer instance as a single instance, supports
+         *   async functions too
+         */
+        registerViewerMenu(getter) {
+            const insert = (content, menuComponent) => {
+                if (!content) {
+                    return;
+                }
+
+                const id = content.id;
+
+                // Ensure ID uniqueness per plugin/module
+                const menuId = `${this.id}-${id}`;
+                const internalMenu = menuComponent.menu;
+                const exists = menuId in internalMenu.tabs;
+
+                // Delete to replace (update)
+                if (exists) internalMenu.deleteTab(menuId);
+
+                content.id = menuId;
+
+                try {
+                    internalMenu.addTab(content, this.id);
+                } catch (e) {
+                    console.error(`Failed to add viewer menu tab for ${this.id}`, e);
+                }
+            };
+
+            const updateMenu = (viewer) => {
+                const menuComponent = VIEWER_MANAGER.getMenu(viewer);
+                // If menu not available (e.g. headless or destroyed), skip
+                if (!menuComponent || !menuComponent.menu) return;
+
+                let content = null;
+                try {
+                    content = getter(viewer);
+
+                    if (content instanceof Promise) {
+                        content.then(conf => insert(conf, menuComponent)).catch(e => {
+                            console.error(`Error in viewer menu builder (async) for ${this.id}:`, e);
+                        });
+                    } else {
+                        insert(content, menuComponent);
+                    }
+                } catch (e) {
+                    console.error(`Error in viewer menu builder for ${this.id}:`, e);
+                }
+            };
+
+            // 1. Hook into all future 'open' events (covers content changes) 'open' is an OSD event broadcasted to all viewers
+            VIEWER_MANAGER.broadcastHandler('open', (e) => updateMenu(e.eventSource));
+            // 2. Hook into viewer reset (clearing data) to potentially remove the menu 'viewer-reset' is a ViewerManager event
+            VIEWER_MANAGER.addHandler('viewer-reset', (e) => updateMenu(e.viewer));
+
+            VIEWER_MANAGER.viewers.forEach(v => {
+                // Update regardless of state, logic inside handles null/removal
+                updateMenu(v);
+            });
         }
     }
 
@@ -1440,7 +1516,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string} pluginId
          * @param {function} callback that receives the plugin instance
          * @return {boolean} true if finished immediatelly, false if registered handler for the
-         *   future possibility of plugin being loaded
+         * future possibility of plugin being loaded
          */
         integrateWithPlugin(pluginId, callback) {
             const targetPlugin = plugin(pluginId);
@@ -1657,7 +1733,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * Event handler can by <i>asynchronous</i>, the event can wait.
              *
              * @property {function} setSerializedData callback to call,
-             *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
+             * accepts 'key' (unique) and 'data' (string) to call with your data when ready
              * @memberof VIEWER_MANAGER
              * @event export-data
              */
@@ -1795,7 +1871,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this._singletonsKey = Symbol('singletons');
 
             // layout container
-            this.layout = new UI.StretchGrid({ cols: 2 }); // e.g. 2 cols
+            this.layout = new UI.StretchGrid({ cols: 2, gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer
@@ -1914,7 +1990,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const menu = new UI.RightSideViewerMenu(cellId, navigatorId);
             // todo think of a better way of hosting menu within the viewer
             if (window.innerWidth < 600) {
-                console.log(USER_INTERFACE.FullscreenMenu.menu.tabs["right-side-menu-mobile"])
                 USER_INTERFACE.FullscreenMenu.menu.addTab(new UI.Div({id: "right-side-menu-mobile"}, menu.create()));
             } else {
                 cell.append(menu.create());
@@ -2062,6 +2137,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                      * @param {number|OpenSeadragon.TiledImage} tiledImage
                      */
                     function getPixelData(screen, viewportPosition, tiledImage) {
+                        // todo fix this
+                        return;
                         function changeTile() {
                             let tiles = tiledImage.lastDrawn;
                             //todo verify tiles order, need to ensure we prioritize higher resolution!!!
@@ -2268,7 +2345,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             let viewer = this.ensureViewer(viewerOrUniqueId);
             let singletons = viewer[this._singletonsKey];
             if (!singletons) {
-               singletons = viewer[this._singletonsKey] = {};
+                singletons = viewer[this._singletonsKey] = {};
             }
             if (!(singletonModule instanceof XOpatViewerSingleton)) {
                 console.error("Viewer singleton must be instance of XOpatViewerSingleton");

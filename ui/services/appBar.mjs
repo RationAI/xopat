@@ -19,7 +19,13 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: {bg: "bg-transparent"},
             }, {
-                id: "view", icon: "fa-window-restore", title: $.t('main.bar.view'), body: [], class: Dropdown,
+                id: "view",
+                icon: "fa-window-restore",
+                title: $.t('main.bar.view'),
+                body: [],
+                class: Dropdown,
+                // MODIFIED: Use 'min-w-max' for width and 'check' style for selection
+                extraClasses: { width: "min-w-max" },
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
                 id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'),
@@ -28,6 +34,8 @@ export class AppBar {
         );
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
+
+        // ... (Rest of file remains unchanged)
 
         // Right part: static
         this.rightMenu = new MainPanel({
@@ -40,7 +48,6 @@ export class AppBar {
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
             { id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
-            { id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
                     {
@@ -147,13 +154,7 @@ export class AppBar {
             if (!this._visualMenuNeedsRefresh) return;
             this.subMenu.clear();
 
-            // TODO: allow custom windows here
-            // this.subMenu.addItem({
-            //     id: 'preview',
-            //     onClick: () => USER_INTERFACE.SlidesMenu.open(),
-            //     icon: "fa-rectangle-list",
-            //     label: $.t('main.global.preview'),
-            // });
+            // 1. Global Actions
             this.subMenu.addItem({
                 id: 'clone-viewer',
                 onClick: () => UTILITIES.clone(),
@@ -161,7 +162,7 @@ export class AppBar {
                 label: $.t('main.global.clone'),
             });
 
-            // todo consider sort
+            // 2. Custom Windows
             for (let id in this.otherWindows) {
                 const item = this.otherWindows[id];
                 this.subMenu.addItem({
@@ -169,7 +170,6 @@ export class AppBar {
                     label: item.label,
                     selected: item.selected,
                     onClick: () => {
-                        // todo is necessary this doublechecking?
                         item.selected = APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, item.selected);
                         item.onClick?.(item.selected);
                     },
@@ -177,34 +177,47 @@ export class AppBar {
                 });
             }
 
-
+            // 3. Viewer Sidebars (Nested Dropdown)
+            // Collect sidebar items into an array
+            const sidebarChildren = [];
             for (let id in this.rightMenuTabs) {
                 const item = this.rightMenuTabs[id][0];
                 if (item) {
-                    this.subMenu.addItem({
+                    sidebarChildren.push({
+                        id: item.id,
                         icon: item.iconName,
                         label: item.title,
                         selected: APPLICATION_CONTEXT.getOption(`${id}-selected`, false),
                         onClick: () => {
                             for (let child of this.rightMenuTabs[id]) {
-                                // todo support toggle with t/f
                                 child.toggleHiden();
                             }
-                            //todo taking item.hidden value is problematic, first element controls all
                             item.selected = !APPLICATION_CONTEXT.getOption(`${id}-selected`, item.selected);
                             APPLICATION_CONTEXT.setOption(`${id}-selected`, item.selected);
-                        },
-                        section: 'right-menu',
+                            // Important: return true to keep the menu open if you want multi-select behavior
+                            return true;
+                        }
                     });
                 }
             }
-        },
 
+            // Add the parent item with children
+            if (sidebarChildren.length > 0) {
+                this.subMenu.addItem({
+                    id: 'viewer-sidebars',
+                    label: $.t('main.bar.viewerSidebars'),
+                    icon: 'fa-columns', // Example icon for sidebars
+                    children: sidebarChildren,
+                    section: 'global-windows',
+                    childSelectionStyle: "check"
+                });
+            }
+        },
 
         /**
          * Register a view menu item. Views are displayed inside View dropdown and should
-         *   show available menus in the viewer with an option to hide them. Right-side menu
-         *   panels are added automatically by other UI components using registerRightMenuTab.
+         * show available menus in the viewer with an option to hide them. Right-side menu
+         * panels are added automatically by other UI components using registerRightMenuTab.
          * @return {boolean} true if the selection is currently active.
          */
         registerViewItem(ownerPluginId, icon, label, onClick) {
@@ -247,6 +260,15 @@ export class AppBar {
     Plugins = {
         init(subMenu) {
             this.subMenu = subMenu;
+            this.subMenu.addItem({
+                id: 'plugins',
+                icon: "fa-puzzle-piece",
+                label: $.t('main.bar.plugins'),
+                onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("app-plugins")}
+            });
+            this.subMenu.addSection({
+                id: 'plugin-list',
+            });
         },
 
         // should add submenus to plugin menu
@@ -259,6 +281,7 @@ export class AppBar {
                     label: pluginMeta(ownerPluginId, "name"),
                     pluginRootClass: `plugin-${ownerPluginId}-root`,
                     onClick: () => this.openSubmenu(`${ownerPluginId}`),
+                    section: 'plugin-list'
                 });
 
                 const insideMenu = new TabsMenu({

@@ -1,3 +1,11 @@
+.noUi-connect.color-zoom-range {
+    background: linear-gradient(to right,
+    #FF0000 0%,  /* Red for outside native zoom */
+    #FF9900 25%,  /* Yellow for zoom outside */
+    #00FF00 50%,  /* Green for native zoom */
+    #FFFF00 75%, /* Yellow for zoom inside */
+    #0000FF 100%); /* Blue for maximum zoom */
+}
 /* Functional styling;
  * These styles are required for noUiSlider to function.
  * You don't need to change these rules to apply your design.
@@ -26,7 +34,6 @@
     height: 100%;
     position: relative;
     z-index: 1;
-    background-color: oklch(var(--bc));
 }
 .noUi-connect,
 .noUi-origin {

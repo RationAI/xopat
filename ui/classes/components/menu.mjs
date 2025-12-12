@@ -43,7 +43,7 @@ class Menu extends BaseComponent {
         for (let i of this._children) {
             this.addTab(i);
         }
-        
+
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
 
@@ -97,21 +97,25 @@ class Menu extends BaseComponent {
      *     { id: "clone", section: "actions", label: "Clone Repository…", icon: "content_copy" },
      *     { id: "xopat", section: "recent",  label: "xopat", icon: "widgets", selected: true },
      *   ],
+     * @param {XOpatElementID} [componentId]
      * @description adds a dropdown type item to the menu
      * @return {Dropdown}
      */
-    addDropdown(item){
+    addDropdown(item, componentId=undefined){
         if (item.class !== Dropdown || !item.id){
             throw new Error("Item for addDropdown needs to be of type Dropdown and have id property!");
         }
         const id = item.id;
         item.parentId = this.id;
         item.onClick = item.onClick || (() => {});
-        const tab = new Dropdown(item);
+        let tab = new Dropdown(item);
 
         this.tabs[id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
+        if (componentId) {
+            tab = BaseComponent.ensureTaggedAsExternalComponent(tab, componentId);
+        }
         switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
@@ -131,20 +135,19 @@ class Menu extends BaseComponent {
     }
 
     /**
-     *
-     * @param {*} item dictionary with id, icon, title, body which will be added to the menu
-     * // todo both should have common interface
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be added to the menu
+     * @param {XOpatElementID} [componentId]
      * @return {MenuTab|Dropdown}
      */
-    addTab(item) {
+    addTab(item, componentId=undefined) {
         if (item.class === Dropdown) {
-            return this.addDropdown(item);
+            return this.addDropdown(item, componentId);
         }
 
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-        const tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
+        let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
 
         const prevTab = this.tabs[item.id];
         if (prevTab) {
@@ -155,6 +158,10 @@ class Menu extends BaseComponent {
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
+        if (componentId) {
+            tab = BaseComponent.ensureTaggedAsExternalComponent(tab, componentId);
+        }
+
         switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
@@ -285,7 +292,7 @@ class Menu extends BaseComponent {
                 div({ class: "inner-panel-hidden" },
                     this.toNode(hiddenItem),
                 ),
-            );  
+            );
 
         this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 

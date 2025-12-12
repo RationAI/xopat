@@ -136,8 +136,10 @@
             this.scalebarContainer.style.left = location.x + "px";
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            this.magnificationContainer.style.left = location.x + 8 + "px";
-            this.magnificationContainer.style.top = location.y - this.magnificationContainerHeight - 50 + "px";
+            if (this.magnificationContainer) {
+                this.magnificationContainer.style.left = location.x + 8 + "px";
+                this.magnificationContainer.style.top = location.y - this.magnificationContainerHeight - 50 + "px";
+            }
 
         }.bind(this);
         this._init(options);
@@ -147,7 +149,7 @@
         /**
          * Referenced tile image getter used for measurements
          * todo we should provide references scale image allways and all
-         *  access on BG data should be via the APP Context
+         * access on BG data should be via the APP Context
          */
         getReferencedTiledImage: function () {},
         /**
@@ -170,7 +172,11 @@
 
                 let tiledImage = this.viewer.world.getItemAt(0);
                 //todo proprietary func from before OSD 2.0, remove? search API
-                this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
+                if (tiledImage) {
+                    this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
+                } else {
+                    this.__pixelRatio = 1;
+                }
             }
             return this.__pixelRatio;
         },
@@ -227,16 +233,22 @@
                 }
                 this.viewer.container.appendChild(this.scalebarContainer);
 
-                if (!this.magnificationContainer) {
-                    this.magnificationContainer = document.createElement("div");
-                    this.magnificationContainer.id = this.id + "-magnification";
-                    // this.magnificationContainer.style.display = "none";
+                if (this.magnification > 0) {
+                    // We need to wait for the image to open to get bounds for the slider
+                    const initSlider = () => {
+                        if (!this._active) return;
 
-                    if (this.magnification > 0) {
+                        const image = this.viewer.world.getItemAt(0);
+                        if (!image) return;
+
+                        if (this.magnificationContainer) return;
+
+                        this.magnificationContainer = document.createElement("div");
+                        this.magnificationContainer.id = this.id + "-magnification";
                         this.magnificationContainer.classList.add(
                             "relative",
                             "m-0",
-                            "bg-base-200",
+                            "glass",
                             "backdrop-blur-[2px]",
                             "pr-2", "pt-1", "pb-2",
                             "rounded-lg",
@@ -247,137 +259,217 @@
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width  = "50px";
 
-                        let steps = 0;
-                        let testMag = this.magnification;
-                        while (testMag > 4) {
-                            testMag = Math.round(testMag / 2);
-                            steps++;
-                        }
+                        // --- Dynamic Range & Log Scale Calculation ---
+                        const viewport = this.viewer.viewport;
+                        const minZoom = viewport.getMinZoom();
+                        const maxZoom = viewport.getMaxZoom();
 
-                        const minValue = 0;
+                        const nativeMag = this.magnification;
+
+                        const getNativeVpZoom = () => {
+                            const currentImage = this.viewer.world.getItemAt(0);
+                            return currentImage ? currentImage.imageToViewportZoom(1) : 1;
+                        };
+
+
+                        const vpZoomToMag = (vpZ) => (vpZ / getNativeVpZoom()) * nativeMag;
+                        const magToVpZoom = (mag) => (mag / nativeMag) * getNativeVpZoom();
+
+                        const minMag = vpZoomToMag(minZoom);
+                        const maxMag = vpZoomToMag(maxZoom);
+
+                        // 3. Define Standard Steps (Pips)
+                        const possibleSteps = [
+                            0.01, 0.02, 0.05,
+                            0.1, 0.2, 0.5,
+                            1, 2, 5,
+                            10, 20, 40,
+                            80, 160, 240, 480
+                        ];
+                        let pipValues = possibleSteps.filter(v => v >= minMag && v <= maxMag);
+
+                        // Ensure strict bounds are handled cleanly (optional, mostly for range)
+                        // We convert these Magnification values to Log2 values for the slider configuration
+                        const toLog = (v) => Math.log2(v);
+                        const toLin = (v) => Math.pow(2, v);
+
+                        const range = {
+                            'min': toLog(minMag),
+                            'max': toLog(maxMag)
+                        };
+
+                        // 4. Gradient Coloring
+                        // Calculate where the "Native" magnification sits on the slider (0% to 100%)
+                        // Top is Min Value (due to 'rtl'), Bottom is Max Value.
+                        const totalRange = range.max - range.min;
+                        const nativeVal = toLog(nativeMag);
+                        let percentNative = ((nativeVal - range.min) / totalRange) * 100;
+                        percentNative = Math.max(0, Math.min(100, percentNative));
+                        const bgStyle = `linear-gradient(to top, 
+rgba(255, 255, 255, 1) 0%, 
+rgba(255, 255, 255, 1) ${percentNative}%, 
+rgba(255, 100, 100, 1) ${percentNative}%, 
+rgba(255, 100, 100, 1) 100%)`;
+
                         const sliderContainer = document.createElement("span");
-
-                        const range = {max: [this.magnification], min: [1]}, values = [this.magnification];
-                        let mag = this.magnification, stepPerc = Math.round(100 / (steps+1)), stepPercIter = 100;
-                        while (mag > 4) {
-                            mag = Math.floor(mag / 2);
-                            stepPercIter -= stepPerc;
-                            range[`${stepPercIter}%`] = [mag];
-                            values.push(mag);
-                        }
-                        values.push(1);
-                        values.reverse();
-
-                        const updateZoom = (mag) => {
-                            if (sliderContainer.noUiSlider._prevented) return;
-                            const image = this.viewer.world.getItemAt(0);
-                            if (!image) {
-                                throw "Linked referenced image does not exist!";
-                            }
-                            if (mag < 2) {
-                                this.viewer.viewport.goHome();
-                            } else {
-                                const desiredZoom = image.imageToViewportZoom(mag / this.magnification);
-                                this.viewer.viewport.zoomTo(desiredZoom);
-                            }
-                        };
-
-                        const reflectUpdate = (e) => {
-                            const image = this.viewer.world.getItemAt(0);
-                            if (!image) {
-                                console.error("Linked referenced image does not exist!");
-                            } else {
-                                sliderContainer.noUiSlider._prevented = true;
-                                const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
-                                sliderContainer.noUiSlider.set(desiredZoom);
-                                sliderContainer.noUiSlider._prevented = false;
-                            }
-                        };
-                        this.viewer.addHandler('zoom', reflectUpdate);
-
-                        function closestValue (v) {
-                            let d = Infinity, result = -1;
-                            for (let i = 0; i < values.length; i++) {
-                                let dd = Math.abs(values[i] - v);
-                                if (dd < d) {
-                                    d = dd;
-                                    result = i;
-                                }
-                            }
-                            return result;
-                        }
 
                         const mkBtn = (iconClass) => {
                             const b = document.createElement("button");
                             b.type = "button";
-                            b.className = "btn btn-ghost btn-xs min-h-0 w-7 h-7 p-0 rounded-md text-base-content/70 hover:text-base-content";
+                            b.className = "btn btn-ghost btn-xs min-h-0 w-7 h-7 p-0 rounded-md text-base-content/70 hover:text-base-content bg-transparent border-transparent";
                             b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
                             return b;
                         };
 
-                        let minusBtn = mkBtn("fa-minus");
-                        minusBtn.addEventListener("click", () => {
-                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
-                            if (idx > 0) { sliderContainer.noUiSlider.set(values[idx-1]); updateZoom(values[idx-1]); }
-                        });
-                        this.magnificationContainer.appendChild(minusBtn);
 
-                        this.magnificationContainer.appendChild(sliderContainer);
-                        noUiSlider.create(sliderContainer, {
-                            range,
-                            start: minValue,
-                            connect: true,
-                            direction: "ltr",
-                            orientation: "vertical",
-                            behaviour: "drag",
-                            tooltips: false,
-                            pips: {
-                                mode: "values",
-                                values,
-                                density: 5,
-                                format: {
-                                    to: (v) => (v < 2 ? "⌂" : v),
-                                    from: (s) => (s === "⌂" ? 0 : s),
-                                },
-                            },
-                        });
-                        const sliderEl = sliderContainer.noUiSlider.target;
-                        sliderEl.classList.add("flex-1", "mx-auto");
-                        sliderEl.style.width = "6px"; // thicker track
+                        // Max Zoom Button (Zoom In / Plus) - Goes at Bottom
+                        let plusBtn = mkBtn("fa-plus");
+                        this.magnificationContainer.appendChild(plusBtn);
 
                         const sliderWrap = document.createElement("div");
-                        sliderWrap.className = "relative flex-1 flex items-center";
+                        sliderWrap.className = "relative flex-1 flex items-center justify-center w-full";
+                        sliderWrap.style.minHeight = "120px";
                         this.magnificationContainer.appendChild(sliderWrap);
                         sliderWrap.appendChild(sliderContainer);
 
-                        let plusBtn = mkBtn("fa-plus");
-                        plusBtn.addEventListener("click", () => {
-                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
-                            if (idx < values.length - 1) { sliderContainer.noUiSlider.set(values[idx+1]); updateZoom(values[idx+1]); }
+                        this.viewer.container.appendChild(this.magnificationContainer);
+
+                        // Min Zoom Button (Zoom Out / Minus) - Goes at Top
+                        let minusBtn = mkBtn("fa-minus");
+                        this.magnificationContainer.appendChild(minusBtn);
+
+                        // --- Initialize noUiSlider ---
+                        noUiSlider.create(sliderContainer, {
+                            range: range,
+                            start: toLog(vpZoomToMag(viewport.getZoom())),
+                            connect: false, // Using custom background
+                            direction: "rtl", // Top = Min, Bottom = Max
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            tooltips: {
+                                to: (v) => toLin(v).toFixed(1) + "x",
+                                from: (s) => toLog(parseFloat(s))
+                            },
+                            pips: {
+                                mode: 'values',
+                                values: pipValues.map(toLog), // Pass Log values for positions
+                                density: 5,
+                                format: {
+                                    to: (v) => {
+                                        let val = toLin(v);
+                                        // Format nicely (e.g. 20x, 0.5x)
+                                        return (val < 1 ? val.toFixed(1) : Math.round(val)) + "x";
+                                    },
+                                    from: (s) => parseFloat(s)
+                                }
+                            }
                         });
-                        this.magnificationContainer.appendChild(plusBtn);
-                        //todo custom ranges
 
-                        sliderContainer.noUiSlider.target.classList.add('d-inline-block', 'flex-1');
-                        sliderContainer.noUiSlider.target.style.width = "4px";
+                        const sliderEl = sliderContainer.noUiSlider.target;
+                        sliderEl.style.width = "6px";
+                        sliderEl.style.height = "100%";
+                        sliderEl.style.border = "none";
+                        sliderEl.style.background = bgStyle;
 
-                        sliderContainer.noUiSlider.on("change", (event) => {
-                            updateZoom(Number.parseInt(sliderContainer.noUiSlider.get()));
-                        });
+                        // --- Event Handlers ---
 
-                        function onPipiClick() {
-                            let value = Number.parseInt(this.getAttribute('data-value'));
-                            sliderContainer.noUiSlider.set(value);
-                            updateZoom(value);
-                        }
+                        // Slide Change -> Update Zoom
+                        const onSliderChange = (values, handle) => {
+                            const logVal = parseFloat(values[handle]);
+                            const mag = toLin(logVal);
+                            const targetZoom = magToVpZoom(mag);
+                            this.viewer.viewport.zoomTo(targetZoom);
+                        };
+
+                        sliderContainer.noUiSlider.on("slide", onSliderChange);
+                        sliderContainer.noUiSlider.on("change", onSliderChange);
+
+                        // Viewer Zoom -> Update Slider
+                        const reflectUpdate = (e) => {
+                            if (sliderContainer.noUiSlider._prevented) return;
+                            const currentMag = vpZoomToMag(e.zoom);
+                            // Convert to Log for slider
+                            sliderContainer.noUiSlider._prevented = true;
+                            sliderContainer.noUiSlider.set(toLog(currentMag));
+                            sliderContainer.noUiSlider._prevented = false;
+                        };
+                        this.viewer.addHandler('zoom', reflectUpdate);
+
+                        // Helper for Buttons
+                        const stepSlider = (direction) => {
+                            const currLog = parseFloat(sliderContainer.noUiSlider.get());
+
+                            // Find nearest pip value in Log space
+                            const pipLogs = pipValues.map(toLog).sort((a,b) => a-b);
+
+                            // Find index of closest standard step
+                            let idx = -1;
+                            let minDist = Infinity;
+                            for(let i=0; i<pipLogs.length; i++) {
+                                let d = Math.abs(pipLogs[i] - currLog);
+                                if(d < minDist) { minDist = d; idx = i; }
+                            }
+
+                            let nextIdx = idx + direction;
+                            // Clamp
+                            if (nextIdx < 0) nextIdx = 0;
+                            if (nextIdx >= pipLogs.length) nextIdx = pipLogs.length - 1;
+
+                            const nextLog = pipLogs[nextIdx];
+
+                            // Behavior logic:
+                            // If we are 'close' to a pip but not on it, snapping to it might feel like 'no movement' if direction is wrong
+                            // But usually snapping to next index is sufficient.
+
+                            if (direction < 0 && currLog <= pipLogs[idx] + 0.01 && idx > 0) {
+                                // We are effectively AT idx, so we want idx-1
+                                sliderContainer.noUiSlider.set(pipLogs[idx-1]);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx-1])));
+                            } else if (direction > 0 && currLog >= pipLogs[idx] - 0.01 && idx < pipLogs.length - 1) {
+                                // We are effectively AT idx, so we want idx+1
+                                sliderContainer.noUiSlider.set(pipLogs[idx+1]);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx+1])));
+                            } else {
+                                // We are between pips, just go to the calculated nearest neighbor in direction
+                                sliderContainer.noUiSlider.set(nextLog);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(nextLog)));
+                            }
+                        };
+
+                        minusBtn.addEventListener("click", () => stepSlider(-1));
+                        plusBtn.addEventListener("click", () => stepSlider(1));
+
+                        // Click on Pips - FIXED HANDLER
+                        // We use an arrow function here to preserve 'this' as the Scalebar instance (for this.viewer access if needed)
+                        // but we access the DOM element via the 'e.target' or the 'p' closure variable.
                         const pips = sliderContainer.querySelectorAll(".noUi-value");
                         pips.forEach(p => {
-                            p.classList.add("cursor-pointer", "hover:text-base-content"); // nicer hover
-                            p.addEventListener("click", onPipiClick);
+                            p.classList.add("cursor-pointer", "hover:text-base-content");
+                            p.addEventListener("click", (e) => {
+                                // e.target is the clicked pip element
+                                let text = e.target.textContent || "";
+                                let valText = text.replace('x','').trim();
+                                if(!valText) return;
+
+                                let val = parseFloat(valText);
+                                if (!isNaN(val)) {
+                                    let logVal = toLog(val);
+                                    sliderContainer.noUiSlider.set(logVal);
+                                    this.viewer.viewport.zoomTo(magToVpZoom(val));
+                                }
+                            });
                         });
+
+                        this.refreshHandler();
+                    };
+
+                    if (this.viewer.isOpen()) {
+                        initSlider();
+                    } else {
+                        this.viewer.addOnceHandler('open', initSlider);
                     }
-                    this.viewer.container.appendChild(this.magnificationContainer);
                 }
+
                 this.setMinWidth(options.minWidth || "150px");
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
@@ -391,6 +483,8 @@
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
                 let container = document.getElementById(this.id);
                 if (container) container.remove();
+                if (this.magnificationContainer) this.magnificationContainer.remove();
+                this.magnificationContainer = null;
             }
         },
 
@@ -398,12 +492,12 @@
             if (this._active == active) return;
             this._active = active;
             if (active) {
-                this.magnificationContainer.style.visibility = "visible";
-                this.container.style.visibility = "visible";
+                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "visible";
+                this.scalebarContainer.style.visibility = "visible";
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
             } else {
-                this.magnificationContainer.style.visibility = "hidden";
-                this.container.style.visibility = "hidden";
+                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "hidden";
+                this.scalebarContainer.style.visibility = "hidden";
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
             }
         },
@@ -704,7 +798,7 @@
          * Generic metric unit. One can use this function to create a new metric
          * scale. For example, here is an implementation of energy levels:
          * function(ppeV, minSize) {
-         *   return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC("eV", ppeV, minSize);
+         * return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC("eV", ppeV, minSize);
          * }
          */
         METRIC_GENERIC: getScalebarSizeAndTextForMetric

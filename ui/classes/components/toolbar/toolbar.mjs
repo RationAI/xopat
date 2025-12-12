@@ -169,20 +169,35 @@ class Toolbar extends BaseComponent {
             `,
                 ...this.extraProperties,
             },
-            div({ class: "spacer flex flex-grow width-full place-content-center" },
+            // MODIFIED: Removed 'width-full' and 'flex-grow' to prevent it from taking up space in horizontal mode
+            div({ class: "spacer flex place-content-center" },
+
+                // --- Hide Button (Commented Out) ---
+                /*
                 div({
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
                     onclick: () => this._toggle_body()
                 }, i({ class: "fa-auto fa-eye-slash" })),
-                div({ class: "handle badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1", style: "width: max(45px, 45%); touch-action: none;" },
-                    i({ class: "fa-auto fa-grip-horizontal" })
+                */
+
+                // --- Handle (Simplified) ---
+                // Removed fixed width styles and large badge classes for a cleaner look
+                div({
+                        class: "handle pointer-events-auto self-center text-secondary p-2 cursor-grab active:cursor-grabbing",
+                        style: "touch-action: none;"
+                    },
+                    i({ class: "fa-solid fa-grip-lines" }) // Changed icon to simple lines, or keep fa-grip-horizontal
                 ),
+
+                // --- Close Button (Commented Out) ---
+                /*
                 div({
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
                     onclick: () => this.toggleVisible()
                 }, i({ class: "fa-auto fa-xmark" }))
+                */
             ),
             div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-1 rounded-md" }, this.body.create())
         );
@@ -231,6 +246,56 @@ class Toolbar extends BaseComponent {
         });
 
         return this._outerEl;
+    }
+
+    _setOrientation(dir, force = false) {
+        if (!force && this._dir === dir) return;
+        this._dir = dir;
+
+        const wrap = this._rootWrap;
+        if (!wrap) return;
+
+        // Reset inner wrapper classes
+        wrap.classList.remove("w-10", "h-10", "w-full", "h-full", "flex", "flex-row", "flex-col", "items-center");
+        wrap.classList.add("flex", "items-center");
+
+        // --- NEW LOGIC: Manipulate _outerEl to switch handle position ---
+        // Horizontal Mode: outerEl = Row (Handle Left), wrap = Row (Items horizontal)
+        // Vertical Mode:   outerEl = Col (Handle Top),  wrap = Col (Items vertical)
+
+        if (this._outerEl) {
+            this._outerEl.classList.remove("flex-row", "flex-col");
+            if (dir === "horizontal") {
+                this._outerEl.classList.add("flex-row");
+            } else {
+                this._outerEl.classList.add("flex-col");
+            }
+        }
+
+        if (dir === "horizontal") {
+            wrap.classList.add("flex-row", "w-full");
+        } else {
+            wrap.classList.add("flex-col", "h-full");
+        }
+
+        wrap.dispatchEvent(new CustomEvent("toolbar:measure", {
+            bubbles: true,
+            detail: { dir: this._dir, size: 32, gap: "gap-1" }
+        }));
+
+        // (Optional) Logic for hiding buttons is technically unused now since they are commented out,
+        // but safe to keep in case you uncomment them later.
+        const header = this._outerEl?.querySelector(".toolbar-header") || this._outerEl;
+        if (header) {
+            const sideButtons = header.querySelectorAll(".toolbar-hide");
+            sideButtons.forEach(btn => {
+                if (dir === "horizontal") {
+                    btn.classList.remove("hidden");
+                } else {
+                    btn.classList.add("hidden");
+                }
+            });
+        }
     }
 
     toggleVisible() {
@@ -360,40 +425,6 @@ class Toolbar extends BaseComponent {
         const nearSide = (distL2 <= this._edgeThreshold) || (distR2 <= this._edgeThreshold);
 
         this._setOrientation(nearSide ? "vertical" : "horizontal", force);
-    }
-
-    _setOrientation(dir, force = false) {
-        if (!force && this._dir === dir) return;
-        this._dir = dir;
-
-        const wrap = this._rootWrap;
-        if (!wrap) return;
-
-        wrap.classList.remove("w-10", "h-10", "w-full", "h-full", "flex", "flex-row", "flex-col", "items-center");
-        wrap.classList.add("flex", "items-center");
-
-        if (dir === "horizontal") {
-            wrap.classList.add("flex-row", "w-full");
-        } else {
-            wrap.classList.add("flex-col", "h-full");
-        }
-
-        wrap.dispatchEvent(new CustomEvent("toolbar:measure", {
-            bubbles: true,
-            detail: { dir: this._dir, size: 32, gap: "gap-1" }
-        }));
-
-        const header = this._outerEl?.querySelector(".toolbar-header") || this._outerEl;
-        if (header) {
-            const sideButtons = header.querySelectorAll(".toolbar-hide");
-            sideButtons.forEach(btn => {
-                if (dir === "horizontal") {
-                    btn.classList.remove("hidden");
-                } else {
-                    btn.classList.add("hidden");
-                }
-            });
-        }
     }
 
     focus(id) {

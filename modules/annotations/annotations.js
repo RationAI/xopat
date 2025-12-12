@@ -48,13 +48,25 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
+     * Get target fabric wrapper instance
+     * @param {ViewerLikeItem} viewerOrId
+     */
+    getFabric(viewerOrId) {
+        return OSDAnnotations.FabricWrapper.instance(viewerOrId);
+    }
+
+    /**
      * Get actual active viewer instance the user interacts with.
      * @return {OpenSeadragon.Viewer}
      */
     get viewer() {
-        if (!this.mode.locksViewer()) {
+        if (this.__calledViewerGetter) return this._activeViewer;
+        this.__calledViewerGetter = true;
+        const newRef = VIEWER;
+        if (newRef !== this._activeViewer && !this.mode.locksViewer(this._activeViewer, newRef)) {
             this._activeViewer = VIEWER;
         }
+        this.__calledViewerGetter = false;
         return this._activeViewer;
     }
 
@@ -462,23 +474,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.historyManager.addAnnotationToBoard(object);
 	}
 
-	setCloseEdgeMouseNavigation(enable) {
-		this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
-
-		if (enable !== this.edgeMouseInteractive && (!enable || this.mode.supportsEdgeNavigation())) {
-			this.edgeMouseInteractive = enable;
-
-			window.removeEventListener("mousemove", this._edgesMouseNavigation);
-			if (enable) {
-				window.addEventListener("mousemove", this._edgesMouseNavigation);
-			}
-
-			this.edgeNavDisabledByMode = false;
-		}
-
-		return this.edgeMouseInteractive;
-	}
-
+    setCloseEdgeMouseNavigation(enabled) {
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.setCloseEdgeMouseNavigation(enabled);
+        }
+    }
 	/************************ Canvas object modification utilities *******************************/
 
 	_generateInternalId() {
@@ -548,15 +548,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 
-
 	/**
 	 * Set annotation visual property to permanent value
 	 * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
 	 * @param {any} propertyValue value for the property
 	 */
 	setAnnotationCommonVisualProperty(propertyName, propertyValue) {
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-            instance.updateAnnotationVisuals();
+        if (this.presets.setCommonVisualProp(propertyName, propertyValue)) {
+            for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+                instance.updateAnnotationVisuals();
+            }
         }
 	}
 
@@ -823,8 +824,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._idCounter = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
-        // Rewrite with bind this arg to use in events
-        this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -980,13 +979,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		if (mode.setFromAuto()) {
 			this.mode = mode;
 			this.raiseEvent('mode-changed', {mode: this.mode});
-
-			if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
-
-			if (!this.mode.supportsEdgeNavigation()) {
-				this.setCloseEdgeMouseNavigation(false);
-				this.edgeNavDisabledByMode = true;
-			}
 		}
 	}
 
@@ -1005,33 +997,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
             }
 		}
 	}
-
-	_edgesMouseNavigation(e) {
-		if (this.mode !== this.Modes.AUTO) {
-			const edgeThreshold = 20;
-			const mouseX = e.clientX;
-			const mouseY = e.clientY;
-
-			const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
-			const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
-			const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
-			const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
-
-			if (
-				(nearTopEdge < edgeThreshold && nearTopEdge > 0) ||
-				(nearRightEdge < edgeThreshold && nearRightEdge > 0) ||
-				(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
-				(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
-			) {
-                const viewer = this.viewer;
-                const center = viewer.viewport.getCenter(true);
-                const current = viewer.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
-                let direction = current.minus(center);
-				direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
-                viewer.viewport.panTo(direction.times(0.004 / viewer.scalebar.imagePixelSizeOnScreen()).plus(center));
-			}
-		}
-	};
 };
 
 
@@ -1318,9 +1283,20 @@ OSDAnnotations.AnnotationState = class {
      * Predicate that returns true if the viewer is locked and must not be changed (even though the
      * user might hover over different viewer). Because, for example, polygon creation can be in progress.
      * By default, locking is always on when cursor is down.
+     *
+     * This can be used also to listen for viewer changes, not necessarily to return a different
+     * value than the default one. E.g:
+     *   const willKeepViewer = super.locksViewer(...);
+     *   if (!willKeepViewer) {
+     *       ... do cleanup
+     *   }
+     *   return willKeepViewer;
+     *
+     * @param {OpenSeadragon.Viewer} oldViewerRef
+     * @param {OpenSeadragon.Viewer} newViewerRef
      * @return {boolean|*}
      */
-    locksViewer() {
+    locksViewer(oldViewerRef, newViewerRef) {
         return this.context.cursor.isDown;
     }
 
