@@ -36,23 +36,24 @@ addPlugin('file-browser', class extends XOpatPlugin {
                         url.searchParams.set("context", contextPath);
 
                         const res = await fetch(url.toString());
+                        let cases = await res.text();
                         if (!res.ok) {
-                            console.error("/v3/cases error", res.status, await res.text());
-                        } else {
-                            const cases = await res.json();
+                            throw new Error(cases);
+                        }
+                        cases = JSON.parse(cases);
 
-                            for (const c of cases || []) {
-                                const normId = normPath(c.local_id || c.id);
-                                items.push({
-                                    type: "case",
-                                    label: normId.split("/").pop(),
-                                    path: normId,
-                                    slides: Array.isArray(c.slides) ? c.slides.slice() : [],
-                                });
-                            }
+                        for (const c of cases || []) {
+                            const normId = normPath(c.local_id || c.id);
+                            items.push({
+                                type: "case",
+                                label: normId.split("/").pop(),
+                                path: normId,
+                                slides: Array.isArray(c.slides) ? c.slides.slice() : [],
+                            });
                         }
                     } catch (err) {
-                        console.error("EXCEPTION in /v3/cases:", err);
+                        console.error("File Browser failed to list cases!", err);
+                        Dialogs.show(`Could not list cases for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
                     }
 
                     if (!parent) {
@@ -61,16 +62,17 @@ addPlugin('file-browser', class extends XOpatPlugin {
                             url.searchParams.set("slide_id", contextPath);
 
                             const res = await fetch(url.toString());
+                            let slides = await res.text();
                             if (!res.ok) {
-                                console.error("/v3/cases/slides error", res.status, await res.text());
-                            } else {
-                                const slides = await res.json();
-                                for (const c of slides || []) {
-                                    items.push(makeSlideItem(c.local_id || c.id));
-                                }
+                                throw new Error(slides);
+                            }
+                            slides = JSON.parse(cases);
+                            for (const c of slides || []) {
+                                items.push(makeSlideItem(c.local_id || c.id));
                             }
                         } catch (err) {
-                            console.error("EXCEPTION in /v3/cases/slides:", err);
+                            console.error("File Browser failed to list slides!", err);
+                            Dialogs.show(`Could not list slides for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
                         }
                     }
 
