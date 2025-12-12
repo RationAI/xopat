@@ -105,7 +105,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _wrapLevelsWithDefaults(levels) {
-        return levels.map(level => {
+        const wrapOne = (level) => {
             const L = { ...level };
 
             // wrap getChildren if async
@@ -138,7 +138,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             };
 
             return L;
-        });
+        };
+
+        if (!Array.isArray(levels)) {
+            return wrapOne(levels);
+        }
+
+        return levels.map(wrapOne);
     }
 
 
