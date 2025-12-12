@@ -102,6 +102,7 @@
      *   debugMode: ?boolean,
      *   webglDebugMode: ?boolean,
      *   scaleBar: ?boolean,
+     *   toolBar: ?boolean,
      *   statusBar: ?boolean,
      *   viewport: ?Object,
      *   activeBackgroundIndex: ?number,
@@ -131,6 +132,7 @@
         "debugMode": false,
         "webglDebugMode": false,
         "scaleBar": true,
+        "toolBar": true,
         "statusBar": true,
         // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
         // point is in the viewport coordinate system of OpenSeadragon
@@ -160,7 +162,8 @@
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
-        "isStaticPreview": false
+        "isStaticPreview": false,
+        "historySize": 50
     },
     /**
      * The Server status. This object is here just for the reference and

@@ -16,7 +16,7 @@ const { span } = van.tags
  */
 class MenuTab extends BaseComponent {
     /**
-     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be created
      * @param {*} parent parent menu component
      */
     constructor(item, parent) {
@@ -36,7 +36,7 @@ class MenuTab extends BaseComponent {
 
     /**
      * todo: private?
-     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be created
      * @returns {*} Button and Div components from VanJS framework
      */
     _createTab(item) {
@@ -63,7 +63,10 @@ class MenuTab extends BaseComponent {
 
         let c = undefined;
         if (content) {
-            c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
+            if (typeof content !== 'string' && typeof content?.[Symbol.iterator] === 'function') {
+                c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"}}, ...content);
+            }
+            c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, content);
         }
         return [b, c];
     }

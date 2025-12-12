@@ -70,12 +70,13 @@
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
-        "plugins": "Plugins",
+        "plugins": "Get plugins",
         "explainPlugins": "Add plugins to the visualization",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
-        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved."
+        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved.",
+        "viewerSidebars": "Viewer Side Menus"
       }
     },
     "messages": {

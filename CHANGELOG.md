@@ -14,7 +14,12 @@ Breaking: some minor breaking changes in the session API, large changes in the i
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 
-### 2.3.0 (unreleased)
+### 2.3.1
+**Features**: author annotation distinction.
+
+**Bugfixes**: php image includes UI folder.
+
+### 2.3.0
 
 **Features**: added a way to set preferred annotation preset IDs for the GUI. Support for
 annotation modes private and locked. Support for annotation comments. Implementation of ICC profiles.

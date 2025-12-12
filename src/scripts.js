@@ -8,10 +8,6 @@
 function initXopatScripts() {
     $.extend($.scrollTo.defaults, {axis: 'y'});
 
-    $(VIEWER.element).on('contextmenu', function(event) {
-        event.preventDefault();
-    });
-
     let failCount = new WeakMap();
     VIEWER_MANAGER.broadcastHandler('tile-load-failed', function(e) {
         if (e.message === "Image load aborted") return;
@@ -45,38 +41,6 @@ function initXopatScripts() {
         e.tiledImage._failedDate = e.time;
     });
 
-    // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
-    // /**
-    //  * From https://github.com/openseadragon/openseadragon/issues/1690
-    //  * brings better zooming behaviour
-    //  */
-    // window.VIEWER.addHandler("canvas-scroll", function(e) {
-    //     if (Math.abs(e.originalEvent.deltaY) < 100) {
-    //         // touchpad has lesser values, do not change scroll behavior for touchpads
-    //         VIEWER.zoomPerScroll = 0.5;
-    //         _scrollCount = 0;
-    //         return;
-    //     }
-    //
-    //     _currentScroll = Date.now();
-    //     if (_currentScroll - _lastScroll < 400) {
-    //         _scrollCount++;
-    //     } else {
-    //         _scrollCount = 0;
-    //         VIEWER.zoomPerScroll = 1.2;
-    //     }
-    //
-    //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
-    //         VIEWER.zoomPerScroll += 0.2;
-    //     }
-    //     _lastScroll = _currentScroll;
-    // });
-
-    window.VIEWER.addHandler('navigator-scroll', function(e) {
-        VIEWER.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
-        VIEWER.viewport.applyConstraints();
-    });
-
     if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {
         function adjustBounds(speedX, speedY) {
             let bounds = VIEWER.viewport.getBounds();
@@ -84,7 +48,7 @@ function initXopatScripts() {
             bounds.y += speedY*bounds.height;
             VIEWER.viewport.fitBounds(bounds);
         }
-        VIEWER.addHandler('key-up', function(e) {
+        VIEWER_MANAGER.addHandler('key-up', function(e) {
             if (e.focusCanvas) {
                 let zoom = null,
                     speed = 0.3;
@@ -252,6 +216,7 @@ function initXopatScripts() {
         if (staticPreview) data.params.isStaticPreview = true;
         if (!withCookies) data.params.bypassCookies = true;
         data.params.bypassCacheLoadTime = true;
+        // todo: multi-position support
         data.params.viewport = {
             zoomLevel: VIEWER.viewport.getZoom(),
             point: VIEWER.viewport.getCenter()
@@ -336,6 +301,7 @@ form.submit();
      * @returns {void}
      */
     window.UTILITIES.copyToClipboard = function(content, alert=true) {
+        // todo try         navigator.clipboard?.writeText(content).catch(() => {}); on catch go this old way
         let $temp = $("<input>");
         $("body").append($temp);
         $temp.val(content).select();
@@ -555,6 +521,17 @@ ${await UTILITIES.getForm()}
                 if (idx < alphLen) id += _alphabet[idx];
             }
         }
+        if (id.startsWith("osd-")) {
+            while (id.length < size + 4) {
+                let r = rand32();
+                for (let k = 0; k < 4 && id.length < size; k++) {
+                    const b = r & 0xff; r >>>= 8;
+                    const idx = b & mask;
+                    if (idx < alphLen) id += _alphabet[idx];
+                }
+            }
+            return id.slice(4, size + 4);
+        }
         return id.slice(0, size);
     };
 
@@ -571,6 +548,10 @@ ${await UTILITIES.getForm()}
         let out = [];
         for (const ch of s) {
             out.push(_alphaset.has(ch) ? ch : '_');
+        }
+        // ensure ID does not have reserved 'osd-' prefix
+        if (out.length > 3 && out[0] === 'o' && out[1] === 's' && out[2] === 'd' && out[3] === '-') {
+            out[3] = "_";
         }
         return out.join('');
     };

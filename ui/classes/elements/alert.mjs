@@ -199,7 +199,8 @@ function iconSvg(mode, { soft = false, hidden = false } = {}) {
     return svg({
         // width: "16px",
         viewBox: "0 0 24 24",
-        'class': svgCls,
+        class: svgCls,
+        style: "min-height: 20px;",
         fill: "none",
         "aria-hidden": hidden ? "true" : "false",
         xmlns: "http://www.w3.org/2000/svg"

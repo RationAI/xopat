@@ -48,7 +48,7 @@ addPlugin('hotkeys', class extends XOpatPlugin {
 
         const _this = this;
         //todo make key management module that adds shortcuts support handling in uniform way and checks for collisions
-        VIEWER.addHandler('key-down', function (e) {
+        VIEWER_MANAGER.addHandler('key-down', function (e) {
             if (e.altKey) {
                 const handler = _this.keys[e.key];
                 if (handler) handler();

@@ -43,10 +43,10 @@ export class RightSideViewerMenu extends BaseComponent {
         };
 
         this.menu.addTab(
-            {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: [this.navigatorMenu.create()], background: "glass"}
+            {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass"}
         );
         this.menu.addTab(
-            {id: "shaders", icon: "fa-eye", title: $.t('main.shaders.title'), body: [this.createShadersMenu()], background: "glass"}
+            {id: "shaders", icon: "fa-eye", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
         );
 
         this.menu.set(Menu.DESIGN.TITLEONLY);
@@ -64,13 +64,13 @@ export class RightSideViewerMenu extends BaseComponent {
 
         // defaultly open menus
         for (let i of Object.keys(this.menu.tabs)) {
-            if (APPLICATION_CONTEXT.getOption(`${i}-open`, true)) {
+            if (APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
                 this.menu.tabs[i]._setFocus();
             } else {
                 this.menu.tabs[i]._removeFocus();
             }
 
-            if (APPLICATION_CONTEXT.getOption(`${i}-hidden`, false)) {
+            if (APPLICATION_CONTEXT.AppCache.get(`${i}-hidden`, false)) {
                 this.menu.tabs[i].toggleHiden();
             }
         }
@@ -138,6 +138,10 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this.menu.destroy();
         this.menu = undefined;
+    }
+
+    clearMenuItem(id) {
+        this.menu.delete(id);
     }
 
     create() {

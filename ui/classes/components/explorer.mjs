@@ -300,7 +300,7 @@ export class Explorer extends BaseComponent {
                 total: undefined,
                 virtualOffset: 0,
                 mode: lvl?.mode || "page",
-                currentPage: 0,            // ⬅️ single source of truth for current page
+                currentPage: 0, 
             };
             this._store.set(k, b);
         }
@@ -330,7 +330,6 @@ export class Explorer extends BaseComponent {
         const lvl = this._getLevel(levelIndex);
         if (!lvl) return;
 
-        // ⬅️ Snapshot current page for this level (only matters for mode:"page")
         if (lvl.mode === "page") {
             const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
             const bucket = this._ensureBucket(levelIndex, parent, this._search);
@@ -600,13 +599,13 @@ export class Explorer extends BaseComponent {
 
         // footer controls (prev/next) – unchanged behavior
         const pageState = van.state((currentPage || 0) + 1);
-        const totalState = van.state(bucket.total ?? null);
+
         const canNextState = van.state(true);
 
         // Calculate total pages if known
         const total = bucket.total;
         const totalPages = total ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
-        if (totalPages && totalState.val == null) totalState.val = totalPages;
+        const totalState = van.state(totalPages);
 
         // ------- Windowed rendering for paged lists -------
         // Config

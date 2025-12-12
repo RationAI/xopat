@@ -13,11 +13,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._cachedPreviews = {};
         this._cachedLabels = {};
         this._levels = undefined;
+        this._dock = undefined; // Reference to the dockable window
     }
 
     // ---------- public ----------
     open() {
-        if (!this._fw) {
+        if (!this._dock) {
             this.windowId = this.options.id ?? "slide-switcher";
             this.title = this.options.title ?? "Slide Switcher";
             this.w = this.options.width ?? 520;
@@ -25,6 +26,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this.l = this.options.startLeft ?? 80;
             this.t = this.options.startTop ?? 80;
 
+            // 1. Build the content (Toolbar + Explorer Host)
             const body = document.createElement("div");
             body.className = "flex-1 min-h-0 overflow-hidden flex flex-col";
             const toolbar = this._renderToolbar();
@@ -32,24 +34,36 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             contentHost.className = "flex-1 min-h-0 overflow-auto";
             body.append(toolbar, contentHost);
 
-            this._fw = new UI.FloatingWindow({
-                id: this.windowId,
-                title: this.title,
-                width: this.w,
-                height: this.h,
-                startLeft: this.l,
-                startTop: this.t,
-                resizable: true,
-                onClose: () => this.options.onClose?.(),
-            }, body);
-
+            // 2. Initialize the explorer
             this.explorer = new UI.Explorer({ id: "slide-switcher-explorer", levels: this._levels });
             contentHost.appendChild(this.explorer.create());
+
+            // 3. Create the DockableWindow instead of FloatingWindow
+            //
+            this._dock = new UI.DockableWindow({
+                id: this.windowId,
+                title: this.title,
+                icon: "fa-images",
+                // Set default mode to tab as requested
+                defaultMode: "tab",
+                // Pass floating options for when the user undocks it
+                floating: {
+                    width: this.w,
+                    height: this.h,
+                    startLeft: this.l,
+                    startTop: this.t,
+                    resizable: true,
+                    onClose: () => this.options.onClose?.(),
+                }
+            }, body);
+
+            // 4. Attach the component to the DOM so it registers the tab or creates the floater
+            const el = this._dock.create();
+            document.body.appendChild(el);
         }
 
-        // Ensure we don't keep re-initializing the explorer
-        if (!this._fw.opened()) this._fw.attachTo(document.body);
-        else this._fw.focus();
+        // Open (focus tab or bring floater to front)
+        this._dock.open();
     }
 
     _buildLevels() {
@@ -134,8 +148,22 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
 
-    close() { this._fw && this._fw.close(); }
-    opened() { return this._fw && this._fw.opened(); }
+    close() {
+        // Delegate close to the dockable instance
+        this._dock && this._dock.close();
+    }
+
+    isOpened() {
+        if (!this._dock) return false;
+        // Check mode: if floating, check the floating window state
+        if (this._dock.isFloating()) {
+            // Access private property _floating if necessary, or rely on internal logic
+            // Ideally DockableWindow would have an isOpened() method that proxies this
+            return document.getElementById(this.windowId);
+        }
+        // If docked (tab), it is technically "opened" as long as the tab exists
+        return true;
+    }
 
     async _openCurrentSelection() {
         const loadingTimer = setTimeout(() => USER_INTERFACE.Loading.show(), 500);
@@ -172,7 +200,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             );
 
             APPLICATION_CONTEXT.setOption?.("activeBackgroundIndex", indexes);
-            // setTimeout(() => this._refreshAllLinkIcons(), 0);
         } finally {
             clearTimeout(loadingTimer);
             USER_INTERFACE.Loading.show(false);
@@ -182,8 +209,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     /**
      *
      * @param {UI.Explorer.Options|undefined|false} newConfig if falsey value, customization is disabled
-     * @param {function} newConfig.bgItemGetter a function that from explorer leaf item returns BG configuration,
-     *  the configuration must be of a type
+     * @param {function} newConfig.bgItemGetter a function that from explorer leaf item returns BG configuration
      */
     refresh(newConfig) {
         if (!newConfig) {
@@ -198,30 +224,26 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         }
 
         this._levels = this._buildLevels();
-        if (!this.opened()) return;
-        this.explorer.reconfigure({ levels: this._levels });
 
-        // preserve original post-render sync
-        //this._refreshAllLinkIcons();
+        // Only reconfigure if explorer has been created
+        if (this.explorer) {
+            this.explorer.reconfigure({ levels: this._levels });
+        }
     }
 
-    // ---------- internals ----------}
+    // ---------- internals ----------
 
     _onCardClick(item, idx) {
-        // Single-open: replace selection with just this idx, update once
         this._suspendUpdates = true;
-        // Uncheck all checkboxes visually
         this.selected.clear();
         this._indexMap.clear();
         const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
         checks.forEach(ch => { ch.checked = false; });
-        // select the clicked one
         this.selected.add(idx);
         this._indexMap.set(idx, item);
         const box = document.getElementById(`${this.windowId}-chk-${idx}`);
         if (box) box.checked = true;
         this._toggleCardRing(idx, true);
-        // remove rings from others
         checks.forEach(ch => {
             const i = Number(ch.getAttribute("data-idx"));
             if (i !== idx) this._toggleCardRing(i, false);
@@ -251,48 +273,29 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _selectExclusiveAndOpen(item, idx) {
-        // if already selected, do nothing
         if (this.selected.has(idx)) return;
-
         this._suspendUpdates = true;
-
-        // clear previous selection
         this.selected.clear();
         this._indexMap.clear();
-
-        // uncheck all
         const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
         checks.forEach(ch => { ch.checked = false; });
-
-        // select the clicked one
         this.selected.add(idx);
         this._indexMap.set(idx, item);
-
-        // check its box + ring
         const box = document.getElementById(`${this.windowId}-chk-${idx}`);
         if (box) box.checked = true;
         this._toggleCardRing(idx, true);
-
-        // remove rings from others
         checks.forEach(ch => {
             const i = Number(ch.getAttribute("data-idx"));
             if (i !== idx) this._toggleCardRing(i, false);
         });
-
         this._suspendUpdates = false;
-
-        // open the current single selection
         this._openCurrentSelection();
     }
 
     _onCardRootClick(e, item, idx) {
         const t = e.target;
         if (!t) return;
-
-        // ignore any clicks on controls (including DaisyUI .btn)
         if (t.closest('button, input, .btn, .toggle, [data-no-open="1"]')) return;
-
-        // clicking a card acts like checking just that card (single-select)
         this._selectExclusiveAndOpen(item, idx);
     }
 
@@ -303,23 +306,19 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._indexMap.clear();
         const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
         checks.forEach(ch => { ch.checked = false; });
-        // remove all rings
         const cards = document.querySelectorAll(`#${this.windowId}-list .slide-card`);
         cards.forEach(c => c.classList.remove("ring","ring-primary","ring-offset-1"));
         this._suspendUpdates = false;
-        // Single update
         this._openCurrentSelection();
     };
 
     _renderToolbar() {
         const toggleId = `${this.windowId}-stacked`;
         return div({ class: "flex items-center justify-between gap-2 px-2 py-1 border border-base-300 bg-base-100" },
-            // left: tiny title
             div({ class: "flex items-center gap-2 text-sm" },
                 new UI.FAIcon({ name: "fa-images" }).create(),
                 span({ class: "font-semibold" }, this.title),
             ),
-            // right: stacked toggle + clear
             div({ class: "flex items-center gap-2" },
                 div({ class: "form-control" },
                     label({ for: toggleId, class: "label cursor-pointer gap-2 py-0" },
@@ -331,7 +330,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                             onchange: (e) => {
                                 this.stacked = !!e.target.checked;
                                 APPLICATION_CONTEXT.setOption?.("stackedBackground", this.stacked);
-                                // Re-open with current selection immediately so mode applies
                                 this._openCurrentSelection();
                             }
                         })
@@ -347,7 +345,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _renderSlideCard(idx, item) {
-        console.warn("Rendering slide card", idx, item);
         const bg = this.configGetter(item);
         const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
         const checkboxId = `${this.windowId}-chk-${idx}`;
@@ -387,7 +384,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         );
 
         if (bg?.id) {
-            // need a valid viewer ref no matter what
             let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
             this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
             this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, LABEL_CLASS);
@@ -416,16 +412,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
         );
 
-        // Consider actions, but this needs to find the viewer ref first
-        // const actionBar = div(
-        //     {
-        //         class: "absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-gradient-to-t from-black/60 to-transparent flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition"
-        //     },
-        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Center"),
-        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Fit"),
-        //     button({ class: "btn btn-ghost btn-xs", onclick: (e) => { e.stopPropagation(); --to do-- } }, "Remove"),
-        // );
-
         return div(
             {
                 id: `${this.windowId}-card-${idx}`,
@@ -436,8 +422,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 onclick: (e) => this._onCardRootClick(e, item, idx)
             },
             controls,
-            thumbWrap,
-            // actionBar
+            thumbWrap
         );
     }
 
@@ -447,42 +432,32 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const availablePreview = !!cached && !(cached instanceof Promise);
             const applyPreview = (node) => {
                 if (!node) return;
-
-                // still the same placeholder?
                 const current = parentNode.querySelector(`#${replacedImageNode.id}`);
                 if (!current) {
                     console.warn("Failed to find placeholder node", replacedImageNode);
                     return;
                 }
-
                 node.id = replacedImageNode.id;
                 node.className = imageClasses;
                 node.alt = replacedImageNode.alt || name;
                 node.draggable = "false";
-
-                // IMPORTANT: remove intrinsic size attrs that can fight the container
                 node.removeAttribute?.("width");
                 node.removeAttribute?.("height");
-
                 cacheMap[bg.id] = node;
                 replacedImageNode.replaceWith(node);
                 return node;
             };
 
             if (availablePreview) {
-                // use the resolved node right away
                 applyPreview(cached);
             } else if (cached && typeof cached.then === "function") {
-                // promise in flight
                 cached.then(applyPreview)
                     .catch(err => console.error("Failed to reuse image preview", err));
             } else {
-                // start loading and cache the promise
                 cacheMap[bg.id] = method(bg)
                     .then(applyPreview)
                     .catch(err => {
                         console.error("Failed to create image preview", err);
-                        // keep placeholder; clear bad cache
                         delete cacheMap[bg.id];
                     });
             }
@@ -510,26 +485,20 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
             : "Not open";
         btn.disabled = !viewer;
-        btn.innerHTML = "";  // replace icon
+        btn.innerHTML = "";
         btn.appendChild(new UI.FAIcon({name: linked ? "fa-link" : "fa-link-slash"}).create());
     }
-
-    // _refreshAllLinkIcons() {
-    //     // Call this after list render, after selection changes, and after viewer open
-    //     const n = APPLICATION_CONTEXT.config.background?.length ?? 0;
-    //     for (let i = 0; i < n; i++) this._updateLinkIcon(i);
-    // }
 
     _onToggleLink(idx, item, ev) {
         ev?.stopPropagation?.();
         const viewer = this.configGetter(item)?.getViewer();
         if (!viewer) return;
         if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
-        // // Update all cards that might share the same viewer (esp. stacked)
-        // this._refreshAllLinkIcons();
         this._updateLinkIcon(idx, viewer);
     }
 
-    // BaseComponent contract
-    create() { return this._fw.create(); }
+    // BaseComponent contract - pass through to dockable instance
+    create() {
+        return this._dock ? this._dock.create() : super.create();
+    }
 }

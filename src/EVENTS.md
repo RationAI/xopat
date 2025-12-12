@@ -92,17 +92,21 @@ Fired when plugin is loaded within a system (at runtime).
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).
 
-#### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton}`
+#### `module-singleton-created` | e: `{id: string, module: XOpatModuleSingleton, viewer: OpenSeadragon.Viewer|undefined}`
 Modules generally cannot be monitored as they might be any custom
 code used in any context. However, singleton modules are meant for shared
 access to functionality, therefore a handler for singletons is available.
+Viewer argument is available if the module is also a viewer-singleton.
+
+#### `viewer-singleton-created` | e: `{id: string, module: XOpatViewerSingleton, viewer: OpenSeadragon.Viewer|undefined}`
+Fired when viewer singleton is created.
 
 #### `module-loaded` | e: `{id: string}
 Fired when module is loaded within a system (at runtime).
 
 #### `key-down` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
-Fired when user presses a key. The event object is extended by one property that tells us whether the
-main canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
+Fired when user presses a key. The event object is extended by one property that tells us whether a viewer
+canvas is in the focus (e.g. not a UI window) at the time. The event happens on the document node
 and ignores OpenSeadragon key event.
 
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`

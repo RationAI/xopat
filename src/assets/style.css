@@ -398,7 +398,7 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
 .system-container .fa-solid, .system-container .fa-regular {color: var(--color-border-inverse);}
-#top-side {z-index: 99;}
+#top-side {z-index: 9999;}
 .right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
@@ -458,6 +458,7 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 /*input.switch:checked + label {background: var(--color-diff-blob-comment-button-bg);}*/
 /*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
 /*input.switch + label:active:after {width: 130px;}*/
+
 
 /** DIALOGS*/
 input.selectable-image-row-context:checked + div {

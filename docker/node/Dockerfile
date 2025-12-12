@@ -13,6 +13,7 @@ RUN git clone https://github.com/RationAI/openseadragon.git \
 # VIEWER: PROD GIT       ####
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
+# Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
 FROM node:20 AS viewer-git
 
 ENV LANG=en_US.UTF-8
@@ -49,7 +50,8 @@ WORKDIR /app
 ###############################
 # Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
+ENV XO_REPO_ROOT=/app
 COPY --chown=node:1000 . /app
-RUN cd /app && npm install
+RUN cd /app && npm install && npm run build
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

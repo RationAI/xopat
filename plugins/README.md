@@ -302,10 +302,7 @@ For data IO, you ahve two options
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
-
-> Events are available only after `this.registerAsEventSource()` has been called.
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -384,6 +381,15 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+## Viewer Multiplexing
+There can be multiple viewers open at once. You might need to create:
+- custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
+- custom viewer-oriented data models: use `XOpatViewerSingleton` if you need only instance per viewer.
+
+### ``XOpatViewerSingleton``
+The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
+created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton).``
 
 ## Dynamic Loading
 As workers and js modules (recommended usage), the viewer does not offer advanced tools for

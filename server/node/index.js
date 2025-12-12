@@ -11,11 +11,8 @@ const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
 const constants = require("./constants");
-const { ABSPATH } = require("./constants");
 
-
-// TODO hardcoded language!
-const language = 'en';
+const language = constants.SERVER.LANGUAGE;
 const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
 i18n.init(languageServerConf);
@@ -30,7 +27,7 @@ const rawReqToString = async (req) => {
 
 const initViewerCoreAndPlugins = (req, res) => {
 
-    const core = getCore(ABSPATH, PROJECT_PATH,
+    const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key]);
@@ -169,6 +166,7 @@ async function responseViewer(req, res) {
 ${core.requireOpenseadragon()}
 ${core.requireLibs()}
 ${core.requireExternal()}
+${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}
@@ -261,6 +259,13 @@ const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+
+        if (url.pathname.startsWith("/health")) {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+
         // Treat suffix paths as attempt to access existing files
         if (url.pathname.match(/.+\..{2,5}$/g)) {
             const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
@@ -269,7 +274,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.writeHead(404);
             res.end();
-            return
+            return;
         }
 
         if (url.pathname.startsWith("/dev_setup")) {
@@ -285,9 +290,7 @@ const server = http.createServer(async (req, res) => {
         res.end();
     }
 });
-
-const port = process.env.XOPAT_NODE_PORT || 9000;
-server.listen(port, '0.0.0.0', () => {
+server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
@@ -298,10 +301,15 @@ server.listen(port, '0.0.0.0', () => {
     } else {
         console.log("Using default ENV (no overrides).");
     }
-    console.log(`The server is listening on localhost:${port} ...`);
-    console.log(`  To manually create and run a session, open http://localhost:${port}/dev_setup`);
-    console.log(`  To open using GET, provide http://localhost:${port}?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide http://localhost:${port}#urlEncodedSessionJSONHere`);
+
+    const port = constants.SERVER.PORT;
+    const scheme = port === 443 ? "https" : "http";
+    const host = constants.SERVER.HOST === "0.0.0.0" ? "localhost" : constants.SERVER.HOST;
+    const URL = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+    console.log(`The server is listening on ${URL} ...`);
+    console.log(`  To manually create and run a session, open ${URL}/dev_setup`);
+    console.log(`  To open using GET, provide ${URL}?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide ${URL}#urlEncodedSessionJSONHere`);
     console.log(`                                      or sent the data using HTTP POST`);
     console.log(`  The session description is available in src/README.md`);
 });

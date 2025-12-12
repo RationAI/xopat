@@ -3,7 +3,6 @@
 window.OpenSeadragon.Snapshots = class extends XOpatModuleSingleton {
     constructor() {
         super("snapshots");
-        this.registerAsEventSource();
         this.initPostIO();
 
         // expose a small helper for the export link above

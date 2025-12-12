@@ -9,26 +9,31 @@ addPlugin('slide-info', class extends XOpatPlugin {
         this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
         this.slideBrowser = this.getOptionOrConfiguration('slideBrowser', 'slideBrowser', true);
 
-        VIEWER_MANAGER.addHandler('after-open', e => {
-            if (!this.hasCustomBrowser && this.slideBrowser) {
-                this.menu.refresh();
-            }
+        this.infoMenuBuilder.buildViewerMenu(viewer => {
 
-            for (let viewer of VIEWER_MANAGER.viewers) {
-                // todo consider consulting bgconfig
+            let result = {
+                id: `${viewer.id}-slide-info`,
+                title: "Slide Information",
+                page: undefined
+            };
+
+            try {
                 const mainTiledImage = viewer.world.getItemAt(0);
                 let metadata = mainTiledImage?.source.getMetadata();
                 if (metadata) {
                     metadata = metadata.info || metadata;
-
-                    this.infoMenuBuilder.buildViewerMenu(viewer, {
-                        id: viewer.id,
-                        title: "Slide Information",
-                        page: Array.isArray(metadata) ? metadata : [metadata],
-                    });
-                } else {
-                    // todo remove old menu
+                    result.page = Array.isArray(metadata) ? metadata : [metadata];
                 }
+            } catch (e) {
+                console.error('Failed to load slide meta for slide viewer', viewer, e);
+            }
+
+            return result;
+        });
+
+        VIEWER_MANAGER.addHandler('after-open', e => {
+            if (!this.hasCustomBrowser && this.slideBrowser) {
+                this.menu.refresh();
             }
         });
 
@@ -44,6 +49,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
             this._createControlButtons(e.viewer);
         });
         VIEWER_MANAGER.addHandler('viewer-destroy', e => {
+            // todo this needs to be fixed in some api-level way
             document.getElementById("slide-info-control-bar-"+e.viewer.id)?.remove();
         });
         this._customControlsInitialized = true;
@@ -117,6 +123,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
 
     /**
      * Add custom control buttons to the viewer.
+     * TODO redesign this
      * @param children
      */
     addCustomViewerButtons(...children) {

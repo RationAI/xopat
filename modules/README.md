@@ -143,10 +143,11 @@ Return data exported with the viewer if available. Exporting the data is done th
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
-> Events are available only after `this.registerAsEventSource()` has been called.
+Events can furthermore be broadcasted if the instance you want to raise on is ``XOpatViewer*Instance*`` like object,
+which is alive once per active viewer window. The events to call are ``broadcastHandler`` and `cancelBroadcast`, 
+the syntax is similar to the other handlers. Asynchronous versions are not yet available.
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -243,3 +244,16 @@ This might come in handy if you for example want to do additional IO initializat
 > **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
 > ``module[<module_id>.key] = value;``. Nested keys are up to the module to manage for itself,
 > e.g. ``module[<module_id>.parentKey.subKey] = value;``.
+
+## Viewer Multiplexing
+There can be multiple viewers open at once. You might need to create:
+ - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
+ - custom viewer-oriented data models: use ``XOpatViewerSingletonModule`` if you need the module API, or `XOpatViewerSingleton` if you need only instance per viewer.
+
+### ``XOpatViewerSingleton``
+The `XOpatViewerSingleton` or `XOpatViewerSingletonModule` comes with helper APIs that ease the multiplexing management. You can either keep ``XOpatViewerSingletonModule`` X instances per viewer,
+or rather offer single module `XOpatModuleSingleton` interface that internally owns multiple `XOpatViewerSingleton`s, which is usually nicer to users. These classes
+exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
+created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton).``
+

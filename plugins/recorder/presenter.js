@@ -578,9 +578,9 @@ draggable="true"></span>`;
                     }
                 }
 
-                this.annotations.addHandler('annotation-create', e => addSidRecord(e.object));
-                this.annotations.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
-                this.annotations.addHandler('annotation-replace', e => {
+                this.annotations.addFabricHandler('annotation-create', e => addSidRecord(e.object));
+                this.annotations.addFabricHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
+                this.annotations.addFabricHandler('annotation-replace', e => {
                     _this._removeAnnotationRef(e.previous);
                     e.next.presenterSids = e.previous.presenterSids;
                     addSidRecord(e.next);
@@ -607,7 +607,7 @@ draggable="true"></span>`;
                     o.presenterSids = sids;
                 });
             }
-            this.annotations.loadObjects({objects: Object.values(data).flat(1)})
+            this.annotations.fabric.loadObjects({objects: Object.values(data).flat(1)})
                 .then(() => _this._bindAnnotations());
             Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
         } catch(e) {
@@ -695,7 +695,7 @@ draggable="true"></span>`;
                     });
                     updates = true;
                 }
-                if (updates) _this.annotations.canvas.renderAll();
+                if (updates) _this.annotations.fabric.canvas.renderAll();
 
                 _this._delay = false;
                 _this._duration = e.step.duration + 2.5;
@@ -744,7 +744,7 @@ draggable="true"></span>`;
             }
         });
 
-        VIEWER.addHandler('key-down', (e) => {
+        VIEWER_MANAGER.addHandler('key-down', (e) => {
             if (!e.focusCanvas) return;
             if (e.code === "KeyN") {
                 _this.snapshots.goToIndex(_this.snapshots.currentStepIndex + 1);

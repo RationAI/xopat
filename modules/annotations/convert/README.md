@@ -59,7 +59,7 @@ major keys: ``metadata``, `objects` and `presets`. Metadata includes a timestamp
 There are three ID types:
  - ``id``: unused property, left for integration with other logics: gives the annotation identity of the 
  external (often storage) system
- - ``incrementID``: unique ID per annotation memory object, even if object is perceived by user the same
+ - ``incrementId``: unique ID per annotation memory object, even if object is perceived by user the same
  after e.g. modification, it has different increment ID
  - ``internalID``: consistent ID of annotation as perceived by a user, internal value not to be exported
  and copied over between objects - the system manages this internally
@@ -203,7 +203,7 @@ static object describing necessary content for exporting as well as below
  - **inner** (``factory.copyInnerProperties``) - creates a shallow copy that copies over only properties defined in the factory's 
 `exports()` and `exportsGeometry()` methods
 
-Furthermore, you can use ``module.trimExportJSON`` method to trim
+Furthermore, you can use ``module.fabric.trimExportJSON`` method to trim
 all properties automatically, **in depth**
  - top-level objects (i.e. the parent group) are trimmed using ``factory.copyNecessaryProperties``
    - forcefully, `objects`, `left`, `top`, `width`, `height` props are attached

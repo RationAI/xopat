@@ -1,4 +1,4 @@
-window.AdvancedMenuPages = class {
+window.AdvancedMenuPages = class extends XOpatModule {
 
     vegaInit = {};
 
@@ -7,9 +7,9 @@ window.AdvancedMenuPages = class {
      * @param {string} moduleId unique id of this module instance.
      * @param {function|string} strategy builder strategy, renderUIFromJson or guessUIFromJson
      */
-    constructor(moduleId, strategy=this.renderUIFromJson) {
-        this.id = "menu-pages";
-        this.uid = moduleId;
+    constructor(moduleId, strategy='renderUIFromJson') {
+        super("menu-pages")
+        this.__uids = moduleId; // todo consider doing this in some standard way... we need to inherit the identity to e.g. crash together with the owner
         this._count = 0;
         this.strategy = typeof strategy === "string" ? this[strategy] : strategy;
     }
@@ -140,12 +140,10 @@ window.AdvancedMenuPages = class {
         }
 
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str, sanitizeConfig));
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str));
             }, "sanitize-html");
@@ -188,12 +186,10 @@ window.AdvancedMenuPages = class {
             this.loadVega();
         };
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str, sanitizeConfig), selector);
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str), selector);
             })
@@ -203,56 +199,53 @@ window.AdvancedMenuPages = class {
     }
 
     /**
-     *
-     * @param {OpenSeadragon.Viewer|string} viewerOrId
-     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
+     * @typedef {function} ViewerHtmlConfigGetter
+     * @param {OpenSeadragon.Viewer} viewer - viewer that is the config meant for
+     * @return JSONHtmlConfig
+     */
+
+    /**
+     * @param {ViewerHtmlConfigGetter} getter
      * @param sanitizeConfig
      */
-    buildViewerMenu(viewerOrId, config, sanitizeConfig=false) {
-        if (!config) return;
-
-        const build = (config, sanitizer) => {
-            for (let data of config) {
-                const html = [];
-
-                if (!data.title || !data.page) {
-                    console.warn("Config for advanced menu pages missing title or page props - skipping!", data);
-                    continue;
-                }
-
-                for (let element of (data.page || [])) {
-                    html.push(this.strategy(element, sanitizer));
-                }
-
-                // todo replacement must work
-                VIEWER_MANAGER.getMenu(viewerOrId).append(
-                    data.title,
-                    undefined,
-                    html.join(""),
-                    this.getMenuId(data.id, this._count++),
-                    this.uid
-                );
+    buildViewerMenu(getter, sanitizeConfig=false) {
+        const build = (viewer, sanitizer) => {
+            let config = null;
+            try {
+                config = getter(viewer);
+            } catch (e) {
+                console.error(`Error in module menu builder for ${getter}:`, e);
             }
-            this._count += config.length;
-            this.loadVega();
+
+            if (!config) return;
+
+            const html = [];
+            for (let element of (config.page || [])) {
+                html.push(this.strategy(element, sanitizer));
+            }
+
+            // todo vega might be problematic -> we don't know WHEN it gets updated, we need callback to execute when inserted
+            setTimeout(() => this.loadVega());
+
+            // todo icon
+            return {
+                id: this.getMenuId(config.id, this._count++),
+                title: config.title,
+                icon: "fa-cog",
+                body: html.join("")
+            }
         };
 
-        if (!Array.isArray(config)) {
-            config = [config];
-        }
-
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str, sanitizeConfig));
+                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str, sanitizeConfig)));
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str));
+                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str)));
             }, "sanitize-html");
         } else {
-            build(config, false);
+            this.registerViewerMenu(viewer => build(viewer, false));
         }
     }
 

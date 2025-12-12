@@ -103,7 +103,7 @@ OSDAnnotations.Convertor = class {
     /**
      * Encodes the annotation data using asynchronous communication.
      * @param options
-     * @param context
+     * @param {OSDAnnotations.FabricWrapper} context
      * @param withAnnotations
      * @param withPresets
      * @returns serialized or plain list of strings of objects based on this.options.serialize:
@@ -119,14 +119,27 @@ OSDAnnotations.Convertor = class {
 
         options.exportsObjects = withAnnotations && parserCls.exportsObjects;
         options.exportsPresets = withPresets && parserCls.exportsPresets;
+
+        const annotationsGetter = (...exportedProps) => {
+            if (!options.exportsObjects) return undefined;
+            let objs = context.toObject(
+                exportAll,
+                // todo move _exportPrivateAnnotations to options
+                !context._exportPrivateAnnotations && ((o) => !o.private),
+                ...exportedProps
+            ).objects;
+
+            const ids = options?.filter?.ids;
+            if (Array.isArray(ids) && ids.length) {
+                const set = new Set(ids.map(String));
+                objs = objs.filter(o => set.has(String(o.id)));
+            }
+            return objs;
+        };
+
         const encoded = await new parserCls(context, options).encodePartial(
-            (...exportedProps) =>
-                context.toObject(
-                    exportAll,
-                    !context._exportPrivateAnnotations && ((o) => !o.private),
-                    ...exportedProps
-                ).objects,
-            () => context.presets.toObject()
+            annotationsGetter,
+            () => context.module.presets.toObject()
         );
         encoded.format = options.format;
         return encoded;

@@ -23,6 +23,21 @@ const HtmlRenderer = v => {
  */
 
 /**
+ * @typedef {object} UINamedItem The named item in UI.
+ * @property {string} [id] unique id
+ * @property {string} [icon] icon class (FA icons) or empty string if icon not desirable
+ * @property {string} [title] the item title
+ * @property {UIElement|undefined} [body] Returns body of the item, or falsey value if
+ * the item does not exist.
+ */
+
+/**
+ * @typedef {function} UINamedItemGetter
+ * @param {any} argument - use depends on the particular case
+ * @return UINamedItem
+ */
+
+/**
  * @class BaseComponent
  * @description The base class for all components
  */
@@ -96,8 +111,8 @@ export class BaseComponent {
     }
 
     /**
-     *
      * @param {*} element - The element to attach the component to
+     * @return {BaseComponent} builder pattern
      */
     attachTo(element) {
         this.refreshClassState();
@@ -122,11 +137,12 @@ export class BaseComponent {
                 mount.append(this.create());
             }
         }
+        return this;
     }
 
     /**
-     *
      * @param {*} element - The element to prepend the component to
+     * @return {BaseComponent} builder pattern
      */
     prependedTo(element) {
         this.refreshClassState();
@@ -151,6 +167,7 @@ export class BaseComponent {
                 mount.prepend(this.create());
             }
         }
+        return this;
     }
 
     /**
@@ -267,6 +284,22 @@ export class BaseComponent {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
 
+    /**
+     * Toggle the class of the component
+     * @param {string} key
+     * @param {string} value
+     * @param {boolean} on if true, set class
+     */
+    toggleClass(key, value, on=true) {
+        this.classMap[key] = on ? value : "";
+        this.classState.val = Object.values(this.classMap).join(" ");
+    }
+
+    /**
+     * Set attribute property to the element
+     * @param {string} key attribute name
+     * @param {string} value
+     */
     setExtraProperty(key, value) {
         this.propertiesMap[key] = value;
         let stateMap = this.propertiesStateMap[key];
@@ -365,6 +398,30 @@ export class BaseComponent {
     }
 
     /**
+     * Externally added components to the DOM must be wrapped by this function,
+     * so that upon failure they can be removed.
+     * @param {UIElement} element root node
+     * @param {XOpatElementID} componentId plugin or module ID that added the item
+     * @param {boolean} instantiateString turn strings into dom done - for compatibility reasons
+     */
+    static ensureTaggedAsExternalComponent(element, componentId, instantiateString=false) {
+        if (!element) return;
+
+        if (element instanceof BaseComponent) {
+            element.toggleClass('__base__', componentId + '-plugin-root', true);
+            return element;
+        }
+
+        if (typeof element === 'string') {
+            return `<div class="${componentId}-plugin-root">${element}</div>`;
+        }
+
+        // assume node
+        element.classList.add(componentId + '-plugin-root');
+        return element;
+    }
+
+    /**
      * @description Remove the component from the DOM
      */
     remove() {
@@ -407,5 +464,20 @@ export class BaseComponent {
 
         this.refreshClassState();
         this.refreshPropertiesState();
+    }
+}
+
+/**
+ * @typedef {BaseUIOptions} SelectableUIOptions
+ * @property {string|false} [itemID] - The selection ID, or false to remove any selection.
+ */
+export class BaseSelectableComponent extends BaseComponent {
+    constructor(options, ...args) {
+        options = super(options, ...args).options;
+        this.itemID = options.itemID || this.id;
+    }
+
+    setSelected(itemID) {
+        throw new Error("Component must override setSelected method");
     }
 }

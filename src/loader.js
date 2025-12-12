@@ -11,6 +11,23 @@
  */
 
 /**
+ * @typedef {string} UniqueViewerId
+ * Unique ID per viewer session. Accessed as `viewer.uniqueId`. Related to any data-like
+ * function and logics. Do not mix with `ViewerId` type (`viewer.id`).
+ */
+
+/**
+ * @typedef {string} ViewerId
+ * ID per viewer instance. Accessed as `viewer.id`. Related to any UI-like
+ * function and logics when we don't care about the particular viewer instance, but position.
+ */
+
+/**
+ * @typedef {OpenSeadragon.Viewer|UniqueViewerId} ViewerLikeItem
+ * Viewer or unique viewer ID. Syntax sugar for methods that usually accept both parameters.
+ */
+
+/**
  * Initialize the xOpat loading system. This sets up the runtime environment for
  * loading modules and plugins and returns an initializer you call when the host
  * application (e.g., the viewer) is ready.
@@ -18,14 +35,14 @@
  * Notes:
  * - Do not call this inside the viewer; use it if you want to reuse plugins/modules elsewhere.
  * - Example usage:
- *   const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
- *   await initPlugins();
+ * const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
+ * await initPlugins();
  *
  * @param ENV
  * @param {Object<string, XOpatElementRecord>} PLUGINS
- *   Registry object of plugins keyed by plugin id (from include.json).
+ * Registry object of plugins keyed by plugin id (from include.json).
  * @param {Object<string, XOpatElementRecord>} MODULES
- *   Registry object of modules keyed by module id (from include.json).
+ * Registry object of modules keyed by module id (from include.json).
  * @param {string} PLUGINS_FOLDER - Base URL or path where plugin folders reside (trailing slash optional).
  * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
  * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
@@ -47,16 +64,17 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      */
     let REGISTERED_PLUGINS = [];
     let LOADING_PLUGIN = false;
+    const REQUIRED_SINGLETONS = new Set();
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
     }
 
-    window.showPluginError = function (id, e) {
+    window.showPluginError = function (id, e, loaded=undefined) {
         // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
-            $(`#load-plugin-${id}`).html("");
+            if (loaded) $(`#load-plugin-${id}`).html("");
             return;
         }
         $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
@@ -242,9 +260,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     /**
      * Get a module singleton reference if instantiated.
      * @param id module id
-     * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated
+     * @param {ViewerLikeItem} [viewer] if provided, viewer-context-dependent instance (XOpatViewerSingleton) is fetched
+     * @return {XOpatModuleSingleton|XOpatViewerSingletonModule|undefined} module if it is a singleton and already instantiated
      */
-    window.singletonModule = function (id) {
+    window.singletonModule = function (id, viewer = undefined) {
+        if (viewer !== undefined) {
+            return VIEWER_MANAGER._getSingleton(id, viewer);
+        }
         return MODULES[id]?.instance;
     };
 
@@ -265,6 +287,25 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             }
         } //else do not initialize plugin, wait untill all files loaded dynamically
     };
+
+    /**
+     * Force the SingletonClass class definition to be instantiated automatically per active viewer.
+     * @param {XOpatViewerSingleton} SingletonClass
+     */
+    window.requireViewerSingletonPresence = function (SingletonClass) {
+        if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
+            console.error("Invalid singleton class", SingletonClass);
+            return;
+        }
+        REQUIRED_SINGLETONS.add(SingletonClass);
+        if (window.VIEWER_MANAGER) {
+            for (let v of VIEWER_MANAGER.viewers) {
+                if (v.isOpen() && !this._getSingleton(SingletonClass.IDD, v)) {
+                    SingletonClass.instance(v);
+                }
+            }
+        }
+    }
 
     function extendWith(target, source, ...properties) {
         for (let property of properties) {
@@ -342,6 +383,65 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             throw "Invalid translation for item " + id;
         }
     }
+
+    // ability to inherit from mutliple classes https://github.com/rse/aggregation/blob/master/src/aggregation-es6.js
+    const All = (base, ...mixins) => {
+        // Build a linearized, duplicate-free list of mixin classes,
+        // ordered from closest-to-base -> most-derived
+        const linearize = (base, mixins) => {
+            const seen = new Set();
+            const out = [];
+
+            const visit = (K) => {
+                if (!K || K === base || K === Object) return;
+                const superK = Object.getPrototypeOf(K);
+                visit(superK);                 // ensure superclasses come first
+                if (!seen.has(K)) {
+                    seen.add(K);
+                    out.push(K);                  // add each class exactly once
+                }
+            };
+
+            for (const M of mixins) visit(M);
+            return out;
+        };
+
+        const linear = linearize(base, mixins);
+
+        // Copy property helpers (skip problematic keys)
+        const copyProps = (target, source) => {
+            if (!source) return;
+            for (const key of Object.getOwnPropertyNames(source)) {
+                if (/^(?:initializer|constructor|prototype|arguments|caller|name|bind|call|apply|toString|length)$/.test(key))
+                    continue;
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+            }
+
+            for (const key of Object.getOwnPropertySymbols(source)) {
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+            }
+        };
+
+        class Aggregate extends base {
+            constructor (...args) {
+                super(...args);                 // call base constructor once
+
+                // Call each initializer once, in base->derived order
+                for (const K of linear) {
+                    const init = K?.prototype?.initializer;
+                    if (typeof init === "function") init.apply(this, args);
+                }
+            }
+        }
+
+        // Copy statics and prototypes once, in base->derived order
+        for (const K of linear) {
+            copyProps(Aggregate.prototype, K.prototype);
+            copyProps(Aggregate, K);
+        }
+
+        return Aggregate;
+    };
 
     // POST DATA STORAGE - Always implemented via POST, support static IO.
     /**
@@ -435,18 +535,37 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
 
     /**
+     * @typedef {string} XOpatElementID
+     * Element ID unique to instance, either plugin or module id.
+     */
+
+    /**
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
      * available in docs due to its API nature.
+     * @extends OpenSeadragon.EventSource
      * @abstract
      */
-    class XOpatElement {
+    class XOpatElement extends OpenSeadragon.EventSource {
 
+        /**
+         * @param {XOpatElementID} id
+         * @param {('plugin'|'module')} executionContextName
+         */
         constructor(id, executionContextName) {
+            super();
+
             if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
             this.__id = id;
             this.__uid = `${executionContextName}.${id}`;
             this.__xoContext = executionContextName;
+
+            /**
+             * @type {string} id element identifier
+             * @memberof XOpatElement
+             */
+            this.constructor.id = id;
+
             this[CACHE_TOKEN] = new XOpatStorage.Cache({id: this.__uid});
             REGISTERED_ELEMENTS.push(this);
         }
@@ -510,9 +629,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Raise error event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         *   todo better warn mechanism:
-         *      -> simple way of module/plugin level context warns and errors (no feedback)
-         *      -> advanced way of event warnings (feedback with E code)
+         * todo better warn mechanism:
+         * -> simple way of module/plugin level context warns and errors (no feedback)
+         * -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -544,9 +663,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Raise warning event. If the module did register as event source,
          * it is fired on the item instance. Otherwise, it is fired on the VIEWER.
-         *   todo better warn mechanism:
-         *      -> simple way of module/plugin level context warns and errors (no feedback)
-         *      -> advanced way of event warnings (feedback with E code)
+         * todo better warn mechanism:
+         * -> simple way of module/plugin level context warns and errors (no feedback)
+         * -> advanced way of event warnings (feedback with E code)
          * @param e
          * @param e.code
          * @param e.message
@@ -582,7 +701,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
          * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
          * @param {boolean} [options.inViewerContext=true] if true, the POST IO depends on the viewer context and
-         *    runs IO wrt. viewer lifecycle
+         * runs IO wrt. viewer lifecycle
          * @return {PostDataStore} data store reference, or false if import failed
          */
         async initPostIO(options = {}) {
@@ -592,6 +711,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
             options.id = this.uid;
             options.xoType = this.__xoContext;
+            if (options.inViewerContext === undefined) {
+                options.inViewerContext = true;
+            }
             let store = this[STORE_TOKEN];
             if (!store) {
                 this[STORE_TOKEN] = store = new PostDataStore(options);
@@ -600,24 +722,26 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const vanillaExportKey = (options.exportKey || "").replace("::", "");
 
             try {
-                const exportKey = options.inViewerContext ? vanillaExportKey + "::" : vanillaExportKey;
                 VIEWER_MANAGER.addHandler('export-data', async (e) => {
                     const data = await this.exportData(vanillaExportKey);
                     if (data) {
                         await store.set(vanillaExportKey, data);
                     }
 
-                    for (let v of VIEWER_MANAGER.viewers) {
-                        const contextID = findViewerUniqueId(v);
-                        const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
-                        if (data) {
-                            await store.set(vanillaExportKey + "::" + contextID, viewerData);
+                    if (options.inViewerContext) {
+                        const exportKey = vanillaExportKey + "::";
+                        for (let v of VIEWER_MANAGER.viewers) {
+                            const contextID = findViewerUniqueId(v);
+                            const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
+                            if (data) {
+                                await store.set(exportKey + contextID, viewerData);
+                            }
                         }
                     }
                 });
 
-                const data = await store.get(exportKey);
-                if (data !== undefined) await this.importData(exportKey, data);
+                const data = await store.get(vanillaExportKey);
+                if (data !== undefined) await this.importData(vanillaExportKey, data);
 
             } catch (e) {
                 console.error('IO Failure:', this.constructor.name, e);
@@ -633,7 +757,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Called to export data within 'export-data' event: automatically the post data store object
          * (returned from initPostIO()) is given the output of this method:
-         *   `await dataStore.set(options.exportKey || "", await this.exportData());`
+         * `await dataStore.set(options.exportKey || "", await this.exportData());`
          * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
          * upon the event 'export-data', or simply nest objects to fit a single output
          * @param key {string} the data contextual ID it was exported with, default empty string
@@ -652,7 +776,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
         /**
          * Called automatically within this.initPostIO if data available
-         *  note: parseImportData return value decides if data is parsed data or passed as raw string
+         * note: parseImportData return value decides if data is parsed data or passed as raw string
          * @param key {string} the data contextual ID it was exported with, default empty string
          * @param data {any} data
          */
@@ -690,143 +814,97 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * TODO: this does not wait once module is fully loaded!
-         * @param moduleId
-         * @param callback
+         * @param {string} moduleId
+         * @param {{ (module: XOpatModuleSingleton | XOpatViewerSingletonModule): void }} callback
+         * @param {ViewerLikeItem} [viewer] - if defined, XOpatViewerSingletonModule is listened for given
+         * the desired viewer in question, otherwise global XOpatModuleSingleton
          * @return {boolean} true if finished immediatelly, false if registered handler for the
-         *   future possibility of the module being loaded
+         * future possibility of the module being loaded
          */
-        integrateWithSingletonModule(moduleId, callback) {
+        integrateWithSingletonModule(moduleId, callback, viewer = undefined) {
             const targetModule = singletonModule(moduleId);
             if (targetModule) {
                 callback(targetModule);
                 return true;
             }
             VIEWER_MANAGER.addHandler('module-singleton-created', e => {
-                if (e.id === moduleId) callback(e.module);
+                if (viewer) {
+                    viewer = VIEWER_MANAGER.ensureViewer(viewer);
+                    // call also if viewer event arg undefined -> user might missed the usage
+                    if (e.id === moduleId && (e.viewer === viewer || e.viewer) === undefined) callback(e.module);
+                } else {
+                    if (e.id === moduleId) callback(e.module);
+                }
             });
             return false;
         }
 
         /**
-         * Set the element as event-source class. Re-uses EventSource API from OpenSeadragon.
+         * Register a menu item that attaches to every active viewer's right-side menu.
+         * The menu is automatically managed: created on viewer open, updated on content change,
+         * and removed on destroy/reset.
+         *
+         * todo move all UI to UI
+         *
+         * @param {UINamedItemGetter} getter receives the viewer instance as a single instance, supports
+         *   async functions too
          */
-        registerAsEventSource(errorBindingOnViewer=true) {
-            //consider _errorHandlers that would listen for errors and warnings and provide handling instead of global scope VIEWER (at least for plugins)
-
-            const events = this.__eventSource = new OpenSeadragon.EventSource();
-            events.filters = {};
-            this.addHandler = events.addHandler.bind(events);
-            this.addOnceHandler = events.addOnceHandler.bind(events);
-            this.getHandler = events.getHandler.bind(events);
-            this.numberOfHandlers = events.numberOfHandlers.bind(events);
-            this.raiseEvent = events.raiseEvent.bind(events);
-            // todo remove this
-            this.raiseAwaitEvent = VIEWER.tools.raiseAwaitEvent.bind(this, events);
-            this.raiseEventAwaiting = events.raiseEventAwaiting.bind(events);
-            this.removeAllHandlers = events.removeAllHandlers.bind(events);
-            this.removeHandler = events.removeHandler.bind(events);
-            this.__errorBindingOnViewer = errorBindingOnViewer;
-
-            this.addFilter = ( eventName, handler, priority ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters ) {
-                    this.filters[ eventName ] = filters = [];
-                }
-                if ( handler && OpenSeadragon.isFunction( handler ) ) {
-                    let index = filters.length,
-                        filter = { handler: handler, priority: priority || 0 };
-                    filters[ index ] = filter;
-                    while ( index > 0 && filters[ index - 1 ].priority < filters[ index ].priority ) {
-                        filters[ index ] = filters[ index - 1 ];
-                        filters[ index - 1 ] = filter;
-                        index--;
-                    }
-                }
-            };
-            this.applyFilter = ( eventName, value ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters || !filters.length ) {
-                    return null;
-                }
-                for ( let i = 0; i < length; i++ ) {
-                    if ( filters[ i ] ) {
-                        value = filters[ i ].handler( value );
-                    }
-                }
-                return value;
-            };
-            this.removeFilter = ( eventName, handler ) => {
-                let filters = this.filters[ eventName ];
-                if ( !filters || !OpenSeadragon.isArray( filters ) ) {
+        registerViewerMenu(getter) {
+            const insert = (content, menuComponent) => {
+                if (!content) {
                     return;
                 }
-                this.filters = filters.filter(f => f.handler !== handler);
+
+                const id = content.id;
+
+                // Ensure ID uniqueness per plugin/module
+                const menuId = `${this.id}-${id}`;
+                const internalMenu = menuComponent.menu;
+                const exists = menuId in internalMenu.tabs;
+
+                // Delete to replace (update)
+                if (exists) internalMenu.deleteTab(menuId);
+
+                content.id = menuId;
+
+                try {
+                    internalMenu.addTab(content, this.id);
+                } catch (e) {
+                    console.error(`Failed to add viewer menu tab for ${this.id}`, e);
+                }
             };
+
+            const updateMenu = (viewer) => {
+                const menuComponent = VIEWER_MANAGER.getMenu(viewer);
+                // If menu not available (e.g. headless or destroyed), skip
+                if (!menuComponent || !menuComponent.menu) return;
+
+                let content = null;
+                try {
+                    content = getter(viewer);
+
+                    if (content instanceof Promise) {
+                        content.then(conf => insert(conf, menuComponent)).catch(e => {
+                            console.error(`Error in viewer menu builder (async) for ${this.id}:`, e);
+                        });
+                    } else {
+                        insert(content, menuComponent);
+                    }
+                } catch (e) {
+                    console.error(`Error in viewer menu builder for ${this.id}:`, e);
+                }
+            };
+
+            // 1. Hook into all future 'open' events (covers content changes) 'open' is an OSD event broadcasted to all viewers
+            VIEWER_MANAGER.broadcastHandler('open', (e) => updateMenu(e.eventSource));
+            // 2. Hook into viewer reset (clearing data) to potentially remove the menu 'viewer-reset' is a ViewerManager event
+            VIEWER_MANAGER.addHandler('viewer-reset', (e) => updateMenu(e.viewer));
+
+            VIEWER_MANAGER.viewers.forEach(v => {
+                // Update regardless of state, logic inside handles null/removal
+                updateMenu(v);
+            });
         }
-        /**
-         * Add an event handler for a given event. See OpenSeadragon.EventSource::addHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addHandler() {}
-        /**
-         * Add an event handler to be triggered only once (or X times). See OpenSeadragon.EventSource::addOnceHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addOnceHandler () {}
-        /**
-         * Get a function which iterates the list of all handlers registered for a given event, calling the handler for each.
-         * See OpenSeadragon.EventSource::getHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        getHandler () {}
-        /**
-         * Get the amount of handlers registered for a given event. See OpenSeadragon.EventSource::numberOfHandlers
-         * Note: noop if registerAsEventSource() not called.
-         */
-        numberOfHandlers () {}
-        /**
-         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEvent
-         * Note: noop if registerAsEventSource() not called.
-         */
-        raiseEvent () {}
-        /**
-         * Trigger an event, optionally passing additional information.
-         * Awaits async handlers.
-         * Note: noop if registerAsEventSource() not called.
-         * @deprecated
-         */
-        raiseAwaitEvent() {}
-        /**
-         * Trigger an event, optionally passing additional information. See OpenSeadragon.EventSource::raiseEventAwaiting.
-         * Awaits async handlers.
-         * Note: noop if registerAsEventSource() not called.
-         */
-        raiseEventAwaiting() {}
-        /**
-         * Remove all event handlers for a given event type. See OpenSeadragon.EventSource::removeAllHandlers
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeAllHandlers () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeHandler () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        addFilter () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        applyFilter () {}
-        /**
-         * Remove a specific event handler for a given event. See OpenSeadragon.EventSource::removeHandler
-         * Note: noop if registerAsEventSource() not called.
-         */
-        removeFilter () {}
     }
 
     /**
@@ -935,8 +1013,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     }
 
     /**
-     * Singleton Module API, ready to run as an instance
+     * Singleton Module API, to provide one system-wide global instance.
      * offering its features to all equally.
+     * TODO rename to XOpatSingletonModule
      * @class XOpatModuleSingleton
      * @extends XOpatModule
      * @inheritDoc
@@ -963,6 +1042,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         static __self = undefined;
+
+
+        /**
+         * Create singleton with ID of the module.
+         * @param {string} id  The ID must be the module id defined in configuration.
+         */
         constructor(id) {
             super(id);
             const staticContext = this.constructor;
@@ -977,14 +1062,325 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             /**
              * Module singleton was instantiated
              * @property {string} id module id
-             * @property {XOpatModuleSingleton} module
+             * @property {XOpatModuleSingleton|XOpatViewerSingletonModule} module
              * @memberof VIEWER_MANAGER
              * @event module-singleton-created
              */
             setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
                 id: id,
-                module: this
+                module: this,
+                viewer: undefined
             }).catch(/*no-op*/));
+        }
+
+        /**
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
+         */
+        get THIS() {
+            if (!this.id) return "__undefined__";
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `singletonModule('${this.id}')`,
+                writable: false,
+            });
+            return `singletonModule('${this.id}')`;
+        }
+    }
+
+    /**
+     * Singleton Viewer API, to provide one system-wide global instance per viewer,
+     * offering its features to all equally. One distinct thing from all other elements
+     * is that this component has full lifecycle including destruction - it lives
+     * as long as a particular viewer sub-window is alive, and it should handle its
+     * destruction using destroy() method.
+     * @class XOpatViewerSingleton
+     * @extends OpenSeadragon.EventSource
+     * @inheritDoc
+     */
+    window.XOpatViewerSingleton = class extends OpenSeadragon.EventSource {
+        /**
+         * Destroy. This method must be called if overridden.
+         */
+        destroy() {
+            const state = this.constructor.__getBroadcastState?.();
+            if (state) {
+                for (const [eventName, perHandler] of state.entries()) {
+                    for (const [, record] of perHandler.entries()) {
+                        const wrapper = record.wrappers.get(this);
+                        if (wrapper) {
+                            try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
+                        }
+                        record.wrappers.delete(this);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Get instance of the annotations manger, a singleton
+         * (only one instance can run since it captures mouse events).
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @static
+         * @return {XOpatModuleSingleton} manager instance
+         */
+        static instance(viewerOrUniqueId) {
+            if (viewerOrUniqueId === undefined) {
+                console.error("The viewer instance needs a viewer argument to obtain the instance, unlike the global singleton.");
+                return undefined;
+            }
+            // we use ID as this.name - it will not find itself unless registered, and registers itself with a correct ID
+            const value = VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
+            return value || new this(VIEWER_MANAGER.ensureViewer(viewerOrUniqueId));
+        }
+
+        /**
+         * Check if instantiated for a particular viewer
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @return {boolean}
+         */
+        static instantiated(viewerOrUniqueId) {
+            // not passing this as a third option avoids instantiation
+            return !!VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
+        }
+
+        /**
+         * Viewer Instance ID. Unique ID of the class (shared among instances of this singleton).
+         * @return {string}
+         * @constructor
+         */
+        static get IID() {
+            return "ViewerInstance::" + this.name;
+        }
+
+        /**
+         * Create singleton.
+         * @param {OpenSeadragon.Viewer} viewer
+         */
+        constructor(viewer) {
+            // id ignored, only to be compatible with XOpatElement
+            if (viewer === undefined) {
+                throw new Error("Viewer must be provided to create a viewer-singleton!");
+            }
+            super();
+
+            // throws if exists
+            VIEWER_MANAGER._attachSingleton(this.constructor.IID, this, viewer);
+
+            /**
+             * @type {OpenSeadragon.Viewer}
+             * @member viewer
+             * @memberOf XOpatViewerSingletonModule
+             */
+            Object.defineProperty(this, 'viewer', {
+                get: () => viewer,
+            });
+
+            this.constructor.__attachAllHandlersToInstance(this);
+
+            // Await event necessary to fire after instantiation, do in async context
+            /**
+             * Singleton was instantiated
+             * @property {string} id
+             * @property {XOpatViewerSingleton} singleton
+             * @memberof VIEWER_MANAGER
+             * @event viewer-singleton-created
+             */
+            setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('viewer-singleton-created', {
+                id: this.constructor.IID,
+                module: this,
+                viewer: viewer
+            }).catch(/*no-op*/));
+        }
+
+        /**
+         * JS String to use in DOM callbacks to access self instance.
+         * @type {string}
+         */
+        get THIS() {
+            const id = this.constructor.IID;
+            //memoize
+            Object.defineProperty(this, "THIS", {
+                value: `singletonModule('${id}', '${this.viewer.uniqueId}')`,
+                writable: false,
+            });
+            return `singletonModule('${id}', '${this.viewer.uniqueId}')`;
+        }
+
+        /**
+         * Get all instances of the singleton from all active viewers.
+         * @return {XOpatViewerSingletonModule[]}
+         */
+        get instances() {
+            return VIEWER_MANAGER._getSingletons(this.constructor.IID);
+        }
+
+        static instances() {
+            return VIEWER_MANAGER._getSingletons(this.IID);
+        }
+
+        /**
+         * Attach a class-wide handler to all current and future instances of this subclass.
+         * Handler is called as handler.call(emittingInst, emittingInst, event, ...args)
+         */
+        static broadcastHandler(eventName, handler, ...args) {
+            const state = this.__getBroadcastState();
+            if (!state.has(eventName)) state.set(eventName, new Map());
+            const perHandler = state.get(eventName);
+
+            if (perHandler.has(handler)) return; // idempotent
+
+            const record = { args, wrappers: new Map() };
+            perHandler.set(handler, record);
+
+            // Attach immediately to instances that are already event sources
+            for (const inst of this.instances()) {
+                const wrapper = (e) => handler.call(inst, inst, e, ...args);
+                record.wrappers.set(inst, wrapper);
+                inst.addHandler(eventName, wrapper);
+            }
+        }
+
+        /**
+         * Remove a previously added class-wide handler from all instances of this subclass.
+         */
+        static cancelBroadcast(eventName, handler) {
+            const state = this.__getBroadcastState();
+            const perHandler = state.get(eventName);
+            if (!perHandler) return;
+
+            const record = perHandler.get(handler);
+            if (!record) return;
+
+            for (const [inst, wrapper] of record.wrappers.entries()) {
+                try { inst.removeHandler(eventName, wrapper); } catch (_) { /* no-op */ }
+            }
+            perHandler.delete(handler);
+            if (perHandler.size === 0) state.delete(eventName);
+        }
+
+        /**
+         * Attach every broadcast handler registered on this subclass to a particular instance.
+         * Called after the instance becomes an event source.
+         * @private
+         */
+        static __attachAllHandlersToInstance(inst) {
+            const state = this.__getBroadcastState();
+
+            for (const [eventName, perHandler] of state.entries()) {
+                for (const [origHandler, record] of perHandler.entries()) {
+                    if (record.wrappers.has(inst)) continue;
+                    const wrapper = (e) => origHandler.call(inst, inst, e, ...record.args);
+                    record.wrappers.set(inst, wrapper);
+                    inst.addHandler(eventName, wrapper);
+                }
+            }
+        }
+
+        /**
+         * Per-subclass state: { Map<eventName, Map<fn, {args:any[], wrappers: Map<inst, fn> }> }
+         * (Own property on the subclass, so subclasses don't share.)
+         */
+        static __getBroadcastState() {
+            if (!Object.prototype.hasOwnProperty.call(this, "__broadcastState")) {
+                Object.defineProperty(this, "__broadcastState", {
+                    value: new Map(),
+                    writable: false, enumerable: false, configurable: false
+                });
+            }
+            return this.__broadcastState;
+        }
+    }
+
+    /**
+     * Singleton Module API as a viewer module, to provide one system-wide global instance per viewer,
+     * offering its features to all equally. One distinct thing from all other elements
+     * is that this component has full lifecycle including destruction - it lives
+     * as long as a particular viewer sub-window is alive, and it should handle its
+     * destruction using destroy() method.
+     *
+     * The class is basically joint logics of XOpatModule and XOpatModuleSingleton
+     * @class XOpatViewerSingletonModule
+     * @extends XOpatModule
+     * @extends XOpatModuleSingleton
+     * @inheritDoc
+     */
+    window.XOpatViewerSingletonModule = class extends All(XOpatModule, XOpatViewerSingleton) {
+
+        constructor(id, viewer) {
+            super(id, viewer);
+
+            /**
+             * Module singleton was instantiated
+             * @property {string} id module id
+             * @property {XOpatModuleSingleton|XOpatViewerSingletonModule} module
+             * @memberof VIEWER_MANAGER
+             * @event module-singleton-created
+             */
+            setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('module-singleton-created', {
+                id: id,
+                module: this,
+                viewer: viewer
+            }).catch(/*no-op*/));
+        }
+
+        /**
+         * Destructor. When overridden, super call must be issued!
+         */
+        destroy() {
+            super.destroy();
+        }
+
+        /**
+         * Initialize IO in the Element - enables use of export/import functions. Redefinition
+         * of the element base implementation, exports primarily to the viewer it encapsulates.
+         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
+         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
+         * @return {PostDataStore} data store reference, or false if import failed
+         */
+        async initPostIO(options = {}) {
+            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
+                return;
+            }
+
+            options.id = this.uid;
+            options.xoType = this.__xoContext;
+            let store = this[STORE_TOKEN];
+            if (!store) {
+                this[STORE_TOKEN] = store = new PostDataStore(options);
+            }
+
+            const vanillaExportKey = (options.exportKey || "").replace("::", "");
+
+            try {
+                const exportKey =  vanillaExportKey + "::";
+                VIEWER_MANAGER.addHandler('export-data', async (e) => {
+                    const data = await this.exportData(vanillaExportKey);
+                    if (data) {
+                        console.warn("Xopat Module Viewer Singleton should not export to a global context, instead, it should export to a viewer context!");
+                        await store.set(vanillaExportKey, data);
+                    }
+
+                    const contextID = this.viewer.uniqueId;
+                    const viewerData = await this.exportViewerData(this.viewer, vanillaExportKey, contextID);
+                    if (data) {
+                        await store.set(vanillaExportKey + "::" + contextID, viewerData);
+                    }
+                });
+
+                // fallback compatibility, import fo all viewers (importing to just one would make repeated re-import)
+                const data = await store.get(exportKey);
+                if (data !== undefined) await this.importData(exportKey, data);
+
+            } catch (e) {
+                console.error('IO Failure:', this.constructor.name, e);
+                this.error({
+                    error: e, code: "W_IO_INIT_ERROR",
+                    message: $.t('error.pluginImportFail',
+                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                });
+            }
+            return store;
         }
     }
 
@@ -1035,6 +1431,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Store the plugin online configuration parameters/options
+         * todo: options are not being documented, enforce
          * @param {string} key
          * @param {*} value
          * @param {boolean} cache
@@ -1119,7 +1516,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string} pluginId
          * @param {function} callback that receives the plugin instance
          * @return {boolean} true if finished immediatelly, false if registered handler for the
-         *   future possibility of plugin being loaded
+         * future possibility of plugin being loaded
          */
         integrateWithPlugin(pluginId, callback) {
             const targetPlugin = plugin(pluginId);
@@ -1336,7 +1733,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * Event handler can by <i>asynchronous</i>, the event can wait.
              *
              * @property {function} setSerializedData callback to call,
-             *   accepts 'key' (unique) and 'data' (string) to call with your data when ready
+             * accepts 'key' (unique) and 'data' (string) to call with your data when ready
              * @memberof VIEWER_MANAGER
              * @event export-data
              */
@@ -1392,10 +1789,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
 
-    // todo this means if we have session with visualization only, no post IO works
+    /**
+     * @param {OpenSeadragon.Viewer} viewer
+     * @return {UniqueViewerId}
+     */
     function findViewerUniqueId(viewer) {
-        const result = viewer.__cachedUUID;
+        let result = viewer.__cachedUUID;
         if (result) return result;
+        let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item = viewer.world.getItemAt(itemIndex);
             const config = item?.getConfig("background");
@@ -1403,11 +1804,20 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 viewer.__cachedUUID = config.id;
                 return config.id;
             }
+            if (!firstItem) {
+                firstItem = item;
+            }
         }
+
+        const path = APPLICATION_CONTEXT.config.data[firstItem?.getConfig()?.dataReference]
+            || firstItem?.source.url || "--unknown--";
+        result = viewer.__cachedUUID = UTILITIES.generateID(path);
+        console.warn('Viewer has no unique ID! Attempt to create one.', result);
+        return result;
     }
 
     /**
-     * @property {string} uniqueId
+     * @property {UniqueViewerId} uniqueId
      * @memberof OpenSeadragon.Viewer
      */
     Object.defineProperty(OpenSeadragon.Viewer.prototype, "uniqueId", {
@@ -1458,9 +1868,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.viewerMenus = {};
             this.broadcastEvents = {};
             this.active = null;
+            this._singletonsKey = Symbol('singletons');
 
             // layout container
-            this.layout = new UI.StretchGrid({ cols: 2 }); // e.g. 2 cols
+            this.layout = new UI.StretchGrid({ cols: 2, gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer
@@ -1515,25 +1926,27 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Get viewer by ID
-         * @param uniqueId
+         * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
+         * @param {UniqueViewerId} uniqueId
          * @param _warn private arg
          * @return OpenSeadragon.Viewer
          */
         getViewer(uniqueId, _warn=true) {
-            let viewer = this.viewers.find(v => v.uniqueId === uniqueId);
-            if (!viewer) {
+            let viewer;
+            if (uniqueId.startsWith("osd-")) {
                 viewer = this.viewers.find(v => v.id === uniqueId);
-                if (viewer && _warn) {
-                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${viewer.id} for ${viewer.uniqueId}`);
+                if (_warn) {
+                    console.warn(`Viewer with id ${uniqueId} not found, provided id is not UniqueViewerId: using ${viewer.id} for ${viewer.uniqueId} viewer detection. This might result in unexpected behavior.`);
                 }
+            } else {
+                viewer = this.viewers.find(v => v.uniqueId === uniqueId);
             }
             return viewer;
         }
 
         /**
          *
-         * @param uniqueId
+         * @param {UniqueViewerId} uniqueId
          * @param _warn private arg
          * @return number
          */
@@ -1546,6 +1959,19 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 }
             }
             return index;
+        }
+
+        /**
+         * Helper method to get viewer instance from viewer-like argument.
+         * @param {OpenSeadragon.Viewer|UniqueViewerId} viewerOrUniqueId
+         * @return {*|OpenSeadragon.Viewer}
+         */
+        ensureViewer(viewerOrUniqueId) {
+            if (!viewerOrUniqueId) throw new Error("No viewer or viewer id provided!");
+            if (typeof viewerOrUniqueId === "string") {
+                return this.getViewer(viewerOrUniqueId);
+            }
+            return viewerOrUniqueId;
         }
 
         /**
@@ -1563,7 +1989,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const cell = this.layout.attachCell(cellId, index);
             const menu = new UI.RightSideViewerMenu(cellId, navigatorId);
             // todo think of a better way of hosting menu within the viewer
-            cell.append(menu.create());
+            if (window.innerWidth < 600) {
+                USER_INTERFACE.FullscreenMenu.menu.addTab(new UI.Div({id: "right-side-menu-mobile"}, menu.create()));
+            } else {
+                cell.append(menu.create());
+            }
             this.viewerMenus[cellId] = menu;
 
             const viewer = OpenSeadragon($.extend(
@@ -1597,16 +2027,64 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
                 }
             ));
-            
+
+            $(viewer.element).on('contextmenu', function(event) {
+                event.preventDefault();
+            });
+
             for (let event in this.broadcastEvents) {
                 const eventList = this.broadcastEvents[event];
                 for (let handler in eventList) {
-                    viewer.addHandler(event, handler, ...eventList[handler]);
+                    const hData = eventList[handler];
+                    viewer.addHandler(event, hData[0], ...hData[1]);
                 }
             }
 
+
+            // let _lastScroll = Date.now(), _scrollCount = 0, _currentScroll;
+            // /**
+            //  * From https://github.com/openseadragon/openseadragon/issues/1690
+            //  * brings better zooming behaviour
+            //  */
+            // window.VIEWER.addHandler("canvas-scroll", function(e) {
+            //     if (Math.abs(e.originalEvent.deltaY) < 100) {
+            //         // touchpad has lesser values, do not change scroll behavior for touchpads
+            //         VIEWER.zoomPerScroll = 0.5;
+            //         _scrollCount = 0;
+            //         return;
+            //     }
+            //
+            //     _currentScroll = Date.now();
+            //     if (_currentScroll - _lastScroll < 400) {
+            //         _scrollCount++;
+            //     } else {
+            //         _scrollCount = 0;
+            //         VIEWER.zoomPerScroll = 1.2;
+            //     }
+            //
+            //     if (_scrollCount > 2 && VIEWER.zoomPerScroll <= 2.5) {
+            //         VIEWER.zoomPerScroll += 0.2;
+            //     }
+            //     _lastScroll = _currentScroll;
+            // });
+
+            viewer.addHandler('navigator-scroll', function(e) {
+                viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
+                viewer.viewport.applyConstraints();
+            });
+
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
             viewer.addHandler('open', e => {
+                for (let SingletonClass of REQUIRED_SINGLETONS) {
+                    try {
+                        if (!this._getSingleton(SingletonClass.IDD, viewer)) {
+                            SingletonClass.instance(viewer);
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+
                 if (e.firstLoad) {
                     const DELAY = 90;
                     let last = 0;
@@ -1659,6 +2137,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                      * @param {number|OpenSeadragon.TiledImage} tiledImage
                      */
                     function getPixelData(screen, viewportPosition, tiledImage) {
+                        // todo fix this
+                        return;
                         function changeTile() {
                             let tiles = tiledImage.lastDrawn;
                             //todo verify tiles order, need to ensure we prioritize higher resolution!!!
@@ -1697,7 +2177,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         /**
                          * Raised when a new viewer comes into the play. Index is the index-position on the screen.
                          * @param {OpenSeadragon.Viewer} viewer
-                         * @param {string} uniqueId
+                         * @param {UniqueViewerId} uniqueId
                          * @param {Number} index
                          * @event viewer-create
                          * @memberof VIEWER_MANAGER
@@ -1737,6 +2217,16 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     }
                 })();
             });
+
+            viewer.addHandler('destroy', () => {
+                const singletons = viewer[this._singletonsKey];
+                if (singletons) {
+                    for (let singletonId in singletons) {
+                        singletons[singletonId].destroy();
+                    }
+                    viewer[this._singletonsKey] = null;
+                }
+            })
 
             viewer.addHandler('canvas-enter', function (e) {
                 focusOnViewer = e.eventSource;
@@ -1784,13 +2274,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Add an event handler for a given event.
-         * @function
-         * Registers event for each viewer
-         */
-        /**
          * Add an event handler for a given event to all current and future viewers.
          * The handler is also remembered and applied to any viewer created later via add().
+         *
+         * TODO: Supports only viewer events, not events that bound to other instances. Make this design more generic.
          * @param {string} eventName - The OpenSeadragon event name.
          * @param {Function} handler - Event handler function.
          * @param {...any} args - Optional extra arguments passed to OpenSeadragon.addHandler.
@@ -1799,15 +2286,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         broadcastHandler(eventName, handler, ...args) {
             let eventList = this.broadcastEvents[eventName];
             if (!eventList) {
-                eventList = {};
-                this.broadcastEvents[eventName] = eventList;
+                eventList = this.broadcastEvents[eventName] = {};
             }
-            eventList[handler] = args;
+            eventList[handler] = [handler, args];
             for (let v of this.viewers) {
                 v.addHandler(eventName, handler, ...args);
             }
         }
-        
+
         /**
          * Remove a previously broadcasted handler from all viewers and future creations.
          * If the handler was not registered, this is a no-op.
@@ -1826,8 +2312,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         *
-         * @param viewerOrId any viewer ID or viewer instance itself
+         * Get viewer-driven menu: right menu that open tabs for each viewer.
+         * @param {string|OpenSeadragon.Viewer} viewerOrId any viewer ID or viewer instance itself
          * @return {RightSideViewerMenu|undefined} menu instance or undefined if not found
          */
         getMenu(viewerOrId) {
@@ -1838,6 +2324,44 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 viewer = viewerOrId;
             }
             return this.viewerMenus[viewer?.id];
+        }
+
+        /**
+         * Get singleton for particular viewer. This works only for existing isntances - prefer using
+         * @param {string} singletonId
+         * @param {ViewerLikeItem} viewerOrUniqueId
+         * @return {XOpatViewerSingleton|undefined} menu instance or undefined if not found and SingletonClass not specified
+         * @private
+         */
+        _getSingleton(singletonId, viewerOrUniqueId) {
+            let viewer = this.ensureViewer(viewerOrUniqueId);
+            return singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
+        }
+
+        /**
+         * @private
+         */
+        _attachSingleton(singletonId, singletonModule, viewerOrUniqueId) {
+            let viewer = this.ensureViewer(viewerOrUniqueId);
+            let singletons = viewer[this._singletonsKey];
+            if (!singletons) {
+                singletons = viewer[this._singletonsKey] = {};
+            }
+            if (!(singletonModule instanceof XOpatViewerSingleton)) {
+                console.error("Viewer singleton must be instance of XOpatViewerSingleton");
+            }
+            if (singletons[singletonId]) {
+                throw `Trying to instantiate a singleton. Instead, use ${singletonModule.constructor.name}::instance(viewer).`;
+            }
+            singletons[singletonId] = singletonModule;
+            return singletonModule;
+        }
+
+        /**
+         * @private
+         */
+        _getSingletons(singletonId) {
+            return this.viewers.map(v => v[this._singletonsKey]?.[singletonId]).filter(Boolean);
         }
 
         /**
@@ -1911,7 +2435,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                      * @param {OpenSeadragon.Viewer} viewer
                      * @param {string} uniqueId
                      * @param {Number} index
-                     * @event viewer-destroy
+                     * @event viewer-reset
                      * @memberof VIEWER_MANAGER
                      */
                     this.raiseEvent('viewer-reset', {viewer: v, uniqueId: v.uniqueId, index });
@@ -1944,7 +2468,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             let plugin = PLUGINS[pid];
             if (plugin) {
-                showPluginError(plugin.id, plugin.error);
+                showPluginError(plugin.id, plugin.error, plugin.loaded);
             }
         }
 

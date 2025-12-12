@@ -29,10 +29,11 @@ class Checkbox extends BaseComponent {
         this.label = options["label"] || "";
         this.checked = options["checked"] || false;
         this.onchangeFunction = options["onchange"] || (() => {});
+        this.classMap["base"] = "cursor-pointer boxed";
     }
 
     create(){
-        return  label({id: this.id, class: "cursor-pointer boxed", style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}},
+        return  label({...this.commonProperties, style:"display: flex; align-items: center; gap: 8px;", onmousedown: function (e) {e.stopPropagation(); e.preventDefault();}, ...this.extraProperties},
             input({ type: "checkbox", class: "checkbox checkbox-sm", checked: this.checked ? "checked" : "", onchange: this.onchangeFunction }),
             this.label && span({class: ""}, this.label),
         );
