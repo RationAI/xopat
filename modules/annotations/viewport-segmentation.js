@@ -34,7 +34,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         if (this._allowCreation && this.annotations) {
             for (let i = 0; i < this.annotations.length; i++) {
                 delete this.annotations[i].strokeDashArray;
-                this.context.fabric.promoteHelperAnnotation(this.annotations[i]);
+                this.context.fabric.deleteHelperAnnotation(this.annotations[i]);
+                this.context.fabric.addAnnotation(this.annotations[i]);
             }
 
             this.annotations = [];

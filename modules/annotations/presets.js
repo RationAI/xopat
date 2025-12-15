@@ -150,7 +150,7 @@ OSDAnnotations.PresetManager = class {
         selectable: true,
         originalStrokeWidth: 3,
         borderColor: 'rgba(251,184,2,0.35)',
-        cornerColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251, 185, 2, 1)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',

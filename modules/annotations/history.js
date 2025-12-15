@@ -24,6 +24,7 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._autoDomRenderer = null;
         this._lastOpenedInDetachedWindow = false;
         this._boardItems = [];
+        this._selectionSyncPaused = false;
 
         this._context.addFabricHandler('layer-selection-changed', e => {
             this._updateSelectionVisuals(e.selected, e.deselected, 'layer');
@@ -176,25 +177,29 @@ window.addEventListener("beforeunload", (e) => {
         const boardEl = this._getNode("layer-logs");
         this._clearDomSelection(boardEl);
 
-        const willOpenNewWindow = !this._lastOpenedInDetachedWindow;
-        if (willOpenNewWindow) {
-            this._context.raiseEvent('before-history-swap', {
-                inNewWindow: true,
-            });
-            this.openHistoryWindow(undefined);
-        } else {
-            if (!this._autoDomRenderer) {
-                console.error("History window cannot be swapped when auto target ID has not been set or is invalid!");
-                return;
+        this._withSelectionSyncPaused(() => {
+            const willOpenNewWindow = !this._lastOpenedInDetachedWindow;
+            if (willOpenNewWindow) {
+                this._context.raiseEvent('before-history-swap', {
+                    inNewWindow: true,
+                });
+                this.openHistoryWindow(undefined);
+            } else {
+                if (!this._autoDomRenderer) {
+                    console.error("History window cannot be swapped when auto target ID has not been set or is invalid!");
+                    return;
+                }
+                this._context.raiseEvent('before-history-swap', {
+                    inNewWindow: false,
+                });
+                this.openHistoryWindow(this._autoDomRenderer);
             }
-            this._context.raiseEvent('before-history-swap', {
-                inNewWindow: false,
+            this._context.raiseEvent('history-swap', {
+                inNewWindow: willOpenNewWindow,
             });
-            this.openHistoryWindow(this._autoDomRenderer);
-        }
-        this._context.raiseEvent('history-swap', {
-            inNewWindow: willOpenNewWindow,
         });
+
+        this.refresh();
     }
 
     /**
@@ -434,7 +439,19 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         }
     }
 
+    _withSelectionSyncPaused(fn) {
+        if (this._selectionSyncPaused) return;
+        this._selectionSyncPaused = true;
+        try {
+            fn();
+        } finally {
+            this._selectionSyncPaused = false;
+        }
+    }
+
     _syncSortableSelection(objects, type) {
+        if (this._selectionSyncPaused) return;
+
         const container = this._getNode(this.getLayerContainerId());
         if (!container || !Sortable.get(container) || objects === null || objects === undefined) return;
 
@@ -773,7 +790,7 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
             const obj = this._context.fabric.findObjectOnCanvasByIncrementId(Number(annId));
             if (obj?.layerID != null && selectedLayerIds.has(Number(obj.layerID))) {
                 Dialogs.show(
-                    "Cannot move annotations together with their selected parent layer. Deselect either the layer or those annotations.",
+                    "Cannot move annotations together with their selected layer. Deselect either the layer or annotations.",
                     3500,
                     Dialogs.MSG_WARN
                 );
@@ -1416,8 +1433,6 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
         if (iconElement) {
             iconElement.innerText = isVisible ? "visibility_off" : "visibility";
         }
-
-        //this._context.fabric.removeHighlight();
     }
 
     _updateAnnotationCount(layerId) {
@@ -1828,11 +1843,11 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
             let factory = this._context.getAnnotationObjectFactory(object.factoryID);
 
             if (factory && factory.isEditable()) {
-                //this._context.fabric.clearAnnotationSelection(true);
                 this._context.fabric.selectAnnotation(object, true, true);
+                this._context.fabric.removeHighlight();
 
-                factory.edit(object);
                 object.set({ hoverCursor: 'move' });
+                factory.edit(object);
                 if (updateUI) this._disableForEdit();
 
                 const $self = (self && self.jquery) ? self : $(self);
@@ -1873,6 +1888,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
 
         try {
             let obj = this._editSelection.target || this._context.fabric.findObjectOnCanvasByIncrementId(this._editSelection.incrementId);
+            let defaultName = this._context.fabric.getDefaultAnnotationName(obj, false);
             let self = this._editSelection.self,
             //from user testing: disable modification of meta?
                 inputs = self.parent().find("input"),
@@ -1884,6 +1900,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
                     let v = t.value;
                     if (t.name === 'category') {
                         v = this._stripLabelSuffix(v, obj.label);
+                        if (v ===  defaultName) v = "";
                     }
 
                     if (
@@ -1925,8 +1942,8 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         this._context.enableInteraction(true);
         this._setSortableEnabled(true);
         this._updateDeleteSelectionHeaderButton(false);
-        
-        this._context.raiseEvent('enabled-edit-mode', { inEditMode: false });
+
+        this._context.raiseEvent('enabled-edit-mode', { isEditEnabled: false });
     }
 
     _disableForEdit() {
@@ -1935,7 +1952,7 @@ else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : ''
         this._setSortableEnabled(false);
         this._updateDeleteSelectionHeaderButton(true);
 
-        this._context.raiseEvent('enabled-edit-mode', { inEditMode: true });
+        this._context.raiseEvent('enabled-edit-mode', { isEditEnabled: true });
     }
 
     _setSortableEnabled(enabled) {

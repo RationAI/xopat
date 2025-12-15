@@ -382,7 +382,7 @@ OSDAnnotations.FreeFormTool = class {
             }
         }
 
-        ctx.fill("evenodd");
+        ctx.fill("nonzero");
     }
 
     //initialize object so that it is ready to be modified
@@ -631,6 +631,7 @@ OSDAnnotations.FreeFormTool = class {
         if (!mask.bounds) return [];
 
         let contours = this.MagicWand.traceContours(mask);
+        console.log(contours);
         contours = this._getValidContours(contours, ctx, {x: bbox.x, y: bbox.y}, zoomed);
         contours = this.MagicWand.simplifyContours(contours, 0, 30);
 

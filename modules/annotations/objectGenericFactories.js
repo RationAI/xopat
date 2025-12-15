@@ -463,7 +463,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        const instance = new fabric.Text(parameters.text);
+        options.editable = false;
+        const instance = new fabric.IText(parameters.text);
         const conf = this.configure(instance, $.extend(options, parameters));
         this.renderAllControls(conf);
         return conf;
@@ -484,7 +485,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontSize: options.fontSize || 16,
                 type: this.type,
                 factoryID: this.factoryID,
-                selectable: false,
+                selectable: true,
                 hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
@@ -501,7 +502,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontSize: (options.fontSize || 16) / options.zoomAtCreation,
                 type: this.type,
                 factoryID: this.factoryID,
-                selectable: false,
+                selectable: true,
                 hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
@@ -594,7 +595,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
         $.extend(props, parameters);
         props.paintFirst = 'stroke';
-        const conf = new fabric.Text(parameters.text, props);
+        props.editable = false;
+        const conf = new fabric.IText(parameters.text, props);
         this.renderAllControls(conf);
         return conf;
     }
@@ -602,9 +604,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
+        this._origText = (theObject.text || "").trim();
+
         theObject.set({
             lockMovementX: false,
-            lockMovementY: false
+            lockMovementY: false,
+            editable: true
         });
     }
 
@@ -614,12 +619,41 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
     recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
-            top = theObject.top,
-            text = this._context.fabric.getAnnotationDescription(theObject, "category", false) || theObject.text;
+            top = theObject.top;
 
+        let customText = theObject.text.trim();
+        theObject.meta = theObject.meta || {};
+
+        if (this._origText !== customText && customText !== "") {
+            theObject.meta.category = customText;
+        } else {
+            theObject.text = theObject.meta?.category;
+        }
+
+        let newText = this._context.fabric.getAnnotationDescription(theObject, "category", true, false);
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {left: left, top: top, text: text});
+            hasControls: false, lockMovementX: true, lockMovementY: true, editable: false});
+
+        let newObject = this.copy(theObject, {
+            left: left,
+            top: top,
+            text: newText
+        });
+
+        const meta = JSON.parse(JSON.stringify(theObject.meta || {}));
+        let preset = this._context.presets.get(theObject.presetID);
+        let metadata = preset ? preset.meta : {};
+        let presetCategory = metadata['category'] ? metadata['category'].value : null;
+        let defaultText = "Text";
+
+        if (this._origText !== defaultText && this._origText !== presetCategory) {
+            meta['category'] = this._origText;
+        } else {
+            meta['category'] = '';
+        }
+
+        theObject.text = this._origText;
+        theObject.meta = meta;
         theObject.calcACoords();
 
         if (!ignoreReplace) {
@@ -689,7 +723,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         };
     }
 
-    selected(theObject) {
+    createHighlight(theObject) {
         return undefined;
     }
 };
@@ -1977,9 +2011,9 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return multipolygonPoints;
     }
 
-    async selected(theObject) {
+    createHighlight(theObject) {
         try {
-            const result = await super.selected(theObject);
+            const result = super.createHighlight(theObject);
             return this.setPoints(result);
 
         } catch (error) {

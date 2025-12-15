@@ -773,8 +773,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype.zooming = function(zoom, _realZoom) {
 			if (this.isHighlight) {
                 this.set({
-                    strokeWidth: (this.originalStrokeWidth / zoom) * 7,
-                    strokeDashArray: [this.strokeWidth * 4, this.strokeWidth * 2]
+                    strokeWidth: (this.originalStrokeWidth / zoom) * 5,
+                    strokeDashArray: [this.strokeWidth * 3, this.strokeWidth * 2]
                 });
 				return;
             }

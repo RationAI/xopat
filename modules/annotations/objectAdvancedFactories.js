@@ -336,7 +336,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2", "text"];
     }
 
-    selected(theObject) {
+    createHighlight(theObject) {
         const factory = this._context.getAnnotationObjectFactory('line');
         const absGroupPos = theObject.getPointByOrigin('center', 'center');
 
@@ -349,7 +349,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         copyLine.left = absGroupPos.x + originalLine.left;
         copyLine.top = absGroupPos.y + originalLine.top;
 
-        return super.selected(copyLine);
+        return super.createHighlight(copyLine);
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {

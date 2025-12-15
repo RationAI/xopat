@@ -1581,7 +1581,7 @@ ${UIComponents.Elements.select({
 		let nodeVisibility = document.getElementById('enable-disable-annotations');
 		let nodeOutline = document.getElementById('annotations-outline-control');
 
-		if (e.inEditMode) { 
+		if (e.isEditEnabled) { 
 			this._toggleEnabledStyle(nodeToolBar, false);
 			this._toggleEnabledStyle(nodeVisibility, false);
 			this._toggleEnabledStyle(nodeOutline, false);
