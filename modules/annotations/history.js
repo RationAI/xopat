@@ -206,6 +206,8 @@ window.addEventListener("beforeunload", (e) => {
      * Programmatically close the board window
      */
     destroyHistoryWindow() {
+        if (this.isOngoingEdit()) this._boardItemSave();
+
         if (this._lastOpenedInDetachedWindow) {
             if (!Dialogs.closeWindow(this.containerId)) {
                 return;

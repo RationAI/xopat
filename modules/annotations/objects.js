@@ -435,26 +435,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     }
 
-    renderAllControls(ofObject) {
-        const baseControls = fabric.Object.prototype.controls || {};
-        const controls = { ...baseControls};
-
-        controls.private = this.renderIcon(
-            (obj) => obj.private ? 'visibility_lock' : 'visibility',
-            undefined,
-            undefined,
-        );
-        const commentsControl = this.renderIcon(
-            'comment',
-            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-            () => {
-                this._context.raiseEvent('comments-control-clicked')
-            },
-        );
-        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
-        controls.comments = commentsControl;
-
-        ofObject.controls = controls;
+    renderAllControls(ofObject) { // TODO: Integrate with new code
+//        const baseControls = fabric.Object.prototype.controls || {};
+//        const controls = { ...baseControls};
+//
+//        controls.private = this.renderIcon(
+//            (obj) => obj.private ? 'visibility_lock' : 'visibility',
+//            undefined,
+//            undefined,
+//        );
+//        const commentsControl = this.renderIcon(
+//            'comment',
+//            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+//            () => {
+//                this._context.raiseEvent('comments-control-clicked')
+//            },
+//        );
+//        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
+//        controls.comments = commentsControl;
+//
+//        ofObject.controls = controls;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {

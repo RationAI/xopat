@@ -1690,7 +1690,7 @@ OSDAnnotations.FabricWrapper = class extends OpenSeadragon.EventSource {
         });
 
         this.canvas.on('selection:cleared', function(e) {
-            if (!_this.__programmaticClear) _this.canvas.setActiveObject(e.deselected[0] || null);
+            if (!_this.__programmaticClear && e.deselected && e.deselected.length > 0) _this.canvas.setActiveObject(e.deselected[0]);
             _this.__programmaticClear = false;
         });
 
