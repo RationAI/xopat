@@ -913,12 +913,26 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, imagePixelOnScreen, highestQuality = true) {
-        // both algorithms combined for performance, simplifies the object based on zoom level
+    simplify: function (points, highestQuality = true) {
         if (points.length <= 2) return points;
 
-        let tolerance = 15 / imagePixelOnScreen;
-        points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
+        // desired visual tolerance in screen pixels
+        const desiredScreenTol = 15;
+        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+
+        // convert to image coords
+        let tolerance = desiredScreenTol / pxSize;
+
+        // CLAMP to keep polygons sane at huge zooms
+        const MIN_TOL = 1.5;   // at least ~1–2 image pixels
+        const MAX_TOL = 100;   // avoid over-simplifying at tiny zoom
+        if (!isFinite(tolerance)) tolerance = MIN_TOL;
+        tolerance = Math.max(MIN_TOL, Math.min(MAX_TOL, tolerance));
+
+        points = highestQuality
+            ? points
+            : this._simplifyRadialDist(points, tolerance * tolerance);
+
         return this._simplifyDouglasPeucker(points, tolerance);
     },
 

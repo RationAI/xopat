@@ -16,17 +16,19 @@ class AnnotationsGUI extends XOpatPlugin {
 	 */
 
 	/**
-	 * @typedef {{
-	 * 	id: string,
-	 * 	author: {
-	 * 		id: string,
-	 * 		name: string,
-	 * 	},
-	 * 	content: string,
-	 * 	createdAt: Date,
-	 *  replyTo?: string,
-	 * 	removed?: boolean,
-	 * }} AnnotationComment
+   * @typedef {{
+   * 	  id: string;
+   *    author: {
+   *      id: string;
+   *      name: string;
+   *    };
+   *    reference: string;
+   *    content: string;
+   *    replyTo?: string;
+   *    createdAt: number;
+   *    modifiedAt: number;
+   *    removed?: boolean;
+   * }} AnnotationComment
 	 */
 
 	static annotationMenuIconOrder = [
@@ -409,6 +411,7 @@ ${UIComponents.Elements.select({
 
 		this.context.addHandler('author-annotation-styling-toggle', e => this._toggleStrokeStyling(e.enable))
 		this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow())
+		this.context.addHandler('annotation-updated-comment', () => this._renderComments())
 		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
@@ -541,15 +544,17 @@ ${UIComponents.Elements.select({
 				name: this.user.name,
 			},
 			content: commentText,
-			createdAt: new Date(),
+			createdAt: Date.now(),
+			modifiedAt: Date.now(),
 			removed: false,
 		};
-
-		this.context.fabric.addComment(this._selectedAnnot, comment);
-		this.context.fabric.rerender();
+		
+		this.context.fabric.canvas.requestRenderAll();
 		this._renderSingleComment(comment);
 		input.value = '';
 
+		this.context.fabric.addComment(this._selectedAnnot, comment);
+		
 		const commentsList = document.getElementById('comments-list');
 		if (commentsList) {
 			commentsList.scrollTop = commentsList.scrollHeight;
@@ -624,8 +629,8 @@ ${UIComponents.Elements.select({
 			}
 		});
 		roots.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-		replies.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
+		replies.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+		
 		const rootMap = new Map(roots.filter(c => !c.removed).map(c => [c.id, c]));
 		const renderedRemoved = new Set();
 		// render comments and replies
@@ -697,13 +702,14 @@ ${UIComponents.Elements.select({
 
 		if (comment.replyTo) {
 			commentElement.style.marginLeft = '2em';
+			commentElement.dataset.replyTo = comment.replyTo;
 		}
 
 		const createdAt = new Date(comment.createdAt);
 		const timeAgo = this._formatTimeAgo(createdAt);
 
-		const isAuthor = this.user.id === comment.author.id;
-		const deleteButtonHtml = isAuthor ?
+		const isAuthor = this.user.id === (this.context.mapAuthorCallback?.(comment.author.id) ?? comment.author.id);
+		const deleteButtonHtml = isAuthor ? 
 			`<button class="relative" title="Delete comment" data-confirmed="false">
 				<span class="material-icons btn-pointer" style="font-size: 21px; color: var(--color-text-danger);">delete</span>
 				<div class="delete-hint hidden right-[30px] top-1/2 -translate-y-1/2 px-2 py-1 rounded-md p-2 text-xs absolute whitespace-nowrap" style="z-index: 10; background: var(--color-bg-canvas-inset); color: var(--color-text-danger);">
@@ -737,7 +743,7 @@ ${UIComponents.Elements.select({
 			deleteButton.addEventListener('click', (event) => {
 				const confirmed = event.currentTarget.dataset.confirmed === 'true';
 				if (confirmed) {
-					this._deleteComment(comment.id);
+					this._deleteComment(comment);
 				} else {
 					event.currentTarget.dataset.confirmed = 'true';
 					event.currentTarget.querySelector('.delete-hint').classList.remove('hidden');
@@ -791,12 +797,20 @@ ${UIComponents.Elements.select({
 		// insert replies after parent
 		if (parentId) {
 			const parentEl = commentsList.querySelector(`[data-comment-id="${parentId}"]`);
-			if (parentEl && parentEl.nextSibling) {
-				commentsList.insertBefore(commentElement, parentEl.nextSibling);
-			} else if (parentEl) {
-				commentsList.appendChild(commentElement);
+			if (parentEl) {
+				let targetNode = parentEl;
+				let nextNode = targetNode.nextSibling;
+				while (nextNode && nextNode.dataset && nextNode.dataset.replyTo === parentId) {
+					targetNode = nextNode;
+					nextNode = nextNode.nextSibling;
+				}
+				
+				if (targetNode.nextSibling) {
+					commentsList.insertBefore(commentElement, targetNode.nextSibling);
+				} else {
+					commentsList.appendChild(commentElement);
+				}
 			} else {
-				// If parent is not found, just append (should not happen with new logic)
 				commentsList.appendChild(commentElement);
 			}
 		} else {
@@ -811,22 +825,24 @@ ${UIComponents.Elements.select({
 	 */
 	_addReplyComment(parentId, text) {
 		const id = crypto.randomUUID();
-		const newComment = {
+		const comment = {
 			id,
 			author: { id: this.user.id, name: this.user.name },
 			content: text,
-			createdAt: new Date(),
+			createdAt: Date.now(),
+			modifiedAt: Date.now(),
 			replyTo: parentId,
 			removed: false
 		};
 		if (!this._selectedAnnot.comments) this._selectedAnnot.comments = [];
-		this._selectedAnnot.comments.push(newComment);
-		this._renderComments();
+		this.context.canvas.requestRenderAll();
+
+		this.context.addComment(this._selectedAnnot, comment);
+		this._renderSingleComment(comment, parentId);
 
 		const addedComment = document.getElementById('comments-list').querySelector(`[data-comment-id="${id}"]`);
 		if (addedComment) addedComment.scrollIntoView({ block: "end" });
 
-		this.context.fabric.rerender();
 	}
 
 	/**
@@ -864,25 +880,31 @@ ${UIComponents.Elements.select({
 
 	/**
 	 * Delete a comment by ID
-	 * @param {string} commentId - ID of the comment to delete
+	 * @param {AnnotationComment} comment - Deleted comment
 	 */
-	_deleteComment(commentId) {
+	_deleteComment(comment) {
+		const commentId = comment.id;
 		this.context.fabric.deleteComment(this._selectedAnnot, commentId);
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
-		const comment = this._selectedAnnot.comments.find(c => c.id === commentId);
 		const commentParent = this._selectedAnnot.comments.find(c => c.id === comment.replyTo)
 		const commentEl = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
 
 		const hasReplies = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === commentId);
+		const isParentRemoved = !commentParent || commentParent.removed;
+		const hasSiblings = this._selectedAnnot.comments.some(c => !c.removed && c.replyTo === comment.replyTo);
+
 		const removeParentPlaceholder =
 			comment.replyTo &&
-			!this._selectedAnnot.comments.some(c => !c.removed && comment.replyTo === c.id) &&
-			commentParent?.removed
+			!hasSiblings &&
+			isParentRemoved;
 
 		if (removeParentPlaceholder) {
-			const commentParentId = commentParent?.id;
-			if (commentParentId) commentsList.querySelector(`[data-comment-id="${commentParentId}"]`).remove();
+			const commentParentId = comment.replyTo;
+			if (commentParentId) {
+				const placeholder = commentsList.querySelector(`[data-comment-id="${commentParentId}"]`);
+				if (placeholder) placeholder.remove();
+			}
 		}
 
 		if (commentEl) {

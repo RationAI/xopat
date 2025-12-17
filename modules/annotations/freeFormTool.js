@@ -28,13 +28,14 @@ OSDAnnotations.FreeFormTool = class {
         this._node = document.getElementById("annotation-cursor");
 
         this._windowCanvas = document.createElement('canvas');
-        this._windowCanvas.width = this._windowSize.width + 4 * this.maxRadius;
-        this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
+        this._windowCanvas.width  = this._windowSize.width + 2 * this.maxRadius;
+        this._windowCanvas.height = this._windowSize.height + 2 * this.maxRadius;
         this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
         this._annotationCanvas = document.createElement('canvas');
-        this._annotationCanvas.width = this._windowSize.width * 3;
-        this._annotationCanvas.height = this._windowSize.height * 3;
+
+        this._annotationCanvas.width  = this._windowSize.width * 2;
+        this._annotationCanvas.height = this._windowSize.height * 2;
         this._ctxAnnotationFull =  this._annotationCanvas.getContext('2d', { willReadFrequently: true });
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
@@ -91,12 +92,12 @@ OSDAnnotations.FreeFormTool = class {
     _updateCanvasSize() {
         if (this._isWindowSizeUpdated()) {
 
-            this._windowCanvas.width = this._windowSize.width + 4 * this.maxRadius;
-            this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
+            this._windowCanvas.width  = this._windowSize.width + 2 * this.maxRadius;
+            this._windowCanvas.height = this._windowSize.height + 2 * this.maxRadius;
             this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
-            this._annotationCanvas.width = this._windowSize.width * 3;
-            this._annotationCanvas.height = this._windowSize.height * 3;
+            this._annotationCanvas.width  = this._windowSize.width * 2;
+            this._annotationCanvas.height = this._windowSize.height * 2;
             this._ctxAnnotationFull = this._annotationCanvas.getContext('2d', { willReadFrequently: true });
             return;
         }
@@ -566,7 +567,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _processContours(nextMousePos, fillColor) {
-        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 2) return false;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
         this._convert = this._convertOSD;
 
@@ -632,18 +633,29 @@ OSDAnnotations.FreeFormTool = class {
 
         let contours = this.MagicWand.traceContours(mask);
         contours = this._getValidContours(contours, ctx, {x: bbox.x, y: bbox.y}, zoomed);
-        contours = this.MagicWand.simplifyContours(contours, 0, 30);
+        // contours = this.MagicWand.simplifyContours(contours, 0, 30);
 
-        const imageContours = contours.map(contour => ({
-            ...contour,
-            points: contour.points.map(point => {
-                point.x += bbox.x + 0.5;
-                point.y += bbox.y + 0.5;
-                return this._convert(point);
-            })
-        }));
+        const MAX_POINTS = 4000;
 
-        return imageContours;
+        for (let contour of contours) {
+            contour.points = OSDAnnotations.PolygonUtilities.simplify(
+                contour.points.map(point => {
+                    // empirically found: the polygon
+                    point.x += bbox.x + 0.3;
+                    point.y += bbox.y + 0.1;
+                    return this._convert(point);
+                })
+            );
+
+            if (contour.points.length > MAX_POINTS) {
+                // Aggressive extra simplification if still insane
+                contour.points = OSDAnnotations.PolygonUtilities.simplifyQuality(
+                    contour.points,
+                    0.2 // lower quality → higher tolerance
+                );
+            }
+        }
+        return contours;
     }
 
     _getBinaryMask(data, width, height) {
@@ -654,9 +666,15 @@ OSDAnnotations.FreeFormTool = class {
             for (let x = 0; x < width; x++) {
                 const index = (y * width + x) * 4;
                 const r = data[index];
+                const g = data[index + 1];
+                const b = data[index + 2];
+                const a = data[index + 3];
 
-                if (r === 255) {
-                    mask[y * width + x] = 1;
+                // simple luminance threshold + alpha guard
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                if (a > 0 && lum >= 200) {  // instead of r === 255
+                    const idx = y * width + x;
+                    mask[idx] = 1;
 
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -669,20 +687,10 @@ OSDAnnotations.FreeFormTool = class {
         if (maxX === -1 || maxY === -1) {
             bounds = null;
         } else {
-            bounds = {
-                minX: minX,
-                minY: minY,
-                maxX: maxX,
-                maxY: maxY
-            }
+            bounds = { minX, minY, maxX, maxY };
         }
 
-        return {
-            data: mask,
-            width: width,
-            height: height,
-            bounds: bounds,
-        }
+        return { data: mask, width, height, bounds };
     }
 
     _toDistancePointsAsObjects(pointA, pointB) {

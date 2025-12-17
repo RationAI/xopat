@@ -4,6 +4,7 @@
   "description": "A flexible multipurose browser-based WSI viewer.",
   "main": "index.php",
   "scripts": {
+    "postinstall": "grunt css && grunt buildUI",
     "build": "grunt all",
     "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
     "s-static": "grunt html",

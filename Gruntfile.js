@@ -136,6 +136,11 @@ module.exports = function(grunt) {
     });
     grunt.registerTask('plugins', ["uglify:plugins"]);
     grunt.registerTask('modules', ["uglify:modules"]);
+    grunt.registerTask('buildUI', function (){
+        grunt.log.writeln('esbuild');
+        const result = exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+        grunt.log.writeln(result);
+    });
     grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
         grunt.log.writeln('Tailwind');
         //TODO change back to minify
