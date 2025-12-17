@@ -344,9 +344,9 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                 }
             }
 
-            this.annotations.addHandler('annotation-create', e => addSidRecord(e.object));
-            this.annotations.addHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
-            this.annotations.addHandler('annotation-replace', e => {
+            this.annotations.addFabricHandler('annotation-create', e => addSidRecord(e.object));
+            this.annotations.addFabricHandler('annotation-delete', e => _this._removeAnnotationRef(e.object));
+            this.annotations.addFabricHandler('annotation-replace', e => {
                 _this._removeAnnotationRef(e.previous);
                 e.next.presenterSids = e.previous.presenterSids;
                 addSidRecord(e.next);
@@ -372,7 +372,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                     o.presenterSids = sids;
                 });
             }
-            this.annotations.loadObjects({objects: Object.values(data).flat(1)})
+            this.annotations.fabric.loadObjects({objects: Object.values(data).flat(1)})
                 .then(() => _this._bindAnnotations());
             Dialogs.show("Loaded.", 1500, Dialogs.MSG_INFO);
         } catch(e) {
@@ -462,7 +462,7 @@ margin-left: ${this._convertValue('delay', step.delay)};"></span>`;
                     });
                     updates = true;
                 }
-                if (updates) _this.annotations.canvas.renderAll();
+                if (updates) _this.annotations.fabric.canvas.renderAll();
 
                 let container = $("#playback-timeline");
                 _this._delay = false;

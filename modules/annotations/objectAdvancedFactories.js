@@ -1,8 +1,8 @@
 
 //todo implement as composition of line and text
 OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "ruler", "group");
+    constructor(context, presetManager) {
+        super(context, presetManager, "ruler", "group");
         this._current = null;
     }
 
@@ -45,6 +45,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             this._configureParts(instance.item(0), instance.item(1), options);
             this._configureWrapper(instance, instance.item(0), instance.item(1), options);
         }
+        return instance;
     }
 
     /**
@@ -119,6 +120,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
             hasControls: true,
+            hasBorders: false,
             left: parameters.left,
             top: parameters.top,
             height: ofObject.height,
@@ -167,7 +169,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line = theObject._objects[0];
         const points = [line.x1, line.y1, line.x2, line.y2];
-        
+
         const newObject = this.copy(theObject, {
             left: theObject.left,
             top: theObject.top,
@@ -175,8 +177,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
 
         return newObject;
@@ -189,7 +190,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const line = theObject._objects[0];
         let deltaX, deltaY;
-        
+
         if (pos.mode === 'move') {
             deltaX = pos.x;
             deltaY = pos.y;
@@ -212,8 +213,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         });
 
         if (!ignoreReplace) {
-            this._context.replaceAnnotation(theObject, newObject);
-            this._context.canvas.renderAll();
+            this._context.fabric.replaceAnnotation(theObject, newObject);
         }
 
         return newObject;
@@ -221,7 +221,21 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         visualProperties.modeOutline = true; // we are always transparent
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        ofObject.set({ opacity: 1 });
+
+        if (ofObject._objects) {
+            const lineFactory = this._context.getAnnotationObjectFactory('line');
+            const textFactory = this._context.getAnnotationObjectFactory('text');
+
+            lineFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties);
+            textFactory.updateRendering(ofObject._objects[1], preset, visualProperties, defaultVisualProperties);
+        }
+    }
+
+    applySelectionStyle(ofObject) {
+        ofObject._objects[0].set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -235,25 +249,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }
     }
 
-    instantCreate(screenPoint, isLeftClick = true) {
-        let bounds = this._auto.approximateBounds(screenPoint, false);
-        if (bounds) {
-            //todo bugged
-            let opts = this._presets.getAnnotationOptions(isLeftClick);
-            let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
-            this._context.addAnnotation(object);
-            return true;
-        }
-        return false;
-    }
-
     initCreate(x, y, isLeftClick) {
         let opts = this._presets.getAnnotationOptions(isLeftClick);
         let parts = this._createParts([x, y, x, y], opts);
         this._updateText(parts[0], parts[1]);
         this._current = parts;
-        this._context.addHelperAnnotation(this._current[0]);
-        this._context.addHelperAnnotation(this._current[1]);
+        this._context.fabric.addHelperAnnotation(this._current[0]);
+        this._context.fabric.addHelperAnnotation(this._current[1]);
     }
 
     updateCreate(x, y) {
@@ -266,8 +268,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     discardCreate() {
         if (this._current) {
-            this._context.deleteHelperAnnotation(this._current[0]);
-            this._context.deleteHelperAnnotation(this._current[1]);
+            this._context.fabric.deleteHelperAnnotation(this._current[0]);
+            this._context.fabric.deleteHelperAnnotation(this._current[1]);
             this._current = undefined;
         }
     }
@@ -275,8 +277,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     finishDirect() {
         let obj = this.getCurrentObject();
         if (!obj) return true;
-        this._context.deleteHelperAnnotation(obj[0]);
-        this._context.deleteHelperAnnotation(obj[1]);
+        this._context.fabric.deleteHelperAnnotation(obj[0]);
+        this._context.fabric.deleteHelperAnnotation(obj[1]);
 
         const line = obj[0],
             text = obj[1],
@@ -286,10 +288,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             return true;
         }
 
-        const props = this._presets.getCommonProperties();
+        const props = { ...this._presets.getCommonProperties()};
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
-        this._context.addAnnotation(obj);
+        this._context.fabric.addAnnotation(obj);
         this._current = undefined;
         return true;
     }
@@ -306,13 +308,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return false;
     }
 
+    getLength(theObject) {
+        return theObject._objects[1]?.text;
+    }
+
     _round(value) {
         return Math.round(value * 100) / 100;
     }
 
     _updateText(line, text) {
         const d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2));
-        const strText = VIEWER.scalebar.imageLengthToGivenUnits(d);
+        const strText = this._context.viewer.scalebar.imageLengthToGivenUnits(d);
         //todo update text should not recompute the text value on zoom, does not change
         text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
         return strText;
@@ -330,13 +336,29 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2", "text"];
     }
 
-    toPointArray(obj, converter, digits=undefined, quality=1) {
-        const line = obj._objects ? obj._objects[0] : [];
+    createHighlight(theObject) {
+        const factory = this._context.getAnnotationObjectFactory('line');
+        const absGroupPos = theObject.getPointByOrigin('center', 'center');
 
-        let x1 = line.x1;
-        let y1 = line.y1;
-        let x2 = line.x2;
-        let y2 = line.y2;
+        const originalLine = theObject.item(0);
+        const copyLine = factory.copy(originalLine);
+
+        copyLine.factoryID = factory.factoryID;
+        copyLine.type = factory.type;
+
+        copyLine.left = absGroupPos.x + originalLine.left;
+        copyLine.top = absGroupPos.y + originalLine.top;
+
+        return super.createHighlight(copyLine);
+    }
+
+    toPointArray(obj, converter, digits=undefined, quality=1) {
+        const line = obj.objects ? obj.objects[0] : [];
+
+        let x1 = line.x1 + obj.left + obj.width/2;
+        let y1 = line.y1 + obj.top + obj.height/2;
+        let x2 = line.x2 + obj.left + obj.width/2;
+        let y2 = line.y2 + obj.top + obj.height/2;
 
         if (digits !== undefined) {
             x1 = parseFloat(x1.toFixed(digits));
@@ -401,7 +423,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             type: this.type,
             presetID: options.presetID,
             measure: text.text,
-            hasControls: true,
+            hasControls: false,
+            hasBorders: false,
         });
     }
 
@@ -414,236 +437,16 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _createWrap(parts, options) {
+        options.hasBorders = false;
         const wrap = new fabric.Group(parts);
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
         return wrap;
     }
 };
 
-// OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
-//     constructor(context, autoCreationStrategy, presetManager) {
-//         super(context, autoCreationStrategy, presetManager, "ruler", "group");
-//         this._current = null;
-//
-//         //reuse
-//         this._textFactory = new OSDAnnotations.Text(context, autoCreationStrategy, presetManager);
-//         this._lineFactory = new OSDAnnotations.Line(context, autoCreationStrategy, presetManager);
-//     }
-//
-//     getIcon() {
-//         return "square_foot";
-//     }
-//
-//     getDescription(ofObject) {
-//         return `Length ${Math.round(ofObject.measure)} mm`;
-//     }
-//
-//     fabricStructure() {
-//         return ["line", "text"];
-//     }
-//
-// exports() {
-//     return ["measure"];
-// }
-
-//     getCurrentObject() {
-//         return this._current;
-//     }
-//
-//     isEditable() {
-//         return false;
-//     }
-//
-//     /**
-//      * @param {array} parameters array of a single line points [x1, y1, x2, y2]
-//      * @param {Object} options see parent class
-//      */
-//     create(parameters, options) {
-//         let parts = this._createParts(parameters, options);
-//         return this._createWrap(parts, options);
-//     }
-//
-//     /**
-//      * @param {Object} ofObject fabricjs.Line object that is being copied
-//      * @param {array} parameters array of line points [x, y, x, y ..]
-//      */
-//     copy(ofObject, parameters=undefined) {
-//         let line = ofObject.item(0),
-//             text = ofObject.item(1);
-//         if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-//         return new fabric.Group([fabric.Line(parameters, {
-//             fill: line.fill,
-//             opacity: line.opacity,
-//             strokeWidth: line.strokeWidth,
-//             stroke: line.stroke,
-//             scaleX: line.scaleX,
-//             scaleY: line.scaleY,
-//             hasRotatingPoint: line.hasRotatingPoint,
-//             borderColor: line.borderColor,
-//             cornerColor: line.cornerColor,
-//             borderScaleFactor: line.borderScaleFactor,
-//             hasControls: line.hasControls,
-//             lockMovementX: line.lockMovementX,
-//             lockMovementY: line.lockMovementY,
-//             originalStrokeWidth: line.originalStrokeWidth,
-//             selectable: false,
-//         }), new fabric.Text(text.text), {
-//             textBackgroundColor: text.textBackgroundColor,
-//             fontSize: text.fontSize,
-//             lockUniScaling: true,
-//             scaleY: text.scaleY,
-//             scaleX: text.scaleX,
-//             selectable: false,
-//             hasControls: false,
-//             stroke: text.stroke,
-//             fill: text.fill,
-//             paintFirst: 'stroke',
-//             strokeWidth: text.strokeWidth,
-//         }], {
-//             presetID: ofObject.presetID,
-//             measure: ofObject.measure,
-//             meta: ofObject.meta,
-//             factoryID: ofObject.factoryID,
-//             isLeftClick: ofObject.isLeftClick,
-//             type: ofObject.type,
-//             layerID: ofObject.layerID,
-//             color: ofObject.color,
-//             zoomAtCreation: ofObject.zoomAtCreation,
-//             selectable: false,
-//             hasControls: false
-//         });
-//     }
-//
-//     edit(theObject) {
-//         //not allowed
-//     }
-//
-//     recalculate(theObject) {
-//         //not supported error?
-//     }
-//
-//     instantCreate(screenPoint, isLeftClick = true) {
-//         let bounds = this._auto.approximateBounds(screenPoint, false);
-//         if (bounds) {
-//             let opts = this._presets.getAnnotationOptions(isLeftClick);
-//             let object = this.create([bounds.left.x, bounds.top.y, bounds.right.x, bounds.bottom.y], opts);
-//             this._context.addAnnotation(object);
-//             return true;
-//         }
-//         return false;
-//     }
-//
-//     initCreate(x, y, isLeftClick) {
-//         let opts = this._presets.getAnnotationOptions(isLeftClick);
-//         let parts = this._createParts([x, y, x, y], opts);
-//         this._updateText(parts[0], parts[1]);
-//         this._current = parts;
-//         this._context.addHelperAnnotation(this._current[0]);
-//         this._context.addHelperAnnotation(this._current[1]);
-//
-//     }
-//
-//     updateCreate(x, y) {
-//         if (!this._current) return;
-//         let line = this._current[0],
-//             text = this._current[1];
-//         line.set({ x2: x, y2: y });
-//         this._updateText(line, text);
-//     }
-//
-//     finishDirect() {
-//         let obj = this.getCurrentObject();
-//         if (!obj) return true;
-//         this._context.deleteHelperAnnotation(obj[0]);
-//         this._context.deleteHelperAnnotation(obj[1]);
-//
-//         obj = this._createWrap(obj, this._presets.getCommonProperties());
-//         this._context.addAnnotation(obj);
-//         this._current = undefined;
-//         return true;
-//     }
-//
-//     /**
-//      * Create array of points - approximation of the object shape
-//      * @return {undefined} not supported, ruler cannot be turned to polygon
-//      */
-//     toPointArray(obj, converter, quality=1) {
-//         return undefined;
-//     }
-//
-//     title() {
-//         return "Ruler";
-//     }
-//     _getWithUnit(value, unitSuffix) {
-//         if (value < 0.000001) {
-//             return value * 1000000000 + " n" + unitSuffix;
-//         }
-//         if (value < 0.001) {
-//             return value * 1000000 + " μ" + unitSuffix;
-//         }
-//         if (value < 1) {
-//             return value * 1000 + " m" + unitSuffix;
-//         }
-//         if (value >= 1000) {
-//             return value / 1000 + " k" + unitSuffix;
-//         }
-//         return value + " " + unitSuffix;
-//     }
-//
-//     _updateText(line, text) {
-//         let microns = APPLICATION_CONTEXT.getOption("microns") ?? -1;
-//         let d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2)),
-//             strText;
-//         if (microns > 0) {
-//             strText = this._getWithUnit(
-//                 Math.round(d * microns / 10000000) / 100, "m"
-//             );
-//         } else {
-//             strText = Math.round(d) + " px";
-//         }
-//         text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
-//     }
-//
-//     _createParts(parameters, options) {
-//         options.stroke = options.color;
-//         return [
-//             this._lineFactory.create(parameters, options),
-//             this._textFactory.create()
-//         ];
-//
-//
-//         return [new fabric.Line(parameters, $.extend({
-//             scaleX: 1,
-//             scaleY: 1,
-//             selectable: false,
-//             hasControls: false,
-//         }, options)), new fabric.Text('', {
-//             fontSize: 16,
-//             selectable: false,
-//             hasControls: false,
-//             lockUniScaling: true,
-//             stroke: 'white',
-//             fill: 'black',
-//             paintFirst: 'stroke',
-//             strokeWidth: 2,
-//             scaleX: 1/options.zoomAtCreation,
-//             scaleY: 1/options.zoomAtCreation
-//         })];
-//     }
-//
-//     _createWrap(parts, options) {
-//         this._updateText(parts[0], parts[1]);
-//         return new fabric.Group(parts, $.extend({
-//             factoryID: this.factoryID,
-//             type: this.type,
-//             measure: 0,
-//         }, options));
-//     }
-// };
-
 // OSDAnnotations.Image = class extends OSDAnnotations.AnnotationObjectFactory {
-//     constructor(context, autoCreationStrategy, presetManager) {
-//         super(context, autoCreationStrategy, presetManager, "image", "image");
+//     constructor(context, presetManager) {
+//         super(context, presetManager, "image", "image");
 //         this._origX = null;
 //         this._origY = null;
 //         this._current = null;
@@ -732,12 +535,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         let newObject = this.copy(theObject, {left: left, top: top});
 //         delete newObject.incrementId; //todo make this nicer, avoid always copy of this attr
 //         theObject.calcACoords();
-//         this._context.replaceAnnotation(theObject, newObject);
+//         this._context.fabric.replaceAnnotation(theObject, newObject);
 //     }
 //
-//     instantCreate(screenPoint, isLeftClick = true) {
-//         return false;
-//     }
 //
 //     initCreate(x, y, isLeftClick) {
 //         this._origX = x;
@@ -748,7 +548,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //             width: 1,
 //             height: 1
 //         }, this._presets.getAnnotationOptions(isLeftClick)));
-//         this._context.addHelperAnnotation(this._current);
+//         this._context.fabric.addHelperAnnotation(this._current);
 //     }
 //
 //     updateCreate(x, y) {
@@ -773,8 +573,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         UTILITIES.uploadFile(url => {
 //             const image = document.createElement('img');
 //             image.onload = () => {
-//                 self._context.deleteHelperAnnotation(obj);
-//                 self._context.addAnnotation(self.create({
+//                 self._context.fabric.deleteHelperAnnotationobj);
+//                 self._context.fabric.addAnnotation(self.create({
 //                         top: obj.top,
 //                         left: obj.left,
 //                         scaleX: obj.width / image.width,
@@ -783,10 +583,10 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //                 }, this._presets.getAnnotationOptions(obj.isLeftClick)));
 //             };
 //             image.onerror = () => {
-//                 self._context.deleteHelperAnnotation(obj);
+//                 self._context.fabric.deleteHelperAnnotationobj);
 //             };
 //             image.onabort = () => {
-//                 self._context.deleteHelperAnnotation(obj);
+//                 self._context.fabric.deleteHelperAnnotationobj);
 //             }
 //             image.setAttribute('src', url);
 //         }, "image/*", "url");

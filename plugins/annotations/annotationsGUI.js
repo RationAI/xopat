@@ -37,7 +37,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	/**
 	 * Check if an array of menu icons is sorted per annotationMenuIconOrder
-	 * @param {string[]} array 
+	 * @param {string[]} array
 	 * @returns {boolean}
 	 */
 	static _isAnnotationMenuSorted(array) {
@@ -58,8 +58,6 @@ class AnnotationsGUI extends XOpatPlugin {
 		 */
 		this._preferredPresets = new Set();
 		this.user = XOpatUser.instance();
-
-		this.registerAsEventSource();
 	}
 
 	/*
@@ -81,11 +79,11 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.setCustomModeUsed("FREE_FORM_TOOL_CORRECT", OSDAnnotations.StateCorrectionTool);
 		this.context.setCustomModeUsed("VIEWPORT_SEGMENTATION", OSDAnnotations.ViewportSegmentation);
 
-    this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
-    this.context.commentsEnabled = this._commentsEnabled;
+        this._commentsEnabled = this.getOption("commentsEnabled", this.getStaticMeta("commentsEnabled", true));
+        this.context.commentsEnabled = this._commentsEnabled;
 		this._commentsClosedMethod = this.getOption("commentsClosedMethod", this.getStaticMeta("commentsClosedMethod", 'global'));
 		this._commentsDefaultOpened = this.getOption("commentsDefaultOpened", this.getStaticMeta("commentsDefaultOpened", true));
-		this._commentsOpened = this.commentsDefaultOpened;
+		this._commentsOpened = this._commentsDefaultOpened;
 
 		await this.setupFromParams();
 
@@ -121,7 +119,7 @@ class AnnotationsGUI extends XOpatPlugin {
 
 	async setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.getStaticMeta("factories") || ["polygon"];
-		this.context.history.focusWithZoom = this.getOption("focusWithZoom", true);
+		this.context.historyManager.focusWithZoom = this.getOption("focusWithZoom", true);
 		const convertOpts = this.getOption('convertors');
 		this._ioArgs.serialize = true;
 		this._ioArgs.imageCoordinatesOffset = convertOpts?.imageCoordinatesOffset || this._ioArgs.imageCoordinatesOffset;
@@ -135,6 +133,7 @@ class AnnotationsGUI extends XOpatPlugin {
 			availableFormats: OSDAnnotations.Convertor.formats,
 			//defaultIOFormat not docummented, as it is not meant to be used
 			format: this.getOption('defaultIOFormat', this._defaultFormat),
+			scope: 'all',
 		};
 		const formats = OSDAnnotations.Convertor.formats;
 		if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = "native";
@@ -186,12 +185,12 @@ class AnnotationsGUI extends XOpatPlugin {
 	_toggleStrokeStyling(enable) {
 		const authorButton = $("#author-list-button-mp");
 		const isAuthorsTabActive = authorButton.attr('aria-selected') === 'true';
-		
+
 		if (enable) {
 			authorButton.show();
 		} else {
 			authorButton.hide();
-			
+
 			if (isAuthorsTabActive) {
 				this.switchMenuList('preset');
 			}
@@ -238,7 +237,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		);
 
 		const commentsMenu = document.getElementById("annotation-comments-menu");
-		
+
 		const commentsBody = document.querySelector('.card-body div')
 		commentsBody.style.width = "100%";
 		commentsBody.style.height = "100%";
@@ -275,11 +274,13 @@ onclick="${this.THIS}._toggleEnabled(this)">visibility</span>
 			`
 <div class="d-flex flex-row mt-1 width-full">
 <div style="width: 50%"><span>Border </span><input type="range" class="pl-1" id="annotations-border-width" min="1" max="10" step="1"></div>
+<div id="annotations-outline-control">
 ${UIComponents.Elements.checkBox({
 				label: this.t('outlineOnly'),
 				classes: "pl-2",
 				onchange: `${this.THIS}.setDrawOutline(!!this.checked)`,
 				default: this.context.getAnnotationCommonVisualProperty('modeOutline')})}
+</div>
 </div>
 <div class="d-flex flex-row mt-1 width-full">
 <div style="width: 50%"><span>Opacity </span><input type="range" class="pl-1" id="annotations-opacity" min="0" max="1" step="0.1"></div>
@@ -368,6 +369,10 @@ ${modeOptions.join("")}</div>`, 'draw');
 <h4 class="f3-light header-sep">File Download / Upload</h4><br>
 <div>${this.exportOptions.availableFormats.map(o => this.getIOFormatRadioButton(o)).join("")}</div>
 <div id="annotation-convertor-options"></div>
+<div id="export-annotations-scope" class="mt-2">
+  <span class="text-small mr-2">Export scope (annotations):</span>
+  ${['all','selected'].map(s => this.getExportScopeRadioButton(s)).join("")}
+</div>
 <br>
 ${UIComponents.Elements.checkBox({label: "Replace existing data on import",
 onchange: this.THIS + ".setOption('importReplace', !!this.checked)", default: this.getOption("importReplace", true)})}
@@ -410,6 +415,20 @@ ${UIComponents.Elements.select({
 		this._toggleStrokeStyling(this.context.strokeStyling);
 	}
 
+	getExportScopeRadioButton(scope) {
+        const id = `export-scope-${scope}-radio`;
+        const label = scope === 'all' ? 'All' : 'Selected';
+        const checked = this.exportOptions.scope === scope ? 'checked' : '';
+        return `
+        <div class="d-inline-block p-2">
+          <input type="radio" id="${id}" class="d-none switch" ${checked} name="annotation-scope-switch">
+          <label for="${id}" class="position-relative format-selector"
+                 onclick="${this.THIS}.setExportScope('${scope}');">
+            <span class="btn">${label}</span>
+          </label>
+        </div>`;
+    }
+
 	getIOFormatRadioButton(format) {
 		const selected = format === this.exportOptions.format ? "checked" : "";
 		const convertor = OSDAnnotations.Convertor.get(format);
@@ -422,6 +441,9 @@ ${UIComponents.Elements.select({
 		const convertor = OSDAnnotations.Convertor.get(format);
 		document.getElementById('downloadAnnotation').style.visibility = convertor.exportsObjects ? 'visible' : 'hidden';
 		document.getElementById('downloadPreset').style.visibility = convertor.exportsPresets ? 'visible' : 'hidden';
+		const scopeEl = document.getElementById('export-annotations-scope');
+		if (scopeEl) scopeEl.style.display = convertor.exportsObjects ? 'block' : 'none';
+
 		document.getElementById('importAnnotation').innerHTML = `Import file: format '${format}'`;
 		this.exportOptions.format = format;
 		this.setLocalOption('defaultIOFormat', format);
@@ -432,19 +454,19 @@ ${UIComponents.Elements.select({
 
     /**
      * Enable/disable comments UI
-     * @param {boolean} enabled 
+     * @param {boolean} enabled
      */
     enableComments(enabled) {
         if (this._commentsEnabled === enabled) return;
         this._commentsEnabled = enabled;
         this.context.commentsEnabled = enabled;
         this.setOption("commentsEnabled", enabled);
-				if (!enabled) {
-					this.commentsToggleWindow(false, true);
-				} else if (this._selectedAnnot) {
-					this.commentsToggleWindow(true, true);
-				}
-        this.context.canvas.requestRenderAll();
+            if (!enabled) {
+                this.commentsToggleWindow(false, true);
+            } else if (this._selectedAnnot) {
+                this.commentsToggleWindow(true, true);
+            }
+        this.context.fabric.rerender();
     }
 
 		commentsDefaultOpen(enabled) {
@@ -455,7 +477,7 @@ ${UIComponents.Elements.select({
 
     /**
      * Set strategy for closing comments
-     * @param {'none' | 'global' | 'individual'} method 
+     * @param {'none' | 'global' | 'individual'} method
      */
     switchCommentsClosedMethod(method) {
         if (this._commentsClosedMethod === method) return;
@@ -465,7 +487,7 @@ ${UIComponents.Elements.select({
 
     /**
      * Get opened state cache for object
-     * @param {string} objectId 
+     * @param {string} objectId
      */
     _getCommentOpenedCache(objectId) {
         const cacheRaw = this.cache.get('comments-opened-states')
@@ -473,12 +495,11 @@ ${UIComponents.Elements.select({
             this.cache.set('comments-opened-states', '{}');
             return undefined;
         }
-        const cache = JSON.parse(cacheRaw)[objectId];
-        return cache;
+        return JSON.parse(cacheRaw)[objectId];
     }
     /**
      * Set opened state cache for object
-     * @param {string} objectId 
+     * @param {string} objectId
      * @param {boolean} opened
      */
     _setCommentOpenedCache(objectId, opened) {
@@ -513,9 +534,9 @@ ${UIComponents.Elements.select({
 		if (!this.user) return;
 		const input = document.getElementById('comment-input');
 		const commentText = input.value.trim();
-		
+
 		if (!commentText) return;
-				
+
 		const comment = {
 			id: crypto.randomUUID(),
 			author: {
@@ -528,11 +549,11 @@ ${UIComponents.Elements.select({
 			removed: false,
 		};
 		
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.canvas.requestRenderAll();
 		this._renderSingleComment(comment);
 		input.value = '';
 
-		this.context.addComment(this._selectedAnnot, comment);
+		this.context.fabric.addComment(this._selectedAnnot, comment);
 		
 		const commentsList = document.getElementById('comments-list');
 		if (commentsList) {
@@ -542,7 +563,7 @@ ${UIComponents.Elements.select({
 
 	/**
 	 * Generate a consistent color corresponding to a username
-	 * @param {string} username 
+	 * @param {string} username
 	 * @returns {string} HSL CSS color string
 	 */
 	getColorForUser(username) {
@@ -552,14 +573,14 @@ ${UIComponents.Elements.select({
 			hash = ((hash << 5) - hash) + char;
 			hash = hash & hash;
 		}
-		
+
 		const positiveHash = Math.abs(hash);
-		
+
 		const hue = positiveHash % 360;
-		
+
 		const saturation = 65;
 		const lightness = 45;
-		
+
 		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 	}
 
@@ -863,7 +884,7 @@ ${UIComponents.Elements.select({
 	 */
 	_deleteComment(comment) {
 		const commentId = comment.id;
-		this.context.deleteComment(this._selectedAnnot, commentId);
+		this.context.fabric.deleteComment(this._selectedAnnot, commentId);
 		const commentsList = document.getElementById('comments-list');
 		if (!commentsList) return;
 		const commentParent = this._selectedAnnot.comments.find(c => c.id === comment.replyTo)
@@ -885,7 +906,7 @@ ${UIComponents.Elements.select({
 				if (placeholder) placeholder.remove();
 			}
 		}
-		
+
 		if (commentEl) {
 			if (hasReplies) {
 				// replace with placeholder
@@ -902,7 +923,7 @@ ${UIComponents.Elements.select({
 				commentEl.remove();
 			}
 		}
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.rerender();
 
 		if (this._selectedAnnot.comments.filter(c => !c.removed).length === 0) {
 			this._clearComments();
@@ -912,7 +933,7 @@ ${UIComponents.Elements.select({
 
 	/**
 	 * Toggle comments window
-     * @param {boolean} enabled Optionally specify state 
+     * @param {boolean} enabled Optionally specify state
      * @param {boolean} [stopPropagation=false] Dont propagate this toggle to the comment window opened state
 	 */
 	commentsToggleWindow(enabled = undefined, stopPropagation = false) {
@@ -950,7 +971,7 @@ ${UIComponents.Elements.select({
     this._previousAnnotId = object.id;
 		this.commentsToggleWindow(false, true);
 		this._clearComments();
-		
+
 		this._stopCommentsRefresh();
 	}
 
@@ -959,7 +980,7 @@ ${UIComponents.Elements.select({
 	 */
 	_startCommentsRefresh() {
 		this._stopCommentsRefresh();
-		
+
 		this._refreshCommentsInterval = setInterval(() => {
 			this._refreshCommentTimestamps();
 		}, 30_000);
@@ -985,19 +1006,19 @@ ${UIComponents.Elements.select({
 
 		this._selectedAnnot.comments.forEach(comment => {
 			if (comment.removed) return;
-			
+
 			const commentElement = document.querySelector(`[data-comment-id="${comment.id}"]`);
 			if (!commentElement) return;
 
 			const timestampSpan = commentElement.querySelector('span[name="created-at"]');
 			if (!timestampSpan) return;
 
-			const timeAgo = this._formatTimeAgo(comment.createdAt);
-			timestampSpan.textContent = timeAgo;
+            timestampSpan.textContent = this._formatTimeAgo(comment.createdAt);
 		});
 	}
 
 	switchModeActive(id, factory=undefined, isLeftClick) {
+		if (this.context.historyManager.isOngoingEdit()) return;
 		if (this.context.mode.getId() === id) {
 			if (id === "auto") return;
 
@@ -1039,7 +1060,7 @@ ${UIComponents.Elements.select({
 		presetListButton.attr('aria-selected', false);
 		annotListButton.attr('aria-selected', false);
 		authorListButton.attr('aria-selected', false);
-		
+
 		// hide panels
 		const presetList = $("#preset-list-mp");
 		const annotList = $("#annotation-list-mp");
@@ -1071,9 +1092,9 @@ ${UIComponents.Elements.select({
 
 	openHistoryWindow(asModal = this.isModalHistory) {
 		if (asModal) {
-			this.context.history.openHistoryWindow();
+			this.context.historyManager.openHistoryWindow();
 		} else {
-			this.context.history.openHistoryWindow(this._annotationsDomRenderer);
+			this.context.historyManager.openHistoryWindow(this._annotationsDomRenderer);
 		}
 		this._afterHistoryWindowOpen(asModal);
 	}
@@ -1117,16 +1138,17 @@ ${UIComponents.Elements.select({
 		const authorListContainer = $("#author-list-inner-mp");
 		if (!authorListContainer.length) return;
 
-		const objects = this.context.canvas.getObjects();
+        // todo check this code, it smells
+		const objects = this.context.fabric.canvas.getObjects();
 		const authorCounts = new Map();
 
 		objects.forEach(obj => {
 			if (this.context.isAnnotation(obj) && obj.author) {
 				const author = this.context.mapAuthorCallback?.(obj) ?? obj.author;
-				
+
 				// skip current user
 				if (author === this.user.id) return;
-				
+
 				authorCounts.set(author, (authorCounts.get(author) || 0) + 1);
 			}
 		});
@@ -1145,7 +1167,7 @@ ${UIComponents.Elements.select({
 			const pluralS = count === 1 ? '' : 's';
 			const config = this.context.getAuthorConfig(author);
 			const authorIdSafe = author.replace(/[^a-zA-Z0-9]/g, '_');
-			
+
 			return `<div class="author-item p-2 border-bottom border-secondary" style="${config.shown ? '' : 'opacity: 0.6;'}">
 				<div class="d-flex align-items-center mb-2">
 					<span class="material-icons mr-2">person</span>
@@ -1182,7 +1204,7 @@ ${UIComponents.Elements.select({
 
 	_createHistoryInAdvancedMenu(focus = false) {
 		USER_INTERFACE.AdvancedMenu.setMenu(this.id, "annotations-board-in-advanced-menu", "Annotations Board", '', 'shape_line');
-		this.context.history.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
+		this.context.historyManager.openHistoryWindow(document.getElementById('annotations-board-in-advanced-menu'));
 		this._openedHistoryMenu = true;
 		if (focus) USER_INTERFACE.AdvancedMenu.openSubmenu(this.id, 'annotations-board-in-advanced-menu');
 	}
@@ -1225,6 +1247,9 @@ ${UIComponents.Elements.select({
 			}
 		});
 		this.context.addHandler('enabled', this.annotationsEnabledHandler);
+		this.annotationsEnabledEditModeHandler = this.annotationsEnabledEditModeHandler.bind(this);
+		this.context.addHandler('enabled-edit-mode', this.annotationsEnabledEditModeHandler);
+		
 		this.context.addHandler('preset-select', this.updatePresetsHTML.bind(this));
 		this.context.addHandler('preset-update', this.updatePresetEvent.bind(this));
 		this.context.addHandler('preset-delete', e => {
@@ -1237,23 +1262,25 @@ ${UIComponents.Elements.select({
 			this.context.createPresetsCookieSnapshot();
 			this._updateMainMenuPresetList();
 		});
-		this.context.history.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
+		this.context.historyManager.setAutoOpenDOMRenderer(this._annotationsDomRenderer, "160px");
 		this.context.addHandler('history-swap', e => this._afterHistoryWindowOpen(e.inNewWindow));
 		this.context.addHandler('history-close', e => e.inNewWindow && this.openHistoryWindow(false));
 		this.context.addHandler('history-change', refreshHistoryButtons);
 
-		this.context.addHandler('annotation-set-private', e => {
-			this.context.canvas.requestRenderAll();
+        this.context.addFabricHandler('annotation-set-private', e => {
+            // todo smells
+			this.context.fabric.rerender();
 		});
 
-		this.context.canvas.on('object:added', e => {
-			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+        // todo consider moving to OSD Annotations events instead
+		this.context.fabric.canvas.on('object:added', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.fabric.isAnnotation(e.target)) {
 				this._populateAuthorsList();
 			}
 		});
 
-		this.context.canvas.on('object:removed', e => {
-			if ($("#author-list-mp").css('display') !== 'none' && this.context.isAnnotation(e.target)) {
+		this.context.fabric.canvas.on('object:removed', e => {
+			if ($("#author-list-mp").css('display') !== 'none' && this.context.fabric.isAnnotation(e.target)) {
 				this._populateAuthorsList();
 			}
 		});
@@ -1266,7 +1293,8 @@ ${UIComponents.Elements.select({
 			}
 
 			let actions = [], handler;
-			let active = this.context.canvas.findTarget(e.originalEvent);
+            // todo what about e.target?
+			let active = this.context.fabric.canvas.findTarget(e.originalEvent);
 			if (active) {
 				actions.push({
 					title: `Change annotation to:`
@@ -1361,8 +1389,8 @@ ${UIComponents.Elements.select({
 			USER_INTERFACE.DropDown.open(e.originalEvent, actions);
 		});
 		this.context.addHandler('history-select', e => {
-			if (e.originalEvent.isPrimary) return;
-			const annotationObject = this.context.findObjectOnCanvasByIncrementId(e.incrementId);
+			if (e.originalEvent.isPrimary || e.originalEvent.button === 0) return;
+			const annotationObject = this.context.fabric.findObjectOnCanvasByIncrementId(e.incrementId);
 			if (!annotationObject) return; //todo error message
 
 			const actions = [{
@@ -1392,16 +1420,10 @@ ${UIComponents.Elements.select({
 		// this.context.forEachLayerSorted(l => {
 		// 	  this.insertLayer(l);
 		// });
-		// this.context.addHandler('layer-added', e => {
+        // this.context.fabric.broadcastHandler('layer-added', e => {
 		// 	  this.insertLayer(e.layer, e.layer.name);
 		// });
 
-		let strategy = this.context.automaticCreationStrategy;
-		if (strategy && this.context.autoSelectionEnabled) {
-			this.context.Modes.AUTO.customHtml = this.getAutoCreationStrategyControls.bind(this);
-			//on visualization change update auto UI
-			VIEWER.addHandler('visualization-used', vis => this.updateAutoSelect(vis));
-		}
 		this.context.Modes.FREE_FORM_TOOL_ADD.customHtml =
 			this.context.Modes.FREE_FORM_TOOL_REMOVE.customHtml =
 				this.context.Modes.FREE_FORM_TOOL_CORRECT.customHtml =
@@ -1576,6 +1598,34 @@ ${UIComponents.Elements.select({
 		}
 	}
 
+	annotationsEnabledEditModeHandler(e) {
+		let nodeToolBar = document.getElementById('annotations-tool-bar-content');
+		let nodeVisibility = document.getElementById('enable-disable-annotations');
+		let nodeOutline = document.getElementById('annotations-outline-control');
+
+		if (e.isEditEnabled) { 
+			this._toggleEnabledStyle(nodeToolBar, false);
+			this._toggleEnabledStyle(nodeVisibility, false);
+			this._toggleEnabledStyle(nodeOutline, false);
+		} else {
+			this._toggleEnabledStyle(nodeToolBar, true);
+			this._toggleEnabledStyle(nodeVisibility, true);
+			this._toggleEnabledStyle(nodeOutline, true);
+		}
+	}
+
+	_toggleEnabledStyle(node, on) {
+		if (on) {
+			node.style.pointerEvents = 'auto';
+			node.style.opacity = null;
+			node.ariaDisabled = 'false';
+		} else {
+			node.style.pointerEvents = 'none';
+			node.style.opacity = '0.5';
+			node.ariaDisabled = 'true';
+		}
+	}
+
 	//todo event handler prevent default / return false?
 	_errorHandlers = {
 		W_NO_PRESET: (e) => {
@@ -1600,28 +1650,26 @@ coloured area. Also, adjusting threshold can help.`, 5000, Dialogs.MSG_WARN, fal
 
 	_toggleEnabled(node) {
 		let self = $(node);
+		let nodeToolBar = document.getElementById('annotations-tool-bar-content');
+
 		if (this.context.disabledInteraction) {
 			this.context.enableAnnotations(true);
 			self.html('visibility');
 			self.attr('data-ref', 'on');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'auto';
-			node.style.opacity = null;
-			node.ariaDisabled = 'true';
+			this._toggleEnabledStyle(nodeToolBar, true);
 		} else {
 			this.context.enableAnnotations(false);
 			self.html('visibility_off');
 			self.attr('data-ref', 'off');
-			let node = document.getElementById('annotations-tool-bar-content');
-			node.style.pointerEvents = 'none';
-			node.style.opacity = '0.5';
-			node.ariaDisabled = 'false';
+			this._toggleEnabledStyle(nodeToolBar, false);
 		}
 	}
 
 	_annotationsDomRenderer(history, containerId) {
-		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">
-${history.getWindowSwapButtonHtml(2)}${history.getHistoryWindowBodyHtml()}</div>`);
+		let headHtml = history.getHistoryWindowHeadHtml();
+		headHtml = headHtml.replace(/<span[^>]*>Annotation List<\/span>\s*/, '');
+
+		$("#annotation-list-mp").html(`<div id="${containerId}" class="position-relative">${headHtml}${history.getHistoryWindowBodyHtml()}</div>`);
 	}
 
 	/******************** Free Form Tool ***********************/
@@ -1631,93 +1679,6 @@ ${history.getWindowSwapButtonHtml(2)}${history.getHistoryWindowBodyHtml()}</div>
 <input class="form-control" title="Size of a brush (scroll to change)." type="number" min="5" max="100" 
 step="1" name="freeFormToolSize" id="fft-size" autocomplete="off" value="${this.context.freeFormTool.screenRadius}"
 style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.setSafeRadius(Number.parseInt(this.value));">`;
-	}
-
-	/******************** LAYERS ***********************/
-
-	// Blending = {
-	// 	DEFAULT: 'source-over',
-	// 	AND: 'source-in',
-	// 	MASK_FG: 'source-atop',
-	// 	DIFF: 'source-out',
-	// 	MASK_AND: 'destination-in',
-	// 	MASK_DIFF: 'destination-out',
-	// 	MASK_BG: 'destination-atop',
-	// 	XOR: 'xor'
-	// };
-	// globalCompositeOperation
-
-	// insertLayer(layer, name) {
-	// 	console.log("ADDED");
-	// 	let container = $('#annotations-layers');
-	// 	name = name || "Layer " + layer.id;
-	// 	container.append(`<div id="a_layer_${layer.id}" onclick="${this.THIS}.context.setActiveLayer('${layer.id}');">${name}</div>`);
-	//
-	// 	this.context.forEachLayerSorted(l => {
-	// 		let ch = container.find(`#a_layer_${l.id}`);
-	// 		container.append(ch);
-	// 	});
-	// }
-	//
-	// setBlending(blending) {
-	// 	this.canvas.globalCompositeOperation = blending;
-	// 	this.canvas.renderAll();
-	// }
-
-	/******************** AUTO DETECTION ***********************/
-
-	getDetectionControlOptions(visualization) {
-		let autoStrategy = this.context.automaticCreationStrategy;
-		if (!autoStrategy.running) return "";
-		let html = "";
-
-		let index = -1;
-		let layer = null;
-		let key = "";
-		for (key in visualization.shaders) {
-			if (!visualization.shaders.hasOwnProperty(key)) continue;
-			layer = visualization.shaders[key];
-			if (isNaN(layer._index)) continue;
-
-			let errIcon = autoStrategy.compatibleShaders.some(type => type === layer.type) ? "" : "&#9888; ";
-			let errData = errIcon ? "data-err='true' title='Layer visualization style not supported with automatic annotations.'" : "";
-			let selected = "";
-
-			if (layer._index === autoStrategy.getLayerIndex()) {
-				index = layer._index;
-				autoStrategy.setLayer(index, key);
-				selected = "selected";
-			}
-			html += `<option value='${key}' ${selected} ${errData}>${errIcon}${layer.name}</option>`;
-		}
-
-		if (index < 0) {
-			if (!layer) return;
-			autoStrategy.setLayer(layer._index, key);
-			html = "<option selected " + html.substring(8);
-		}
-		return html;
-	}
-
-	updateAutoSelect(visualization) {
-		$("#sensitivity-auto-outline").html(this.getDetectionControlOptions(visualization));
-	}
-
-	getAutoCreationStrategyControls() {
-		return "";
-// 		let strategy = this.context.automaticCreationStrategy;
-// 		if (!strategy || !strategy.running) return "";
-// 		return `<span class="d-inline-block position-absolute top-0" style="font-size: xx-small;" title="What layer is used to create automatic
-// annotations."> Automatic annotations detected in: </span><select title="Double click creates automatic annotation - in which layer?" style="min-width: 180px; max-width: 250px;"
-// type="number" id="sensitivity-auto-outline" class="form-select select-sm" onchange="${this.THIS}.setAutoTargetLayer(this);">
-// ${this.getDetectionControlOptions(VIEWER.bridge.visualization())}</select>`;
-	}
-
-	setAutoTargetLayer(self) {
-		self = $(self);
-		let key = self.val(),
-			layer = VIEWER.bridge.visualization().shaders[key];
-		this.context.automaticCreationStrategy.setLayer(layer._index, key);
 	}
 
 	/******************** PRESETS ***********************/
@@ -1771,7 +1732,7 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 		const _this = this;
 		this._ioArgs.format = _this.exportOptions.format;
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			return await _this.context.import(data, this._ioArgs, this.getOption("importReplace", true));
+			return await _this.context.fabric.import(data, this._ioArgs, this.getOption("importReplace", true));
 		}).then(r => {
 			Dialogs.show(r ? "Loaded." : "No data was imported! Are you sure you have a correct format set?", 1500,
 				r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
@@ -1789,8 +1750,10 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 * @return {Promise<*>}
 	 */
 	async getExportData(preferredFormat = null, withObjects=true, withPresets=true) {
-		this._ioArgs.format = preferredFormat || this._defaultFormat;
-		return this.context.export(this._ioArgs, withObjects, withPresets);
+		const ioArgs = { ...this._ioArgs };
+        ioArgs.format = preferredFormat || this._defaultFormat;
+		ioArgs.scopeSelected = this.exportOptions.scope === 'selected' || false;
+        return this.context.fabric.export(ioArgs, withObjects, withPresets);
 	}
 
 	/**
@@ -1798,16 +1761,30 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	exportToFile(withObjects=true, withPresets=true) {
 		const toFormat = this.exportOptions.format;
+        const scopeSuffix = withObjects && this.exportOptions.scope === 'selected' ? "-selection" : "";
 		const name = APPLICATION_CONTEXT.referencedName(true)
 			+ "-" + UTILITIES.todayISOReversed() + "-"
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
+			+ scopeSuffix;
+
 		this.getExportData(toFormat, withObjects, withPresets).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
+			if (e?.code === 'EXPORT_NO_SELECTION') {
+				Dialogs.show("No annotations selected to export.", 2500, Dialogs.MSG_WARN);
+                return;
+			}
+
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
 			console.error(e);
 		});
 	}
+
+	setExportScope(scope) {
+        this.exportOptions.scope = scope === 'selected' ? 'selected' : 'all';
+        $('#export-scope-all-radio').prop('checked', this.exportOptions.scope === 'all');
+        $('#export-scope-selected-radio').prop('checked', this.exportOptions.scope === 'selected');
+    }
 
 	/**
 	 * Output GUI HTML for presets
@@ -1884,7 +1861,7 @@ oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
 		if (this._fireBoardUpdate) {
-			this.context.history.refresh();
+			this.context.historyManager.refresh();
 		}
 		this._fireBoardUpdate = true;
 	}
@@ -2145,8 +2122,7 @@ class="btn m-2">Set for left click </button></div>`
 	}
 
 	_deleteAnnotation(annotation) {
-		this.context.deleteObject(annotation);
-		this.context.canvas.requestRenderAll();
+		this.context.fabric.deleteObject(annotation);
 	}
 
 	_canPasteAnnotation(e, getMouseValue = false) {
@@ -2179,7 +2155,7 @@ class="btn m-2">Set for left click </button></div>`
         if (this._copiedIsCopy) {
             delete copy.internalID; // ensure internal ID is changed
         }
-		this.context.addAnnotation(res);
+		this.context.fabric.addAnnotation(res);
 		factory.renderAllControls(res);
 	}
 
@@ -2191,8 +2167,7 @@ class="btn m-2">Set for left click </button></div>`
 		const _this = this;
 		setTimeout(function() {
 			Dialogs.closeWindow('preset-modify-dialog');
-			_this.context.changeAnnotationPreset(annotation, _this._presetSelection);
-			_this.context.canvas.requestRenderAll();
+			_this.context.fabric.changeAnnotationPreset(annotation, _this._presetSelection);
 		}, 150);
 		return false;
 	}
@@ -2201,7 +2176,7 @@ class="btn m-2">Set for left click </button></div>`
 		const _this = this;
 		const newValue = !this._getAnnotationProps(annotation).private;
 
-		_this.context.setAnnotationPrivate(annotation, newValue);
+		_this.context.fabric.setAnnotationPrivate(annotation, newValue);
 	}
 
 	_getAnnotationProps(annotation) {
@@ -2226,7 +2201,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	async saveDefault() {
 		this.needsSave = false;
-		await this.raiseAwaitEvent('save-annotations', {
+		await this.module.raiseAwaitEvent('save-annotations', {
 			getData: this.getExportData.bind(this),
 			setNeedsDownload: (needsDownload) => {
 				this.needsSave = needsDownload;
@@ -2248,7 +2223,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	/**
 	 * Add a preset ID to the preferred presets
-	 * @param {string} presetID 
+	 * @param {string} presetID
 	 */
 	addPreferredPreset(presetID) {
 		this._preferredPresets.add(presetID);
@@ -2256,7 +2231,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	/**
 	 * Remove a preset ID from the preferred presets
-	 * @param {string} presetID 
+	 * @param {string} presetID
 	 */
 	removePreferredPreset(presetID) {
 		this._preferredPresets.delete(presetID);
@@ -2264,7 +2239,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	/**
 	 * Check if a preset ID is not preferred
-	 * @param {string} presetID 
+	 * @param {string} presetID
 	 * @returns {boolean} true if the preset is not preferred
 	 */
 	isUnpreferredPreset(presetID) {
