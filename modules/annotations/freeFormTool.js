@@ -28,14 +28,14 @@ OSDAnnotations.FreeFormTool = class {
         this._node = document.getElementById("annotation-cursor");
 
         this._windowCanvas = document.createElement('canvas');
-        this._windowCanvas.width  = this._windowSize.width + 2 * this.maxRadius;
-        this._windowCanvas.height = this._windowSize.height + 2 * this.maxRadius;
+        this._windowCanvas.width  = this._windowSize.width + 4 * this.maxRadius;
+        this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
         this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
         this._annotationCanvas = document.createElement('canvas');
 
-        this._annotationCanvas.width  = this._windowSize.width * 2;
-        this._annotationCanvas.height = this._windowSize.height * 2;
+        this._annotationCanvas.width  = this._windowSize.width * 3;
+        this._annotationCanvas.height = this._windowSize.height * 3;
         this._ctxAnnotationFull =  this._annotationCanvas.getContext('2d', { willReadFrequently: true });
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
@@ -92,12 +92,12 @@ OSDAnnotations.FreeFormTool = class {
     _updateCanvasSize() {
         if (this._isWindowSizeUpdated()) {
 
-            this._windowCanvas.width  = this._windowSize.width + 2 * this.maxRadius;
-            this._windowCanvas.height = this._windowSize.height + 2 * this.maxRadius;
+            this._windowCanvas.width  = this._windowSize.width + 4 * this.maxRadius;
+            this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
             this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
-            this._annotationCanvas.width  = this._windowSize.width * 2;
-            this._annotationCanvas.height = this._windowSize.height * 2;
+            this._annotationCanvas.width  = this._windowSize.width * 3;
+            this._annotationCanvas.height = this._windowSize.height * 3;
             this._ctxAnnotationFull = this._annotationCanvas.getContext('2d', { willReadFrequently: true });
             return;
         }

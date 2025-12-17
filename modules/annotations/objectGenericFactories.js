@@ -623,7 +623,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         let customText = theObject.text.trim();
         theObject.meta = theObject.meta || {};
 
-        if (this._origText !== customText && customText !== "") {
+        if (this._origText !== customText) {
             theObject.meta.category = customText;
         } else {
             theObject.text = theObject.meta?.category;
@@ -996,6 +996,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
+        theObject.set({ hoverCursor: 'default' });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1997,6 +1998,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
 
         const self = this;
+        theObject.set({ hoverCursor: 'default' });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
