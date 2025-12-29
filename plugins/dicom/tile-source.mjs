@@ -125,7 +125,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         }
 
         // if not provided, fetch
-        this.wsi = await DicomQuery.findWSIItems(this.baseUrl, this.ajaxHeaders["Authorization"], this.studyUID, this.seriesUID);
+        this.wsi = await DicomQuery.findWSIItems(this.baseUrl, XOpatUser.instance().getSecret(), this.studyUID, this.seriesUID);
         this.wsi = this.wsi[0]; // parses series for potential wsi set, take first found
 
         // Validate we have at least one pyramid level
@@ -156,17 +156,30 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         // {
         //   error: ....
         //  }
+
+        if (!this.wsi || !this.wsi.levels) {
+            return { error: "Metadata missing", imageInfo: {} };
+        }
+
+        const level0 = this.wsi.levels[0] || {};
+
+        // --- DEFAULTS --- todo show warning if used
+        const safeFrameOfRef = this.wsi.frameOfReferenceUID || `${this.seriesUID}.999`;
+        const safeMicronsX = level0.micronsX || 0.00025;
+        const safeMicronsY = level0.micronsY || 0.00025;
+
         return {
             imageInfo: {
                 studyUID: this.studyUID,
                 seriesUID: this.seriesUID,
+                frameOfReferenceUID: safeFrameOfRef,
                 previewInstanceUID: this.previewInstanceUID,
                 macroInstanceUID: this.macroInstanceUID,
                 levels: this.wsi.levels,
                 tileWidth: this.tileWidth,
                 tileHeight: this.tileHeight,
-                micronsX: this.wsi.levels[0].micronsX,
-                micronsY: this.wsi.levels[0].micronsY,
+                micronsX: safeMicronsX,
+                micronsY: safeMicronsY,
             },
             // todo patientInfo: this.patientDetails
         }

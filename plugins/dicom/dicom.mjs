@@ -43,6 +43,8 @@ addPlugin('dicom', class extends XOpatPlugin {
         this.defaultStudy   = this.getOptionOrConfiguration('studyUID');
         this.defaultSeries  = this.getOptionOrConfiguration('seriesUID');
 
+        this.lastSopInstanceUID = null;
+
         // In-memory state for future UI wiring
         this.state = {
             patients: [],                // [{ patientID, name, sex, birthDate, studies:[...]}]
@@ -147,7 +149,6 @@ addPlugin('dicom', class extends XOpatPlugin {
             }
         }, null, -1);
 
-        // === RESOLVE BACKGROUND ITEMS INTO TILE SOURCES ===
         VIEWER_MANAGER.addHandler('before-open', (evt) => {
             for (const bg of evt.background || []) {
                 const data = evt.data?.[bg.dataReference];
@@ -329,7 +330,6 @@ addPlugin('dicom', class extends XOpatPlugin {
             info.setCustomBrowser({ id: "dicom-browser", levels, bgItemGetter: (item) => {
                     const seriesUID = item.seriesUID;
                     const studyUID  = item.studyUID || this.state.activeStudy;
-                    console.log("USING", studyUID, this.state.activeStudy, seriesUID);
                     // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
                     // Example using DICOMWebTileSource:
                     const tileSource = new DICOMWebTileSource({
@@ -343,20 +343,107 @@ addPlugin('dicom', class extends XOpatPlugin {
                 }
             });
         });
+
+        this.integrateWithSingletonModule('annotations', async (module) => {
+            import('./annotation-convertor.mjs');
+
+            module.addHandler("save-annotations", async (e) => {
+                const token = XOpatUser.instance().getSecret();
+
+                // 1. Get Context (Slide Metadata)
+                const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
+                if (!tiledImage || !tiledImage.source || typeof tiledImage.source.getMetadata !== 'function') {
+                    Dialogs.show("Cannot save: No active DICOM slide found.", 5000, Dialogs.MSG_ERR);
+                    return;
+                }
+
+                const meta = tiledImage.source.getMetadata().imageInfo;
+                if (!meta.micronsX || !meta.frameOfReferenceUID) {
+                    Dialogs.show("Cannot save: Missing PixelSpacing or FrameOfReferenceUID.", 5000, Dialogs.MSG_ERR);
+                    return;
+                }
+
+                // Add patient context for the converter
+                meta.patient = this.state.activePatientDetails;
+
+                // 2. Get Annotations using the new DICOM converter
+                try {
+                    const exportOptions = {
+                        format: "dicom",
+                        serialize: false,
+                        meta: meta
+                    };
+
+                    // Use the converter to transform OSD objects to DICOM structure
+                    const conversion = await OSDAnnotations.Convertor.encodePartial(exportOptions, module.fabric);
+
+                    if (!conversion.objects || conversion.objects.length === 0) {
+                        return;
+                    }
+
+                    // 3. Finalize: Wrap structure into DICOM P10 Binary
+                    const dicomBuffer = OSDAnnotations.Convertor.encodeFinalize("dicom", conversion);
+
+                    // 4. Upload via STOW-RS
+                    const response = await DicomTools.stow(
+                        this.serviceUrl,
+                        token,
+                        meta.studyUID,
+                        dicomBuffer
+                    );
+
+                    console.log("STOW Response:", response);
+                    e.setHandled('Annotations saved successfully.');
+                } catch (ex) {
+                    console.error("DICOM Save Failed:", ex);
+                }
+            });
+
+            // Fetch & load available data
+            const token = XOpatUser.instance().getSecret();
+            const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
+
+            if (tiledImage?.source) {
+                const meta = tiledImage.source.getMetadata().imageInfo;
+
+                try {
+                    Dialogs.show("Loading annotations...", 2000);
+
+                    // 1. Find latest SR
+                    const latestSOP = await DicomTools.findLatestAnnotation(this.serviceUrl, token, meta.studyUID);
+                    if (latestSOP) {
+                        // 2. Fetch SR Instance (P10 Binary)
+                        const url = `${this.serviceUrl}/studies/${meta.studyUID}/series/${latestSOP.seriesUID}/instances/${latestSOP.sopUID}`;
+                        const res = await fetch(url, {
+                            headers: {Accept: 'application/dicom', Authorization: `Bearer ${token}`}
+                        });
+                        const buffer = await res.arrayBuffer();
+
+                        // 3. Decode using the Converter
+                        const options = {format: "dicom", meta: meta};
+                        const imported = await OSDAnnotations.Convertor.decode(options, buffer, module.fabric);
+
+                        // 4. Inject into viewer
+                        if (imported && imported.objects) {
+                            await module.fabric.loadObjects(imported); // Or module.import(imported)
+                            Dialogs.show(`Loaded ${imported.objects.length} annotations.`, 3000);
+                        }
+                    }
+                } catch (ex) {
+                    console.error("Load failed", ex);
+                    Dialogs.show("Failed to load annotations.", 5000, Dialogs.MSG_ERR);
+                }
+            }
+
+        })
     }
-
-    // ────────────────────────────────────────────────────────────────────────────
-    // QIDO helpers & metadata parsing
-    // ────────────────────────────────────────────────────────────────────────────
-
-    // Base QIDO fetch (kept as-is)
 
     async _supportsPatients(serviceUrl, authToken) {
         try {
             const url = new URL(`${serviceUrl}/patients`);
             url.searchParams.set('limit', '1');
             const res = await fetch(url.toString(), {
-                headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
+                headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization:  authToken } : {}) }
             });
             // GCP will 404/400 here; DICOMweb servers that implement /patients should 200
             return res.ok;
@@ -452,7 +539,7 @@ addPlugin('dicom', class extends XOpatPlugin {
         const whenISO = (studyDate || studyTime)
             ? DicomTools.toISODateTime(studyDate, studyTime) : null;
 
-        const label = desc || (whenISO ? `Study ${whenISO.slice(0,10)}` : `Study ${tail(studyUID, 6)}`);
+        const label = desc || (whenISO ? `Study ${whenISO.slice(0,10)}` : `Study ${studyUID}`);
 
         // Chips you may show in UI (optional)
         const chips = {
@@ -509,16 +596,20 @@ addPlugin('dicom', class extends XOpatPlugin {
         const arr = await DicomTools.qido(url, authToken);
         const row = arr?.[0];
         if (!row) return null;
-        const v = DicomTools.v;
-        return { studyUID: v(row, '0020000D'), seriesUID: v(row, '0020000E') };
+        return { studyUID: DicomTools.v(row, '0020000D'), seriesUID: DicomTools.v(row, '0020000E') };
     }
 
     async seriesConfigForStudy(serviceUrl, studyUID, authToken) {
-        const v = DicomTools.v;
         const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series`;
-        const json = await DicomTools.qidoSafe(base, authToken, '0020000D,0020000E'); // minimal
+        const json = await DicomTools.qidoSafe(base, authToken, '0020000D,0020000E,00080060');
+
         return json
-            .map(ds => ({ studyUID: v(ds, '0020000D') || studyUID, seriesUID: v(ds, '0020000E') }))
+            .filter(ds => {
+                const mod = DicomTools.v(ds, '00080060');
+                // filter out non-image types like Key Objects (KO) or Presentation States (PR)
+                return mod !== 'SR' && mod !== 'KO' && mod !== 'PR' && mod !== 'SEG' && mod !== 'RTSTRUCT';
+            })
+            .map(ds => ({ studyUID: DicomTools.v(ds, '0020000D') || studyUID, seriesUID: DicomTools.v(ds, '0020000E') }))
             .filter(x => x.seriesUID);
     }
 

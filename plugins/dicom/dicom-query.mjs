@@ -102,6 +102,51 @@ export default class DicomTools {
         try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
     }
 
+    static async stow(serviceUrl, authToken, studyUID, dicomData) {
+        const url = `${serviceUrl}/studies/${studyUID}`;
+        const boundary = 'DICOM_STOW_BOUNDARY';
+
+        // 1. Construct Body
+        const header =
+            `--${boundary}\r\n` +
+            `Content-Type: application/dicom\r\n` +
+            `\r\n`;
+        const footer = `\r\n--${boundary}--`;
+
+        const headerBuf = new TextEncoder().encode(header);
+        const footerBuf = new TextEncoder().encode(footer);
+
+        const body = new Uint8Array(headerBuf.length + dicomData.byteLength + footerBuf.length);
+        body.set(headerBuf, 0);
+        body.set(new Uint8Array(dicomData), headerBuf.length);
+        body.set(footerBuf, headerBuf.length + dicomData.byteLength);
+
+        // 2. Send Request with CORRECT HEADERS
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
+                'Accept': 'application/dicom+json', // <--- THIS FIXES THE CRASH
+                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+            },
+            body: body
+        });
+
+        // 3. Handle Response
+        if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(`STOW-RS failed (${res.status}): ${txt}`);
+        }
+
+        // Safety check: verify response is actually JSON before parsing
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.includes("json")) {
+            return await res.json();
+        } else {
+            return { status: "success", message: "Upload complete (non-JSON response)" };
+        }
+    }
+
     /* WSI TOOLS */
 
     static isWSIInstance(ds) {
@@ -149,6 +194,73 @@ export default class DicomTools {
         return `${yyyy}-${mm}-${dd}${timePart}`;
     }
 
+    static async findLatestAnnotation(serviceUrl, authToken, studyUID) {
+        // Request Modality (00080060) and Dates explicitly
+        const seriesUrl = `${serviceUrl}/studies/${studyUID}/series?includefield=00080060&includefield=00080021&includefield=00080031`;
+
+        try {
+            const seriesList = await this.qidoSafe(seriesUrl, authToken);
+            if (!seriesList || !seriesList.length) return null;
+
+            // Filter for SR (Structured Report) series client-side
+            const srSeriesList = seriesList.filter(s => {
+                const mod = this.v(s, '00080060');
+                return mod === 'SR';
+            });
+
+            if (srSeriesList.length === 0) {
+                console.log("No SR series found in this study.");
+                return null;
+            }
+
+            let allCandidates = [];
+
+            // Check every SR series for instances
+            for (const series of srSeriesList) {
+                const seriesUID = this.v(series, '0020000E');
+
+                // Fetch instances with date tags
+                const instancesUrl = `${serviceUrl}/studies/${studyUID}/series/${seriesUID}/instances?includefield=00080023&includefield=00080033&includefield=00080012&includefield=00080013`;
+
+                const instances = await this.qidoSafe(instancesUrl, authToken);
+                if (instances && instances.length) {
+                    // Attach SeriesUID so we can use it later
+                    instances.forEach(i => { i._parentSeriesUID = seriesUID; });
+                    allCandidates.push(...instances);
+                }
+            }
+
+            if (allCandidates.length === 0) return null;
+
+            // Sort: Newest First
+            // Priortize Content Date/Time (SR specific), fallback to Instance Creation
+            allCandidates.sort((a, b) => {
+                const getDt = (item) => {
+                    const clean = (val) => (val || '').replace(/[^0-9]/g, '');
+                    const date = clean(this.v(item, '00080023')) ||
+                        clean(this.v(item, '00080012')) ||
+                        clean(this.v(item, '00080021')) || '00000000';
+                    const time = clean(this.v(item, '00080033')) ||
+                        clean(this.v(item, '00080013')) ||
+                        clean(this.v(item, '00080031')) || '000000';
+                    return Number(date + time);
+                };
+                return getDt(b) - getDt(a);
+            });
+
+            const latest = allCandidates[0];
+            console.log(`Found ${allCandidates.length} annotations. Newest:`, latest, allCandidates);
+
+            return {
+                seriesUID: latest._parentSeriesUID,
+                sopUID: this.v(latest, '00080018')
+            };
+
+        } catch (e) {
+            console.warn("Error finding annotations:", e);
+            return null;
+        }
+    }
     /* PRIVATE */
 
     static async groupSeriesInstances(serviceUrl, authToken, instancesObject, seriesObject) {
@@ -242,9 +354,14 @@ export default class DicomTools {
 
     static _ingestInstanceMetadata(instanceUID, instance, metadata, wsiInstance) {
         const attrs = metadata[0] || {};
+
+        if (!wsiInstance.frameOfReferenceUID) {
+            wsiInstance.frameOfReferenceUID = this.v(attrs, "00200052");
+        }
+
         const numberOfFrames = this.iv(attrs, "00280008");
 
-        // Heuristics for role detection (single frame, specialized ImageType)
+        // ... (Keep existing role detection logic) ...
         const imageType = this.tag(attrs, "00080008")?.map(x => x.toUpperCase());
         const isSingleFrame = (numberOfFrames || 1) === 1;
         if (isSingleFrame && imageType?.length) {
@@ -253,64 +370,76 @@ export default class DicomTools {
             if (!wsiInstance.macroInstanceUID && /LABEL|MACRO/.test(tag)) wsiInstance.macroInstanceUID = instanceUID;
         }
 
-        // Try to read pyramid definition
         const totalWidth  = this.iv(attrs, "00480006");
         const totalHeight = this.iv(attrs, "00480007");
         const tileWidth   = this.iv(attrs, "00280011");
         const tileHeight  = this.iv(attrs, "00280010");
 
-        const perFrameFG = attrs["52009230"]?.Value || null; // Per‑Frame Functional Groups
+        const perFrameFG = attrs["52009230"]?.Value || null;
 
-        let spacingArr = attrs["00280030"]?.Value;
+        // 2. ROBUST PixelSpacing FINDER
+        let spacingArr = attrs["00280030"]?.Value; // Standard PixelSpacing
         if (!spacingArr) {
-            // Enhanced/WSI: Shared Functional Groups -> Pixel Measures -> PixelSpacing
+            // Check Shared Functional Groups -> Pixel Measures
             const sfg = attrs["52009229"]?.Value?.[0];
             const pms = sfg?.["00289110"]?.Value?.[0];
-            spacingArr = pms?.["00280030"]?.Value;                 // PixelSpacing
+            spacingArr = pms?.["00280030"]?.Value;
+        }
+        if (!spacingArr) {
+            // Fallbacks for converted images
+            const nominal = this.fv(attrs, "00182010"); // Nominal Scanned Pixel Spacing
+            if (nominal) spacingArr = [nominal, nominal];
+        }
+        if (!spacingArr) {
+            const imager = this.fv(attrs, "00181164"); // Imager Pixel Spacing
+            if (imager) spacingArr = [imager, imager];
         }
 
         if (perFrameFG && numberOfFrames) {
             for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
                 const fg = perFrameFG[frameIndex];
-                const planePos      = this.v(fg, "0048021A"); // PlanePositionSlideSequence
+                const planePos = this.v(fg, "0048021A");
                 if (!planePos) continue;
-                const pixelMeasures = this.v(fg, "00289110"); // PixelMeasuresSequence
+
+                const pixelMeasures = this.v(fg, "00289110");
                 let measures = pixelMeasures?.["00280030"]?.Value || spacingArr;
+
+                // Fallback if still missing
                 if (!measures) {
-                    console.warn("No pixel measures found for frame", frameIndex);
-                    const pixelSpacing = this.fv(attrs, "00181164");  // or ImagerPixelSpacing at worst
-                    measures = [pixelSpacing, pixelSpacing];
+                    measures = [0.00025, 0.00025]; // Default to 0.25 microns (approx 40x)
                 }
 
                 const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
                 level.micronsX = measures[0];
                 level.micronsY = measures[1];
                 level.instanceUID = instanceUID;
-                level.frames = {};
-                const frames = level.frames;
-                // Map tile (x,y) -> { frameNumber, instanceUID }
+                level.frames = level.frames || {};
+
                 const row = this.iv(fg, "0048021E") || this.iv(planePos, "0048021E");
                 const col = this.iv(fg, "0048021F") || this.iv(planePos, "0048021F");
                 const tileX = Math.floor((col ?? 0) / (tileWidth || 1));
                 const tileY = Math.floor((row ?? 0) / (tileHeight || 1));
-                frames[`${tileX}_${tileY}`] = frameIndex + 1
+                level.frames[`${tileX}_${tileY}`] = frameIndex + 1;
             }
             return;
         }
 
-        // Fallback: a single‑resolution tiled instance without per‑frame FG (row‑major)
         if (totalWidth && totalHeight && tileWidth && tileHeight && numberOfFrames > 1) {
             const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
-            // todo read microns
-            level.instanceUID = instanceUID;
-            level.frames = {};
-            const frames = level.frames;
 
+            // Ensure single-instance levels also get the spacing
+            if (!level.micronsX && spacingArr) {
+                level.micronsX = spacingArr[0];
+                level.micronsY = spacingArr[1];
+            }
+
+            level.instanceUID = instanceUID;
+            level.frames = level.frames || {};
             const tilesX = Math.ceil(totalWidth / tileWidth);
             const tilesY = Math.ceil(totalHeight / tileHeight);
             if (tilesX * tilesY === numberOfFrames) {
                 for (let y = 0; y < tilesY; y++) for (let x = 0; x < tilesX; x++) {
-                    frames[`${x}_${y}`] = y * tilesX + x + 1;
+                    level.frames[`${x}_${y}`] = y * tilesX + x + 1;
                 }
             }
         }

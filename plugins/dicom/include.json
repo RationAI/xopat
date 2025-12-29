@@ -7,6 +7,7 @@
   // Provide service URL of your DICOM API
   "serviceUrl": "http://localhost:8042/dicom-web",
   "includes": [
+    "dcmjs.min.js",
     "dicom.mjs"
   ],
   // Default study to open
