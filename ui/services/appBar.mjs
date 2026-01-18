@@ -14,6 +14,7 @@ export class AppBar {
         this.context = $("#top-side-left");
         this.menu = new MainPanel({
                 id: "visual-menu",
+                collapsed: false, // MODIFIED: Start collapsed to save space
                 orientation: Menu.ORIENTATION.TOP,
                 buttonSide: Menu.BUTTONSIDE.LEFT,
                 rounded: Menu.ROUNDED.ENABLE,
@@ -43,10 +44,11 @@ export class AppBar {
                 orientation: Menu.ORIENTATION.TOP,
                 buttonSide: Menu.BUTTONSIDE.LEFT,
                 rounded: Menu.ROUNDED.ENABLE,
+                collapsed: true,
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
+            //{ id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [

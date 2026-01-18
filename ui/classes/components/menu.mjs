@@ -6,7 +6,7 @@ import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Dropdown } from "../elements/dropdown.mjs";
 
-const ui = { Join, Div, Button, MenuTab };
+const ui = { Join, Div, Button, MenuTab, Dropdown };
 const { div, span, h3 } = van.tags()
 
 /**
@@ -58,7 +58,23 @@ class Menu extends BaseComponent {
 
 
     create() {
-        this.header.attachTo(this);
+        if (this.options.collapsed) {
+            const dropdown = new Dropdown({
+                id: this.id + "-dropdown",
+                icon: "fa-bars",
+                items: Object.values(this.tabs).map(tab => ({
+                    id: tab.id,
+                    label: tab.title,
+                    icon: tab.icon,
+                    onClick: () => {
+                        console.log(tab);}
+                }))
+            });
+            dropdown.attachTo(this);
+        }
+        else{
+            this.header.attachTo(this);
+        }
         this.body.attachTo(this);
         return div(
             { ...this.commonProperties, ...this.extraProperties },
