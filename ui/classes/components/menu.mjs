@@ -6,7 +6,7 @@ import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Dropdown } from "../elements/dropdown.mjs";
 
-const ui = { Join, Div, Button, MenuTab };
+const ui = { Join, Div, Button, MenuTab, Dropdown };
 const { div, span, h3 } = van.tags()
 
 /**

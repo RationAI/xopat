@@ -35,8 +35,21 @@ export class AppBar {
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
 
-        // ... (Rest of file remains unchanged)
-
+        if (window.innerWidth < 640) {
+            this.rightMenu = new MainPanel({
+                    id: "top-user-buttons-menu",
+                    orientation: Menu.ORIENTATION.TOP,
+                    buttonSide: Menu.BUTTONSIDE.LEFT,
+                    rounded: Menu.ROUNDED.ENABLE,
+                    extraClasses: {bg: "bg-transparent"},
+                },{
+                    id: "Menu", icon: "fa-bars",
+                    body: [], class: Dropdown
+                }
+            );
+            this.RightSideMenu.init(this.rightMenu.getTab("Menu"));
+        }
+        else {
         // Right part: static
         this.rightMenu = new MainPanel({
                 id: "top-user-buttons-menu",
@@ -46,7 +59,7 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
+            //{ id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
@@ -75,6 +88,7 @@ export class AppBar {
                 ], class: Dropdown},
             { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
         );
+        }
         this.rightMenu.attachTo($("#top-side-left-user"));
         this.rightMenu.set(Menu.DESIGN.ICONONLY);
 
@@ -140,6 +154,42 @@ export class AppBar {
 
     isFullScreen() {
         return this._fullscreen;
+    }
+
+    RightSideMenu = {
+        init(subMenu) {
+            this.subMenu = subMenu;
+            this.subMenu.addItem({ id: "banner", icon: "fa-warning", label: "Banner", body: undefined, class: MenuTabBanner })
+            this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} })
+            this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
+            this.subMenu.addItem({
+                                id: 'share',
+                                label: $.t('main.bar.share'),
+                                icon: 'fa-share-nodes',
+                                children: [
+                                            {
+                                                id: "global-export",
+                                                domID: true,
+                                                label: $.t("main.bar.exportFile"),
+                                                hint: $.t("main.bar.explainExportFile"),
+                                                onClick: () => {
+                                                    UTILITIES.export();
+                                                },
+                                                icon: "fa-download"
+                                            },
+                                            {
+                                                id: "copy-url-inner",
+                                                domID: true,
+                                                label: $.t("main.bar.exportUrl"),
+                                                hint: $.t("main.bar.explainExportUrl"),
+                                                onClick: () => {
+                                                    UTILITIES.copyUrlToClipboard();
+                                                },
+                                                icon: "fa-link"
+                                            }
+                                        ],
+                            });
+        },
     }
 
     View = {

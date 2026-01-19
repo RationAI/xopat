@@ -139,6 +139,20 @@ button div {
     z-index: 4;
     background-color: rgba(0, 0, 0, 0.5);
 }
+body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
+    z-index: 0 !important;
+    pointer-events: none !important;
+}
+
+#fullscreen-menu-content{
+    z-index: 1008;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: auto;
+}
 
 .ui-menu{
     pointer-events: none;
