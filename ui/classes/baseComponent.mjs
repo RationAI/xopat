@@ -64,6 +64,12 @@ export class BaseComponent {
      */
     constructor(options, ...children) {
 
+        window.addEventListener('app:layout-change', (e) => {
+            // Každá komponenta se sama rozhodne, co udělá
+            console.log(`Layout change event received in component ${this.id}`);
+            this.onLayoutChange?.(e.detail);
+        });
+
         if (typeof options === "string" || options instanceof Node || options instanceof BaseComponent) {
             children.unshift(options);
             options = undefined;

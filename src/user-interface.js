@@ -1172,4 +1172,16 @@ ${label}
             }
         },
     };
+
+    let resizeTimer;
+    // resize handler to notify layout changes
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            // Vyšle globální zprávu
+            window.dispatchEvent(new CustomEvent('app:layout-change', { 
+                detail: { width: window.innerWidth } 
+            }));
+        }, 200);
+    });
 }
