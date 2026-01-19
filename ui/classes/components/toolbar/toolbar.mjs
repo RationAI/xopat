@@ -404,8 +404,8 @@ class Toolbar extends BaseComponent {
             this._outerEl.style.top  = `${t}px`;
 
             // remember snapped pos
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
 
             // let FloatingManager re-clamp if needed (top bar, margins, etc.)
             if (this._fmToken && UI.Services.FloatingManager.clampNow) {
@@ -443,6 +443,21 @@ class Toolbar extends BaseComponent {
             tab.contentDiv?.setClass("display", "display-none");
         }
         this._focused = undefined;
+    }
+
+    onLayoutChange(details) {
+        const root = this._outerEl;
+        if (details.width < 600) {
+            this._setOrientation("horizontal", true);
+            this.setClass("mobile", "mobile");
+            root.querySelector(".handle")?.classList.add("hidden")
+        } else {
+            this._setOrientation("horizontal", false);
+            this.setClass("mobile", "");
+            this._outerEl.style.left = `50px`;
+            this._outerEl.style.top  = `50px`;
+            root.querySelector(".handle")?.classList.remove("hidden")
+        }
     }
 }
 

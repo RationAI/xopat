@@ -223,6 +223,12 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     cursor: grabbing;
 }
 
+.draggable.mobile {
+    position: relative !important;
+    top: 0px !important; 
+    left: 0px !important;     
+}
+
 .opaque-bg {
     background-color: rgba(0, 0, 0, 0.406);
 }
