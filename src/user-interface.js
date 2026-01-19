@@ -826,6 +826,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                 );
                 menu.attachTo(document.getElementById('toolbars-container'));
+                menu.onLayoutChange({width: window.innerWidth});
 
                 // if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                 //     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));

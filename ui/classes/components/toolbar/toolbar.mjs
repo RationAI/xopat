@@ -448,15 +448,13 @@ class Toolbar extends BaseComponent {
     onLayoutChange(details) {
         const root = this._outerEl;
         if (details.width < 600) {
-            this._setOrientation("horizontal", true);
             this.setClass("mobile", "mobile");
             root.querySelector(".handle")?.classList.add("hidden")
+            this._setOrientation("horizontal", true);
         } else {
-            this._setOrientation("horizontal", false);
             this.setClass("mobile", "");
-            this._outerEl.style.left = `50px`;
-            this._outerEl.style.top  = `50px`;
             root.querySelector(".handle")?.classList.remove("hidden")
+            this._setOrientation("horizontal", false);
         }
     }
 }
