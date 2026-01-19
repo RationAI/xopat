@@ -165,7 +165,7 @@ export class AppBar {
             this.subMenu.addItem({
                                 id: 'share',
                                 label: $.t('main.bar.share'),
-                                icon: 'fa-share-nodes', // Example icon for share
+                                icon: 'fa-share-nodes',
                                 children: [
                                             {
                                                 id: "global-export",
