@@ -58,23 +58,7 @@ class Menu extends BaseComponent {
 
 
     create() {
-        if (this.options.collapsed) {
-            const dropdown = new Dropdown({
-                id: this.id + "-dropdown",
-                icon: "fa-bars",
-                items: Object.values(this.tabs).map(tab => ({
-                    id: tab.id,
-                    label: tab.title,
-                    icon: tab.icon,
-                    onClick: () => {
-                        console.log(tab);}
-                }))
-            });
-            dropdown.attachTo(this);
-        }
-        else{
-            this.header.attachTo(this);
-        }
+        this.header.attachTo(this);
         this.body.attachTo(this);
         return div(
             { ...this.commonProperties, ...this.extraProperties },
