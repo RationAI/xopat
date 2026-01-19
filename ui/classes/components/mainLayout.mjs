@@ -276,9 +276,11 @@ export class MainLayout extends BaseComponent {
         if (!this._dockEl) return;
         if (this.collapsed) {
             this._dockEl.style.width = "0px";
+            this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
         } else {
             this._dockEl.style.width = `${this.widthPx}px`;
+            this._dockEl.style.height = "";
             this._handleEl.style.display = "";
         }
     }
