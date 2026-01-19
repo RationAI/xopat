@@ -48,6 +48,11 @@ export class AppBar {
             },{
                 id: "Menu", icon: "fa-bars",
                 body: [], class: Dropdown
+            },{
+                id: "Global-Menu-button", icon: "fa-arrow-right", title: "Expand Menu",
+                onClick: function () {
+                    window.LAYOUT.toggle();
+                }
             }
         );
         this.rightMenuSideCollapsed.init(this.rightMenuCollapsed.getTab("Menu"));

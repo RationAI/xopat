@@ -56,6 +56,11 @@ export class MainLayout extends BaseComponent {
         this.collapseBreakpointPx = options.collapseBreakpointPx ?? 900;
         this.collapsed = false;
 
+        // fullscreen-on-narrow state
+        this._isFullscreen = false;
+        this._prevViewerDisplay = null;
+        this._prevDockInlineStyles = null;
+
         this._tabsArr = [];
         if (Array.isArray(options.tabs)) this._tabsArr.push(...options.tabs);
         this._menu = options.menu || null;
@@ -127,7 +132,119 @@ export class MainLayout extends BaseComponent {
     /** Expand the dock. */
     expand() { this.collapsed = false; this._applyVisibility(); }
     /** Toggle the dock collapsed/expanded state. */
-    toggle() { this.collapsed ? this.expand() : this.collapse(); }
+    toggle() {
+        const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
+        if (narrow) {
+            this.toggleFullscreen();
+        } else {
+            this.collapsed ? this.expand() : this.collapse();
+        }
+    }
+
+    /** Toggle fullscreen overlay when in narrow viewport. */
+    toggleFullscreen() {
+        this._isFullscreen ? this._closeFullscreen() : this._openFullscreen();
+    }
+
+    _openFullscreen() {
+        if (!this._dockEl || !this._viewerEl || this._isFullscreen) return;
+        this._isFullscreen = true;
+        // save inline state to restore later
+        this._prevViewerDisplay = this._viewerEl.style.display || "";
+        // also save the OSd (image) element display and top-side styles so we can keep top panel visible
+        const osdEl = document.getElementById('osd');
+        this._prevOsdDisplay = osdEl ? (osdEl.style.display || '') : null;
+        this._osdElement = osdEl;
+        const topSide = document.getElementById('top-side');
+        this._topSideElement = topSide;
+        if (topSide && !topSide.getAttribute('data-prev-style')) {
+            const prev = {
+                position: topSide.style.position || '',
+                top: topSide.style.top || '',
+                left: topSide.style.left || '',
+                width: topSide.style.width || '',
+                zIndex: topSide.style.zIndex || ''
+            };
+            topSide.setAttribute('data-prev-style', JSON.stringify(prev));
+        }
+        this._prevDockInlineStyles = {
+            position: this._dockEl.style.position || "",
+            top: this._dockEl.style.top || "",
+            left: this._dockEl.style.left || "",
+            width: this._dockEl.style.width || "",
+            height: this._dockEl.style.height || "",
+            zIndex: this._dockEl.style.zIndex || "",
+            overflow: this._dockEl.style.overflow || ""
+        };
+
+        // apply fullscreen styles to dock and hide viewer
+        this._dockEl.style.position = "fixed";
+        this._dockEl.style.top = "0";
+        this._dockEl.style.left = "0";
+        this._dockEl.style.width = "100%";
+        this._dockEl.style.height = "100%";
+        this._dockEl.style.zIndex = "9999";
+        this._dockEl.style.overflow = "auto";
+        // hide only the image/container, keep top-side visible
+        if (this._osdElement) this._osdElement.style.display = "none";
+        // add top padding so content is not hidden under pinned top-side
+        if (this._topSideElement) {
+            const rect = this._topSideElement.getBoundingClientRect();
+            const topH = Math.ceil(rect.height || 0);
+            // save previous paddingTop
+            this._prevDockPaddingTop = this._dockEl.style.paddingTop || "";
+            this._dockEl.style.paddingTop = topH + "px";
+        }
+        // pin top-side to fixed so it stays visible above the fullscreen dock
+        if (this._topSideElement) {
+            this._topSideElement.style.position = 'fixed';
+            this._topSideElement.style.top = '0';
+            this._topSideElement.style.left = '0';
+            this._topSideElement.style.width = '100%';
+            this._topSideElement.style.zIndex = '10001';
+        }
+        try { document.documentElement.style.overflow = "hidden"; } catch (e) {}
+    }
+
+    _closeFullscreen() {
+        if (!this._dockEl || !this._viewerEl || !this._isFullscreen) return;
+        this._isFullscreen = false;
+        const s = this._prevDockInlineStyles || {};
+        this._dockEl.style.position = s.position;
+        this._dockEl.style.top = s.top;
+        this._dockEl.style.left = s.left;
+        this._dockEl.style.width = s.width;
+        this._dockEl.style.height = s.height;
+        this._dockEl.style.zIndex = s.zIndex;
+        this._dockEl.style.overflow = s.overflow;
+        // restore osd (image) display instead of whole viewer
+        if (this._osdElement && this._prevOsdDisplay !== null) this._osdElement.style.display = this._prevOsdDisplay;
+        else this._viewerEl.style.display = this._prevViewerDisplay;
+        // restore dock paddingTop
+        if (typeof this._prevDockPaddingTop !== 'undefined') {
+            this._dockEl.style.paddingTop = this._prevDockPaddingTop;
+            delete this._prevDockPaddingTop;
+        }
+        try { document.documentElement.style.overflow = ""; } catch (e) {}
+        // restore top-side previous inline styles
+        if (this._topSideElement) {
+            const prevAttr = this._topSideElement.getAttribute('data-prev-style');
+            if (prevAttr) {
+                try {
+                    const prev = JSON.parse(prevAttr);
+                    this._topSideElement.style.position = prev.position || '';
+                    this._topSideElement.style.top = prev.top || '';
+                    this._topSideElement.style.left = prev.left || '';
+                    this._topSideElement.style.width = prev.width || '';
+                    this._topSideElement.style.zIndex = prev.zIndex || '';
+                } catch (e) {}
+                this._topSideElement.removeAttribute('data-prev-style');
+            }
+        }
+        // ensure layout classes and visibility are correct after restoring
+        this._applyResponsiveLayout();
+        this._updateDockVisibility();
+    }
 
     /** ---- internals ---- */
     /** @private */
@@ -173,16 +290,17 @@ export class MainLayout extends BaseComponent {
 
         this._shellEl.classList.toggle("flex-col", narrow);
         this._shellEl.classList.toggle("flex-row", !narrow);
+        this._viewerEl.style.order = this.position === "left" ? "1" : "0";
+        this._dockEl.style.order = this.position === "left" ? "0" : "2";
+        this._applyVisibility();
 
         if (narrow) {
-            this._viewerEl.style.order = "0";
-            this._dockEl.style.order = "1";
-            this._dockEl.style.width = "100%";
-            this._handleEl.style.display = "none";
+            // default collapsed on narrow; fullscreen may be toggled separately
+            this.collapse();
         } else {
-            this._viewerEl.style.order = this.position === "left" ? "1" : "0";
-            this._dockEl.style.order = this.position === "left" ? "0" : "2";
-            this._applyVisibility();
+            // leaving narrow viewport: ensure any fullscreen overlay is closed and viewer restored
+            if (this._isFullscreen) this._closeFullscreen();
+            this.expand();
         }
     }
 
@@ -272,5 +390,11 @@ export class MainLayout extends BaseComponent {
         this._updateDockVisibility();
 
         return shell;
+    }
+
+    onLayoutChange(details) {
+        console.log("Layout change detected in MainLayout:", details);
+        this._applyResponsiveLayout();
+
     }
 }
