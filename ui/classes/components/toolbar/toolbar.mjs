@@ -414,7 +414,7 @@ class Toolbar extends BaseComponent {
         }
 
         // --- orientation: vertical near a side edge, else horizontal ---
-        if (this._horizontalOnly) {
+        if (this._horizontalOnly || window.innerWidth < 600) {
             this._setOrientation("horizontal", force);
             return;
         }
