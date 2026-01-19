@@ -66,7 +66,6 @@ export class BaseComponent {
 
         window.addEventListener('app:layout-change', (e) => {
             // Každá komponenta se sama rozhodne, co udělá
-            console.log(`Layout change event received in component ${this.id}`);
             this.onLayoutChange?.(e.detail);
         });
 
