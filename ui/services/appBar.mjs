@@ -35,20 +35,21 @@ export class AppBar {
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
 
-        // ... (Rest of file remains unchanged)
-        this.rightMenu = new MainPanel({
-                id: "top-user-buttons-menu",
-                orientation: Menu.ORIENTATION.TOP,
-                buttonSide: Menu.BUTTONSIDE.LEFT,
-                rounded: Menu.ROUNDED.ENABLE,
-                extraClasses: {bg: "bg-transparent"},
-            },{
-                id: "Menu", icon: "fa-bars",
-                body: [], class: Dropdown
-            }
-        );
-
-        if (false) {
+        if (window.innerWidth < 640) {
+            this.rightMenu = new MainPanel({
+                    id: "top-user-buttons-menu",
+                    orientation: Menu.ORIENTATION.TOP,
+                    buttonSide: Menu.BUTTONSIDE.LEFT,
+                    rounded: Menu.ROUNDED.ENABLE,
+                    extraClasses: {bg: "bg-transparent"},
+                },{
+                    id: "Menu", icon: "fa-bars",
+                    body: [], class: Dropdown
+                }
+            );
+            this.RightSideMenu.init(this.rightMenu.getTab("Menu"));
+        }
+        else {
         // Right part: static
         this.rightMenu = new MainPanel({
                 id: "top-user-buttons-menu",
@@ -119,7 +120,6 @@ export class AppBar {
         this.button.attachTo($("#top-side-left-fullscreen"));
 
         // init submenus
-        this.RightSideMenu.init(this.rightMenu.getTab("Menu"));
         this.View.init(this.menu.getTab("view"));
         this.Plugins.init(this.menu.getTab("plugins"));
     }
