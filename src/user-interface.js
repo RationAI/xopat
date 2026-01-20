@@ -574,6 +574,47 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         Tooltip: UI.Services.GlobalTooltip, //alias
 
+        MobileNavBar: {
+            context: $("#mobile-navbar"),
+            bar: "",
+            init: function () {
+                
+
+                this.bar = new UI.Join({
+                    id: "mobile-navbar", 
+                    style: ui.Join.STYLE.HORIZONTAL
+                    },
+                    new UI.Button(
+                        {
+                            id: "global-menu-button", icon: "fa-arrow-right", title: "Expand global Menu",
+                            onClick: function () {
+                                window.LAYOUT.toggle();
+                                if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
+                                    VIEWER_MANAGER.menu.setClass("display", "hidden");
+                                }
+                            }
+                        }
+                    ),
+                    new UI.Button({
+                        id: "Viewer-Menu-button", icon: "fa-expand", title: "Expand viewer Menu",
+                        onClick: function () {
+                            window.LAYOUT.collapse();
+                            window.LAYOUT.closeFullscreen();
+                            if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
+                                VIEWER_MANAGER.menu.setClass("display", "");
+                                for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
+                                    VIEWER_MANAGER.menu.menu.getTab(i).open();
+                                }
+                            } else {
+                                VIEWER_MANAGER.menu.setClass("display", "hidden");
+                            }
+                        }
+                    })
+                );
+                this.bar.attachTo(this.context);
+            }
+        },
+
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
             context: $("#fullscreen-menu"),

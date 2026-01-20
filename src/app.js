@@ -438,6 +438,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     // todo make some cascading + registration strategy..
     USER_INTERFACE.AppBar.init();
     USER_INTERFACE.FullscreenMenu.init();
+    USER_INTERFACE.MobileNavBar.init();
     /**
      * Replace share button in static preview mode
      */

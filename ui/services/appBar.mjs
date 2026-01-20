@@ -48,28 +48,6 @@ export class AppBar {
             },{
                 id: "Menu", icon: "fa-bars",
                 body: [], class: Dropdown
-            },{
-                id: "Global-Menu-button", icon: "fa-arrow-right", title: "Expand Menu",
-                onClick: function () {
-                    window.LAYOUT.toggle();
-                    if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
-                        VIEWER_MANAGER.menu.setClass("display", "hidden");
-                    }
-                }
-            },{
-                id: "Viewer-Menu-button", icon: "fa-expand", title: "Expand viewer Menu",
-                onClick: function () {
-                    window.LAYOUT.collapse();
-                    window.LAYOUT.closeFullscreen();
-                    if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
-                        VIEWER_MANAGER.menu.setClass("display", "");
-                        for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
-                            VIEWER_MANAGER.menu.menu.getTab(i).open();
-                        }
-                    } else {
-                        VIEWER_MANAGER.menu.setClass("display", "hidden");
-                    }
-                }
             }
         );
         this.rightMenuSideCollapsed.init(this.rightMenuCollapsed.getTab("Menu"));
@@ -83,7 +61,6 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            //{ id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [

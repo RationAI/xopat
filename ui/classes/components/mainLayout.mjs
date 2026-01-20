@@ -361,11 +361,9 @@ export class MainLayout extends BaseComponent {
 
 <div id="fullscreen-menu" class="bg-base-100"></div>
 
-<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
+<div id="bottom-menu" style="display: flex-row; position: fixed; left: 0; bottom: 0; width: 100%; height: 20%">
     <div id="toolbars-container" style="width: 100%;"></div>
-    <div id="bottom-menu-left"></div>
-    <div id="bottom-menu-center"></div>
-    <div id="bottom-menu-right"></div>
+    <div id="mobile-navbar" style="width: 100%;"></div>
 </div>`).create());
 
         // --- dock ---
