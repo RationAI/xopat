@@ -586,30 +586,34 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     },
                     new UI.Button(
                         {
-                            id: "global-menu-button", icon: "fa-arrow-right", title: "Expand global Menu",
+                            id: "global-menu-button", 
+                            size: UI.Button.SIZE.SMALL,
                             onClick: function () {
                                 window.LAYOUT.toggle();
                                 if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
                                     VIEWER_MANAGER.menu.setClass("display", "hidden");
                                 }
                             }
-                        }
+                        }, "Global Menu"
                     ),
-                    new UI.Button({
-                        id: "Viewer-Menu-button", icon: "fa-expand", title: "Expand viewer Menu",
-                        onClick: function () {
-                            window.LAYOUT.collapse();
-                            window.LAYOUT.closeFullscreen();
-                            if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
-                                VIEWER_MANAGER.menu.setClass("display", "");
-                                for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
-                                    VIEWER_MANAGER.menu.menu.getTab(i).open();
+                    new UI.Button(
+                        {
+                            id: "viewer-menu-button", 
+                            size: UI.Button.SIZE.SMALL,
+                            onClick: function () {
+                                window.LAYOUT.collapse();
+                                window.LAYOUT.closeFullscreen();
+                                if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
+                                    VIEWER_MANAGER.menu.setClass("display", "");
+                                    for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
+                                        VIEWER_MANAGER.menu.menu.getTab(i).open();
+                                    }
+                                } else {
+                                    VIEWER_MANAGER.menu.setClass("display", "hidden");
                                 }
-                            } else {
-                                VIEWER_MANAGER.menu.setClass("display", "hidden");
                             }
-                        }
-                    })
+                        }, "Viewer Menu"
+                    ),
                 );
                 this.bar.attachTo(this.context);
             }

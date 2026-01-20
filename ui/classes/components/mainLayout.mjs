@@ -171,6 +171,19 @@ export class MainLayout extends BaseComponent {
             };
             topSide.setAttribute('data-prev-style', JSON.stringify(prev));
         }
+        const navbar = document.getElementById('mobile-navbar');
+        this._navbar = navbar;
+        if (navbar && !navbar.getAttribute('data-prev-style')) {
+            const prev = {
+                position: navbar.style.position || '',
+                bottom: navbar.style.bottom || '',
+                left: navbar.style.left || '',
+                width: navbar.style.width || '',
+                zIndex: navbar.style.zIndex || ''
+            };
+            navbar.setAttribute('data-prev-style', JSON.stringify(prev));
+        }
+
         this._prevDockInlineStyles = {
             position: this._dockEl.style.position || "",
             top: this._dockEl.style.top || "",
@@ -206,6 +219,21 @@ export class MainLayout extends BaseComponent {
             this._topSideElement.style.left = '0';
             this._topSideElement.style.width = '100%';
             this._topSideElement.style.zIndex = '10001';
+        }
+        if (this._navbar) {
+            const rect = this._navbar.getBoundingClientRect();
+            const bottomH = Math.ceil(rect.bottom || 0);
+            // save previous paddingTop
+            this._prevDockPaddingBottom = this._dockEl.style.paddingBottom || "";
+            this._dockEl.style.paddingBottom = bottomH + "px";
+        }
+        // pin top-side to fixed so it stays visible above the fullscreen dock
+        if (this._navbar) {
+            this._navbar.style.position = 'fixed';
+            this._navbar.style.bottom = '0';
+            this._navbar.style.left = '0';
+            this._navbar.style.width = '100%';
+            this._navbar.style.zIndex = '10001';
         }
         try { document.documentElement.style.overflow = "hidden"; } catch (e) {}
     }
@@ -243,6 +271,20 @@ export class MainLayout extends BaseComponent {
                     this._topSideElement.style.zIndex = prev.zIndex || '';
                 } catch (e) {}
                 this._topSideElement.removeAttribute('data-prev-style');
+            }
+        }
+        if (this._navbar) {
+            const prevAttr = this._navbar.getAttribute('data-prev-style');
+            if (prevAttr) {
+                try {
+                    const prev = JSON.parse(prevAttr);
+                    this._navbar.style.position = prev.position || '';
+                    this._navbar.style.bottom = prev.bottom || '';
+                    this._navbar.style.left = prev.left || '';
+                    this._navbar.style.width = prev.width || '';
+                    this._navbar.style.zIndex = prev.zIndex || '';
+                } catch (e) {}
+                this._navbar.removeAttribute('data-prev-style');
             }
         }
         // ensure layout classes and visibility are correct after restoring
@@ -360,10 +402,9 @@ export class MainLayout extends BaseComponent {
 </div>
 
 <div id="fullscreen-menu" class="bg-base-100"></div>
-
-<div id="bottom-menu" style="display: flex-row; position: fixed; left: 0; bottom: 0; width: 100%; height: 20%">
-    <div id="toolbars-container" style="width: 100%;"></div>
-    <div id="mobile-navbar" style="width: 100%;"></div>
+<div id="mobile-navbar" class="flex-row w-full glass" style="display: flex; position: fixed; bottom: 0; left: 0; align-items: flex-start; height: 35px; pointer-events: auto;"></div>
+<div id="bottom-menu" style="display: flex-row; position: fixed; left: 0; bottom: 45px; width: 100%; flex-direction: column-reverse;">
+    <div id="toolbars-container" style="width: 100%; position: fixed; left: 0; bottom: 45px;"></div>
 </div>`).create());
 
         // --- dock ---
