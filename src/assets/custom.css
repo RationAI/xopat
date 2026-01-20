@@ -229,6 +229,14 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     left: 0px !important;     
 }
 
+.right-side-menu.mobile {
+    width: 100% !important;
+    height: 100% !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+}
+
 .opaque-bg {
     background-color: rgba(0, 0, 0, 0.406);
 }

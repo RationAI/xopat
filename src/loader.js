@@ -1864,6 +1864,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         constructor(CONFIG) {
             super();
             this.CONFIG = CONFIG;
+            this.menu = null;
             this.viewers = [];
             this.viewerMenus = {};
             this.broadcastEvents = {};
@@ -1987,14 +1988,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             const cellId = `osd-${index}`;
             const navigatorId = cellId + "-navigator";
             const cell = this.layout.attachCell(cellId, index);
-            const menu = new UI.RightSideViewerMenu(cellId, navigatorId);
+            this.menu = new UI.RightSideViewerMenu(cellId, navigatorId);
             // todo think of a better way of hosting menu within the viewer
-            if (window.innerWidth < 600) {
-                USER_INTERFACE.FullscreenMenu.menu.addTab(new UI.Div({id: "right-side-menu-mobile"}, menu.create()));
-            } else {
-                cell.append(menu.create());
-            }
-            this.viewerMenus[cellId] = menu;
+            cell.append(this.menu.create());
+            this.menu.onLayoutChange({width: window.innerWidth});
+            this.viewerMenus[cellId] = this.menu;
 
             const viewer = OpenSeadragon($.extend(
                 true,
@@ -2241,7 +2239,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
             viewer.gestureSettingsMouse.clickToZoom = false;
             new OpenSeadragon.Tools(viewer);
-            menu.init(viewer);
+            this.menu.init(viewer);
 
             /**
              * Show demo page with error message

@@ -53,6 +53,16 @@ export class AppBar {
                 onClick: function () {
                     window.LAYOUT.toggle();
                 }
+            },{
+                id: "Viewer-Menu-button", icon: "fa-expand", title: "Expand viewer Menu",
+                onClick: function () {
+                    console.log(VIEWER_MANAGER.menu);
+                    if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
+                        VIEWER_MANAGER.menu.setClass("display", "");
+                    } else {
+                        VIEWER_MANAGER.menu.setClass("display", "hidden");
+                    }
+                }
             }
         );
         this.rightMenuSideCollapsed.init(this.rightMenuCollapsed.getTab("Menu"));
