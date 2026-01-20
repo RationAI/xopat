@@ -94,6 +94,9 @@ class MultiPanelMenuTab extends MenuTab {
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px; pointer-events: auto;" },
             onClick: () => {
+                if (window.innerWidth < 600) {
+                    return;
+                }
                 this.focus();
             },
         }, inIcon, span(inText), this.pin, this.closeButton);

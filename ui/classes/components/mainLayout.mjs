@@ -146,6 +146,10 @@ export class MainLayout extends BaseComponent {
         this._isFullscreen ? this._closeFullscreen() : this._openFullscreen();
     }
 
+    closeFullscreen() {
+        this._closeFullscreen();
+    }
+
     _openFullscreen() {
         if (!this._dockEl || !this._viewerEl || this._isFullscreen) return;
         this._isFullscreen = true;

@@ -52,13 +52,20 @@ export class AppBar {
                 id: "Global-Menu-button", icon: "fa-arrow-right", title: "Expand Menu",
                 onClick: function () {
                     window.LAYOUT.toggle();
+                    if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
+                        VIEWER_MANAGER.menu.setClass("display", "hidden");
+                    }
                 }
             },{
                 id: "Viewer-Menu-button", icon: "fa-expand", title: "Expand viewer Menu",
                 onClick: function () {
-                    console.log(VIEWER_MANAGER.menu);
+                    window.LAYOUT.collapse();
+                    window.LAYOUT.closeFullscreen();
                     if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
                         VIEWER_MANAGER.menu.setClass("display", "");
+                        for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
+                            VIEWER_MANAGER.menu.menu.getTab(i).open();
+                        }
                     } else {
                         VIEWER_MANAGER.menu.setClass("display", "hidden");
                     }

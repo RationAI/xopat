@@ -159,10 +159,14 @@ export class RightSideViewerMenu extends BaseComponent {
         if (details.width < 600) {
             this.setClass("mobile", "mobile");
             this.setClass("display", "hidden");
-            console.log(this)
         } else {
             this.setClass("mobile", "");
             this.setClass("display", "");
+            for (let i of Object.keys(this.menu.tabs)) {
+                if (!APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
+                    this.menu.getTab(i).close();
+                }
+            }
         }
     }
 }
