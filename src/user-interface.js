@@ -615,7 +615,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 );
                 const settings = div(
                   div({ class: "boxed"},
-                    span({ class: "f3-light header-sep" },
+                    span({ class: "f3-light" },
                     "Appearance"),
                   themeSelect.create(),
                   this.createCheckbox(
@@ -646,7 +646,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
                   div({ class: "boxed"},
-                  span({ class: "f3-light header-sep" }, "Behaviour", ),
+                  span({ class: "f3-light" }, "Behaviour", ),
                   this.createCheckbox(
                     "cookies-checkbox",
                     $.t('settings.cookies'),
@@ -654,7 +654,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('bypassCookies', false)),
                   ),
                   div({ class: "boxed"},
-                  span({ class: "f3-light header-sep" }, "Other", ),
+                  span({ class: "f3-light" }, "Other", ),
                   this.createCheckbox(
                     "debug-checkbox",
                     $.t('settings.debugMode'),
@@ -744,7 +744,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             }, class: "btn"
                         }, "Load with selected"),
                     ),
-                    span({class: "text-xl font-semibold header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
+                    span({class: "text-xl font-semibold", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
                     div({id: "plug-list-content-inner", class: "boxed"},
                         div({id: "plug-list-content-inner-content"}, ...pluginDivs),
                     ),

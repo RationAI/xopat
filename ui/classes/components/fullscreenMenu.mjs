@@ -54,6 +54,10 @@ export class FullscreenMenu extends BaseComponent{
         }
         // todo - better usage design? prevent using this directly...
         this._children = [];
+        this.mobile = false;
+        if (window.innerWidth < 600) {
+            this.mobile = true;
+        }
     }
 
     /**
@@ -75,7 +79,7 @@ export class FullscreenMenu extends BaseComponent{
     }
 
     create(){
-        return div({ id: "overlay", class: "hidden" },
+        return div({ id: "overlay", class: "hidden " + (this.mobile ? "mobile" : "") },
             div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
             div({ id: "overlay-content", class: "relative" }, this.closeBtn.create(), this.content.create()),
         );
@@ -121,5 +125,13 @@ export class FullscreenMenu extends BaseComponent{
      */
     getContentDomNode() {
         return document.getElementById(this.id + "-content");
+    }
+
+    onLayoutChange(details) {
+        if (details.width < 600) {
+            document.getElementById("overlay").classList.add("mobile");
+        } else {
+            document.getElementById("overlay").classList.remove("mobile");
+        }
     }
 }
