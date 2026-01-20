@@ -616,6 +616,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     ),
                 );
                 this.bar.attachTo(this.context);
+                window.addEventListener('app:layout-change', (e) => {
+                    if (e.detail.width < 600) {
+                        this.context.removeClass("hidden");
+                    } else {
+                        this.context.addClass("hidden");
+                    }
+                });
             }
         },
 

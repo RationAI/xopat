@@ -243,9 +243,6 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     top: 0px !important; 
     left: 0px !important;     
 }
-#viewer-container {
-    height: calc(100vh - 112px) !important; /* Odečte výšku spodní lišty */
-}
 
 .right-side-menu.mobile {
     width: 95% !important;
