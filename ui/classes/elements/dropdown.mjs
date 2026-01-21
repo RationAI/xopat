@@ -402,8 +402,8 @@ class Dropdown extends BaseSelectableComponent {
         if (link) link.classList.add('bg-base-300');
 
         const submenuEl = div({
-            class: "dropdown-content bg-base-200 text-base-content rounded-box shadow-xl border border-base-300 absolute w-52 max-w-full min-w-max z-[9999]",
-            style: "display: block;"
+            class: "dropdown-content bg-base-200 text-base-content rounded-box shadow-xl border border-base-300 w-52 max-w-full min-w-max z-[9999]",
+            style: "display: block; position: fixed;"
         });
 
         // Determine style for this specific submenu
@@ -416,9 +416,8 @@ class Dropdown extends BaseSelectableComponent {
 
         // ... rest of the positioning and event logic (unchanged) ...
 
-        // Append to container
-        if (this._contentEl) this._contentEl.appendChild(submenuEl);
-        else document.body.appendChild(submenuEl);
+        // Append to body and use fixed positioning to avoid stacking/overflow issues
+        if (submenuEl.parentNode !== document.body) document.body.appendChild(submenuEl);
 
         // Events
         submenuEl.addEventListener("mouseenter", () => {
@@ -430,19 +429,40 @@ class Dropdown extends BaseSelectableComponent {
             this._scheduleSubmenuCheck();
         });
 
-        // Positioning logic (simplified for brevity, keep your existing logic)
+        // Positioning: place submenu adjacent to the parent row, prefer to the right.
+        // If it would overflow the viewport, flip to the left; otherwise clamp to viewport edges.
+        // Placement using viewport coordinates (anchorRect is already viewport-based)
         const anchorRect = anchorEl.getBoundingClientRect();
-        const containerRect = this._contentEl ? this._contentEl.getBoundingClientRect() : document.body.getBoundingClientRect();
+        const margin = 6;
+        const vw = document.documentElement.clientWidth || window.innerWidth;
+        const vh = document.documentElement.clientHeight || window.innerHeight;
 
-        // ... (Keep your existing positioning calculations here) ...
-        // For brevity, assuming standard positioning logic:
-        let left = (anchorRect.right - containerRect.left) - 5;
-        let top = (anchorRect.top - containerRect.top) - 5;
-        // Check bounds...
-        const submenuWidth = 208;
-        if (anchorRect.right + submenuWidth > window.innerWidth) {
-            left = (anchorRect.left - containerRect.left) - submenuWidth + 5;
+        const submenuWidth = submenuEl.offsetWidth || 0;
+        const submenuHeight = submenuEl.offsetHeight || 0;
+
+        // Prefer to place to the right of the anchor
+        let left = Math.round(anchorRect.right + 6);
+        let top = Math.round(anchorRect.top);
+
+        // If overflowing right, try flipping to left of anchor
+        if (left + submenuWidth > vw - margin) {
+            const altLeft = Math.round(anchorRect.left - submenuWidth - 6);
+            if (altLeft >= margin) left = altLeft;
+            else left = Math.max(margin, vw - margin - submenuWidth);
         }
+
+        // Clamp left to viewport
+        if (left < margin) left = margin;
+
+        // Vertical: ensure submenu fits; prefer aligned to anchor top, else align bottom to anchor bottom
+        if (top + submenuHeight > vh - margin) {
+            const altTop = Math.round(anchorRect.bottom - submenuHeight);
+            if (altTop >= margin) top = altTop;
+            else top = Math.max(margin, vh - margin - submenuHeight);
+        }
+        if (top < margin) top = margin;
+
+        // Apply fixed-position coordinates
         submenuEl.style.left = `${left}px`;
         submenuEl.style.top = `${top}px`;
 
