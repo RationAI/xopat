@@ -575,7 +575,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         Tooltip: UI.Services.GlobalTooltip, //alias
 
         MobileNavBar: {
-            context: $("#mobile-navbar"),
+            context: $("#bottom-container"),
             bar: "",
             init: function () {
                 
@@ -616,11 +616,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     ),
                 );
                 this.bar.attachTo(this.context);
+                this.context[0].style.height = "auto";
                 window.addEventListener('app:layout-change', (e) => {
                     if (e.detail.width < 600) {
-                        this.context.removeClass("hidden");
+                        this.context[0].style.height = "auto";
                     } else {
-                        this.context.addClass("hidden");
+                        this.context[0].style.height = "0px";
                     }
                 });
             }
@@ -978,7 +979,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 let content = document.createElement("span");
                 content.setAttribute("class", "one-liner");
                 node.appendChild(content);
-                document.getElementById("bottom-menu-right").appendChild(node);
+                document.getElementById("middle-container").appendChild(node);
                 this.context = node;
 
                 if (!APPLICATION_CONTEXT.getOption("statusBar", true)){

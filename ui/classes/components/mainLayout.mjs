@@ -171,46 +171,21 @@ export class MainLayout extends BaseComponent {
             };
             topSide.setAttribute('data-prev-style', JSON.stringify(prev));
         }
-        const navbar = document.getElementById('mobile-navbar');
-        this._navbar = navbar;
-        if (navbar && !navbar.getAttribute('data-prev-style')) {
-            const prev = {
-                position: navbar.style.position || '',
-                bottom: navbar.style.bottom || '',
-                left: navbar.style.left || '',
-                width: navbar.style.width || '',
-                zIndex: navbar.style.zIndex || ''
-            };
-            navbar.setAttribute('data-prev-style', JSON.stringify(prev));
-        }
 
         this._prevDockInlineStyles = {
-            position: this._dockEl.style.position || "",
-            top: this._dockEl.style.top || "",
-            left: this._dockEl.style.left || "",
             width: this._dockEl.style.width || "",
             height: this._dockEl.style.height || "",
-            zIndex: this._dockEl.style.zIndex || "",
-            overflow: this._dockEl.style.overflow || ""
         };
 
         // apply fullscreen styles to dock and hide viewer
-        this._dockEl.style.position = "fixed";
-        this._dockEl.style.top = "0";
-        this._dockEl.style.left = "0";
         this._dockEl.style.width = "100%";
         this._dockEl.style.height = "100%";
-        this._dockEl.style.zIndex = "9999";
-        this._dockEl.style.overflow = "auto";
         // hide only the image/container, keep top-side visible
         if (this._osdElement) this._osdElement.style.display = "none";
         // add top padding so content is not hidden under pinned top-side
         if (this._topSideElement) {
             const rect = this._topSideElement.getBoundingClientRect();
             const topH = Math.ceil(rect.height || 0);
-            // save previous paddingTop
-            this._prevDockPaddingTop = this._dockEl.style.paddingTop || "";
-            this._dockEl.style.paddingTop = topH + "px";
         }
         // pin top-side to fixed so it stays visible above the fullscreen dock
         if (this._topSideElement) {
@@ -220,21 +195,6 @@ export class MainLayout extends BaseComponent {
             this._topSideElement.style.width = '100%';
             this._topSideElement.style.zIndex = '10001';
         }
-        if (this._navbar) {
-            const rect = this._navbar.getBoundingClientRect();
-            const bottomH = Math.ceil(rect.bottom || 0);
-            // save previous paddingTop
-            this._prevDockPaddingBottom = this._dockEl.style.paddingBottom || "";
-            this._dockEl.style.paddingBottom = bottomH + "px";
-        }
-        // pin top-side to fixed so it stays visible above the fullscreen dock
-        if (this._navbar) {
-            this._navbar.style.position = 'fixed';
-            this._navbar.style.bottom = '0';
-            this._navbar.style.left = '0';
-            this._navbar.style.width = '100%';
-            this._navbar.style.zIndex = '10001';
-        }
         try { document.documentElement.style.overflow = "hidden"; } catch (e) {}
     }
 
@@ -242,21 +202,11 @@ export class MainLayout extends BaseComponent {
         if (!this._dockEl || !this._viewerEl || !this._isFullscreen) return;
         this._isFullscreen = false;
         const s = this._prevDockInlineStyles || {};
-        this._dockEl.style.position = s.position;
-        this._dockEl.style.top = s.top;
-        this._dockEl.style.left = s.left;
         this._dockEl.style.width = s.width;
         this._dockEl.style.height = s.height;
-        this._dockEl.style.zIndex = s.zIndex;
-        this._dockEl.style.overflow = s.overflow;
         // restore osd (image) display instead of whole viewer
         if (this._osdElement && this._prevOsdDisplay !== null) this._osdElement.style.display = this._prevOsdDisplay;
         else this._viewerEl.style.display = this._prevViewerDisplay;
-        // restore dock paddingTop
-        if (typeof this._prevDockPaddingTop !== 'undefined') {
-            this._dockEl.style.paddingTop = this._prevDockPaddingTop;
-            delete this._prevDockPaddingTop;
-        }
         try { document.documentElement.style.overflow = ""; } catch (e) {}
         // restore top-side previous inline styles
         if (this._topSideElement) {
@@ -271,20 +221,6 @@ export class MainLayout extends BaseComponent {
                     this._topSideElement.style.zIndex = prev.zIndex || '';
                 } catch (e) {}
                 this._topSideElement.removeAttribute('data-prev-style');
-            }
-        }
-        if (this._navbar) {
-            const prevAttr = this._navbar.getAttribute('data-prev-style');
-            if (prevAttr) {
-                try {
-                    const prev = JSON.parse(prevAttr);
-                    this._navbar.style.position = prev.position || '';
-                    this._navbar.style.bottom = prev.bottom || '';
-                    this._navbar.style.left = prev.left || '';
-                    this._navbar.style.width = prev.width || '';
-                    this._navbar.style.zIndex = prev.zIndex || '';
-                } catch (e) {}
-                this._navbar.removeAttribute('data-prev-style');
             }
         }
         // ensure layout classes and visibility are correct after restoring
@@ -389,7 +325,7 @@ export class MainLayout extends BaseComponent {
      */
     create() {
         // --- viewer core (IDs unchanged) ---
-        const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });
+        const osd = div({ id:"osd", style:"position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events:auto;", class:"grow relative w-full overflow-hidden" });
         const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create());
 
         const topSide = new Div({ id:"top-side" }, new RawHtml(null, `
@@ -404,10 +340,8 @@ export class MainLayout extends BaseComponent {
             </div>`).create());
         topSide.attachTo(document.getElementById('top-container'));
 
-        const mobileNavbar = new Div({ id:"mobile-navbar", class:"flex-row w-full glass", style:"display: flex; position: fixed; bottom: 0; left: 0; align-items: flex-start; height: 35px; pointer-events: auto;" });
         const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0;" });
         toolbarsContainer.attachTo(document.getElementById('bottom-container'));
-        mobileNavbar.attachTo(document.getElementById('bottom-container'));
 
 
         // --- dock ---

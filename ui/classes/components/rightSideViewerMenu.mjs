@@ -148,7 +148,7 @@ export class RightSideViewerMenu extends BaseComponent {
         return div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; width: 400px; margin-top: 40px; overflow-y: auto;"
+                style: "position: absolute; width: 400px; overflow-y: auto;"
             },
             this.menu.create()
         );
