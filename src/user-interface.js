@@ -590,8 +590,14 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             size: UI.Button.SIZE.SMALL,
                             onClick: function () {
                                 window.LAYOUT.toggle();
+                                if (document.getElementById("toolbars-container").style.display != "none") {
+                                    document.getElementById("toolbars-container").style.display = "none";
+                                } else {
+                                    document.getElementById("toolbars-container").style.display = "";
+                                }
                                 if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
                                     VIEWER_MANAGER.menu.setClass("display", "hidden");
+                                    document.getElementById("toolbars-container").style.display = "none";
                                 }
                             }
                         }, "Global Menu"
@@ -605,10 +611,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                                 window.LAYOUT.closeFullscreen();
                                 if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
                                     VIEWER_MANAGER.menu.setClass("display", "");
+                                    document.getElementById("toolbars-container").style.display = "none";
                                     for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
                                         VIEWER_MANAGER.menu.menu.getTab(i).open();
                                     }
                                 } else {
+                                    document.getElementById("toolbars-container").style.display = "";
                                     VIEWER_MANAGER.menu.setClass("display", "hidden");
                                 }
                             }

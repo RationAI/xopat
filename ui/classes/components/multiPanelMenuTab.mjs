@@ -59,6 +59,9 @@ class MultiPanelMenuTab extends MenuTab {
             extraClasses: { display: "display-none" },
             extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
             onClick: (event) => {
+                if (window.innerWidth < 600) {
+                    return;
+                }
                 this.togglePinned();
                 if (pinIcon.classMap["name"] === "fa-thumbtack") {
                     pinIcon.changeIcon("fa-thumbtack-slash");
@@ -82,6 +85,9 @@ class MultiPanelMenuTab extends MenuTab {
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
+                if (window.innerWidth < 600) {
+                    return;
+                }
                 this.toggleHiden();
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-hidden`, this.hidden);
                 event.stopPropagation();
