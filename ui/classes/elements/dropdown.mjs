@@ -348,6 +348,7 @@ class Dropdown extends BaseSelectableComponent {
 
         // --- Hover Events (Standard) ---
         if (hasChildren) {
+            // Hover behaviour for desktop
             liEl.addEventListener("mouseenter", () => {
                 self._isHoveringParent = true;
                 if (self._activeSubmenu?.parentId === item.id) {
@@ -360,6 +361,29 @@ class Dropdown extends BaseSelectableComponent {
                 self._isHoveringParent = false;
                 self._scheduleSubmenuCheck();
             });
+
+            // Click/tap behaviour for touch devices only: open/toggle submenu on click
+            const isTouchDevice = (typeof window !== "undefined") && (
+                ("ontouchstart" in window) ||
+                (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
+                (window.matchMedia && window.matchMedia("(hover: none)").matches)
+            );
+            if (isTouchDevice) {
+                liEl.addEventListener("click", (e) => {
+                    // Prevent the anchor default navigation and stop propagation
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    // Toggle submenu when tapping the parent item
+                    if (self._activeSubmenu?.parentId === item.id) {
+                        self._closeSubmenu();
+                        return;
+                    }
+                    // mark hovering to keep submenu open while interacting
+                    self._isHoveringParent = true;
+                    self._openSubmenu(item, liEl);
+                });
+            }
         } else {
             liEl.addEventListener("mouseenter", () => {
                 self._isHoveringParent = false;
