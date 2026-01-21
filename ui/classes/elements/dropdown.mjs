@@ -416,9 +416,9 @@ class Dropdown extends BaseSelectableComponent {
 
         // ... rest of the positioning and event logic (unchanged) ...
 
-        // Append to body and use fixed positioning to avoid stacking/overflow issues
-        if (submenuEl.parentNode !== document.body) document.body.appendChild(submenuEl);
-
+        // Append to container
+        if (this._contentEl) this._contentEl.appendChild(submenuEl);
+        else document.body.appendChild(submenuEl);
         // Events
         submenuEl.addEventListener("mouseenter", () => {
             this._isHoveringSubmenu = true;
