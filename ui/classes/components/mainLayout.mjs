@@ -390,22 +390,25 @@ export class MainLayout extends BaseComponent {
     create() {
         // --- viewer core (IDs unchanged) ---
         const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });
-        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `
-<div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
-    <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
-        <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
-        <div class="flex flex-row">
-            <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>
-            <div id="top-side-left-fullscreen" style="margin-left: 5px; pointer-events: auto;"></div>
-        </div>
-    </div>
-</div>
+        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create());
 
-<div id="fullscreen-menu" class="bg-base-100"></div>
-<div id="mobile-navbar" class="flex-row w-full glass" style="display: flex; position: fixed; bottom: 0; left: 0; align-items: flex-start; height: 35px; pointer-events: auto;"></div>
-<div id="bottom-menu" style="display: flex-row; position: fixed; left: 0; bottom: 45px; width: 100%; flex-direction: column-reverse;">
-    <div id="toolbars-container" style="width: 100%; position: fixed; left: 0; bottom: 45px;"></div>
-</div>`).create());
+        const topSide = new Div({ id:"top-side" }, new RawHtml(null, `
+            <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
+                <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
+                    <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
+                    <div class="flex flex-row">
+                        <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>
+                        <div id="top-side-left-fullscreen" style="margin-left: 5px; pointer-events: auto;"></div>
+                    </div>
+                </div>
+            </div>`).create());
+        topSide.attachTo(document.getElementById('top-container'));
+
+        const mobileNavbar = new Div({ id:"mobile-navbar", class:"flex-row w-full glass", style:"display: flex; position: fixed; bottom: 0; left: 0; align-items: flex-start; height: 35px; pointer-events: auto;" });
+        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0;" });
+        toolbarsContainer.attachTo(document.getElementById('bottom-container'));
+        mobileNavbar.attachTo(document.getElementById('bottom-container'));
+
 
         // --- dock ---
         const dock = new Div({

@@ -48,10 +48,15 @@
     <!-- Template head -->
     <template id="template-head"></template>
 </head>
-<body style="overflow: hidden; height: 100vh; width: 100vw">
-
+<body style="margin: 0; padding: 0; overflow: hidden; height: 100vh; width: 100vw; display: flex; flex-direction: column;">
     <!-- Template ui -->
     <template id="template-ui"></template>
+
+    <div id="top-container" class="glass" style="min-height: 35px; flex-shrink: 0; pointer-events: auto;"></div>
+
+    <div id="middle-container" style="flex-grow: 1; position: relative; overflow: auto; background: #1a1a1a;"></div>
+
+    <div id="bottom-container" style="display: flex; flex-direction: column-reverse; flex-shrink: 0;"></div>
 
     <script>
         // todo make sure our globals dont get out of hand...
@@ -65,7 +70,7 @@
             // ]
         });
         // Attach once (replaces your static HTML wrapper)
-        window.LAYOUT.attachTo(document.body);
+        window.LAYOUT.attachTo(document.getElementById("middle-container"));
     </script>
 <!--&lt;!&ndash; OSD viewer &ndash;&gt;-->
 <!--<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">-->
