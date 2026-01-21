@@ -515,7 +515,9 @@ class Dropdown extends BaseSelectableComponent {
                 container.appendChild(menu);
             }
 
+            // Make visible for measurements but keep hidden from user until placed
             menu.style.visibility = "hidden";
+            menu.style.display = "block";
             menu.style.top = "0px";
             menu.style.left = "0px";
 
@@ -529,33 +531,44 @@ class Dropdown extends BaseSelectableComponent {
             const verticalToolbar = !!toolbarRoot && toolbarRoot.classList.contains("flex-col");
             const placement = this.placement;
 
-            let openRight;
-            if (placement === "right") {
-                openRight = true;
-            } else if (placement === "below") {
-                openRight = false;
-            } else {
-                openRight = verticalToolbar;
-            }
+            // prefer opening below and to the right (or depending on toolbar)
+            let preferRight;
+            if (placement === "right") preferRight = true;
+            else if (placement === "below") preferRight = false;
+            else preferRight = verticalToolbar;
 
+            // initial coordinates relative to container
             let left, top;
-            if (openRight) {
-                left = (hostRect.right - contRect.left) + margin;
-                top  = (hostRect.top   - contRect.top);
-            } else {
-                left = (hostRect.left   - contRect.left);
-                top  = (hostRect.bottom - contRect.top) + margin;
+            // default: open below, align to host left
+            left = hostRect.left - contRect.left;
+            top  = hostRect.bottom - contRect.top + margin;
+
+            // if toolbar wants right alignment, align menu's left with host's right
+            if (preferRight) {
+                left = hostRect.right - contRect.left - mw + margin;
             }
 
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
+            // viewport dims (exclude scrollbars)
+            const vw = document.documentElement.clientWidth || window.innerWidth;
+            const vh = document.documentElement.clientHeight || window.innerHeight;
+
+            // convert to viewport coords for overflow checks
             let vpLeft = contRect.left + left;
             let vpTop  = contRect.top + top;
 
+            // Try horizontal flipping if overflow on right or left
             if (vpLeft + mw > vw - margin) {
-                const delta = (vpLeft + mw) - (vw - margin);
-                left -= delta;
-                vpLeft -= delta;
+                // try opening to the other side of the host
+                const altLeft = hostRect.left - contRect.left - mw - margin; // place left of host
+                if (altLeft >= -margin) {
+                    left = altLeft;
+                    vpLeft = contRect.left + left;
+                } else {
+                    // clamp to right edge
+                    const delta = (vpLeft + mw) - (vw - margin);
+                    left -= delta;
+                    vpLeft -= delta;
+                }
             }
             if (vpLeft < margin) {
                 const delta = margin - vpLeft;
@@ -563,10 +576,18 @@ class Dropdown extends BaseSelectableComponent {
                 vpLeft += delta;
             }
 
+            // Try vertical flip (open above) if it would overflow bottom
             if (vpTop + mh > vh - margin) {
-                const delta = (vpTop + mh) - (vh - margin);
-                top -= delta;
-                vpTop -= delta;
+                const canOpenAbove = (hostRect.top - mh - margin) >= 0;
+                if (canOpenAbove) {
+                    top = hostRect.top - contRect.top - mh - margin;
+                    vpTop = contRect.top + top;
+                } else {
+                    // clamp to bottom edge
+                    const delta = (vpTop + mh) - (vh - margin);
+                    top -= delta;
+                    vpTop -= delta;
+                }
             }
             if (vpTop < margin) {
                 const delta = margin - vpTop;
