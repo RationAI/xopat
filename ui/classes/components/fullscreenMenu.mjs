@@ -95,6 +95,7 @@ export class FullscreenMenu extends BaseComponent{
 
         if (overlay.classList.contains("hidden")) {
             document.getElementById("overlay").classList.toggle("hidden");
+            document.getElementById("toolbars-container").style.display = "none";
         }
 
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
@@ -106,6 +107,7 @@ export class FullscreenMenu extends BaseComponent{
             }
             else if(tab.id == id && tab.classMap.display == "") {
                 document.getElementById("overlay").classList.toggle("hidden");
+                document.getElementById("toolbars-container").style.display = "";
             }
 
             tab.setClass("display", "hidden");
@@ -117,6 +119,7 @@ export class FullscreenMenu extends BaseComponent{
             tab.setClass("display", "hidden");
         }
         document.getElementById("overlay").classList.add("hidden");
+        document.getElementById("toolbars-container").style.display = "";
     }
 
 
