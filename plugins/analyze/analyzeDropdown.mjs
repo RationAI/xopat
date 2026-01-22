@@ -156,6 +156,102 @@ addPlugin('analyze', class extends XOpatPlugin {
                                 return false;
                             }
                         });
+
+                        // Add Apps item: collapses dropdown and opens floating window listing apps
+                        tab.addItem({
+                            id: 'apps-list',
+                            label: tOr('analyze.apps', 'Apps'),
+                            onClick: async () => {
+                                try {
+                                    // collapse the dropdown
+                                    try {
+                                        const btnId = `${tab.parentId}-b-${tab.id}`;
+                                        const btnEl = document.getElementById(btnId);
+                                        const wrapper = btnEl?.closest('.dropdown');
+                                        wrapper?.classList.remove('dropdown-open');
+                                        try { tab.hideRecent?.(); } catch(_) {}
+                                    } catch(_) {}
+
+                                    // fetch apps via standalone_jobs
+                                    let items = [];
+                                    try {
+                                        const resp = await window.EmpaiaStandaloneJobs?.getApps?.();
+                                        items = Array.isArray(resp?.items) ? resp.items : [];
+                                    } catch (e) {
+                                        console.warn('[analyze] failed to fetch apps, showing empty list', e);
+                                    }
+
+                                    // render content using menu-pages if available, fallback to simple list
+                                    const { FloatingWindow } = await import('../../ui/classes/components/floatingWindow.mjs');
+                                    const fw = new FloatingWindow({
+                                        id: `${this.id}-apps-window`,
+                                        title: tOr('analyze.apps', 'Apps'),
+                                        width: 460,
+                                        height: 380
+                                    });
+                                    fw.attachTo(document.body);
+
+                                    // Prefer a simple interactive list for reliability
+                                    const container = document.createElement('div');
+                                    container.className = 'p-2 space-y-2';
+                                    const caseIdHardcoded = '87fbb59a-3183-4d36-ab22-48f4e027d1f0';
+
+                                    // No input preloading for now; keep simple run flow
+
+                                    items.forEach((app, idx) => {
+                                        const appId = app?.id || app?.app_id;
+                                        const btn = document.createElement('button');
+                                        btn.type = 'button';
+                                        btn.className = 'btn btn-sm btn-primary w-full justify-start';
+                                        btn.textContent = app?.name_short || app?.name || `App ${idx+1}`;
+                                        const status = document.createElement('div');
+                                        status.className = 'text-xs mt-1';
+                                        status.textContent = tOr('analyze.jobReady', 'Ready to run');
+
+                                        // Keep UI minimal: no inputs or mode selector
+
+                                        btn.addEventListener('click', async () => {
+                                            try {
+                                                status.textContent = tOr('analyze.jobStarting', 'Starting job...');
+                                                // Create + run job via helper (returns final job)
+                                                const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({ appId, caseId: caseIdHardcoded });
+                                                status.textContent = `${tOr('analyze.jobFinal', 'Final status')}: ${res?.status || 'UNKNOWN'}`;
+                                                console.log('[analyze] Job final:', res);
+                                            } catch (err) {
+                                                console.error('[analyze] Failed to run app job', err);
+                                                alert('Failed to run app job: ' + (err?.message || err));
+                                                status.textContent = tOr('analyze.jobError', 'Error running job');
+                                            }
+                                        });
+                                        const desc = document.createElement('div');
+                                        desc.className = 'text-xs opacity-70 mt-1';
+                                        desc.textContent = app?.store_description || '';
+                                        const wrap = document.createElement('div');
+                                        wrap.className = 'p-2 rounded-box bg-base-100';
+                                        wrap.appendChild(btn);
+                                        wrap.appendChild(status);
+                                        // Minimal controls only
+                                        if (desc.textContent) wrap.appendChild(desc);
+                                        container.appendChild(wrap);
+                                    });
+
+                                    // Fallback when no items
+                                    if (!items.length) {
+                                        const empty = document.createElement('div');
+                                        empty.className = 'p-2 text-sm opacity-70';
+                                        empty.textContent = tOr('analyze.noApps', 'No apps available.');
+                                        container.appendChild(empty);
+                                    }
+
+                                    fw.setBody(container);
+                                    fw.focus();
+                                    
+                                } catch (e) {
+                                    console.error('[analyze] apps-list error', e);
+                                }
+                                return false;
+                            }
+                        });
                     }
                 } catch (e) { console.warn('[analyze] failed to configure dropdown items', e); }
                 // Close dropdowns when clicking away: attach a document-level click handler once per tab
