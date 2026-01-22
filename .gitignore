@@ -37,6 +37,8 @@
 !/plugins/sam-segment-tool-experimental
 !/plugins/dicom
 !/plugins/slide-info
+!/plugins/myplugin/
+!/plugins/myplugin/**
 
 #rubbish
 *.txt

@@ -1,0 +1,11 @@
+{
+    "id": "my_plugin",
+    "name": "My Plugin",
+    "author": "Jirka Horák",
+    "version": "1.0.0",
+    "description": "A plugin for annotations creation, management and sharing.",
+    "icon": null,
+    "includes": ["myPlugin.js"],
+    "modules": [],
+    "permaLoad": false
+}
