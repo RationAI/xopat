@@ -163,89 +163,8 @@ addPlugin('analyze', class extends XOpatPlugin {
                             label: tOr('analyze.apps', 'Apps'),
                             onClick: async () => {
                                 try {
-                                    // collapse the dropdown
-                                    try {
-                                        const btnId = `${tab.parentId}-b-${tab.id}`;
-                                        const btnEl = document.getElementById(btnId);
-                                        const wrapper = btnEl?.closest('.dropdown');
-                                        wrapper?.classList.remove('dropdown-open');
-                                        try { tab.hideRecent?.(); } catch(_) {}
-                                    } catch(_) {}
-
-                                    // fetch apps via standalone_jobs
-                                    let items = [];
-                                    try {
-                                        const resp = await window.EmpaiaStandaloneJobs?.getApps?.();
-                                        items = Array.isArray(resp?.items) ? resp.items : [];
-                                    } catch (e) {
-                                        console.warn('[analyze] failed to fetch apps, showing empty list', e);
-                                    }
-
-                                    // render content using menu-pages if available, fallback to simple list
-                                    const { FloatingWindow } = await import('../../ui/classes/components/floatingWindow.mjs');
-                                    const fw = new FloatingWindow({
-                                        id: `${this.id}-apps-window`,
-                                        title: tOr('analyze.apps', 'Apps'),
-                                        width: 460,
-                                        height: 380
-                                    });
-                                    fw.attachTo(document.body);
-
-                                    // Prefer a simple interactive list for reliability
-                                    const container = document.createElement('div');
-                                    container.className = 'p-2 space-y-2';
-                                    const caseIdHardcoded = '87fbb59a-3183-4d36-ab22-48f4e027d1f0';
-
-                                    // No input preloading for now; keep simple run flow
-
-                                    items.forEach((app, idx) => {
-                                        const appId = app?.id || app?.app_id;
-                                        const btn = document.createElement('button');
-                                        btn.type = 'button';
-                                        btn.className = 'btn btn-sm btn-primary w-full justify-start';
-                                        btn.textContent = app?.name_short || app?.name || `App ${idx+1}`;
-                                        const status = document.createElement('div');
-                                        status.className = 'text-xs mt-1';
-                                        status.textContent = tOr('analyze.jobReady', 'Ready to run');
-
-                                        // Keep UI minimal: no inputs or mode selector
-
-                                        btn.addEventListener('click', async () => {
-                                            try {
-                                                status.textContent = tOr('analyze.jobStarting', 'Starting job...');
-                                                // Create + run job via helper (returns final job)
-                                                const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({ appId, caseId: caseIdHardcoded });
-                                                status.textContent = `${tOr('analyze.jobFinal', 'Final status')}: ${res?.status || 'UNKNOWN'}`;
-                                                console.log('[analyze] Job final:', res);
-                                            } catch (err) {
-                                                console.error('[analyze] Failed to run app job', err);
-                                                alert('Failed to run app job: ' + (err?.message || err));
-                                                status.textContent = tOr('analyze.jobError', 'Error running job');
-                                            }
-                                        });
-                                        const desc = document.createElement('div');
-                                        desc.className = 'text-xs opacity-70 mt-1';
-                                        desc.textContent = app?.store_description || '';
-                                        const wrap = document.createElement('div');
-                                        wrap.className = 'p-2 rounded-box bg-base-100';
-                                        wrap.appendChild(btn);
-                                        wrap.appendChild(status);
-                                        // Minimal controls only
-                                        if (desc.textContent) wrap.appendChild(desc);
-                                        container.appendChild(wrap);
-                                    });
-
-                                    // Fallback when no items
-                                    if (!items.length) {
-                                        const empty = document.createElement('div');
-                                        empty.className = 'p-2 text-sm opacity-70';
-                                        empty.textContent = tOr('analyze.noApps', 'No apps available.');
-                                        container.appendChild(empty);
-                                    }
-
-                                    fw.setBody(container);
-                                    fw.focus();
-                                    
+                                    this._collapseDropdown(tab);
+                                    await this._showAppsWindow(tOr);
                                 } catch (e) {
                                     console.error('[analyze] apps-list error', e);
                                 }
@@ -277,9 +196,260 @@ addPlugin('analyze', class extends XOpatPlugin {
                     } catch (e) { /* ignore */ }
                 };
                 try { attachDocumentCloser(tab); } catch(e) { /* ignore */ }
-                // diagnostic logs removed
         };
 
         register();
+    }
+
+    // Hardcoded case ID for now - should be made configurable
+    get _caseId() {
+        return '87fbb59a-3183-4d36-ab22-48f4e027d1f0';
+    }
+
+    _collapseDropdown(tab) {
+        try {
+            const btnId = `${tab.parentId}-b-${tab.id}`;
+            const btnEl = document.getElementById(btnId);
+            const wrapper = btnEl?.closest('.dropdown');
+            wrapper?.classList.remove('dropdown-open');
+            try { tab.hideRecent?.(); } catch(_) {}
+        } catch(_) {}
+    }
+
+    async _showAppsWindow(tOr) {
+        let items = [];
+        try {
+            const resp = await window.EmpaiaStandaloneJobs?.getApps?.();
+            items = Array.isArray(resp?.items) ? resp.items : [];
+        } catch (e) {
+            console.warn('[analyze] failed to fetch apps, showing empty list', e);
+        }
+
+        const { FloatingWindow } = await import('../../ui/classes/components/floatingWindow.mjs');
+        const fw = new FloatingWindow({
+            id: `${this.id}-apps-window`,
+            title: tOr('analyze.apps', 'Apps'),
+            width: 520,
+            height: 480
+        });
+        fw.attachTo(document.body);
+
+        const container = document.createElement('div');
+        container.className = 'p-2 space-y-3';
+
+        for (const [idx, app] of items.entries()) {
+            const card = this._createAppCard(app, idx, tOr);
+            container.appendChild(card);
+        }
+
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'p-2 text-sm opacity-70';
+            empty.textContent = tOr('analyze.noApps', 'No apps available.');
+            container.appendChild(empty);
+        }
+
+        fw.setBody(container);
+        fw.focus();
+    }
+
+    _createAppCard(app, idx, tOr) {
+        const appId = app?.id || app?.app_id;
+        const wrap = document.createElement('div');
+        wrap.className = 'p-3 rounded-box bg-base-200 border border-base-300';
+
+        // Header with title and configure button
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between';
+
+        const title = document.createElement('span');
+        title.className = 'font-medium';
+        title.textContent = app?.name_short || app?.name || `App ${idx + 1}`;
+        header.appendChild(title);
+
+        const configBtn = document.createElement('button');
+        configBtn.type = 'button';
+        configBtn.className = 'btn btn-xs btn-ghost';
+        configBtn.textContent = 'Configure';
+        header.appendChild(configBtn);
+        wrap.appendChild(header);
+
+        // Description
+        if (app?.store_description) {
+            const desc = document.createElement('div');
+            desc.className = 'text-xs opacity-70 mt-1';
+            desc.textContent = app.store_description;
+            wrap.appendChild(desc);
+        }
+
+        // Inputs section (hidden by default)
+        const inputsSection = document.createElement('div');
+        inputsSection.className = 'mt-2 hidden';
+        inputsSection.innerHTML = '<div class="text-xs opacity-50">Loading inputs...</div>';
+        wrap.appendChild(inputsSection);
+
+        let inputsForm = null;
+        let inputsLoaded = false;
+
+        configBtn.addEventListener('click', async () => {
+            inputsSection.classList.toggle('hidden');
+            if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
+                inputsLoaded = true;
+                try {
+                    const api = EmpationAPI.V3.get();
+                    const examination = await api.examinations.create(this._caseId, appId);
+                    const scope = await api.getScopeFrom(examination);
+                    inputsForm = await this._buildInputsForm(appId, scope);
+                    inputsSection.innerHTML = '';
+                    inputsSection.appendChild(inputsForm.container);
+                } catch (e) {
+                    inputsSection.innerHTML = `<div class="text-xs text-error">Failed to load inputs: ${e.message}</div>`;
+                }
+            }
+        });
+
+        // Actions row
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center gap-2 mt-2';
+
+        const runBtn = document.createElement('button');
+        runBtn.type = 'button';
+        runBtn.className = 'btn btn-sm btn-primary';
+        runBtn.textContent = tOr('analyze.run', 'Run');
+
+        const status = document.createElement('span');
+        status.className = 'text-xs flex-1';
+        status.textContent = tOr('analyze.jobReady', 'Ready');
+
+        runBtn.addEventListener('click', async () => {
+            try {
+                runBtn.disabled = true;
+                status.textContent = tOr('analyze.jobStarting', 'Starting...');
+
+                const inputs = inputsForm?.getInputs?.() || {};
+                console.log('[analyze] Running job with inputs:', inputs);
+
+                const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({
+                    appId,
+                    caseId: this._caseId,
+                    mode: 'STANDALONE',
+                    inputs
+                });
+
+                const isSuccess = res?.status === 'COMPLETED';
+                status.textContent = `${tOr('analyze.jobFinal', 'Status')}: ${res?.status || 'UNKNOWN'}`;
+                status.className = isSuccess ? 'text-xs flex-1 text-success' : 'text-xs flex-1 text-error';
+                console.log('[analyze] Job final:', res);
+            } catch (err) {
+                console.error('[analyze] Failed to run app job', err);
+                status.textContent = `Error: ${err?.message || err}`;
+                status.className = 'text-xs flex-1 text-error';
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+
+        actions.appendChild(runBtn);
+        actions.appendChild(status);
+        wrap.appendChild(actions);
+
+        return wrap;
+    }
+
+    async _buildInputsForm(appId, scope, mode = 'STANDALONE') {
+        const container = document.createElement('div');
+        container.className = 'space-y-2 mt-2';
+
+        try {
+            const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(appId, scope);
+            if (!ead) {
+                container.innerHTML = '<div class="text-xs opacity-50">No EAD available</div>';
+                return { container, getInputs: () => ({}) };
+            }
+
+            const requiredInputs = window.EmpaiaStandaloneJobs?.getRequiredInputs?.(ead, mode) || [];
+            if (requiredInputs.length === 0) {
+                container.innerHTML = '<div class="text-xs opacity-50">No inputs required</div>';
+                return { container, getInputs: () => ({}) };
+            }
+
+            let slides = [];
+            try {
+                slides = await window.EmpaiaStandaloneJobs?.getCaseSlides?.(this._caseId) || [];
+            } catch (e) {
+                console.warn('[analyze] Failed to fetch slides', e);
+            }
+
+            const inputFields = {};
+
+            for (const input of requiredInputs) {
+                const row = this._createInputRow(input, slides, inputFields);
+                container.appendChild(row);
+            }
+
+            const getInputs = () => {
+                const result = {};
+                for (const [key, el] of Object.entries(inputFields)) {
+                    if (el.type === 'checkbox') {
+                        result[key] = el.checked ? 'true' : 'false';
+                    } else {
+                        const val = el.value?.trim();
+                        if (val) result[key] = val;
+                    }
+                }
+                return result;
+            };
+
+            return { container, getInputs };
+        } catch (e) {
+            console.error('[analyze] Failed to build inputs form', e);
+            container.innerHTML = `<div class="text-xs text-error">Error: ${e.message}</div>`;
+            return { container, getInputs: () => ({}) };
+        }
+    }
+
+    _createInputRow(input, slides, inputFields) {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2';
+
+        const label = document.createElement('label');
+        label.className = 'text-xs font-medium min-w-20';
+        label.textContent = `${input.key} (${input.type})`;
+        row.appendChild(label);
+
+        let fieldEl;
+
+        if (input.type === 'wsi') {
+            fieldEl = document.createElement('select');
+            fieldEl.className = 'select select-xs select-bordered flex-1';
+            fieldEl.innerHTML = '<option value="">-- Select slide --</option>';
+            slides.forEach(slide => {
+                const opt = document.createElement('option');
+                opt.value = slide.id;
+                opt.textContent = slide.local_id || slide.id;
+                fieldEl.appendChild(opt);
+            });
+        } else if (input.type === 'bool') {
+            fieldEl = document.createElement('input');
+            fieldEl.type = 'checkbox';
+            fieldEl.className = 'checkbox checkbox-xs';
+        } else if (input.type === 'integer' || input.type === 'float') {
+            fieldEl = document.createElement('input');
+            fieldEl.type = 'number';
+            fieldEl.className = 'input input-xs input-bordered flex-1';
+            if (input.type === 'float') fieldEl.step = 'any';
+        } else {
+            fieldEl = document.createElement('input');
+            fieldEl.type = 'text';
+            fieldEl.className = 'input input-xs input-bordered flex-1';
+            if (!['string'].includes(input.type)) {
+                fieldEl.placeholder = `${input.type} ID`;
+            }
+        }
+
+        inputFields[input.key] = fieldEl;
+        row.appendChild(fieldEl);
+
+        return row;
     }
 });
