@@ -142,7 +142,11 @@ addPlugin('analyze', class extends XOpatPlugin {
                             onClick: () => {
                                 try {
                                     const form = new NewAppForm({ onSubmit: (data) => {
-                                        try { if (this.params.onCreate?.(data) !== false) { alert('Created new app: ' + JSON.stringify(data)); } }
+                                        try { 
+                                            if (this.params.onCreate?.(data) !== false) { 
+                                                USER_INTERFACE.Dialogs.show('Successfuly created new app');
+                                            } 
+                                        }
                                         catch (err) { console.error(err); }
                                     }});
                                     const win = form.showFloating({ title: tOr('analyze.createApp', 'Create New App'), width: 420, height: 360 });
