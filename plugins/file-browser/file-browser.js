@@ -66,7 +66,7 @@ addPlugin('file-browser', class extends XOpatPlugin {
                             if (!res.ok) {
                                 throw new Error(slides);
                             }
-                            slides = JSON.parse(cases);
+                            slides = JSON.parse(slides);
                             for (const c of slides || []) {
                                 items.push(makeSlideItem(c.local_id || c.id));
                             }
