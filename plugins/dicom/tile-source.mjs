@@ -25,6 +25,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         user.addHandler("secret-updated", e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = `Bearer ${e.secret}`));
         user.addHandler("secret-removed", e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
         user.addHandler("logout", () => (this.ajaxHeaders["Authorization"] = null));
+
+        this.frameOrder = options.frameOrder || null;
     }
 
     supports(data) { return data && data.type === "dicomweb"; }
@@ -115,6 +117,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 this.raiseEvent("ready", { tileSource: this });
             })
             .catch((e) => {
+                console.error("Failed to initialize DICOM Web TileSource!", e);
                 this.raiseEvent("open-failed", { message: e, source: url, postData: null });
             });
     }
@@ -125,22 +128,68 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         }
 
         // if not provided, fetch
-        this.wsi = await DicomQuery.findWSIItems(this.baseUrl, XOpatUser.instance().getSecret(), this.studyUID, this.seriesUID);
-        this.wsi = this.wsi[0]; // parses series for potential wsi set, take first found
+        const wsiList = await DicomQuery.findWSIItems(
+            this.baseUrl,
+            XOpatUser.instance().getSecret(),
+            this.studyUID,
+            this.seriesUID,
+            this.frameOrder
+        );
+
+// Pick the best candidate: most levels, then biggest top level
+        this.wsi = (wsiList || [])
+            .slice()
+            .sort((a, b) => {
+                const aLevels = a?.levels?.length ?? 0;
+                const bLevels = b?.levels?.length ?? 0;
+                if (bLevels !== aLevels) return bLevels - aLevels;
+
+                const maxW = (w) => Math.max(0, ...((w?.levels || []).map(L => Number(L?.width) || 0)));
+                return maxW(b) - maxW(a);
+                return bW - aW;
+            })[0];
 
         // Validate we have at least one pyramid level
-        if (!this.wsi?.levels.length) throw new Error("No pyramid levels discovered in series (missing Per‑Frame FG or TILED_FULL fallback)");
+        if (!this.wsi?.levels?.length) {
+            throw new Error("No pyramid levels discovered in series (missing Per-Frame FG or TILED_FULL fallback)");
+        }
+
+// Normalize levels:
+// - drop incomplete entries
+// - sort so levels[0] is ALWAYS highest-res (max width)
+        const normalized = this.wsi.levels
+            .filter(l =>
+                l &&
+                Number.isFinite(l.width) &&
+                Number.isFinite(l.height) &&
+                Number.isFinite(l.tileWidth) &&
+                Number.isFinite(l.tileHeight) &&
+                l.instanceUID
+            )
+            .slice()
+            .sort((a, b) => {
+                // biggest first
+                if (b.width !== a.width) return b.width - a.width;
+                return (b.height ?? 0) - (a.height ?? 0);
+            });
+
+        if (!normalized.length) {
+            throw new Error("WSI levels exist but none are usable (missing width/height/tile sizes/instanceUID).");
+        }
+
+        this.wsi.levels = normalized;
 
         this.minLevel = 0;
         this.maxLevel = this.wsi.levels.length - 1;
 
-        // width/height/tile size — take from best available (first owner that provided them)
+// width/height/tile size — always from highest-res level (levels[0])
         const topLevel = this.wsi.levels[0];
         this.width  = topLevel.width;
         this.height = topLevel.height;
-        // Tile sizes: prefer those from an instance that provided this level
-        this.tileWidth  = this.tileWidth  || topLevel.tileWidth  || 512;
-        this.tileHeight = this.tileHeight || topLevel.tileHeight || 512;
+
+// Tile sizes: use highest-res tile size as canonical for OSD
+        this.tileWidth  = topLevel.tileWidth  || 512;
+        this.tileHeight = topLevel.tileHeight || 512;
 
         // build pyramid downsacle info
         if (!this.wsi.levels.length) {
@@ -194,7 +243,14 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
     getTileUrl(level, x, y) {
         level = this.wsi.levels[this.maxLevel - level];
-        const frame = level?.frames[`${x}_${y}`];
+        const frame = level?.frames?.[`${x}_${y}`];
+
+        // Guard: if frame mapping is missing, return a URL that will fail fast but never "frames/undefined"
+        if (!Number.isFinite(frame) || frame <= 0) {
+            // You can also return `null` if your OSD integration tolerates it, but URL is safer here.
+            return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/frames/1`;
+        }
+
         const tail = this.useRendered ? `frames/${frame}/rendered` : `frames/${frame}`;
         return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/${tail}`;
     }
@@ -254,7 +310,22 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     /** Download preview/overview (thumbnail) image as a Blob (PNG or JPEG). */
-    async getThumbnail() { return this._downloadWholeInstanceImage(this.wsi.previewInstanceUID); }
+    async getThumbnail() {
+        // 1. Try dedicated preview instance (if detected by DicomQuery)
+        if (this.wsi?.previewInstanceUID) {
+            return this._downloadWholeInstanceImage(this.wsi.previewInstanceUID);
+        }
+
+        // 2. Fallback: Use the smallest pyramid level (lowest resolution)
+        // 'levels' usually goes from High Res (0) -> Low Res (N)
+        if (this.wsi?.levels?.length > 0) {
+            const smallestLevel = this.wsi.levels[this.wsi.levels.length - 1];
+            return this._downloadWholeInstanceImage(smallestLevel.instanceUID);
+        }
+
+        // 3. Give up if neither exists
+        throw new Error("No suitable instance found for thumbnail generation.");
+    }
 
     /** Download label/macro image as a Blob (PNG or JPEG). */
     async downloadMacroImage() { return this._downloadWholeInstanceImage(this.wsi.macroInstanceUID); }

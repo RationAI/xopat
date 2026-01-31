@@ -167,7 +167,7 @@ export default class DicomTools {
         return (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType));
     }
 
-    static async findWSIItems(serviceUrl, authToken, studyUID, seriesUID) {
+    static async findWSIItems(serviceUrl, authToken, studyUID, seriesUID, frameOrder=undefined) {
         const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
         const { rows, total } = await this.qidoSafeWithMeta(base, authToken, '00080018,00080008,00280010,00280011,00400512,00480106,00480006,00480007');
         // rows are already instance objects; pass through or normalize if needed
@@ -178,7 +178,7 @@ export default class DicomTools {
             for (let instance of wsi.pyramidInstances) {
                 const uid = this.v(instance, "00080018");
                 const meta = await this.wadoMetadata(`${serviceUrl}/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`, authToken);
-                this._ingestInstanceMetadata(uid, instance, meta, wsi);
+                this._ingestInstanceMetadata(uid, instance, meta, wsi, frameOrder);
             }
         }
         return wsiInstances;
@@ -323,16 +323,34 @@ export default class DicomTools {
             }
 
             // todo duplicate logics on the ingest metadata level
-            const imageType = (ds?.["00080008"]?.Value || []).join("\\");  // ImageType
-            if (/LABEL/i.test(imageType)) g.labelInstance = ds;
-            else if (/OVERVIEW/i.test(imageType)) g.overviewInstance = ds;
-            else g.pyramidInstances.push(ds); // pyramid levels
+            const imageTypeRaw = (ds?.["00080008"]?.Value || []).map(x => String(x).toUpperCase());
+            const imageType = imageTypeRaw.join("\\");
 
-            const area = rows * cols || Number.POSITIVE_INFINITY;
-            if (sopInstanceUID && area < g._bestArea) {
-                g._bestArea = area;
-                g._bestSop = sopInstanceUID;
+// classify special single-image instances
+            if (/LABEL|MACRO/.test(imageType)) {
+                g.labelInstance = ds;
+                continue;
             }
+            if (/OVERVIEW|THUMBNAIL/.test(imageType)) {
+                g.overviewInstance = ds;
+                continue;
+            }
+
+            // only consider multi-frame tiled instances as pyramid candidates
+            const frames = Number(ds?.["00280008"]?.Value?.[0] ?? 0);
+            if (!(frames > 1 && rows > 0 && cols > 0 && rows <= 512 && cols <= 512)) {
+                continue;
+            }
+
+            // Prefer ORIGINAL pyramids. Keep DERIVED/RESAMPLED only as fallback.
+            const isOriginal = imageTypeRaw.includes("ORIGINAL");
+            const isDerived  = imageTypeRaw.includes("DERIVED") || imageTypeRaw.includes("RESAMPLED");
+
+            g._pyrOriginal = g._pyrOriginal || [];
+            g._pyrDerived  = g._pyrDerived  || [];
+
+            if (isOriginal && !isDerived) g._pyrOriginal.push(ds);
+            else g._pyrDerived.push(ds);
         }
 
         for (const g of groups.values()) {
@@ -348,21 +366,79 @@ export default class DicomTools {
                 g.thumbUrl    = `${base}/thumbnail`;
                 g.renderedUrl = `${base}/rendered?rows=256`;
             }
+            const originals = (g._pyrOriginal || []).slice();
+            const derived   = (g._pyrDerived  || []).slice();
+
+            const dimsOf = (ds) => {
+                const tpmC = Number(this.v(ds, "00480006") ?? 0);
+                const tpmR = Number(this.v(ds, "00480007") ?? 0);
+                if (tpmC > 0 && tpmR > 0) return { w: tpmC, h: tpmR };
+
+                const cols = Number(this.v(ds, "00280011") ?? 0);
+                const rows = Number(this.v(ds, "00280010") ?? 0);
+                return { w: cols, h: rows };
+            };
+
+            const aspectOK = (a, b, tol = 0.02) => {
+                if (!a.w || !a.h || !b.w || !b.h) return false;
+                const ra = a.w / a.h;
+                const rb = b.w / b.h;
+                return Math.abs(ra - rb) <= tol * Math.max(ra, rb);
+            };
+
+            originals.sort((A, B) => dimsOf(B).w - dimsOf(A).w);
+            derived.sort((A, B) => dimsOf(B).w - dimsOf(A).w);
+
+            let chosen = originals.length ? originals.slice() : [];
+
+            if (chosen.length <= 1 && derived.length) {
+                // Reference dims: use ORIGINAL dims if present; else use biggest derived dims
+                const refDims = chosen.length ? dimsOf(chosen[0]) : dimsOf(derived[0]);
+
+                // Take derived levels that:
+                // - are smaller than the reference
+                // - have ~same aspect ratio (so they are true downsample versions)
+                // - are not duplicates of existing sizes
+                const seen = new Set(chosen.map(ds => {
+                    const d = dimsOf(ds);
+                    return `${d.w}x${d.h}`;
+                }));
+
+                for (const ds of derived) {
+                    const d = dimsOf(ds);
+                    if (!d.w || !d.h) continue;
+                    if (d.w >= refDims.w || d.h >= refDims.h) continue;
+                    if (!aspectOK(d, refDims)) continue;
+
+                    const key = `${d.w}x${d.h}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+
+                    chosen.push(ds);
+                }
+
+                // Re-sort chosen (largest first)
+                chosen.sort((A, B) => dimsOf(B).w - dimsOf(A).w);
+            }
+
+            // Final chosen pyramid instances
+            g.pyramidInstances = chosen;
         }
         return Array.from(groups.values());
     }
 
-    static _ingestInstanceMetadata(instanceUID, instance, metadata, wsiInstance) {
-        const attrs = metadata[0] || {};
+    static _ingestInstanceMetadata(instanceUID, instance, metadata, wsiInstance, frameOrder) {
+        const attrs = metadata?.[0] || {};
 
+        // Frame of Reference (optional)
         if (!wsiInstance.frameOfReferenceUID) {
             wsiInstance.frameOfReferenceUID = this.v(attrs, "00200052");
         }
 
-        const numberOfFrames = this.iv(attrs, "00280008");
+        const numberOfFrames = this.iv(attrs, "00280008") || 0;
 
-        // ... (Keep existing role detection logic) ...
-        const imageType = this.tag(attrs, "00080008")?.map(x => x.toUpperCase());
+        // --- Keep existing role detection logic (OVERVIEW / THUMBNAIL / LABEL / MACRO) ---
+        const imageType = this.tag(attrs, "00080008")?.map(x => String(x).toUpperCase());
         const isSingleFrame = (numberOfFrames || 1) === 1;
         if (isSingleFrame && imageType?.length) {
             const tag = imageType.join("\\");
@@ -370,77 +446,153 @@ export default class DicomTools {
             if (!wsiInstance.macroInstanceUID && /LABEL|MACRO/.test(tag)) wsiInstance.macroInstanceUID = instanceUID;
         }
 
+        // Dimensions
         const totalWidth  = this.iv(attrs, "00480006");
         const totalHeight = this.iv(attrs, "00480007");
         const tileWidth   = this.iv(attrs, "00280011");
         const tileHeight  = this.iv(attrs, "00280010");
 
+        // Per-frame functional groups (often absent or unusable in DICOMweb servers)
         const perFrameFG = attrs["52009230"]?.Value || null;
 
-        // 2. ROBUST PixelSpacing FINDER
-        let spacingArr = attrs["00280030"]?.Value; // Standard PixelSpacing
+        // --- Robust PixelSpacing finder ---
+        let spacingArr = attrs["00280030"]?.Value; // PixelSpacing
         if (!spacingArr) {
-            // Check Shared Functional Groups -> Pixel Measures
-            const sfg = attrs["52009229"]?.Value?.[0];
-            const pms = sfg?.["00289110"]?.Value?.[0];
+            const sfg = attrs["52009229"]?.Value?.[0];           // Shared FG
+            const pms = sfg?.["00289110"]?.Value?.[0];           // Pixel Measures
             spacingArr = pms?.["00280030"]?.Value;
         }
         if (!spacingArr) {
-            // Fallbacks for converted images
-            const nominal = this.fv(attrs, "00182010"); // Nominal Scanned Pixel Spacing
+            const nominal = this.fv(attrs, "00182010");          // Nominal Scanned Pixel Spacing
             if (nominal) spacingArr = [nominal, nominal];
         }
         if (!spacingArr) {
-            const imager = this.fv(attrs, "00181164"); // Imager Pixel Spacing
+            const imager = this.fv(attrs, "00181164");           // Imager Pixel Spacing
             if (imager) spacingArr = [imager, imager];
         }
 
-        if (perFrameFG && numberOfFrames) {
+        // Helper: apply spacing to a level if it doesn't have it yet
+        const applySpacingToLevel = (level, measures) => {
+            const m = measures || spacingArr || null;
+            if (m && (!level.micronsX || !level.micronsY)) {
+                level.micronsX = Number(m[0]);
+                level.micronsY = Number(m[1] ?? m[0]);
+            }
+            if (!level.micronsX || !level.micronsY) {
+                // Hard fallback (0.25 microns) — you already used this default
+                level.micronsX = level.micronsX || 0.00025;
+                level.micronsY = level.micronsY || 0.00025;
+            }
+        };
+
+        // === 1) Try per-frame mapping ONLY if it is truly usable ===
+        // Many DICOMweb servers provide 5200,9230 in metadata but not the slide position keys you rely on.
+        // We only "commit" to this path if it maps most of the expected grid.
+        let didMapPerFrame = false;
+
+        if (Array.isArray(perFrameFG) && numberOfFrames > 1 && totalWidth && totalHeight && tileWidth && tileHeight) {
+            const tilesX = Math.ceil(totalWidth / tileWidth);
+            const tilesY = Math.ceil(totalHeight / tileHeight);
+            const expected = tilesX * tilesY;
+
+            // Make/find level for these dims early (so we fill into one object)
+            const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
+            level.instanceUID = instanceUID;
+            level.frames = level.frames || {};
+            applySpacingToLevel(level, spacingArr);
+
+            let mapped = 0;
+
             for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
                 const fg = perFrameFG[frameIndex];
+                if (!fg) continue;
+
+                // Your current code expects a "plane position" group under tag 0048,021A.
+                // In practice, servers vary; keep your lookup but don't assume success.
                 const planePos = this.v(fg, "0048021A");
-                if (!planePos) continue;
 
-                const pixelMeasures = this.v(fg, "00289110");
-                let measures = pixelMeasures?.["00280030"]?.Value || spacingArr;
+                // Compute row/col offsets. Use floats (DS values are common).
+                const colOff = this.fv(fg, "0048021E") ?? this.fv(planePos, "0048021E");
+                const rowOff = this.fv(fg, "0048021F") ?? this.fv(planePos, "0048021F");
 
-                // Fallback if still missing
-                if (!measures) {
-                    measures = [0.00025, 0.00025]; // Default to 0.25 microns (approx 40x)
-                }
+                if (!Number.isFinite(colOff) || !Number.isFinite(rowOff)) continue;
 
-                const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
-                level.micronsX = measures[0];
-                level.micronsY = measures[1];
-                level.instanceUID = instanceUID;
-                level.frames = level.frames || {};
+                const tileX = Math.floor((colOff ?? 0) / (tileWidth || 1));
+                const tileY = Math.floor((rowOff ?? 0) / (tileHeight || 1));
+                if (tileX < 0 || tileY < 0) continue;
 
-                const row = this.iv(fg, "0048021E") || this.iv(planePos, "0048021E");
-                const col = this.iv(fg, "0048021F") || this.iv(planePos, "0048021F");
-                const tileX = Math.floor((col ?? 0) / (tileWidth || 1));
-                const tileY = Math.floor((row ?? 0) / (tileHeight || 1));
-                level.frames[`${tileX}_${tileY}`] = frameIndex + 1;
+                const key = `${tileX}_${tileY}`;
+                if (level.frames[key] == null) mapped++;
+                level.frames[key] = frameIndex + 1;
             }
+
+            // Only trust this map if it filled most of the grid (otherwise fall back)
+            if (expected > 0 && mapped >= expected * 0.80) {
+                didMapPerFrame = true;
+            } else {
+                // Per-frame info was incomplete; clear partial mapping so it doesn't interfere
+                level.frames = {};
+            }
+
+            const inferred = this._inferFrameOrderFromMap(level, tilesX, tilesY);
+            if (inferred && !wsiInstance._inferredFrameOrder) {
+                wsiInstance._inferredFrameOrder = inferred;
+            }
+        }
+
+        if (didMapPerFrame) {
             return;
         }
 
+        // === 2) Fallback: sequential row-major mapping (works for the metadata you posted) ===
+        // This triggers when per-frame info is absent OR incomplete.
         if (totalWidth && totalHeight && tileWidth && tileHeight && numberOfFrames > 1) {
             const level = this._injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight);
 
-            // Ensure single-instance levels also get the spacing
-            if (!level.micronsX && spacingArr) {
-                level.micronsX = spacingArr[0];
-                level.micronsY = spacingArr[1];
-            }
-
             level.instanceUID = instanceUID;
             level.frames = level.frames || {};
+            applySpacingToLevel(level, spacingArr);
+
             const tilesX = Math.ceil(totalWidth / tileWidth);
             const tilesY = Math.ceil(totalHeight / tileHeight);
-            if (tilesX * tilesY === numberOfFrames) {
-                for (let y = 0; y < tilesY; y++) for (let x = 0; x < tilesX; x++) {
-                    level.frames[`${x}_${y}`] = y * tilesX + x + 1;
+            const expected = tilesX * tilesY;
+
+            // Only build if it's a perfect grid (your sample is perfect: 487*262 == 127594)
+            if (expected === numberOfFrames) {
+                // Different DICOMweb backends / WSI writers may order frames differently.
+                // Support 4 common variants and pick via wsiInstance.frameOrder:
+                //   "row-major" (default)          : f = y*tilesX + x + 1
+                //   "row-major-flipY"              : f = (tilesY-1-y)*tilesX + x + 1
+                //   "col-major"                    : f = x*tilesY + y + 1
+                //   "col-major-flipY"              : f = x*tilesY + (tilesY-1-y) + 1
+                const order = wsiInstance.frameOrder || wsiInstance._inferredFrameOrder || frameOrder || "row-major";
+
+                const frameAt = (x, y) => {
+                    const yy = order.includes("flipY") ? (tilesY - 1 - y) : y;
+                    if (order.startsWith("row-major")) {
+                        return yy * tilesX + x + 1;
+                    }
+                    // col-major
+                    return x * tilesY + yy + 1;
+                };
+
+                for (let y = 0; y < tilesY; y++) {
+                    for (let x = 0; x < tilesX; x++) {
+                        level.frames[`${x}_${y}`] = frameAt(x, y);
+                    }
                 }
+
+                const inferred = this._inferFrameOrderFromMap(level, tilesX, tilesY);
+                if (inferred && !wsiInstance._inferredFrameOrder) {
+                    wsiInstance._inferredFrameOrder = inferred;
+                }
+            } else {
+                console.warn("WSI sequential frame-map mismatch; cannot map frames reliably", {
+                    instanceUID,
+                    totalWidth, totalHeight, tileWidth, tileHeight,
+                    tilesX, tilesY, expected,
+                    numberOfFrames
+                });
             }
         }
     }
@@ -448,15 +600,15 @@ export default class DicomTools {
     static _injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight) {
         const levels = wsiInstance.levels;
 
-        // 0) Reuse existing level if same dimensions
         for (let i = 0; i < wsiInstance.levels.length; i++) {
             const L = levels[i];
             if (L.width != null && L.height != null &&
-                // test dimensions with 1 pixel tolerance
                 Math.abs(L.width - totalWidth) <= 1 && Math.abs(L.height - totalHeight) <= 1) {
+
                 if (L.tileWidth == null && tileWidth != null)  L.tileWidth  = tileWidth;
                 if (L.tileHeight == null && tileHeight != null) L.tileHeight = tileHeight;
-                return i;
+
+                return L;
             }
         }
 
@@ -466,7 +618,6 @@ export default class DicomTools {
             if (L.width != null && L.height != null) {
                 if (totalWidth > L.width) { insertIdx = i; break; } // bigger => more detailed => earlier
             } else {
-                // If existing level lacks dims, put known-dim level ahead of it
                 insertIdx = i; break;
             }
         }
@@ -480,6 +631,67 @@ export default class DicomTools {
 
         levels.splice(insertIdx, 0, newLevel);
         return newLevel;
+    }
+
+    static _inferFrameOrderFromMap(level, tilesX, tilesY) {
+        // Returns one of:
+        // "row-major", "row-major-flipY", "col-major", "col-major-flipY"
+        // based on predominant neighbor deltas in level.frames.
+
+        const frames = level?.frames;
+        if (!frames || tilesX < 2 || tilesY < 2) return null;
+
+        let dxPos1 = 0, dxNeg1 = 0, dxPosTY = 0, dxNegTY = 0;
+        let dyPos1 = 0, dyNeg1 = 0, dyPosTX = 0, dyNegTX = 0;
+
+        const get = (x, y) => frames[`${x}_${y}`];
+
+        // Sample a grid of interior points (avoid last row/col)
+        const stepX = Math.max(1, Math.floor(tilesX / 16));
+        const stepY = Math.max(1, Math.floor(tilesY / 16));
+
+        for (let y = 0; y < tilesY - 1; y += stepY) {
+            for (let x = 0; x < tilesX - 1; x += stepX) {
+                const f = get(x, y);
+                const fx = get(x + 1, y);
+                const fy = get(x, y + 1);
+                if (!Number.isFinite(f)) continue;
+
+                if (Number.isFinite(fx)) {
+                    const d = fx - f;
+                    if (d === 1) dxPos1++;
+                    else if (d === -1) dxNeg1++;
+                    else if (d === tilesY) dxPosTY++;       // col-major: x-step moves by tilesY
+                    else if (d === -tilesY) dxNegTY++;
+                }
+
+                if (Number.isFinite(fy)) {
+                    const d = fy - f;
+                    if (d === 1) dyPos1++;
+                    else if (d === -1) dyNeg1++;
+                    else if (d === tilesX) dyPosTX++;       // row-major: y-step moves by tilesX
+                    else if (d === -tilesX) dyNegTX++;
+                }
+            }
+        }
+
+        // Decide major order by which pattern dominates
+        const rowMajorScore = dyPosTX + dyNegTX + dxPos1 + dxNeg1;
+        const colMajorScore = dxPosTY + dxNegTY + dyPos1 + dyNeg1;
+
+        if (rowMajorScore === 0 && colMajorScore === 0) return null;
+
+        const isRowMajor = rowMajorScore >= colMajorScore;
+
+        if (isRowMajor) {
+            // flipY if moving "down" decreases frame numbers by tilesX
+            const flipY = dyNegTX > dyPosTX;
+            return flipY ? "row-major-flipY" : "row-major";
+        } else {
+            // flipY if moving "down" decreases frame numbers by 1 (col-major)
+            const flipY = dyNeg1 > dyPos1;
+            return flipY ? "col-major-flipY" : "col-major";
+        }
     }
 
     static _readTotalHeader(h) {

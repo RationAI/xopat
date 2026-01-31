@@ -9,7 +9,11 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- EXPORT: OSD -> DICOM ---
     async encodePartial(annotationsGetter, presetsGetter) {
-        const annotations = annotationsGetter();
+        // Handle input whether it's a function or the object itself
+        // If it's the FabricWrapper, toObject() returns the serialized JSON structure
+        const annotations = typeof annotationsGetter === 'function' ? annotationsGetter() :
+            (annotationsGetter?.toObject ? annotationsGetter.toObject().objects : annotationsGetter);
+
         if (!annotations) return { objects: [] };
 
         const meta = this.options.meta;
@@ -19,6 +23,8 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         for (let i = 0; i < annotations.length; i++) {
             const obj = annotations[i];
+
+            // Generate DICOM items (handles specific geometry types)
             const dicomItems = this._toDicomItems(obj, meta);
 
             for (const dicomItem of dicomItems) {
@@ -27,6 +33,7 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
                 dicomItem.ReferencedFrameOfReferenceUID = meta.frameOfReferenceUID;
                 dicomItem.ConceptNameCodeSequence = [this._getConceptCodeForFactory(obj.factoryID)];
 
+                // Add text label if present
                 let textValue = obj.text || obj.name || obj.description || "";
                 if (textValue) {
                     dicomItem.TextValue = textValue.substring(0, 64);
@@ -90,8 +97,6 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         // 2. Identify Factory
         const factoryID = this._getFactoryForConceptCode(conceptCode, type);
-
-        // FIX: Access factory via context.module
         const factory = this.context.module.getAnnotationObjectFactory(factoryID);
         if (!factory) {
             console.warn(`No factory found for ${factoryID}`);
@@ -103,11 +108,21 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         const deconvertor = (p) => ({x: p.x, y: p.y});
 
         try {
-            if (factory.fromPointArray) {
-                // Factories like Polygon, Ruler usually support this
+            // Text: Manually construct params to correctly set left/top
+            if (factoryID === "text") {
+                parameters = {
+                    x: points[0].x,
+                    y: points[0].y,
+                    left: points[0].x,
+                    top: points[0].y,
+                    text: textValue || "Text"
+                };
+            }
+            // Ruler: Use factory method to get [x1, y1, x2, y2]
+            else if (factory.fromPointArray) {
                 parameters = factory.fromPointArray(points, deconvertor);
-            } else {
-                // Fallback: Just pass points directly
+            }
+            else {
                 parameters = points;
             }
         } catch (e) {
@@ -115,37 +130,30 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
             return null;
         }
 
-        // 4. Inject Text / Name into parameters BEFORE creation if possible
-        if (textValue) {
-            if (factoryID === "text") {
-                parameters.text = textValue;
-            } else if (factoryID !== "ruler") {
+        // 4. Inject Text / Name
+        if (textValue && factoryID !== "text") {
+            if (typeof parameters === 'object' && !Array.isArray(parameters)) {
                 parameters.name = textValue;
             }
-        } else if (factoryID === "text") {
-            parameters.text = "Text";
         }
 
-        // 5. Special Handling for Text Position
-        // Text factory usually expects 'x' and 'y' in parameters, but fromPointArray might return an array or object
-        if (factoryID === "text" && points.length > 0) {
-            if (!parameters.x) parameters.x = points[0].x;
-            if (!parameters.y) parameters.y = points[0].y;
-        }
+        // 5. Create Fabric Object
+        // CLONE options to prevent pollution of shared references (fixes "jump to same origin" issue)
+        const commonProps = this.context.module.presets.getCommonProperties();
+        const options = $.extend(true, {}, commonProps);
 
-        // 6. Create Fabric Object
-        const options = this.context.module.presets.getCommonProperties(); // FIX: Access via module
         let fabricObj = factory.create(parameters, options);
 
-        // 7. Post-Creation Fixups
+        // 6. Post-Creation Fixups
         if (fabricObj) {
             if (textValue && factoryID !== "text") {
                 fabricObj.name = textValue;
             }
-            // Ensure type is valid for Fabric (factories might set internal types like 'ruler')
-            if (factoryID === "ruler") {
-                // Ruler factory returns a Group. Groups are valid in Fabric.
-                // No change needed unless factory returns something weird.
+            if (fabricObj._objects) {
+                // todo: avoid calling factory.create(...) above, and ensure the objects were created correctly
+                //  this looks like API correction usecase - we would like to have generic create factory method
+                //  that always takes same parameters and creates object for import (create should work for 'enlivened' objects already)
+                fabricObj.objects = fabricObj._objects;
             }
         }
 
@@ -174,11 +182,55 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
     // --- CONVERSION HELPERS ---
     _toDicomItems(obj, meta) {
-        // FIX: Access via module
         const factory = this.context.module.getAnnotationObjectFactory(obj.factoryID);
         if (!factory) return [];
 
-        const points = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withObjectPoint);
+        let points;
+        try {
+            // Try standard conversion first
+            points = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withObjectPoint);
+        } catch (e) {
+            // Ignore errors here, we'll try fallbacks
+        }
+
+        const fid = obj.factoryID;
+
+        // [FIX] Ruler Export: Handle missing points by digging into Group children
+        if ((!points || points.length === 0 || !Number.isFinite(points[0]?.x)) && (fid === 'ruler')) {
+            const innerObjects = obj._objects || obj.objects;
+
+            if (innerObjects && innerObjects.length > 0) {
+                // Ruler is a Group [Line, Text]. We need the Line (index 0).
+                const line = innerObjects[0];
+
+                if (Number.isFinite(line.x1) && Number.isFinite(line.y1)) {
+                    // Coordinates in a Fabric Group are relative to the group center.
+                    // We must convert them to absolute image coordinates.
+
+                    const gLeft = Number(obj.left) || 0;
+                    const gTop = Number(obj.top) || 0;
+                    const gWidth = Number(obj.width) || 0;
+                    const gHeight = Number(obj.height) || 0;
+
+                    // Calculate Group Center (assuming origin is Top/Left, which is standard for these JSON exports)
+                    const centerX = gLeft + (gWidth / 2);
+                    const centerY = gTop + (gHeight / 2);
+
+                    // Add relative line coords to group center
+                    const p1 = { x: centerX + line.x1, y: centerY + line.y1 };
+                    const p2 = { x: centerX + line.x2, y: centerY + line.y2 };
+
+                    points = [p1, p2];
+                }
+            }
+        }
+        // [FIX] Standard Line fallback
+        else if ((!points || points.length === 0) && fid === 'line') {
+            if (Number.isFinite(obj.x1) && Number.isFinite(obj.y1)) {
+                points = [{ x: obj.x1, y: obj.y1 }, { x: obj.x2, y: obj.y2 }];
+            }
+        }
+
         if (!points || points.length === 0) return [];
 
         const pxX = Number(meta.micronsX);
@@ -186,8 +238,6 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         if (isNaN(pxX) || isNaN(pxY)) return [];
 
         let graphicType = "POLYGON";
-        const fid = obj.factoryID;
-
         if (fid === "polyline" || fid === "line" || fid === "ruler") graphicType = "POLYLINE";
         else if (fid === "point" || fid === "text") graphicType = "POINT";
 

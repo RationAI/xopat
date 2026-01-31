@@ -42,6 +42,7 @@ addPlugin('dicom', class extends XOpatPlugin {
         this.defaultPatient = this.getOptionOrConfiguration('patientUID');
         this.defaultStudy   = this.getOptionOrConfiguration('studyUID');
         this.defaultSeries  = this.getOptionOrConfiguration('seriesUID');
+        this.frameOrder = this.getOption('frameOrder', undefined);
 
         this.lastSopInstanceUID = null;
 
@@ -82,6 +83,8 @@ addPlugin('dicom', class extends XOpatPlugin {
         VIEWER_MANAGER.addHandler('before-first-open', async (evt) => {
             const token = XOpatUser.instance().getSecret();
 
+            // todo test throw here, not stable
+
             const hasSeries = !!this.defaultSeries;
             const hasStudy  = !!this.defaultStudy;
             const hasPatient= !!this.defaultPatient;
@@ -104,7 +107,11 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // Build foreground data; no background needed (unless you want siblings too)
                 const cfg = [{ studyUID: this.defaultStudy, seriesUID: this.defaultSeries }];
                 evt.data = cfg;
-                evt.background = [{ dataReference: 0 }];
+                evt.background = [{
+                    dataReference: 0,
+                    id: this.defaultSeries,
+                    name: this.defaultSeries
+                }];
                 // todo remove acive series, can be mutlitple
                 this.state.activeSeries = this.defaultSeries;
                 this.state.activeStudy  = this.defaultStudy || null;
@@ -117,7 +124,11 @@ addPlugin('dicom', class extends XOpatPlugin {
                 // Prepare all series from the study as background items (do not open a UI yet)
                 const cfg = await this.seriesConfigForStudy(this.serviceUrl, this.defaultStudy, token);
                 evt.data = cfg;
-                evt.background = cfg.map((x, i) => ({ dataReference: i }));
+                evt.background = cfg.map((x, i) => ({
+                    dataReference: i,
+                    id: x.seriesUID,
+                    name: x.seriesUID
+                }));
                 this.state.activeStudy = this.defaultStudy;
                 await this.populateStudyDetails(this.state.activeStudy, token);
                 await this.ensurePatientForCurrentStudy(token);
@@ -150,7 +161,9 @@ addPlugin('dicom', class extends XOpatPlugin {
         }, null, -1);
 
         VIEWER_MANAGER.addHandler('before-open', (evt) => {
-            for (const bg of evt.background || []) {
+            for (let i = 0; i < (evt.background || []).length; i++) {
+                let bg = evt.background[i];
+
                 const data = evt.data?.[bg.dataReference];
                 if (typeof data === "object" && data.studyUID && data.seriesUID) {
                     bg.tileSource = new DICOMWebTileSource({
@@ -159,8 +172,17 @@ addPlugin('dicom', class extends XOpatPlugin {
                         seriesUID: data.seriesUID,
                         useRendered: this.useRendered,
                         patientDetails: this.state.activePatientDetails,
+                        frameOrder: this.frameOrder
                     });
-                    bg.name = data.seriesUID;
+
+                    // Keep identity stable and aligned with the browser:
+                    bg.id = bg.id || data.seriesUID;
+                    bg.name = bg.name || data.seriesUID;
+                }
+
+                // Ensure BackgroundConfig instance
+                if (window.APPLICATION_CONTEXT?.registerConfig) {
+                    evt.background[i] = window.APPLICATION_CONTEXT.registerConfig(bg);
                 }
             }
         });
@@ -338,6 +360,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                         seriesUID,
                         useRendered: this.useRendered,
                         patientDetails: this.state.activePatientDetails,
+                        frameOrder: this.frameOrder
                     });
                     return { id: seriesUID, tileSource, dataReference: { studyUID, seriesUID } };
                 }
