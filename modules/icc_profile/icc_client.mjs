@@ -3,42 +3,15 @@ class ICCProfile extends window.XOpatModuleSingleton {
     constructor() {
         super("icc-profiles");
 
-//         // In the module on the main thread (where you create the worker)
-//         const workerEntry = new URL('./icc.worker.mjs', import.meta.url); // absolute URL to your real worker
-//
-//         const bootstrapSrc = `
-// self.addEventListener('error', e => {
-//   self.postMessage({type:'bootstrap-error', message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, stack: e.error?.stack });
-// });
-// self.addEventListener('unhandledrejection', e => {
-//   self.postMessage({type:'bootstrap-error', message: String(e.reason), stack: e.reason?.stack });
-// });
-//
-// (async () => {
-//   try {
-//     // IMPORTANT: use absolute URL injected from main thread
-//     await import(${JSON.stringify(workerEntry.href)});
-//   } catch (err) {
-//     self.postMessage({ type: 'bootstrap-error', message: String(err), stack: err?.stack });
-//   }
-// })();
-// `;
-//
-//         const blob = new Blob([bootstrapSrc], { type: 'application/javascript' });
-//         const bootstrapURL = URL.createObjectURL(blob);
-//         const worker = new Worker(bootstrapURL, { type: 'module' });
-//
-// // optional: clean up once ready
-// // worker.addEventListener('message', (e) => { if (e.data?.type === 'ready') URL.revokeObjectURL(bootstrapURL); });
-//
-//         worker.addEventListener('message', (e) => {
-//             if (e.data?.type === 'bootstrap-error') {
-//                 console.error('Bootstrap caught worker init error:', e.data.message, e.data.stack);
-//             } else {
-//                 console.log('Worker bootstrap complete:', e.data?.type, e.data?.message, e.data?.stack);
-//             }
-//         });
-
+        this.profileState = new Map();
+        this.getCtx = (contextId) => {
+            let ctx = this.profileState.get(contextId);
+            if (!ctx) {
+                ctx = { status: 'loading', queue: [] };
+                this.profileState.set(contextId, ctx);
+            }
+            return ctx;
+        };
 
         this.worker = new Worker(
             new URL('./icc.worker.mjs', import.meta.url),
@@ -120,33 +93,31 @@ class ICCProfile extends window.XOpatModuleSingleton {
     async init() {
         await this.ready;
 
+        VIEWER_MANAGER.broadcastHandler("open", (e) => this.initEvents(e.eventSource));
+
         this.debug = this.debug || makeDebugPanel();
 
         this.worker.onmessage = async (e) => {
             const { type, image, bitmap, contextId } = e.data;
 
-            if (type === 'profileSet') {
-                this.loaded = true;
-                const q = this.earlyQueue;
-                this.earlyQueue = null; // drain (we’ll re-queue any that are null)
+            if (type === "profileSet") {
+                const ctx = this.getCtx(contextId);
+                ctx.status = "ready";
+
+                const q = ctx.queue;
+                ctx.queue = [];
+
                 for (const item of q) {
-                    const tile = item.ref.deref?.() ?? null;
-                    if (!tile) { continue; } // tile no longer alive
+                    // item has: tile, bmp, before?, jobId
+                    this.pendingTiles[item.jobId] = this.debugMode
+                        ? { tile: item.tile, before: item.before }
+                        : { tile: item.tile };
 
-                    if (item.source.url === contextId) {
-                        // remember tile for the response
-                        this.pendingTiles[item.key] = this.debugMode
-                            ? { tile, before: item.before }
-                            : { tile };
-
-                        // ship the bitmap we saved
-                        this.worker.postMessage(
-                            { type: 'processBitmap', bitmap: item.bmp, contextId: item.key },
-                            [item.bmp]
-                        );
-                    }
+                    this.worker.postMessage(
+                        { type: "processBitmap", bitmap: item.bmp, contextId: item.jobId },
+                        [item.bmp]
+                    );
                 }
-
                 return;
             }
 
@@ -201,48 +172,63 @@ class ICCProfile extends window.XOpatModuleSingleton {
 
                 window.VIEWER.forceRedraw();
             }
-
-            this.initEvents(window.VIEWER);
-            if (window.VIEWER.navigator) {
-                this.initEvents(window.VIEWER.navigator);
-            }
         };
     }
 
     initEvents(viewer) {
-        viewer.world.addHandler("add-item", e => {
+        viewer.world.addHandler("add-item", (e) => {
             const source = e.item.source;
+            if (!source?.downloadICCProfile) return;
 
-            // todo support more than one profile
-            if (!this.loaded && source.downloadICCProfile) {
-                source.downloadICCProfile().then(data => {
-                    if (data instanceof ArrayBuffer) {
-                        this.worker.postMessage({ type: 'setProfile', profile: data, contextId: source.url }, [data]);
-                    } else {
-                        this.earlyQueue = [];
-                        throw new Error("Invalid profile data!");
+            const contextId = source.url;          // stable per slide/source
+            const ctx = this.getCtx(contextId);
+
+            // Only fetch once per context
+            if (ctx.status === "ready" || ctx.status === "none" || ctx.status === "error") return;
+            if (ctx.status === "loading" && ctx._started) return;
+            ctx._started = true;
+
+            source.downloadICCProfile()
+                .then((data) => {
+                    if (data == null) {
+                        ctx.status = "none";            // no profile -> process without conversion
+                        // optionally: drain queued tiles without conversion (or just drop queue)
+                        ctx.queue.length = 0;
+                        return;
                     }
-                }).catch(e => {
-                    console.warn("Failed to load icc profile data: continue without", e);
-                    this.earlyQueue = null;
-                });
-            }
-        });
+                    if (!(data instanceof ArrayBuffer)) {
+                        ctx.status = "error";
+                        ctx.queue.length = 0;
+                        throw new Error("Invalid ICC profile data (expected ArrayBuffer)");
+                    }
 
+                    // Ask worker to install the profile for THIS contextId
+                    this.worker.postMessage({ type: "setProfile", profile: data, contextId }, [data]);
+                    // status flips to "ready" when worker replies profileSet for this contextId
+                })
+                .catch((err) => {
+                    console.warn("[ICC] Failed to load profile; continuing without conversion", err);
+                    ctx.status = "error";
+                    ctx.queue.length = 0;
+                });
+        });
         // window.VIEWER.world.addHandler("remove-item", (e) => {
         //     remove unused profiles
         // });
 
-        viewer.addHandler('tile-loaded', async e => {
+        viewer.addHandler("tile-loaded", async (e) => {
             if (!e.data) return;
             const source = e.tiledImage?.source;
             if (!source?.downloadICCProfile) return;
+
+            const contextId = source.url;
+            const ctx = this.getCtx(contextId);
 
             const jobId = e.tile.cacheKey;
             const data = e.data;
 
             let bmpForWorker;
-            let beforeForDebug = null; // only created in debug mode
+            let beforeForDebug = null;
 
             if (data instanceof HTMLImageElement) {
                 bmpForWorker = await createImageBitmap(data);
@@ -254,31 +240,73 @@ class ICCProfile extends window.XOpatModuleSingleton {
                 bmpForWorker = data.transferToImageBitmap();
                 if (this.debugMode) beforeForDebug = data.transferToImageBitmap();
             } else {
-                console.warn('tile-loaded: unsupported data type', data);
+                console.warn("tile-loaded: unsupported data type", data);
                 return;
             }
 
-            if (!this.loaded && this.earlyQueue) {
-                // --- profile not ready yet → queue weakly ---
-                const token = Symbol(jobId);
-                const rec = { ref: new WeakRef(e.tile), key: jobId, bmp: bmpForWorker, before: beforeForDebug, token, source };
-                this.earlyQueue.push(rec);
-                if (this.finalizer) this.finalizer.register(e.tile, token, rec);
-
-                // Do NOT store strong refs in pendingTiles yet.
+            // If profile isn't ready, queue for this context
+            if (ctx.status === "loading") {
+                ctx.queue.push({ tile: e.tile, bmp: bmpForWorker, before: beforeForDebug, jobId });
                 return;
             }
 
-            // store only what we need
+            // If no profile (or failed), you can either:
+            // (a) do nothing (no conversion), OR
+            // (b) still processBitmap with an identity transform in worker
+            if (ctx.status !== "ready") return;
+
             this.pendingTiles[jobId] = this.debugMode
                 ? { tile: e.tile, before: beforeForDebug }
                 : { tile: e.tile };
 
             this.worker.postMessage(
-                { type: 'processBitmap', bitmap: bmpForWorker, contextId: jobId },
-                [bmpForWorker] // transfer
+                { type: "processBitmap", bitmap: bmpForWorker, contextId: jobId },
+                [bmpForWorker]
             );
         }, null, Infinity);
+    }
+
+    attachIccToViewer(viewer, iccClient) {
+        // Run early in the invalidation pipeline (priority < 0 tends to run earlier than default 0)
+        viewer.addHandler(
+            "tile-invalidated",
+            async (e) => {
+                const tile = e.tile;
+                const tiledImage = e.tiledImage;
+
+                // 1) Decide whether this tile should be color-managed
+                //    (you likely key off the TileSource or item metadata)
+                const source = tiledImage?.source;
+                const ctxId = source?.url || source?.id || tiledImage?.id;
+                if (!ctxId) return;
+
+                // If profile not ready yet, do nothing (tile draws uncorrected for now).
+                // Optionally you can trigger download here, then requestInvalidate later.
+                if (!iccClient.hasProfileFor(ctxId)) return;
+
+                // 2) Get the cache record that is about to become the drawable "main cache".
+                //    In this prerelease, the mutation point is the cache record, NOT tile.image/context2D.
+                //
+                //    Different builds pass different properties; prefer e.cache if present, else tile.getCache().
+                const cache =
+                    e.cache || e.cacheRecord || tile.getCache?.(tile.cacheKey) || tile.getCache?.();
+                if (!cache) return;
+
+                // 3) Get an ImageBitmap from the cache (copy=true by default; safe for transfer)
+                //    If your cache already *is* an ImageBitmap, this stays cheap.
+                const bmp = await cache.getDataAs("imageBitmap"); // CacheRecord.getDataAs(...) :contentReference[oaicite:8]{index=8}
+                if (!bmp) return;
+
+                // 4) Process in worker and write back into THE cache record.
+                const corrected = await iccClient.processBitmapForContext(ctxId, bmp);
+
+                // 5) Replace cached data so future draws/viewport changes reuse corrected pixels.
+                //    This is the “put it into the original cache” step you want.
+                await cache.setDataAs(corrected, "imageBitmap"); // CacheRecord.setDataAs(...) :contentReference[oaicite:9]{index=9}
+            },
+            null,
+            -10
+        );
     }
 }
 
