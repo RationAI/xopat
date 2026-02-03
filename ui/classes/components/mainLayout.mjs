@@ -56,6 +56,11 @@ export class MainLayout extends BaseComponent {
         this.collapseBreakpointPx = options.collapseBreakpointPx ?? 900;
         this.collapsed = false;
 
+        // fullscreen-on-narrow state
+        this._isFullscreen = false;
+        this._prevViewerDisplay = null;
+        this._prevDockInlineStyles = null;
+
         this._tabsArr = [];
         if (Array.isArray(options.tabs)) this._tabsArr.push(...options.tabs);
         this._menu = options.menu || null;
@@ -127,7 +132,101 @@ export class MainLayout extends BaseComponent {
     /** Expand the dock. */
     expand() { this.collapsed = false; this._applyVisibility(); }
     /** Toggle the dock collapsed/expanded state. */
-    toggle() { this.collapsed ? this.expand() : this.collapse(); }
+    toggle() {
+        const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
+        if (narrow) {
+            this.toggleFullscreen();
+        } else {
+            this.collapsed ? this.expand() : this.collapse();
+        }
+    }
+
+    /** Toggle fullscreen overlay when in narrow viewport. */
+    toggleFullscreen() {
+        this._isFullscreen ? this._closeFullscreen() : this._openFullscreen();
+    }
+
+    closeFullscreen() {
+        this._closeFullscreen();
+    }
+
+    _openFullscreen() {
+        if (!this._dockEl || !this._viewerEl || this._isFullscreen) return;
+        this._isFullscreen = true;
+        // save inline state to restore later
+        this._prevViewerDisplay = this._viewerEl.style.display || "";
+        // also save the OSd (image) element display and top-side styles so we can keep top panel visible
+        const osdEl = document.getElementById('osd');
+        this._prevOsdDisplay = osdEl ? (osdEl.style.display || '') : null;
+        this._osdElement = osdEl;
+        const topSide = document.getElementById('top-side');
+        this._topSideElement = topSide;
+        if (topSide && !topSide.getAttribute('data-prev-style')) {
+            const prev = {
+                position: topSide.style.position || '',
+                top: topSide.style.top || '',
+                left: topSide.style.left || '',
+                width: topSide.style.width || '',
+                zIndex: topSide.style.zIndex || ''
+            };
+            topSide.setAttribute('data-prev-style', JSON.stringify(prev));
+        }
+
+        this._prevDockInlineStyles = {
+            width: this._dockEl.style.width || "",
+            height: this._dockEl.style.height || "",
+        };
+
+        // apply fullscreen styles to dock and hide viewer
+        this._dockEl.style.width = "100%";
+        this._dockEl.style.height = "100%";
+        // hide only the image/container, keep top-side visible
+        if (this._osdElement) this._osdElement.style.display = "none";
+        // add top padding so content is not hidden under pinned top-side
+        if (this._topSideElement) {
+            const rect = this._topSideElement.getBoundingClientRect();
+            const topH = Math.ceil(rect.height || 0);
+        }
+        // pin top-side to fixed so it stays visible above the fullscreen dock
+        if (this._topSideElement) {
+            this._topSideElement.style.position = 'fixed';
+            this._topSideElement.style.top = '0';
+            this._topSideElement.style.left = '0';
+            this._topSideElement.style.width = '100%';
+            this._topSideElement.style.zIndex = '10001';
+        }
+        try { document.documentElement.style.overflow = "hidden"; } catch (e) {}
+    }
+
+    _closeFullscreen() {
+        if (!this._dockEl || !this._viewerEl || !this._isFullscreen) return;
+        this._isFullscreen = false;
+        const s = this._prevDockInlineStyles || {};
+        this._dockEl.style.width = s.width;
+        this._dockEl.style.height = s.height;
+        // restore osd (image) display instead of whole viewer
+        if (this._osdElement && this._prevOsdDisplay !== null) this._osdElement.style.display = this._prevOsdDisplay;
+        else this._viewerEl.style.display = this._prevViewerDisplay;
+        try { document.documentElement.style.overflow = ""; } catch (e) {}
+        // restore top-side previous inline styles
+        if (this._topSideElement) {
+            const prevAttr = this._topSideElement.getAttribute('data-prev-style');
+            if (prevAttr) {
+                try {
+                    const prev = JSON.parse(prevAttr);
+                    this._topSideElement.style.position = prev.position || '';
+                    this._topSideElement.style.top = prev.top || '';
+                    this._topSideElement.style.left = prev.left || '';
+                    this._topSideElement.style.width = prev.width || '';
+                    this._topSideElement.style.zIndex = prev.zIndex || '';
+                } catch (e) {}
+                this._topSideElement.removeAttribute('data-prev-style');
+            }
+        }
+        // ensure layout classes and visibility are correct after restoring
+        this._applyResponsiveLayout();
+        this._updateDockVisibility();
+    }
 
     /** ---- internals ---- */
     /** @private */
@@ -159,9 +258,11 @@ export class MainLayout extends BaseComponent {
         if (!this._dockEl) return;
         if (this.collapsed) {
             this._dockEl.style.width = "0px";
+            this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
         } else {
             this._dockEl.style.width = `${this.widthPx}px`;
+            this._dockEl.style.height = "";
             this._handleEl.style.display = "";
         }
     }
@@ -173,16 +274,17 @@ export class MainLayout extends BaseComponent {
 
         this._shellEl.classList.toggle("flex-col", narrow);
         this._shellEl.classList.toggle("flex-row", !narrow);
+        this._viewerEl.style.order = this.position === "left" ? "1" : "0";
+        this._dockEl.style.order = this.position === "left" ? "0" : "2";
+        this._applyVisibility();
 
         if (narrow) {
-            this._viewerEl.style.order = "0";
-            this._dockEl.style.order = "1";
-            this._dockEl.style.width = "100%";
-            this._handleEl.style.display = "none";
+            // default collapsed on narrow; fullscreen may be toggled separately
+            this.collapse();
         } else {
-            this._viewerEl.style.order = this.position === "left" ? "1" : "0";
-            this._dockEl.style.order = this.position === "left" ? "0" : "2";
-            this._applyVisibility();
+            // leaving narrow viewport: ensure any fullscreen overlay is closed and viewer restored
+            if (this._isFullscreen) this._closeFullscreen();
+            this.expand();
         }
     }
 
@@ -223,26 +325,24 @@ export class MainLayout extends BaseComponent {
      */
     create() {
         // --- viewer core (IDs unchanged) ---
-        const osd = div({ id:"osd", style:"pointer-events:auto;", class:"absolute w-full h-full top-0 left-0" });
-        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `
-<div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
-    <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
-        <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
-        <div class="flex flex-row">
-            <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>
-            <div id="top-side-left-fullscreen" style="margin-left: 5px; pointer-events: auto;"></div>
-        </div>
-    </div>
-</div>
+        const osd = div({ id:"osd", style:"position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events:auto;", class:"grow relative w-full overflow-hidden" });
+        const viewerWrap = div({ class:"relative flex-1" }, osd, new RawHtml(null, `<div id="fullscreen-menu" class="bg-base-100"></div>`).create());
 
-<div id="fullscreen-menu" class="bg-base-100"></div>
-<div id="toolbars-container"></div>
+        const topSide = new Div({ id:"top-side" }, new RawHtml(null, `
+            <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
+                <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
+                    <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
+                    <div class="flex flex-row">
+                        <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>
+                        <div id="top-side-left-fullscreen" style="margin-left: 5px; pointer-events: auto;"></div>
+                    </div>
+                </div>
+            </div>`).create());
+        topSide.attachTo(document.getElementById('top-container'));
 
-<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">
-    <div id="bottom-menu-left"></div>
-    <div id="bottom-menu-center"></div>
-    <div id="bottom-menu-right"></div>
-</div>`).create());
+        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0;" });
+        toolbarsContainer.attachTo(document.getElementById('bottom-container'));
+
 
         // --- dock ---
         const dock = new Div({
@@ -272,5 +372,11 @@ export class MainLayout extends BaseComponent {
         this._updateDockVisibility();
 
         return shell;
+    }
+
+    onLayoutChange(details) {
+        console.log("Layout change detected in MainLayout:", details);
+        this._applyResponsiveLayout();
+
     }
 }

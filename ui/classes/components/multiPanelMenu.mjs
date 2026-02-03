@@ -92,8 +92,16 @@ class MultiPanelMenu extends Menu {
      * @param {*} id of the item we want to close
      */
     closeTab(id) {
-        if (id in this.tabs) {
+        if (id in this.tabs && !(this.parentElement.classMap["mobile"] === "mobile")) {
             this.tabs[id].close();
+            return true;
+        }
+        return false;
+    }
+
+    openTab(id) {
+        if (id in this.tabs) {
+            this.tabs[id].open();
             return true;
         }
         return false;

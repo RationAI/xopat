@@ -574,6 +574,67 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         Tooltip: UI.Services.GlobalTooltip, //alias
 
+        MobileNavBar: {
+            context: $("#bottom-container"),
+            bar: "",
+            init: function () {
+                
+
+                this.bar = new UI.Join({
+                    id: "mobile-navbar", 
+                    style: ui.Join.STYLE.HORIZONTAL
+                    },
+                    new UI.Button(
+                        {
+                            id: "global-menu-button", 
+                            size: UI.Button.SIZE.SMALL,
+                            onClick: function () {
+                                window.LAYOUT.toggle();
+                                if (document.getElementById("toolbars-container").style.display != "none") {
+                                    document.getElementById("toolbars-container").style.display = "none";
+                                } else {
+                                    document.getElementById("toolbars-container").style.display = "";
+                                }
+                                if (VIEWER_MANAGER.menu.classMap.display != "hidden") {
+                                    VIEWER_MANAGER.menu.setClass("display", "hidden");
+                                    document.getElementById("toolbars-container").style.display = "none";
+                                }
+                            }
+                        }, "Global Menu"
+                    ),
+                    new UI.Button(
+                        {
+                            id: "viewer-menu-button", 
+                            size: UI.Button.SIZE.SMALL,
+                            onClick: function () {
+                                window.LAYOUT.collapse();
+                                window.LAYOUT.closeFullscreen();
+                                if (VIEWER_MANAGER.menu.classMap.display === "hidden") {
+                                    VIEWER_MANAGER.menu.setClass("display", "");
+                                    document.getElementById("toolbars-container").style.display = "none";
+                                    for (let i of Object.keys(VIEWER_MANAGER.menu.menu.tabs)) {
+                                        VIEWER_MANAGER.menu.menu.getTab(i).open();
+                                    }
+                                } else {
+                                    document.getElementById("toolbars-container").style.display = "";
+                                    VIEWER_MANAGER.menu.setClass("display", "hidden");
+                                }
+                            }
+                        }, "Viewer Menu"
+                    ),
+                );
+                this.bar.attachTo(this.context);
+                this.context[0].style.height = "auto";
+                window.addEventListener('app:layout-change', (e) => {
+                    if (e.detail.width < 600) {
+                        this.context[0].style.height = "auto";
+                    } else {
+                        this.context[0].style.height = "0px";
+                    }
+                });
+            }
+        },
+
         //setup component in config.json -> can be added in URL, important setting such as removed cookies, theme etc -> can be set from outside
         FullscreenMenu: {
             context: $("#fullscreen-menu"),
@@ -615,7 +676,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 );
                 const settings = div(
                   div({ class: "boxed"},
-                    span({ class: "f3-light header-sep" },
+                    span({ class: "f3-light" },
                     "Appearance"),
                   themeSelect.create(),
                   this.createCheckbox(
@@ -646,7 +707,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('statusBar', true)),
                   ),
                   div({ class: "boxed"},
-                  span({ class: "f3-light header-sep" }, "Behaviour", ),
+                  span({ class: "f3-light" }, "Behaviour", ),
                   this.createCheckbox(
                     "cookies-checkbox",
                     $.t('settings.cookies'),
@@ -654,7 +715,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     APPLICATION_CONTEXT.getOption('bypassCookies', false)),
                   ),
                   div({ class: "boxed"},
-                  span({ class: "f3-light header-sep" }, "Other", ),
+                  span({ class: "f3-light" }, "Other", ),
                   this.createCheckbox(
                     "debug-checkbox",
                     $.t('settings.debugMode'),
@@ -744,7 +805,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                             }, class: "btn"
                         }, "Load with selected"),
                     ),
-                    span({class: "text-xl font-semibold header-sep", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
+                    span({class: "text-xl font-semibold", style: "margin-top: 5px; margin-bottom: 5px"}, "Plugins"),
                     div({id: "plug-list-content-inner", class: "boxed"},
                         div({id: "plug-list-content-inner-content"}, ...pluginDivs),
                     ),
@@ -826,6 +887,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     }
                 );
                 menu.attachTo(document.getElementById('toolbars-container'));
+                menu.onLayoutChange({width: window.innerWidth});
 
                 // if (!APPLICATION_CONTEXT.getOption(`toolBar`, true)){
                 //     document.querySelectorAll('div[id^="toolbar-"]').forEach((el) => el.classList.add("hidden"));
@@ -925,7 +987,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 let content = document.createElement("span");
                 content.setAttribute("class", "one-liner");
                 node.appendChild(content);
-                document.getElementById("bottom-menu-right").appendChild(node);
+                document.getElementById("middle-container").appendChild(node);
                 this.context = node;
 
                 if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
@@ -1172,4 +1234,16 @@ ${label}
             }
         },
     };
+
+    let resizeTimer;
+    // resize handler to notify layout changes
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            // Vyšle globální zprávu
+            window.dispatchEvent(new CustomEvent('app:layout-change', { 
+                detail: { width: window.innerWidth } 
+            }));
+        }, 200);
+    });
 }

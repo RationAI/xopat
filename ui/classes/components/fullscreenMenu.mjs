@@ -54,6 +54,10 @@ export class FullscreenMenu extends BaseComponent{
         }
         // todo - better usage design? prevent using this directly...
         this._children = [];
+        this.mobile = false;
+        if (window.innerWidth < 600) {
+            this.mobile = true;
+        }
     }
 
     /**
@@ -75,7 +79,7 @@ export class FullscreenMenu extends BaseComponent{
     }
 
     create(){
-        return div({ id: "overlay", class: "hidden" },
+        return div({ id: "overlay", class: "hidden " + (this.mobile ? "mobile" : "") },
             div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
             div({ id: "overlay-content", class: "relative" }, this.closeBtn.create(), this.content.create()),
         );
@@ -91,6 +95,7 @@ export class FullscreenMenu extends BaseComponent{
 
         if (overlay.classList.contains("hidden")) {
             document.getElementById("overlay").classList.toggle("hidden");
+            document.getElementById("toolbars-container").style.display = "none";
         }
 
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
@@ -102,6 +107,7 @@ export class FullscreenMenu extends BaseComponent{
             }
             else if(tab.id == id && tab.classMap.display == "") {
                 document.getElementById("overlay").classList.toggle("hidden");
+                document.getElementById("toolbars-container").style.display = "";
             }
 
             tab.setClass("display", "hidden");
@@ -113,6 +119,7 @@ export class FullscreenMenu extends BaseComponent{
             tab.setClass("display", "hidden");
         }
         document.getElementById("overlay").classList.add("hidden");
+        document.getElementById("toolbars-container").style.display = "";
     }
 
 
@@ -121,5 +128,13 @@ export class FullscreenMenu extends BaseComponent{
      */
     getContentDomNode() {
         return document.getElementById(this.id + "-content");
+    }
+
+    onLayoutChange(details) {
+        if (details.width < 600) {
+            document.getElementById("overlay").classList.add("mobile");
+        } else {
+            document.getElementById("overlay").classList.remove("mobile");
+        }
     }
 }

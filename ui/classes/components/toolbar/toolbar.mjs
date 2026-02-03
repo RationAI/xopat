@@ -404,8 +404,8 @@ class Toolbar extends BaseComponent {
             this._outerEl.style.top  = `${t}px`;
 
             // remember snapped pos
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
 
             // let FloatingManager re-clamp if needed (top bar, margins, etc.)
             if (this._fmToken && UI.Services.FloatingManager.clampNow) {
@@ -414,7 +414,7 @@ class Toolbar extends BaseComponent {
         }
 
         // --- orientation: vertical near a side edge, else horizontal ---
-        if (this._horizontalOnly) {
+        if (this._horizontalOnly || window.innerWidth < 600) {
             this._setOrientation("horizontal", force);
             return;
         }
@@ -443,6 +443,19 @@ class Toolbar extends BaseComponent {
             tab.contentDiv?.setClass("display", "display-none");
         }
         this._focused = undefined;
+    }
+
+    onLayoutChange(details) {
+        const root = this._outerEl;
+        if (details.width < 600) {
+            this.setClass("mobile", "mobile");
+            root.querySelector(".handle")?.classList.add("hidden")
+            this._setOrientation("horizontal", true);
+        } else {
+            this.setClass("mobile", "");
+            root.querySelector(".handle")?.classList.remove("hidden")
+            this._setOrientation("horizontal", false);
+        }
     }
 }
 

@@ -352,6 +352,7 @@ class Dropdown extends BaseSelectableComponent {
 
         // --- Hover Events (Standard) ---
         if (hasChildren) {
+            // Hover behaviour for desktop
             liEl.addEventListener("mouseenter", () => {
                 self._isHoveringParent = true;
                 if (self._activeSubmenu?.parentId === item.id) {
@@ -364,6 +365,29 @@ class Dropdown extends BaseSelectableComponent {
                 self._isHoveringParent = false;
                 self._scheduleSubmenuCheck();
             });
+
+            // Click/tap behaviour for touch devices only: open/toggle submenu on click
+            const isTouchDevice = (typeof window !== "undefined") && (
+                ("ontouchstart" in window) ||
+                (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) ||
+                (window.matchMedia && window.matchMedia("(hover: none)").matches)
+            );
+            if (isTouchDevice) {
+                liEl.addEventListener("click", (e) => {
+                    // Prevent the anchor default navigation and stop propagation
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    // Toggle submenu when tapping the parent item
+                    if (self._activeSubmenu?.parentId === item.id) {
+                        self._closeSubmenu();
+                        return;
+                    }
+                    // mark hovering to keep submenu open while interacting
+                    self._isHoveringParent = true;
+                    self._openSubmenu(item, liEl);
+                });
+            }
         } else {
             liEl.addEventListener("mouseenter", () => {
                 self._isHoveringParent = false;
@@ -382,8 +406,8 @@ class Dropdown extends BaseSelectableComponent {
         if (link) link.classList.add('bg-base-300');
 
         const submenuEl = div({
-            class: "dropdown-content bg-base-200 text-base-content rounded-box shadow-xl border border-base-300 absolute w-52 max-w-full min-w-max z-[9999]",
-            style: "display: block;"
+            class: "dropdown-content bg-base-200 text-base-content rounded-box shadow-xl border border-base-300 w-52 max-w-full min-w-max z-[9999]",
+            style: "display: block; position: fixed;"
         });
 
         // Determine style for this specific submenu
@@ -399,7 +423,6 @@ class Dropdown extends BaseSelectableComponent {
         // Append to container
         if (this._contentEl) this._contentEl.appendChild(submenuEl);
         else document.body.appendChild(submenuEl);
-
         // Events
         submenuEl.addEventListener("mouseenter", () => {
             this._isHoveringSubmenu = true;
@@ -410,19 +433,40 @@ class Dropdown extends BaseSelectableComponent {
             this._scheduleSubmenuCheck();
         });
 
-        // Positioning logic (simplified for brevity, keep your existing logic)
+        // Positioning: place submenu adjacent to the parent row, prefer to the right.
+        // If it would overflow the viewport, flip to the left; otherwise clamp to viewport edges.
+        // Placement using viewport coordinates (anchorRect is already viewport-based)
         const anchorRect = anchorEl.getBoundingClientRect();
-        const containerRect = this._contentEl ? this._contentEl.getBoundingClientRect() : document.body.getBoundingClientRect();
+        const margin = 6;
+        const vw = document.documentElement.clientWidth || window.innerWidth;
+        const vh = document.documentElement.clientHeight || window.innerHeight;
 
-        // ... (Keep your existing positioning calculations here) ...
-        // For brevity, assuming standard positioning logic:
-        let left = (anchorRect.right - containerRect.left) - 5;
-        let top = (anchorRect.top - containerRect.top) - 5;
-        // Check bounds...
-        const submenuWidth = 208;
-        if (anchorRect.right + submenuWidth > window.innerWidth) {
-            left = (anchorRect.left - containerRect.left) - submenuWidth + 5;
+        const submenuWidth = submenuEl.offsetWidth || 0;
+        const submenuHeight = submenuEl.offsetHeight || 0;
+
+        // Prefer to place to the right of the anchor
+        let left = Math.round(anchorRect.right + 6);
+        let top = Math.round(anchorRect.top);
+
+        // If overflowing right, try flipping to left of anchor
+        if (left + submenuWidth > vw - margin) {
+            const altLeft = Math.round(anchorRect.left - submenuWidth - 6);
+            if (altLeft >= margin) left = altLeft;
+            else left = Math.max(margin, vw - margin - submenuWidth);
         }
+
+        // Clamp left to viewport
+        if (left < margin) left = margin;
+
+        // Vertical: ensure submenu fits; prefer aligned to anchor top, else align bottom to anchor bottom
+        if (top + submenuHeight > vh - margin) {
+            const altTop = Math.round(anchorRect.bottom - submenuHeight);
+            if (altTop >= margin) top = altTop;
+            else top = Math.max(margin, vh - margin - submenuHeight);
+        }
+        if (top < margin) top = margin;
+
+        // Apply fixed-position coordinates
         submenuEl.style.left = `${left}px`;
         submenuEl.style.top = `${top}px`;
 
@@ -519,7 +563,9 @@ class Dropdown extends BaseSelectableComponent {
                 container.appendChild(menu);
             }
 
+            // Make visible for measurements but keep hidden from user until placed
             menu.style.visibility = "hidden";
+            menu.style.display = "block";
             menu.style.top = "0px";
             menu.style.left = "0px";
 
@@ -533,33 +579,44 @@ class Dropdown extends BaseSelectableComponent {
             const verticalToolbar = !!toolbarRoot && toolbarRoot.classList.contains("flex-col");
             const placement = this.placement;
 
-            let openRight;
-            if (placement === "right") {
-                openRight = true;
-            } else if (placement === "below") {
-                openRight = false;
-            } else {
-                openRight = verticalToolbar;
-            }
+            // prefer opening below and to the right (or depending on toolbar)
+            let preferRight;
+            if (placement === "right") preferRight = true;
+            else if (placement === "below") preferRight = false;
+            else preferRight = verticalToolbar;
 
+            // initial coordinates relative to container
             let left, top;
-            if (openRight) {
-                left = (hostRect.right - contRect.left) + margin;
-                top  = (hostRect.top   - contRect.top);
-            } else {
-                left = (hostRect.left   - contRect.left);
-                top  = (hostRect.bottom - contRect.top) + margin;
+            // default: open below, align to host left
+            left = hostRect.left - contRect.left;
+            top  = hostRect.bottom - contRect.top + margin;
+
+            // if toolbar wants right alignment, align menu's left with host's right
+            if (preferRight) {
+                left = hostRect.right - contRect.left - mw + margin;
             }
 
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
+            // viewport dims (exclude scrollbars)
+            const vw = document.documentElement.clientWidth || window.innerWidth;
+            const vh = document.documentElement.clientHeight || window.innerHeight;
+
+            // convert to viewport coords for overflow checks
             let vpLeft = contRect.left + left;
             let vpTop  = contRect.top + top;
 
+            // Try horizontal flipping if overflow on right or left
             if (vpLeft + mw > vw - margin) {
-                const delta = (vpLeft + mw) - (vw - margin);
-                left -= delta;
-                vpLeft -= delta;
+                // try opening to the other side of the host
+                const altLeft = hostRect.left - contRect.left - mw - margin; // place left of host
+                if (altLeft >= -margin) {
+                    left = altLeft;
+                    vpLeft = contRect.left + left;
+                } else {
+                    // clamp to right edge
+                    const delta = (vpLeft + mw) - (vw - margin);
+                    left -= delta;
+                    vpLeft -= delta;
+                }
             }
             if (vpLeft < margin) {
                 const delta = margin - vpLeft;
@@ -567,10 +624,18 @@ class Dropdown extends BaseSelectableComponent {
                 vpLeft += delta;
             }
 
+            // Try vertical flip (open above) if it would overflow bottom
             if (vpTop + mh > vh - margin) {
-                const delta = (vpTop + mh) - (vh - margin);
-                top -= delta;
-                vpTop -= delta;
+                const canOpenAbove = (hostRect.top - mh - margin) >= 0;
+                if (canOpenAbove) {
+                    top = hostRect.top - contRect.top - mh - margin;
+                    vpTop = contRect.top + top;
+                } else {
+                    // clamp to bottom edge
+                    const delta = (vpTop + mh) - (vh - margin);
+                    top -= delta;
+                    vpTop -= delta;
+                }
             }
             if (vpTop < margin) {
                 const delta = margin - vpTop;

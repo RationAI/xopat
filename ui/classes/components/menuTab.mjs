@@ -130,10 +130,11 @@ class MenuTab extends BaseComponent {
     }
 
     close() {
-        this.headerButton?.setClass("type", "btn-neutral");
-        if (this.contentDiv){
-            this._removeFocus();
-        };
+        this._removeFocus();
+    }
+
+    open() {
+        this._setFocus();
     }
 
     /**

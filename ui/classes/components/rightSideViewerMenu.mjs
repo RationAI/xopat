@@ -148,9 +148,25 @@ export class RightSideViewerMenu extends BaseComponent {
         return div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; width: 400px; margin-top: 40px; overflow-y: auto;"
+                style: "position: absolute; width: 400px; overflow-y: auto;"
             },
             this.menu.create()
         );
+    }
+
+    onLayoutChange(details) {
+        console.log("RightSideViewerMenu onLayoutChange", details);
+        if (details.width < 600) {
+            this.setClass("mobile", "mobile");
+            this.setClass("display", "hidden");
+        } else {
+            this.setClass("mobile", "");
+            this.setClass("display", "");
+            for (let i of Object.keys(this.menu.tabs)) {
+                if (!APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
+                    this.menu.getTab(i).close();
+                }
+            }
+        }
     }
 }

@@ -10,6 +10,10 @@ import { FAIcon } from '../classes/elements/fa-icon.mjs';
 export class AppBar {
 
     init() {
+        window.addEventListener('app:layout-change', (e) => {
+            // Každá komponenta se sama rozhodne, co udělá
+            this.onLayoutChange?.(e.detail);
+        });
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
         this.menu = new MainPanel({
@@ -35,21 +39,19 @@ export class AppBar {
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
 
-        if (window.innerWidth < 640) {
-            this.rightMenu = new MainPanel({
-                    id: "top-user-buttons-menu",
-                    orientation: Menu.ORIENTATION.TOP,
-                    buttonSide: Menu.BUTTONSIDE.LEFT,
-                    rounded: Menu.ROUNDED.ENABLE,
-                    extraClasses: {bg: "bg-transparent"},
-                },{
-                    id: "Menu", icon: "fa-bars",
-                    body: [], class: Dropdown
-                }
-            );
-            this.RightSideMenu.init(this.rightMenu.getTab("Menu"));
-        }
-        else {
+        this.rightMenuCollapsed = new MainPanel({
+                id: "top-user-buttons-menu-collapsed",
+                orientation: Menu.ORIENTATION.TOP,
+                buttonSide: Menu.BUTTONSIDE.LEFT,
+                rounded: Menu.ROUNDED.ENABLE,
+                extraClasses: {bg: "bg-transparent"},
+            },{
+                id: "Menu", icon: "fa-bars",
+                body: [], class: Dropdown
+            }
+        );
+        this.rightMenuSideCollapsed.init(this.rightMenuCollapsed.getTab("Menu"));
+
         // Right part: static
         this.rightMenu = new MainPanel({
                 id: "top-user-buttons-menu",
@@ -59,7 +61,6 @@ export class AppBar {
                 extraClasses: { bg: "bg-transparent" }
             },
             { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            //{ id: "show-right-menu", icon: "fa-angles-left", title: $.t('main.bar.showRightMenu'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("right-side-menu-mobile");} },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
@@ -88,9 +89,21 @@ export class AppBar {
                 ], class: Dropdown},
             { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
         );
-        }
+
         this.rightMenu.attachTo($("#top-side-left-user"));
         this.rightMenu.set(Menu.DESIGN.ICONONLY);
+        this.rightMenuCollapsed.attachTo($("#top-side-left-user"));
+        this.rightMenuCollapsed.set(Menu.DESIGN.ICONONLY);
+
+        if (window.innerWidth < 600) {
+            this.rightMenu.setClass("display", "hidden");
+            console.log("Here")
+            console.log(this.rightMenu)
+        } else {
+            console.log("Here")
+            this.rightMenuCollapsed.setClass("display", "hidden");
+            console.log(this.rightMenuCollapsed)
+        }
 
         // Fullscreen button switch
         this.button = new Button({
@@ -156,7 +169,7 @@ export class AppBar {
         return this._fullscreen;
     }
 
-    RightSideMenu = {
+    rightMenuSideCollapsed = {
         init(subMenu) {
             this.subMenu = subMenu;
             this.subMenu.addItem({ id: "banner", icon: "fa-warning", label: "Banner", body: undefined, class: MenuTabBanner })
@@ -365,6 +378,16 @@ export class AppBar {
                 const stTabId = Object.keys(USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].tabs)[0];
                 USER_INTERFACE.FullscreenMenu.menu.tabs[`${atPluginId}-menu`]._children[0].focus(stTabId);
             }
+        }
+    }
+    onLayoutChange(details) {
+        console.log("Layout change detected in AppBar:", details);
+        if (details.width < 600) {
+            this.rightMenu.setClass("display", "hidden");
+            this.rightMenuCollapsed.setClass("display", "");
+        } else {
+            this.rightMenu.setClass("display", "");
+            this.rightMenuCollapsed.setClass("display", "hidden");
         }
     }
 }
