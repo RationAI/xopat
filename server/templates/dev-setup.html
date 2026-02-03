@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<html lang="en" dir="ltr" data-theme="light">
 
 <head>
     <meta charset="utf-8">
@@ -7,38 +7,58 @@
     <template id="template-head"></template>
 </head>
 
-<body data-color-mode="auto" data-light-theme="light" data-dark-theme="dark_dimmed">
+<body class="min-h-screen bg-base-100 text-base-content">
 
-<div class="max-w-[1260px] mx-auto px-[60px] py-[25px]">
-  <div>
-  <h1 class="text-4xl font-light">Developer visualization setup</h1>
-<br><br>
+<div class="container mx-auto px-4 py-8 max-w-6xl">
+    <div class="flex flex-col gap-4">
+        <div class="flex justify-between items-center">
+            <h1 class="text-3xl font-light">Developer visualization setup</h1>
+            <button onclick="app.resetDefaults()" class="btn btn-ghost btn-xs text-error">Reset All Data</button>
+        </div>
 
-      <br>
-        <!--TODO ALLOW TABS, configure with a valid data examples with different use-cases, store in session/local storage-->
-          <textarea rows="40" class="textarea textarea-bordered m-2 layer-params" id="custom-params" style="resize: vertical; width: 90%;box-sizing: border-box;" onchange="
-          try {
-              JSON.parse($(this).val());
-          } catch (e) {
-              console.warn(e, 'Data:', $(this).val());
-              alert(`Incorrect JSON in the custom visualization: ${e} (see console).`);
-          }
-">
-{
+        <div class="w-full">
+            <div class="tabs tabs-lifted w-full" id="tab-header">
+            </div>
+
+            <div class="bg-base-100 border-base-300 rounded-b-box rounded-tr-box border p-4 relative">
+
+                <div class="absolute top-2 right-4 z-10 opacity-50 hover:opacity-100 transition-opacity">
+                    <span class="text-xs font-mono" id="save-status">Saved</span>
+                </div>
+
+                <textarea
+                        class="textarea textarea-ghost font-mono text-sm leading-relaxed w-full h-[60vh] focus:outline-none"
+                        id="custom-params"
+                        placeholder="Enter JSON configuration..."
+                        spellcheck="false"></textarea>
+
+                <label class="label">
+                    <span class="label-text-alt text-error font-bold" id="json-error-msg"></span>
+                </label>
+            </div>
+        </div>
+
+        <div id="form-submit-container" class="flex justify-start mt-2"></div>
+
+        <div class="divider"></div>
+
+        <div id="documentation" class="prose max-w-none"></div>
+    </div>
+</div>
+
+<script id="default-json-template" type="text/plain">{
     "params": {
         "customBlending": true
     },
     "data": ["data-to-fetch-1", "data-to-fetch-2"],
     "background": [
         {
-            "dataReference": 0,
-            "lossless": false
+            "dataReference": 0
         }
     ],
     "visualizations": [
         {
             "name": "My visualization",
-            "lossless": true,
             "shaders": {
                 "shader_id_1": {
                     "name": "Layer 1",
@@ -51,44 +71,222 @@
             }
         }
     ]
-}
-</textarea>
-      <div id="form-submit-container"></div>
-      <br><br>
-      <div id="documentation"></div>
-      </div>
-  </div>
+}</script>
 
 <template id="template-form-init"></template>
 
-<script type="text/javascript">
+<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 
+<script type="text/javascript">
+    // --- App Logic ---
+    const app = {
+        storageKey: 'viz-dev-tabs-v1',
+        tabs: [],
+        activeTabId: null,
+        editor: null,
+
+        init: function() {
+            this.editor = document.getElementById('custom-params');
+            this.loadState();
+
+            // Event Listeners
+            this.editor.addEventListener('input', () => this.handleInput());
+
+            // Initial Render
+            this.renderTabs();
+            this.loadActiveContent();
+        },
+
+        getDefaultJson: function() {
+            return document.getElementById('default-json-template').textContent;
+        },
+
+        loadState: function() {
+            const stored = localStorage.getItem(this.storageKey);
+            if (stored) {
+                try {
+                    const data = JSON.parse(stored);
+                    this.tabs = data.tabs;
+                    this.activeTabId = data.activeTabId;
+                } catch (e) {
+                    console.error("Failed to load state", e);
+                    this.createDefaultState();
+                }
+            } else {
+                this.createDefaultState();
+            }
+        },
+
+        createDefaultState: function() {
+            this.tabs = [{
+                id: Date.now(),
+                name: 'Config 1',
+                content: this.getDefaultJson()
+            }];
+            this.activeTabId = this.tabs[0].id;
+            this.saveState();
+        },
+
+        saveState: function() {
+            // Ensure current editor content is saved to the active tab object before persisting
+            this.updateActiveTabContent(this.editor.value);
+
+            localStorage.setItem(this.storageKey, JSON.stringify({
+                tabs: this.tabs,
+                activeTabId: this.activeTabId
+            }));
+
+            $('#save-status').text('Saved ' + new Date().toLocaleTimeString());
+        },
+
+        resetDefaults: function() {
+            if(confirm("Are you sure? This will delete all your saved tabs.")) {
+                localStorage.removeItem(this.storageKey);
+                location.reload();
+            }
+        },
+
+        addTab: function() {
+            const newId = Date.now();
+            const newNum = this.tabs.length + 1;
+            this.tabs.push({
+                id: newId,
+                name: `Config ${newNum}`,
+                content: this.getDefaultJson()
+            });
+            this.switchTab(newId);
+        },
+
+        closeTab: function(e, id) {
+            e.stopPropagation(); // Prevent switching when clicking close
+
+            if (this.tabs.length <= 1) {
+                alert("You cannot close the last tab.");
+                return;
+            }
+
+            if (!confirm("Delete this tab?")) return;
+
+            const index = this.tabs.findIndex(t => t.id === id);
+            this.tabs.splice(index, 1);
+
+            // If we closed the active tab, switch to the previous one (or first)
+            if (id === this.activeTabId) {
+                this.activeTabId = this.tabs[Math.max(0, index - 1)].id;
+                this.loadActiveContent();
+            }
+
+            this.saveState();
+            this.renderTabs();
+        },
+
+        switchTab: function(id) {
+            // 1. Save current work
+            this.updateActiveTabContent(this.editor.value);
+
+            // 2. Switch ID
+            this.activeTabId = id;
+
+            // 3. Load new work
+            this.loadActiveContent();
+            this.renderTabs();
+            this.saveState();
+        },
+
+        updateActiveTabContent: function(content) {
+            const tab = this.tabs.find(t => t.id === this.activeTabId);
+            if (tab) tab.content = content;
+        },
+
+        loadActiveContent: function() {
+            const tab = this.tabs.find(t => t.id === this.activeTabId);
+            if (tab) {
+                this.editor.value = tab.content;
+                this.validateJson(tab.content); // Check validity on load
+            }
+        },
+
+        handleInput: function() {
+            const content = this.editor.value;
+            this.validateJson(content);
+            this.updateActiveTabContent(content);
+            this.saveState();
+        },
+
+        validateJson: function(str) {
+            const errorEl = document.getElementById('json-error-msg');
+            try {
+                if (str.trim() === "") throw "Empty";
+                JSON.parse(str);
+                errorEl.textContent = "";
+                this.editor.classList.remove('textarea-error');
+            } catch (e) {
+                errorEl.textContent = `Invalid JSON: ${e.message || e}`;
+                this.editor.classList.add('textarea-error');
+            }
+        },
+
+        renderTabs: function() {
+            const container = document.getElementById('tab-header');
+            let html = '';
+
+            this.tabs.forEach(tab => {
+                const isActive = tab.id === this.activeTabId;
+                const activeClass = isActive ? 'tab-active [--tab-bg:var(--fallback-b1,oklch(var(--b1)))]' : '';
+
+                html += `
+                    <a class="tab tab-lifted ${activeClass} gap-2 group" onclick="app.switchTab(${tab.id})">
+                        ${tab.name}
+                        ${this.tabs.length > 1 ? `
+                        <button onclick="app.closeTab(event, ${tab.id})"
+                                class="btn btn-xs btn-circle btn-ghost opacity-0 group-hover:opacity-100 transition-opacity">
+                            ✕
+                        </button>` : ''}
+                    </a>
+                    `;
+            });
+
+            // Add "New Tab" button
+            html += `
+                <button class="tab tab-lifted" onclick="app.addTab()">
+                    <span class="text-lg font-bold text-success">+</span>
+                </button>
+                <div class="tab tab-lifted flex-1 cursor-default"></div>
+                `;
+
+            container.innerHTML = html;
+        }
+    };
+
+    // --- Standard Init ---
     window.addEventListener('load', _ => {
+        // Initialize App
+        app.init();
+
+        // Legacy Form Handling
         window.formInit = $.extend(true, {
             location: "/",
-            lang: {
-                ready: "Ready!"
-            }
+            lang: { ready: "Ready!" }
         }, window.formInit || {});
 
         $("#form-submit-container").html(
-            `    <form method="POST" target="_blank" action="${formInit.location}" id="custom-request">
-        <input type="hidden" name="visualization" id="custom-visualization" value=''>
-        <button class="btn" type="submit" value="${formInit.lang.ready}">${formInit.lang.ready}</button>
-    &emsp;
-    </form>`
+            `<form method="POST" target="_blank" action="${formInit.location}" id="custom-request" class="w-full">
+                    <input type="hidden" name="visualization" id="custom-visualization" value=''>
+                    <button class="btn btn-primary btn-wide" type="submit" value="${formInit.lang.ready}">
+                        ${formInit.lang.ready}
+                    </button>
+                </form>`
         );
 
-        ShaderConfigurator.buildShadersAndControlsDocs("documentation");
-
-        $(document).off('submit');
+        if (typeof ShaderConfigurator !== 'undefined') {
+            ShaderConfigurator.buildShadersAndControlsDocs("documentation");
+        }
 
         $('#custom-request').on('submit', evt => {
+            // Ensure we send the current editor value
             document.getElementById("custom-visualization").value = $("#custom-params").val();
         });
     });
-
 </script>
 </body>
-
 </html>

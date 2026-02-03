@@ -101,6 +101,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
      * @callback getBGStandaloneItem
      * @param {object} item
      * @returns {StandaloneBackgroundItem}
+     * The return value should include optional ID property.
      */
 
     /**

@@ -150,6 +150,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         PLUGINS[id].instance = plugin;
+        PLUGINS[id].__ready = false;
         //clean up possible errors
         showPluginError(id, null);
         return plugin;
@@ -165,7 +166,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             if (typeof plugin.pluginReady === "function") {
                 await plugin.pluginReady();
             }
-
+            PLUGINS[plugin.id].__ready = true;
             /**
              * Plugin was loaded dynamically at runtime.
              * @property {string} id plugin id
@@ -1520,7 +1521,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          */
         integrateWithPlugin(pluginId, callback) {
             const targetPlugin = plugin(pluginId);
-            if (targetPlugin) {
+            if (targetPlugin &&  PLUGINS[pluginId].__ready) {
                 callback(targetPlugin);
                 return true;
             }
@@ -1942,6 +1943,41 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 viewer = this.viewers.find(v => v.uniqueId === uniqueId);
             }
             return viewer;
+        }
+
+        /**
+         * Get viewer reference for the configuration object
+         * @param {BackgroundItem|StandaloneBackgroundItem|VisualizationItem} config
+         */
+        getViewerForConfig(config) {
+            // todo consider: if (config.__cachedRef)
+
+            if (!config) return undefined;
+
+            let data = APPLICATION_CONTEXT.config.data;
+            let receivedData = config.dataReference;
+            if (typeof receivedData === "number") {
+                receivedData = data[receivedData];
+            }
+
+            // non-strict comparator
+            let comparator = typeof receivedData === "object" ?
+                (a, b) =>  typeof a === "object" && Object.keys(a).every(x => !b[x] || a[x] == b[x])
+                : (a, b) => a == b;
+
+            for (let viewer of this.viewers) {
+                for (let index = 0; index < viewer.world.getItemCount(); index++) {
+                    const item = viewer.world.getItemAt(index);
+                    const conf = item?.getConfig();
+                    if (conf) {
+                        const activeDataEl = data[conf.dataReference];
+                        if (comparator(receivedData, activeDataEl)) {
+                            return viewer;
+                        }
+                    }
+                }
+            }
+            return undefined;
         }
 
         /**

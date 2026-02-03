@@ -13,12 +13,5 @@
     //Windowed history + annotation list
     "modalHistoryWindow": true,
     //Enable adjustment of presets
-    "enablePresetModify": true,
-    //Arguments to format convertors
-    "convertors": {
-        "format": "native",
-        //Account for cropping done by BioFormats and OpenSlide
-        //can be overridden by convertors.imageCoordinatesOffset in plugin arguments
-        "imageCoordinatesOffset": [0,0]
-    }
+    "enablePresetModify": true
 }

@@ -80,10 +80,10 @@ export class NavigatorSideMenu extends BaseComponent {
         return div(
             new Join({
                 style: Join.STYLE.HORIZONTAL,
-                extraClasses: {width: "w-full"}
+                extraClasses: {width: "w-full", position: "absolute", index: "z-50"}
             }, this.visibility, this.title, this.copy).create(),
             div({class: "flex flex-col", style: "width: 360px;"},
-                div({id: this.navigatorId, style: " height: 360px; width: 360px;"})
+                div({id: this.navigatorId, style: " height: 300px; width: 360px;"})
             )
         );
     }

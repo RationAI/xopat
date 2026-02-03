@@ -160,7 +160,43 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/******************* EXPORT, IMPORT **********************/
+
+    /**
+     * @fires OSDAnnotations.requestExport::save-annotations
+     * @return {Promise<string>} returns message from the party that handled the event, or throws if no-one handled it
+     */
+    async requestExport() {
+        let handled = undefined;
+        await this.raiseEventAwaiting('save-annotations', {
+            setHandled: (message) => {
+                handled = message;
+            },
+            stopPropagation: () => {
+                return handled;
+            }
+        });
+
+        if (handled) {
+            return handled;
+        }
+
+        throw new Error("Annotation save action was requested but nothing has handled the request.");
+    }
+
+    setIOOption(name, value) {
+        if (!['imageCoordinatesOffset', 'format'].includes(name)) {
+            console.error('Invalid IO option %s set!', name);
+        } else {
+            this._ioArgs[name] = value;
+        }
+    }
+
+    getExportOptions() {
+        return this._ioArgs;
+    }
+
 	async exportData() {
+        // todo we should export all..
         return await this.fabric.export();
 	}
 
@@ -172,6 +208,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		}
         await this.fabric.import(data, options);
 	}
+
+    // todo implement
+    async exportViewerData(viewer, key, viewerTargetID) {
+        return {};
+    }
+
+    async importViewerData(viewer, key, viewerTargetID, data) {}
 
 	/**
 	 * Get the currently used data persistence storage module.
@@ -757,6 +800,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// note the board would have to reflect the UI state when opening
 
 		const _this = this;
+        this._ioArgs = this.getStaticMeta("convertors") || {};
+        this._defaultFormat = this._ioArgs.format || "native";
 
 		/**
 		 * Attach factory getter to each object

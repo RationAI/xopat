@@ -2,11 +2,11 @@
  * @typedef BackgroundItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
- * @property {?boolean} lossless default `false` if the data should be sent from the server as 'png' or 'jpg'
  * @property {?string} protocol see protocol construction below in advanced details
  * @property {?string} protocolPreview as above, must be able to generate file preview (fetch top-level tile)
- * @property {?OpenSeadragon.TileSource} a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
+ * @property {?OpenSeadragon.TileSource} tileSource a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
  *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
+ * @property {?SlideSourceOptions} options options passed to the data source integration logics - TileSource class
  * @property {?number} microns size of pixel in micrometers, default `undefined`,
  * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
@@ -30,9 +30,9 @@
  * @typedef VisualizationItem
  * @type {object}
  * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
- * @property {?boolean} lossless default `false` if the data should be sent from the server as 'png' or 'jpg'
  * @property {?string} protocol see protocol construction below in advanced details
  * @property {?string} protocolPreview as above, must be able to generate file preview (fetch top-level tile)
+ * @property {SlideSourceOptions} options options passed to the data source integration logics - TileSource class
  * @property {?number} microns size of pixel in micrometers, default `undefined`,
  * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
@@ -50,6 +50,13 @@
  */
 
 /**
+ * @typedef SlideSourceOptions
+ * @type {Object.<string, *>} generic value map, where some values are already pre-defined:
+ * @property {string} [format] the desired format to use, can be arbitrary but when sources can, it's optimal to support
+ *   browser-standard values like png, tiff, jpeg/jpg
+ */
+
+/**
  * Init xOpat Viewer with static configuration data.
  * Split so that one can create different access points - e.g. from PHP or JS sever...
  * This function inits the loading system, the OpenSeadragon Viewer
@@ -64,7 +71,7 @@
  * @param I18NCONFIG
  * @private
  */
-function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG = {}) {
     const savedState = checkLocalState();
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
@@ -123,6 +130,86 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         };
     }
 
+    const _CONF_GUARD = Symbol('guard');
+    const _CONF_REGISTRY = new Map();
+    /**
+     * Represents a single slide/background configuration.
+     * - Sanitizes IDs (removes invalid chars).
+     * - Generates IDs if missing.
+     */
+    window.BackgroundConfig = class {
+        constructor(data, guard) {
+            if (guard !== _CONF_GUARD) {
+                throw new Error('Use BackgroundConfig.from(...) to create your background!');
+            }
+            Object.assign(this, data);
+        }
+
+        static from(config) {
+            if (!config) throw new Error('config must be defined');
+
+            config.id = BackgroundConfig.processId(config.id, config);
+            // Ensure numeric references
+            function fixRef(ref) {
+                if (typeof ref === "string") {
+                    const pref = Number.parseInt(ref, 10);
+                    if (typeof pref === "number" && String(pref) === ref) {
+                        return pref;
+                    }
+                }
+                return ref;
+            }
+
+            if (config['dataReference']) {
+                config['dataReferences'] = fixRef(config['dataReference']);
+            }
+            if (Array.isArray(config['dataReferences'])) {
+                config['dataReferences'] = config['dataReferences'].map(fixRef);
+            }
+
+            if (_CONF_REGISTRY.has(config.id)) {
+                return _CONF_REGISTRY.get(config.id);
+            }
+
+            config = new BackgroundConfig(config, _CONF_GUARD);
+            _CONF_REGISTRY.set(config.id, config);
+            return config;
+        }
+
+        /**
+         * Sanitizes a given ID or generates one from the config object.
+         * @param {string|null} id - The existing ID (if any)
+         * @param {object} context - The config object to derive ID from if missing
+         */
+        static processId(id, context) {
+            if (id) return UTILITIES.sanitizeID(id);
+
+            if (typeof context.dataReference === 'string') {
+                return UTILITIES.sanitizeID(context.dataReference);
+            }
+
+            let val = null;
+            // TODO do not allow touching DATA array directly, force usage of standalone item
+            if (typeof context.dataReference === 'number') {
+                const globalData = APPLICATION_CONTEXT?.config?.data;
+                // todo DATA might not be set at all, or not contain the proper reference!
+                const path = globalData[context.dataReference];
+                if (path && typeof path !== "object") return UTILITIES.sanitizeID(String(path));
+                if (path) val = path[Object.keys(path)[0]];
+            }
+
+            if (!val) {
+                val = context[Object.keys(context)[0]];
+            }
+            console.warn('ID Creator could not determine config ID, using generated ID based on first key of the object!', val);
+            return UTILITIES.generateID(String(val));
+        }
+
+        toJSON() {
+            return { ...this };
+        }
+    }
+
     //Perform initialization based on provided data
     const defaultSetup = Object.freeze(ENV.setup);
     const viewerSecureMode = ENV.client.secureMode && ENV.client.secureMode !== "false";
@@ -130,6 +217,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     CONFIG.params = CONFIG.params || {};
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
+    // todo enforce parsing also other by class models
     POST_DATA = POST_DATA || {};
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
@@ -143,8 +231,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
 
-        Cookies.set("test", "test");
-        if (Cookies.get("test") === "test") {
+        if (window.Cookies) {
             XOpatStorage.Cookies.registerClass(class {
                 getItem(key) {
                     return Cookies.get(key) || null;
@@ -246,13 +333,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @type XOpatStorage.Cache
          * @memberOf APPLICATION_CONTEXT
          */
-        AppCache: new XOpatStorage.Cache({id: ""}),
+        AppCache: new XOpatStorage.Cache({ id: "" }),
         /**
          * Global Application Cookies.
          * @type XOpatStorage.Cookies
          * @memberOf APPLICATION_CONTEXT
          */
-        AppCookies: new XOpatStorage.Cookies({id: ""}),
+        AppCookies: new XOpatStorage.Cookies({ id: "" }),
         /**
          * Get sessionName value (fallback refereceId) from the configuration.
          * @return {string|*}
@@ -296,7 +383,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param parse if true, JSON.parse is applied to the value
          * @return {string|*}
          */
-        getOption(name, defaultValue=undefined, cache=true, parse=false) {
+        getOption(name, defaultValue = undefined, cache = true, parse = false) {
             const builtin = this.config.defaultParams[name];
             if (builtin === undefined) {
                 console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(this.config.defaultParams)} are supported.`, name);
@@ -335,7 +422,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param value
          * @param cache
          */
-        setOption(name, value, cache=true) {
+        setOption(name, value, cache = true) {
             if (!this.config.defaultParams.hasOwnProperty(name)) {
                 console.warn(`Trying to set non-existing option: only viewer parameters ${Object.keys(this.config.defaultParams)} are supported.`, name);
             }
@@ -384,7 +471,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          *   field, an attempt to return only filename from the file ID.
          * @return {string}
          */
-        referencedName(stripSuffix=false) {
+        referencedName(stripSuffix = false) {
             if (CONFIG.background.length < 0) {
                 return undefined;
             }
@@ -429,6 +516,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         __cache: {
             dirty: false
         }
+    };
+
+    // todo maybe dont support this, just call directly the static method
+    window.APPLICATION_CONTEXT.registerConfig = function registerConfig(bg) {
+        return window.BackgroundConfig.from(bg);
+    };
+
+// Optional helper if you want a single semantic check everywhere
+    window.APPLICATION_CONTEXT.sameBackground = function sameBackground(a, b) {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        return window.APPLICATION_CONTEXT.registerConfig(a).id === window.APPLICATION_CONTEXT.registerConfig(b).id;
     };
 
     /*--------------------------------------------------------------*/
@@ -477,6 +576,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     OpenSeadragon.TileSource.prototype.getMetadata = function () { };
 
     /**
+     * Set source options.
+     * @memberOf OpenSeadragon.TileSource
+     * @function setSourceOptions
+     * @param {SlideSourceOptions} options
+     */
+    OpenSeadragon.TileSource.prototype.setSourceOptions = function (options) { };
+
+    /**
      * Extension of OpenSeadragon: Retrieve slide thumbnail. This can simplify the
      * slide preview generation, instead of trying to re-construct it from the lowest-resolution level.
      * Returns a promise that resolves to an image-like object.
@@ -512,6 +619,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         get: window.VIEWER_MANAGER.get.bind(window.VIEWER_MANAGER)
     });
 
+    initXopatScripts();
+    //Ensure reliable ID and class instance for every background item
+    CONFIG.background = CONFIG.background.map(c => BackgroundConfig.from(c));
+
     /**
      * Event to fire if you want to avoid explicit warning handling,
      * recommended in modules where module should give plugin chance hande it.
@@ -527,7 +638,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      */
     VIEWER_MANAGER.broadcastHandler('warn-user', e => {
         if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
+        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
     }, -Infinity);
     /**
      * Event to fire if you want to avoid explicit error handling,
@@ -544,7 +655,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      */
     VIEWER_MANAGER.broadcastHandler('error-user', e => {
         if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
+        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
     VIEWER_MANAGER.broadcastHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
 
@@ -637,7 +748,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             magnification: mag,
             maxMagnification: 40
         });
-        if(!APPLICATION_CONTEXT.getOption("scaleBar", true)){
+        if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
             viewer.scalebar.setActive(false);
         }
     };
@@ -669,19 +780,21 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
         const cfg = APPLICATION_CONTEXT.config;
         const data = Array.isArray(cfg.data) ? cfg.data : [];
-        const backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
+        let backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
         const vizCount = Array.isArray(cfg.visualizations) ? cfg.visualizations.length : 0;
 
-        // Ensure background items have IDs
-        for (let bg of backgrounds) {
-            if (!bg.id) {
-                bg.id = UTILITIES.generateID(data[bg.dataReference]);
-            } else {
-                bg.id = UTILITIES.sanitizeID(bg.id);
+        let filteredBackgrounds = backgrounds.filter(bg => {
+            if (!(bg instanceof BackgroundConfig)) {
+                console.error('Config not of BackgroundConfig instance, filtering out', bg);
+                return false;
             }
-            // todo document this but BackgroundItem should be config without methods - only what is exported
-            bg.getViewer = () => undefined;
+            return true;
+        });
+        if (filteredBackgrounds.length !== backgrounds.length) {
+            backgrounds = filteredBackgrounds;
+            Dialogs.show('Viewer does not show all files - some were not properly configured!', 8000, Dialogs.MSG_WARN);
         }
+        // todo also other items should have class models
 
         const clampIndex = (i, max) =>
             Number.isInteger(i) && i >= 0 && i < max ? i : undefined;
@@ -866,7 +979,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const world = viewer.world;
         if (world.getItemCount() < 1) {
             viewer.addTiledImage({
-                tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                tileSource: new OpenSeadragon.EmptyTileSource({ height: 20000, width: 20000, tileSize: 512 }),
                 index: 0,
                 replace: false,
                 success: (event) => {
@@ -906,11 +1019,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         //             console.warn(`Item ${item} was specified without a config getter - this is a bug!`);
         //             item.getConfig = type => undefined;
         //         }
-        //
-        //         const conf = item.getConfig("background");
-        //         if (item.source.hasOwnProperty("requireLossless") && conf?.hasOwnProperty("lossless")) {
-        //             item.source.requireLossless(conf.lossless);
-        //         }
         //     }
         // }
 
@@ -937,7 +1045,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
                 const active = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)?.[0];
                 const name = UTILITIES.fileNameFromPath(APPLICATION_CONTEXT.config.data[active] || 'unknown');
-                viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', {slide: name}), true);
+                viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', { slide: name }), true);
             } else if (!imageData) {
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
             } else {
@@ -966,22 +1074,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 let layerWorldItem = viewer.world.getItemAt(layerPosition);
                 const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
                 if (layerWorldItem) {
-                    const async = APPLICATION_CONTEXT.getOption("fetchAsync");
-                    do {
-                        // todo legacy, remove setFormat support....
-                        if (layerWorldItem.source.setFormat) {
-                            const preferredFormat = APPLICATION_CONTEXT.getOption("preferredFormat");
-                            const lossless = activeVis.lossless;
-                            const format = lossless ? (async ? "png" : preferredFormat) : (async ? "jpg" : preferredFormat);
-                            layerWorldItem.source.setFormat(format);
-                        }
-                        if (layerWorldItem.source.requireLossless) {
-                            layerWorldItem.source.requireLossless(activeVis.lossless);
-                        }
-                        layerWorldItem = viewer.world.getItemAt(++layerPosition);
-                    } while (layerWorldItem);
-
-
                     viewer.getMenu().getShadersTab().updateVisualizationList(
                         APPLICATION_CONTEXT.config.visualizations,
                         // todo is this accurate?
@@ -989,7 +1081,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     );
                 } else {
                     //todo action page reload
-                    Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
+                    Dialogs.show($.t('messages.visualizationDisabled', { name: activeVis.name }), 20000, Dialogs.MSG_ERR);
                     eventOpts.error = $.t('messages.overlaysDisabled');
                 }
             }
@@ -1009,7 +1101,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // todo consider viewport per background
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                viewer.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
+                viewer.viewport.panTo({ x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y) }, true);
                 viewer.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
@@ -1067,8 +1159,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-                                                                    background,
-                                                                    visualizations=undefined) {
+        background,
+        visualizations = undefined) {
         try {
             initXopatLayers();
 
@@ -1112,15 +1204,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
              * @memberOf VIEWER_MANAGER
              * @event before-first-open
              */
-            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', event).catch(e =>
-                {
-                    //todo something meaningful
-                    console.error(e);
-                }
+            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', event).catch(e => {
+                //todo something meaningful
+                console.error(e);
+            }
             );
             await this.openViewerWith(event.data, event.background || [], event.visualizations || []);
             // Only after: before, auto-load would trigger many messages..
-            VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+            VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', { plugin: PLUGINS[e.id].name }), 2500, Dialogs.MSG_INFO));
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1128,7 +1219,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
         //https://github.com/mrdoob/stats.js
         if (APPLICATION_CONTEXT.getOption("debugMode")) {
-            (function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();document.body.appendChild(stats.dom);stats.showPanel(1);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src=APPLICATION_CONTEXT.url+'src/external/stats.js';document.head.appendChild(script);})()
+            (function () { var script = document.createElement('script'); script.onload = function () { var stats = new Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })()
         }
     };
 
@@ -1158,7 +1249,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         USER_INTERFACE.Loading.show(true);
 
         await VIEWER_MANAGER.raiseEventAwaiting(
-            'before-open', {data, background, visualizations, bgSpec, vizSpec}
+            'before-open', { data, background, visualizations, bgSpec, vizSpec }
         ).catch(e => console.warn("Exception in 'before-open' event handler: ", e));
 
         //todo consider return false if some dialog refuses the reload
@@ -1170,12 +1261,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (typeof background !== "undefined") config.background = background;
         if (typeof visualizations !== "undefined") config.visualizations = visualizations;
 
+        if (Array.isArray(config.background)) {
+            config.background = config.background.map(bg =>
+                (bg instanceof window.BackgroundConfig) ? bg : window.BackgroundConfig.from(bg)
+            );
+        }
+
         const cfg = APPLICATION_CONTEXT.config;
         const bgs = Array.isArray(cfg.background) ? cfg.background : [];
         const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
         const env = APPLICATION_CONTEXT.env;
         const isSecureMode = !!APPLICATION_CONTEXT.secure;
-        
+
         // 1) Normalize selection via the parser (also persists options as needed)
         UTILITIES.parseBackgroundAndGoal(bgSpec, vizSpec, {
             deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
@@ -1186,7 +1283,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true);
 
         // Ensure we open at least something if possible
-        const bgSpecWasUnset  = activeBg  === undefined;
+        const bgSpecWasUnset = activeBg === undefined;
         const vizSpecWasUnset = activeViz === undefined;
         if (bgSpecWasUnset && vizSpecWasUnset) {
             if (bgs.length > 0) {
@@ -1218,15 +1315,15 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         //     - activeBg undefined => single viewer, no bg (blank/error tile)
         const bgPlan = (() => {
             if (stacked) {
-                return [{type: "stacked", bgIndices: bgs.map((_, i) => i)}];
+                return [{ type: "stacked", bgIndices: bgs.map((_, i) => i) }];
             }
             if (Array.isArray(activeBg)) {
-                return activeBg.map(idx => ({type: "single", bgIndices: [idx]}));
+                return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
             if (Number.isInteger(activeBg)) {
-                return [{type: "single", bgIndices: [activeBg]}];
+                return [{ type: "single", bgIndices: [activeBg] }];
             }
-            return [{type: "single", bgIndices: []}];
+            return [{ type: "single", bgIndices: [] }];
         })();
 
         // 2) Ensure we have a ViewerManager and correct number of viewers (>= 1)
@@ -1283,9 +1380,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         } else {
                             event.item.getConfig = type => undefined;
                         }
+                        const options = event.item.getConfig()?.options;
+                        if (options !== undefined) {
+                            event.item.source.setSourceOptions(options);
+                        }
                         resolve(true);
                     },
                     error: (e) => {
+                        console.warn(e);
                         // fallback blank item (hidden)
                         viewer.addTiledImage({
                             tileSource: {
@@ -1337,7 +1439,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     if (!bg) continue;
                     toOpen.push(bgUrlFromEntry(bg));
                     openedBase.push(bg);
-                    bg.getViewer = () => viewer;
                 }
             } else {
                 const bgi = entry.bgIndices[0];
@@ -1346,7 +1447,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     if (bg) {
                         toOpen.push(bgUrlFromEntry(bg));
                         openedBase.push(bg);
-                        bg.getViewer = () => viewer;
                     }
                 }
             }
@@ -1446,7 +1546,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // (D) Finally add the images to the viewer world
             if (toOpen.length === 0) {
                 // Add a single hidden blank to keep viewer usable
-                toOpen.push({type: "_blank"});
+                toOpen.push({ type: "_blank" });
             }
 
             // helpers for contextual getConfig in items
@@ -1456,7 +1556,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     // itemIndex within the sequence [0..lastBgIdx] are backgrounds
                     // map local background order back to cfg.background index
                     if (entry.type === "stacked") {
-                         // 0..lastBgIdx
+                        // 0..lastBgIdx
                         return entry.bgIndices[itemIndex];
                     } else {
                         return entry.bgIndices[0];
@@ -1522,7 +1622,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         return true;
     }
 
-    initXopatScripts();
     function checkLocalState() {
         const data = sessionStorage.getItem('__xopat_session__');
         sessionStorage.setItem('__xopat_session__', undefined);
@@ -1536,8 +1635,39 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         return null;
     }
 
+    /**
+     * Lightweight update of the visualization layers.
+     * @param {VisualizationItem[]} visualizations The new visualizations array
+     * @param {Array} [newData=[]] New data identifiers to be appended to the global data array
+     * @param {number|number[]} [activeVizIndex] Optional: set the new active visualization index
+     */
+    APPLICATION_CONTEXT.updateVisualization = async function (visualizations, newData = [], activeVizIndex = undefined) {
+        if (!Array.isArray(visualizations)) {
+            throw new Error("Visualizations must be an array.");
+        }
+
+        const currentData = [...this.config.data];
+        if (newData.length > 0) {
+            currentData.push(...newData);
+        }
+
+
+        let vizSpec = activeVizIndex;
+        if (vizSpec === undefined) {
+            vizSpec = this.getOption("activeVisualizationIndex", 0, true, true);
+        }
+
+        return await this.openViewerWith(
+            currentData,
+            undefined,
+            visualizations,
+            undefined,
+            vizSpec
+        );
+    };
+
     // Refresh Page & Storage state are defined here since we have reference to the incoming config
-    window.UTILITIES.storePageState = function(includedPluginsList=undefined) {
+    window.UTILITIES.storePageState = function (includedPluginsList = undefined) {
         try {
             // Add plugin definition to CONFIG, which is part of POST_DATA entry. Do not change anything if not requested.
             if (includedPluginsList) {
@@ -1557,8 +1687,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             POST_DATA.visualization = CONFIG;
 
             // Clean up instance references before serialization
-            const plugins = {...PLUGINS};
-            const modules = {...MODULES};
+            const plugins = { ...PLUGINS };
+            const modules = { ...MODULES };
             for (let id in plugins) {
                 delete plugins[id].instance;
             }
@@ -1579,7 +1709,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     function safeStringify(obj) {
         const seenData = new WeakMap();
 
-        return JSON.stringify(obj, function(key, value) {
+        return JSON.stringify(obj, function (key, value) {
             if (key.startsWith("_") || ["eventSource"].includes(key)) {
                 return undefined;
             }
@@ -1706,7 +1836,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 if (historyProvider.undo()) return;
             }
 
-            const entry = this._buffer[this._buffidx];           
+            const entry = this._buffer[this._buffidx];
             entry.backward();
             this._buffidx = (this._buffidx - 1 + this.BUFFER_LENGTH) % this.BUFFER_LENGTH;
 
@@ -1755,8 +1885,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             return this._lastValidIndex >= 0 && this._buffidx !== this._lastValidIndex;
         }
     }
-
-
 
     APPLICATION_CONTEXT.history = new History(APPLICATION_CONTEXT.getOption("historySize", 99));
 }

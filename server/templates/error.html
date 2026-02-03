@@ -4,32 +4,49 @@
 <head>
     <meta charset="utf-8">
     <title>Error</title>
-
-    <!-- template Head -->
     <template id="template-head"></template>
 </head>
 
-<body>
+<body class="h-screen w-screen bg-base-200 flex items-center justify-center overflow-hidden">
+
 <script>
+    // Updated to set standard DaisyUI themes
     if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.body.setAttribute("data-theme", "xOpat-detached-mode");
+        document.documentElement.setAttribute("data-theme", "dark");
     } else {
-        document.body.removeAttribute("data-theme");
+        document.documentElement.setAttribute("data-theme", "light");
     }
 </script>
 
-<!-- System messaging -->
-<div id="system-message" class="hidden system-container">
-    <div id="system-message-warn" class="text-4xl font-light text-center"><span class="material-icons text-3xl font-light" style="transform: translate(0px, -5px);">error_outline</span>&nbsp;<template id="template-text-title"></template></div>
-    <div id="system-message-title" class="text-3xl font-light text-center mb-3"></div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('visibility', 'hidden');" class="btn" type="button"><template id="template-text-details"></template></button>
-    <div id="system-message-details" class="px-4 py-4 border rounded-md overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
-
-    <template id="template-custom"></template>
+<div id="viewer-container" class="absolute inset-0 z-0">
 </div>
 
+<div id="system-message" class="hidden relative z-10 card w-96 bg-base-100 shadow-xl border border-base-300">
+    <div class="card-body items-center text-center">
 
-<!-- DEFAULT SETUP SCRIPTING -->
+        <div id="system-message-warn" class="text-error mb-2">
+            <span class="material-icons text-6xl">error_outline</span>
+            <div class="text-xl font-bold mt-2"><template id="template-text-title"></template></div>
+        </div>
+
+        <div id="system-message-title" class="text-lg font-medium mb-4"></div>
+
+        <div class="card-actions">
+            <button id="system-message-details-btn"
+                    onclick="$('#system-message-details').removeClass('hidden'); $(this).addClass('hidden');"
+                    class="btn btn-outline btn-sm">
+                <template id="template-text-details">Show Details</template>
+            </button>
+        </div>
+
+        <div id="system-message-details" class="hidden mt-4 p-3 bg-base-200 rounded-lg text-left text-xs font-mono w-full overflow-y-auto max-h-40 break-words"></div>
+
+        <template id="template-custom"></template>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+
 <script type="text/javascript">
 
     /*---------------------------------------------------------*/
@@ -45,13 +62,17 @@
         show: function(title, description) {
             this.msgTitle.html(title);
             this.msgDetails.html(description);
+
+            // Remove hidden class to show
             this.msgContainer.removeClass("hidden");
-            this.screenContainer.addClass("disabled");
+
+            // Visual disable of background
+            this.screenContainer.addClass("opacity-30 pointer-events-none blur-sm transition-all duration-300");
         },
 
         hide: function() {
             this.msgContainer.addClass("hidden");
-            this.screenContainer.removeClass("disabled");
+            this.screenContainer.removeClass("opacity-30 pointer-events-none blur-sm transition-all duration-300");
         }
     };
 </script>

@@ -51,8 +51,6 @@
                resulting in a string. Available are 'path' (image server URL) and 'data'
                (string array of image identifiers such as image path).
                Server URL can be relative, if on the same server domain as the viewer.
-
-               In case of parameter fetchAsync = true, data is a single string, not an array!
              */
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`", //one-liner expression
@@ -115,8 +113,6 @@
      *   stackedBackground: ?boolean,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
-     *   preferredFormat: ?string,
-     *   fetchAsync: ?boolean,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
@@ -155,10 +151,8 @@
         "maxImageCacheCount": 1200,
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
-        // can be anything that supports the protocol of your choice,
-        // ExtendedDZI supports "png", "zip", "jpg"
+        // deprecated
         "preferredFormat": "zip",
-        "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)

@@ -14,13 +14,18 @@ class XOpatUser extends OpenSeadragon.EventSource {
         this._id = id;
         this._name = name;
         this._secret = {};
-        USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(name);
-
         this.icon = icon;
-        this.raiseEvent('login', {
-            userId: id,
-            userName: name
-        });
+
+        try {
+            USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(name);
+
+            this.raiseEvent('login', {
+                userId: id,
+                userName: name
+            });
+        } catch (e) {
+            console.warn("XOpatUser - error logging user in!", e);
+        }
     }
 
     logout() {

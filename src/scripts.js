@@ -547,7 +547,7 @@ ${await UTILITIES.getForm()}
         const s = String(input);
         let out = [];
         for (const ch of s) {
-            out.push(_alphaset.has(ch) ? ch : '_');
+            out.push(_alphaset.has(ch) ? ch : '-');
         }
         // ensure ID does not have reserved 'osd-' prefix
         if (out.length > 3 && out[0] === 'o' && out[1] === 's' && out[2] === 'd' && out[3] === '-') {

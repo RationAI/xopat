@@ -49,8 +49,6 @@ class AnnotationsGUI extends XOpatPlugin {
 	//todo test with multiple swap bgimages
 	constructor(id) {
 		super(id);
-		this._ioArgs = this.getStaticMeta("convertors") || {};
-		this._defaultFormat = this._ioArgs.format || "native";
 		/**
 		 * @type {Set<string>}
 		 */
@@ -118,14 +116,19 @@ class AnnotationsGUI extends XOpatPlugin {
 	async setupFromParams() {
 		this._allowedFactories = this.getOption("factories", false) || this.getStaticMeta("factories") || ["polygon"];
 		this.context.historyManager.focusWithZoom = this.getOption("focusWithZoom", true);
-		const convertOpts = this.getOption('convertors');
-		this._ioArgs.serialize = true;
-		this._ioArgs.imageCoordinatesOffset = convertOpts?.imageCoordinatesOffset || this._ioArgs.imageCoordinatesOffset;
-		if (Array.isArray(this._ioArgs.imageCoordinatesOffset)) {
-			this._ioArgs.imageCoordinatesOffset = {
-				x: this._ioArgs.imageCoordinatesOffset[0] || 0, y: this._ioArgs.imageCoordinatesOffset[1] || 0
-			};
-		}
+
+        const convertOpts = this.getOption('convertors');
+        // todo we should support setting all convertor opts here, and document this
+        const coords = convertOpts?.imageCoordinatesOffset;
+        if (coords) {
+            if (Array.isArray(convertOpts?.imageCoordinatesOffset)) {
+                this.context.setIOOption('imageCoordinatesOffset', {x: coords[0] || 0, y: coords[1] || 0});
+            } else if (coords.x && coords.y) {
+                this.context.setIOOption('imageCoordinatesOffset', coords);
+            } else {
+                $.console.error('Invalid value for imageCoordinatesOffset on the plugin session.');
+            }
+        }
 
 		this.exportOptions = {
 			availableFormats: OSDAnnotations.Convertor.formats,
@@ -257,6 +260,12 @@ class AnnotationsGUI extends XOpatPlugin {
 		this.context.addHandler('annotation-selected', e => this._annotationSelected(e.object));
 		this.context.addHandler('annotation-deselected', e => this._annotationDeselected(e.object));
 
+        // as a last resort save by exporting to a file
+        this.context.addHandler('save-annotations', async e => {
+            await this.exportToFile();
+            e.setHandled('Annotations downloaded as a file - no service integration available.');
+        }, null, -Infinity);
+
         this.registerViewerMenu(viewer => {
 
             // 1. Top Icon Row (Enable, Save, Outline, EdgeNav, More)
@@ -307,7 +316,9 @@ class AnnotationsGUI extends XOpatPlugin {
                     style: UI.Button.STYLE.TITLEICON,
                     extraClasses: "btn-square btn-sm",
                     extraProperties: { title: "Save" },
-                    onClick: () => this.saveDefault()
+                    onClick: () => this.context.requestExport()
+                        .then(msg => Dialogs.show(msg))
+                        .catch(e => Dialogs.show('Failed to save annotations. ' + e.message, 5000, Dialogs.MSG_ERR))
                 }, new UI.FAIcon("fa-floppy-disk")),
 
                 // More Options
@@ -644,11 +655,11 @@ ${UIComponents.Elements.select({
         this.context.fabric.rerender();
     }
 
-		commentsDefaultOpen(enabled) {
-			if (this._commentsDefaultOpened === enabled) return;
-			this._commentsDefaultOpened = enabled;
-			this.setOption("commentsDefaultOpened", enabled);
-		}
+    commentsDefaultOpen(enabled) {
+        if (this._commentsDefaultOpened === enabled) return;
+        this._commentsDefaultOpened = enabled;
+        this.setOption("commentsDefaultOpened", enabled);
+    }
 
     /**
      * Set strategy for closing comments
@@ -1948,9 +1959,9 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 	 */
 	importFromFile(e) {
 		const _this = this;
-		this._ioArgs.format = _this.exportOptions.format;
+        this.context.setIOOption('format', this.exportOptions.format);
 		UTILITIES.readFileUploadEvent(e).then(async data => {
-			return await _this.context.fabric.import(data, this._ioArgs, this.getOption("importReplace", true));
+			return await _this.context.fabric.import(data, undefined, this.getOption("importReplace", true));
 		}).then(r => {
 			Dialogs.show(r ? "Loaded." : "No data was imported! Are you sure you have a correct format set?", 1500,
 				r ? Dialogs.MSG_INFO : Dialogs.MSG_WARN);
@@ -1962,25 +1973,20 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 
 	/**
 	 * Export annotations for one-time state save
-	 * @param preferredFormat
+	 * @param options
 	 * @param withObjects
 	 * @param withPresets
 	 * @return {Promise<*>}
 	 */
-	async getExportData(preferredFormat = null, withObjects=true, withPresets=true, scope='all', selected=[]) {
-		const ioArgs = { ...this._ioArgs };
-        ioArgs.format = preferredFormat || this._defaultFormat;
-        if (withObjects && scope === 'selected') {
-            ioArgs.filter = { ids: selected };
-        }
-        return this.context.fabric.export(ioArgs, withObjects, withPresets);
+	async getExportData(options = null, withObjects=true, withPresets=true) {
+        return this.context.fabric.export(options, withObjects, withPresets);
 	}
 
 	/**
 	 * Export annotations and download them
 	 */
-	exportToFile(withObjects=true, withPresets=true) {
-		const toFormat = this.exportOptions.format;
+	async exportToFile(withObjects=true, withPresets=true) {
+        const toFormat = this.exportOptions.format;
 
 		let scope = 'all';
         let selectedItems = [];
@@ -2020,7 +2026,15 @@ style="height: 22px; width: 60px;" onchange="${this.THIS}.context.freeFormTool.s
 			+ (withPresets && withObjects ? "all" : (withObjects ? "annotations" : "presets"))
 			+ scopeSuffix;
 
-		this.getExportData(toFormat, withObjects, withPresets, scope, selectedItems).then(result => {
+        const ioArgs = {};
+        if (toFormat) {
+            ioArgs.format = toFormat;
+        }
+        if (withObjects && scope === 'selected') {
+            ioArgs.filter = { ids: selectedItems };
+        }
+
+		return this.getExportData(ioArgs, withObjects, withPresets).then(result => {
 			UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
 		}).catch(e => {
 			Dialogs.show("Could not export annotations in the selected format.", 5000, Dialogs.MSG_WARN);
@@ -2437,20 +2451,6 @@ class="btn m-2">Set for left click </button></div>`
 		//todo
 		error = error ? `<div class="error-container m-2">${error}</div><br>` : "";
 		return `<br><h4 class="f3-light header-sep">Stored on a server</h4>${error}<br>`;
-	}
-
-	async saveDefault() {
-		this.needsSave = false;
-		await this.module.raiseEventAwaiting('save-annotations', {
-			getData: this.getExportData.bind(this),
-			setNeedsDownload: (needsDownload) => {
-				this.needsSave = needsDownload;
-			}
-		})
-
-		if (this.needsSave) {
-			this.exportToFile();
-		}
 	}
 
 	/**

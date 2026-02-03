@@ -32,7 +32,7 @@ const initViewerCoreAndPlugins = (req, res) => {
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
         key => process.env[key]);
 
-    if (throwFatalErrorIf(res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
+    if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
     core.CORE.serverStatus.name = "node";
     core.CORE.serverStatus.supportsPost = true;
 
@@ -42,7 +42,7 @@ const initViewerCoreAndPlugins = (req, res) => {
     if (language) core.CORE.setup.locale = language;
 
     loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
-    if (throwFatalErrorIf(res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+    if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
     return core;
 }
 
@@ -223,9 +223,7 @@ async function responseDeveloperSetup(req, res) {
                 case "head":
                     return `
 ${core.requireOpenseadragon()}
-${core.requireLib('primer')}
-${core.requireLib('jquery')}
-${core.requireLib('render')}
+${core.requireLibs()}
 ${core.requireUI()}
 ${core.requireCore("env")}
 ${core.requireCore("deps")}`;

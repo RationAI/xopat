@@ -7,7 +7,6 @@
   "visualizations": [
     {
       "name": "My visualization",
-      "lossless": true,
       "shaders": {
         "shader_id_1": {
           "name": "Error Layer",
@@ -29,7 +28,6 @@
     },
     {
       "name": "My Second GOal",
-      "lossless": true,
       "shaders": {
         "shader_id_1": {
           "name": "Error Layer",

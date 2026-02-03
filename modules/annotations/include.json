@@ -29,4 +29,16 @@
     "storeCacheSnapshots": true,
     // Whether to include private annotations in module export
     "exportPrivate" : false,
+    //Arguments to format convertors
+    "convertors": {
+        "format": "native",
+        //Account for cropping done by BioFormats and OpenSlide
+        //can be overridden by convertors.imageCoordinatesOffset in plugin arguments
+        "imageCoordinatesOffset": [0,0],
+        //when set to false, the export output is in the native object, useful for subsequent processing,
+        //e.g. consuming the object/element and uploading it to some server
+        "serialize": true,
+        //list of IDs to export, mostly set programmatically when export is really called
+        "filter": null
+    }
 }

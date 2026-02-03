@@ -127,7 +127,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      *   objects: [(string|any)] serialized or un
      */
     async exportPartial(options={}, withAnnotations=true, withPresets=true) {
-        if (!options?.format) options.format = "native";
+        options = $.extend(true, {}, this.module.getExportOptions(), options);
         const result = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
         this.module.raiseEvent('export-partial', {
             owner: this,
@@ -162,7 +162,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
-        if (!options?.format) options.format = "native";
+        options = $.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
         options.serialize = false;
         let output = await OSDAnnotations.Convertor.encodePartial(options, this, withAnnotations, withPresets);
@@ -1972,7 +1972,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             for (let obj of fabricObjects) {
                 initObject(obj);
             }
-            self.historyManager.assignIDs(_this.getObjects());
+            self.module.historyManager.assignIDs(_this.getObjects());
         });
     }
 

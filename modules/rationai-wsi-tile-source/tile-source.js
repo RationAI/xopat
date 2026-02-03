@@ -30,8 +30,24 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
             user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
         }
+
+        this._qArgs = "";
     }
 
+    setSourceOptions(options) {
+        const params = new URLSearchParams(this._qArgs || '');
+        if (options.format) {
+            params.set('image_format', options.format);
+        }
+
+        if (options.quality) {
+            params.set('image_quality', options.quality);
+        }
+        this._qArgs = params.toString();
+        if (this._qArgs.length > 0) {
+            this._qArgs = '&' + this._qArgs;
+        }
+    }
 
     /**
      * Determine if the data and/or url imply the image service is supported by
@@ -268,10 +284,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}`
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}`
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`
     }
 
     /**
@@ -367,7 +383,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                             })
                         ).then(result =>
                             //we return array of promise responses - images
-                            context.finish(result, dataStore.request, undefined)
+                            // todo does not work well -> fix this
+                            context.finish(result, dataStore.request, "image[]")
                         ).catch(
                             abort
                         );

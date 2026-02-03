@@ -115,7 +115,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.fullId = this.parent.id + "-c-" + item.id;
         this.mainDiv = new Div({
             id: this.fullId,
-            extraClasses: {display: "", flex: "flex flex-row", pointer: "pointer-events-auto", position: "relative"},
+            extraClasses: {display: "", flex: "flex flex-row", pointer: "pointer-events-none", position: "relative"},
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;" }
         }, this.openDiv, this.openButton);
 

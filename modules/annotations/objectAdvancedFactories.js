@@ -45,6 +45,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             this._configureParts(instance.item(0), instance.item(1), options);
             this._configureWrapper(instance, instance.item(0), instance.item(1), options);
         }
+        return instance;
     }
 
     /**

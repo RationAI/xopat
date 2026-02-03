@@ -129,7 +129,7 @@ example for ``DeepZoom`` protocol configuration:
       }
     },
     "setup": {
-      "fetchAsync": true
+
     }
   }
 }
@@ -176,11 +176,13 @@ TiledImage can be extended to add custom functionality. The api supports:
 
 ````js
 /**
- * Set required image lossless format for transfer.
- * @param {Boolean} value
+ * Set source options.
+ * @param {SlideSourceOptions} options
  */    
-requireLossless(value) {
-    
+setSourceOptions(options) {
+    // do somethig with the options received, these options come
+    // from the outside and can be useful to furher configure the session
+    // give users control over the transfer capabilities!
 }
 
 /**

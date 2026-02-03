@@ -2,19 +2,19 @@
 const fs = require("node:fs");
 const constants = require("./constants");
 
-function throwFatalErrorIf(res, condition, title, description="", details="") {
+function throwFatalErrorIf(core, res, condition, title, description="", details="") {
     if (condition) {
         try {
-            showError(title, description, details); //todo $_GET["lang"] ?? 'en'
+            showError(core, res, title, description, details); //todo $_GET["lang"] ?? 'en'
         } catch (e) {
-            throwFatalErrorIfFallback(res,true, title, description, details);
+            throwFatalErrorIfFallback(core, res,true, title, description, details);
         }
         return true;
     }
     return false;
 }
 
-function throwFatalErrorIfFallback(res, condition, title, description, details="") {
+function throwFatalErrorIfFallback(core, res, condition, title, description, details="") {
 
     if (!fs.existsSync(constants.ABSPATH + "error.html")) {
         //try to reach the file externally
@@ -26,15 +26,17 @@ function throwFatalErrorIfFallback(res, condition, title, description, details="
 
     const replacer = function(match, p1) {
         switch (p1) {
-        case "error":
-            return `
-                <div class="collapsible" onclick="toggleContent()">Detailed Information</div>
-                <div class="content">
-                    <p>${description}</p>
-                    <code>${details}</code>
-                </div>`;
-        default:
-            break;
+            case "head":
+                return core.requireLibs()
+            case "error":
+                return `
+                    <div class="collapsible" onclick="toggleContent()">Detailed Information</div>
+                    <div class="content">
+                        <p>${description}</p>
+                        <code>${details}</code>
+                    </div>`;
+            default:
+                break;
         }
         return "";
     }
@@ -46,7 +48,7 @@ function throwFatalErrorIfFallback(res, condition, title, description, details="
 
 
 
-function showError(res, errTitle, errDesc, errDetails, locale='en') {
+function showError(core, res, errTitle, errDesc, errDetails, locale='en') {
 
     // global $i18n;
     // if (!isset($i18n)) {

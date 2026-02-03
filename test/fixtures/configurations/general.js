@@ -23,7 +23,6 @@ export default {
         return dataIndexes.map(i => ({
             "dataReference": i,
             "name": ["FirstIndex", "SecondIndex", "ThirdIndex", "FourthIndex"][i],
-            "lossless": false,
             ...overrides
         }));
     },
@@ -55,7 +54,6 @@ export default {
         webGlPreferredVersion: "2.0",
         headers: {},
         preferredFormat: "zip",
-        fetchAsync: false,
         ...overrides
     }),
     viewport: (key, index) => ({

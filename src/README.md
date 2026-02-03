@@ -31,14 +31,12 @@ Example configuration:
     "background": [
         {
             "dataReference": 0,
-            "lossless": false,
             "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
         }
     ],
     "visualizations": [
         {
             "name": "A visualization setup 1",
-            "lossless": true,
             "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
             "shaders": {
                 "shader_id_1": { 
@@ -92,14 +90,15 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
-    - [O]`fetchAsync` - by default uses generic multiplexing on tile protocols to support async fetching, overrideable behaviour
+    - [O]`fetchAsync` - deprecated
     - [O]`bypassCache` - do not allow using cached values for the user, default `false`
     - [O]`bypassCacheLoadTime` - TODO: better name also affects cookies
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
-    - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
+    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
+    - [O]`lossless` - deprecated
     - [O]`protocol` - see protocol construction below in advanced details
     - [O]`tileSource` - a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized
       - the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads using events
@@ -121,8 +120,9 @@ it is an inherited configuration interface of the WebGL module extended by optio
             - shaders can then reference `data` items using index to the `dataReferences` array
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
-    - [O]`name` - visualization goal name 
-    - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
+    - [O]`name` - visualization goal name
+    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
+    - [O]`lossless` - deprecated
     - [O]`protocol` - see protocol construction below in advanced details
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
 

@@ -123,7 +123,6 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                 handMadeConfiguration.background = slideList.map((slide, index) => {
                     return {
                         dataReference: index,
-                        lossless: false,
                     }
                 });
                 processed = true;
@@ -133,7 +132,6 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                 masks = masks.split(',');
                 const visConfig = {
                     name: "Masks",
-                    lossless: true,
                     shaders: {}
                 };
                 handMadeConfiguration.visualizations = [visConfig];

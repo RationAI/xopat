@@ -20,6 +20,11 @@ This event is fired when user clicks the control for comments
 ##### author-annotation-styling-toggle | ``{enable: boolean}``
 This event is fired when preference for per-author property styling changes
 
+#### save-annotations | ``{setHandled(string)}``
+This event is not fired by default, but others can request it by calling ``requestExport();``.
+Once the event is handled, the handler should call ``e.setHandled(<message>)`` to stop saving the annotations 
+multiple times. Winner of the saving process is decided by annotation handler priority.
+
 ##### preset-delete | ``{preset: OSDAnnotations.Preset}``
 
 ##### preset-create | ``{preset: OSDAnnotations.Preset}``

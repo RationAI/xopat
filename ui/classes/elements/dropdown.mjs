@@ -64,17 +64,21 @@ class Dropdown extends BaseSelectableComponent {
         this._headerIconComp = inIcon;
         this._headerLabelSpan = span(this.title);
 
-        this._dropdownIcon = this._useActiveSelection ? i(
-            { "data-dropdown-arrow": "1", class: "ml-1" },
-            new FAIcon({ name: "fa-caret-down" }).create()
-        ) : undefined;
-
+        let dropdownIcon = undefined,
+            buttonClasses = {flex: "flex flex-col items-center", padding: ""};
+        if (this._useActiveSelection) {
+            dropdownIcon = i(
+                { "data-dropdown-arrow": "1", class: "ml-1 p-3" },
+                new FAIcon({ name: "fa-caret-down" }).create()
+            );
+            buttonClasses['padding'] = 'pr-0';
+        }
         return new Button({
             id: this.parentId + "-b-" + this.id,
             size: Button.SIZE.SMALL,
             extraProperties: {title: this.title, style: ""},
-            extraClasses: {flex: "flex flex-col items-center"},
-        }, inIcon, this._headerLabelSpan, this._dropdownIcon);
+            extraClasses: buttonClasses,
+        }, inIcon, this._headerLabelSpan, dropdownIcon);
     }
 
     iconOnly() {
