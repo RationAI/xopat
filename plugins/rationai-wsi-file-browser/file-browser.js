@@ -1,4 +1,4 @@
-addPlugin('file-browser', class extends XOpatPlugin {
+addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
     constructor(id) {
         super(id);
 
@@ -119,7 +119,7 @@ addPlugin('file-browser', class extends XOpatPlugin {
             };
 
             info.setCustomBrowser({
-                id: "file-browser",
+                id: "rationai-wsi-file-browser",
                 levels: dynamicLevel,
                 bgItemGetter,
             });

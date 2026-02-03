@@ -21,22 +21,21 @@
 !/modules/web-worker-manager
 
 /plugins/**
-!/plugins/annotations
-!/plugins/custom-pages
-!/plugins/empaia
-!/plugins/extra-tutorials
-!/plugins/file-browser
-!/plugins/hotkeys
-!/plugins/navigation-tracker
-!/plugins/profiler
-!/plugins/questionaire
-!/plugins/recorder
-!/plugins/.removed/simple-integration
-!/plugins/user-session
-!/plugins/youtrack-feedback-form
-!/plugins/sam-segment-tool-experimental
-!/plugins/dicom
-!/plugins/slide-info
+!/plugins/annotations/*
+!/plugins/custom-pages/*
+!/plugins/empaia/*
+!/plugins/extra-tutorials/*
+!/plugins/rationai-wsi-file-browser/*
+!/plugins/hotkeys/*
+!/plugins/navigation-tracker/*
+!/plugins/profiler/*
+!/plugins/questionaire/*
+!/plugins/recorder/*
+!/plugins/user-session/*
+!/plugins/youtrack-feedback-form/*
+!/plugins/sam-segment-tool-experimental/*
+!/plugins/dicom/*
+!/plugins/slide-info/*
 
 #rubbish
 *.txt

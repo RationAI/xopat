@@ -1,5 +1,5 @@
 {
-  "id": "file-browser",
+  "id": "rationai-wsi-file-browser",
   "name": "File browser",
   "author": "Vendula Penazova",
   "version": "1.0.0",
@@ -8,5 +8,6 @@
     "file-browser.js"
   ],
   "modules": [],
+  // RationAI WSI Service URL
   "wsiService": "http://localhost:8080"
 }
