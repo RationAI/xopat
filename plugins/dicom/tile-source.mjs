@@ -27,29 +27,26 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         user.addHandler("logout", () => (this.ajaxHeaders["Authorization"] = null));
 
         this.frameOrder = options.frameOrder || null;
+        this.frameOrderBySeries = options.frameOrderBySeries || null;
+        this.frameOrderByInstance = options.frameOrderByInstance || null;
     }
 
     supports(data) { return data && data.type === "dicomweb"; }
 
-    // _acceptHeader() {
-    //     // todo support more transfer syntaxes...
-    //     return this.useRendered
-    //         ? 'multipart/related; type="image/png", multipart/related; type="image/jpeg"'
-    //         : 'multipart/related; type="image/jpeg"; transfer-syntax=1.2.840.10008.1.2.4.50, multipart/related; type="application/octet-stream"; transfer-syntax=*';
-    // }
-
     _acceptHeader(useRendered = this.useRendered, preferPng = false) {
         if (useRendered) {
-            // Rendered: NEVER add transfer-syntax here.
-            // Prefer JPEG (smaller/faster) with PNG as fallback, or flip with preferPng=true.
+            // Google DICOMweb often requires multipart/related for rendered endpoints.
+            // Prefer JPEG (smaller) with PNG fallback, or flip with preferPng=true.
             return preferPng
-                ? 'image/png, image/jpeg'
-                : 'image/jpeg, image/png';
+                ? 'multipart/related; type="image/png", multipart/related; type="image/jpeg"'
+                : 'multipart/related; type="image/jpeg", multipart/related; type="image/png"';
         }
 
         // Native (non-rendered): request bulk pixel data with TS wildcard.
         // (Server may respond multipart/related; type="application/octet-stream")
-        return 'multipart/related; type="application/octet-stream"; transfer-syntax=*';
+        return 'multipart/related; type="image/jpeg"; transfer-syntax=1.2.840.10008.1.2.4.50';
+        // TODO: add JP2K support via module to support the below
+        // return 'multipart/related; type="application/octet-stream"; transfer-syntax=*';
     }
 
     indexOfBytes(hay, needle, from = 0) {
@@ -133,10 +130,13 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             XOpatUser.instance().getSecret(),
             this.studyUID,
             this.seriesUID,
-            this.frameOrder
+            {
+                frameOrder: this.frameOrder,
+                frameOrderBySeries: this.frameOrderBySeries,
+                frameOrderByInstance: this.frameOrderByInstance
+            }
         );
 
-// Pick the best candidate: most levels, then biggest top level
         this.wsi = (wsiList || [])
             .slice()
             .sort((a, b) => {
@@ -195,6 +195,14 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         if (!this.wsi.levels.length) {
             throw new Error('No levels were found!');
         }
+
+        if (this.wsi.levels[0].instanceUID) {
+            // You might need to fetch metadata for the first instance if you haven't already
+            // or rely on DicomQuery to have stored it.
+            // For now, let's assume you can access the instance metadata.
+            // The tag is 0028,0004.
+            this.photometricInterpretation = this.wsi.photometricInterpretation || "RGB";
+        }
     }
 
     configure() { }
@@ -222,8 +230,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 studyUID: this.studyUID,
                 seriesUID: this.seriesUID,
                 frameOfReferenceUID: safeFrameOfRef,
-                previewInstanceUID: this.previewInstanceUID,
-                macroInstanceUID: this.macroInstanceUID,
+                previewInstanceUID: this.wsi?.previewInstanceUID,
+                macroInstanceUID: this.wsi?.macroInstanceUID,
                 levels: this.wsi.levels,
                 tileWidth: this.tileWidth,
                 tileHeight: this.tileHeight,
@@ -247,8 +255,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         // Guard: if frame mapping is missing, return a URL that will fail fast but never "frames/undefined"
         if (!Number.isFinite(frame) || frame <= 0) {
-            // You can also return `null` if your OSD integration tolerates it, but URL is safer here.
-            return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/frames/1`;
+            // Return an invalid frame index so the tile fails fast (better than showing the wrong/blank frame 1)
+            return `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${level.instanceUID}/frames/0`;
         }
 
         const tail = this.useRendered ? `frames/${frame}/rendered` : `frames/${frame}`;
@@ -257,7 +265,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
     async _getTile(context) {
         const res = await fetch(context.src, {
-            headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader() },
+            headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader(this.useRendered) },
             mode: 'cors', cache: 'no-store',
         });
 
@@ -275,10 +283,22 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         const type = (headers['content-type'] || '').toLowerCase() || 'application/octet-stream';
         if (parts.length > 2) console.warn("DICOM response carries multiple frames!", res);
 
-        if (type.includes('image/png'))  return context.finish(new Blob([bytes], { type: 'image/png'  }), res, "rasterBlob");
-        if (type.includes('image/jpeg')) return context.finish(new Blob([bytes], { type: 'image/jpeg' }), res, "rasterBlob");
+        const bitmapOptions = this.useRendered
+            ? {} // Default: browser corrects image for display
+            : { colorSpaceConversion: 'none' }; // RAW: browser gives us exact pixels
 
-        return context.fail("DICOM tile format unsupported.", res);
+        try {
+            const bmp = await createImageBitmap(new Blob([bytes]), bitmapOptions);
+            return context.finish(bmp, res, "imageBitmap");
+        } catch (err) {
+            console.error("Bitmap creation failed", err);
+            return context.fail("Bitmap failure", res);
+        }
+    }
+
+    async getLabel() {
+        if (!this.wsi?.macroInstanceUID) return null;
+        return this._downloadWholeInstanceImage(this.wsi.macroInstanceUID);
     }
 
     downloadTileStart(context) { this._getTile(context); }
@@ -287,7 +307,10 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     async _downloadWholeInstanceImage(instanceUID) {
         if (!instanceUID) throw new Error("No instance selected");
         const url = `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${instanceUID}/rendered`;
+        return this._downloadImage(url);
+    }
 
+    async _downloadImage(url) {
         const res = await fetch(url, {
             headers: { ...this.ajaxHeaders, Accept: this._acceptHeader(true, false) },
             mode: 'cors', cache: 'no-store'
@@ -310,23 +333,148 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     /** Download preview/overview (thumbnail) image as a Blob (PNG or JPEG). */
-    async getThumbnail() {
-        // 1. Try dedicated preview instance (if detected by DicomQuery)
+    async getThumbnail({ targetWidth = 512 } = {}) {
+        // 1) Use dedicated single-frame preview instance if available
         if (this.wsi?.previewInstanceUID) {
             return this._downloadWholeInstanceImage(this.wsi.previewInstanceUID);
         }
 
-        // 2. Fallback: Use the smallest pyramid level (lowest resolution)
-        // 'levels' usually goes from High Res (0) -> Low Res (N)
-        if (this.wsi?.levels?.length > 0) {
-            const smallestLevel = this.wsi.levels[this.wsi.levels.length - 1];
-            return this._downloadWholeInstanceImage(smallestLevel.instanceUID);
+        if (this.wsi?.thumbUrl) {
+            return this._downloadImage(this.wsi.thumbUrl);
         }
 
-        // 3. Give up if neither exists
-        throw new Error("No suitable instance found for thumbnail generation.");
+        return null;
     }
 
     /** Download label/macro image as a Blob (PNG or JPEG). */
     async downloadMacroImage() { return this._downloadWholeInstanceImage(this.wsi.macroInstanceUID); }
+
+
+    _iccProfileCache = undefined;
+
+    /**
+     * Download ICC profile from DICOM instance metadata.
+     * The ICC module expects this method to exist and return an ArrayBuffer. :contentReference[oaicite:3]{index=3}
+     */
+    async downloadICCProfile() {
+        if (this.useRendered) return null;
+        if (this._iccProfileCache === null) return null;
+        if (this._iccProfileCache instanceof ArrayBuffer) return this._iccProfileCache;
+
+        const base = (this.baseUrl || "").replace(/\/+$/, "");
+        const studyUID = this.studyUID;
+        const seriesUID = this.seriesUID;
+
+        // Candidate instances to probe
+        const candidates = [];
+        if (this.wsi?.levels?.[0]?.instanceUID) candidates.push(this.wsi.levels[0].instanceUID);
+        if (this.wsi?.previewInstanceUID) candidates.push(this.wsi.previewInstanceUID);
+        if (this.wsi?.macroInstanceUID) candidates.push(this.wsi.macroInstanceUID);
+        for (const lvl of (this.wsi?.levels || [])) if (lvl?.instanceUID) candidates.push(lvl.instanceUID);
+
+        const uniq = Array.from(new Set(candidates));
+        if (!uniq.length) {
+            this._iccProfileCache = null;
+            return null;
+        }
+
+        const authToken = this.ajaxHeaders?.Authorization?.replace(/^Bearer\s+/i, "") || null;
+
+        for (const instanceUID of uniq) {
+            const metaUrl =
+                `${base}/studies/${encodeURIComponent(studyUID)}` +
+                `/series/${encodeURIComponent(seriesUID)}` +
+                `/instances/${encodeURIComponent(instanceUID)}/metadata`;
+
+            let meta;
+            try {
+                meta = await DicomQuery.wadoMetadata(metaUrl, authToken); // Accept: application/dicom+json :contentReference[oaicite:2]{index=2}
+            } catch (e) {
+                console.warn("[ICC] metadata fetch failed", { instanceUID, metaUrl, error: String(e?.message || e) });
+                continue;
+            }
+
+            const ds = meta?.[0];
+            if (!ds) continue;
+
+            // Deep search for the ICC tag anywhere in the dataset tree
+            const tag = findTagDeep(ds, "00282000");
+            if (!tag) continue;
+
+            // Handle common shapes:
+            //  - tag.InlineBinary / tag.BulkDataURI
+            //  - tag.Value[0].InlineBinary / tag.Value[0].BulkDataURI
+            const inline = tag.InlineBinary ?? tag?.Value?.[0]?.InlineBinary;
+            const bulk   = tag.BulkDataURI  ?? tag?.Value?.[0]?.BulkDataURI;
+
+            if (inline) {
+                const buf = this._base64ToArrayBuffer(inline);
+                this._iccProfileCache = buf;
+                return buf;
+            }
+
+            if (bulk) {
+                const bulkUrl = new URL(bulk, metaUrl).toString();
+                const res = await fetch(bulkUrl, {
+                    headers: {
+                        Accept: "application/octet-stream",
+                        ...(this.ajaxHeaders || {}),
+                    },
+                    mode: "cors",
+                    cache: "no-store",
+                });
+
+                if (!res.ok) {
+                    console.warn("[ICC] bulk fetch failed", { bulkUrl, status: res.status });
+                    continue;
+                }
+
+                const buf = await res.arrayBuffer();
+                this._iccProfileCache = buf;
+                return buf;
+            }
+
+            // Tag exists but has no bytes — treat as missing and stop scanning
+            console.warn("[ICC] ICC tag found but contains no InlineBinary/BulkDataURI", { instanceUID, metaUrl, tag });
+            break;
+        }
+
+        this._iccProfileCache = null;
+        return null;
+
+        // ---- helpers ----
+
+        function findTagDeep(node, tagKey) {
+            if (!node || typeof node !== "object") return null;
+
+            // Direct hit
+            if (node[tagKey]) return node[tagKey];
+
+            // Walk all DICOM JSON elements; recurse into sequences:
+            // In DICOM JSON, sequences are usually { vr: "SQ", Value: [ { ... }, ... ] }
+            for (const k of Object.keys(node)) {
+                const el = node[k];
+                if (!el || typeof el !== "object") continue;
+
+                const value = el.Value;
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (item && typeof item === "object") {
+                            const hit = findTagDeep(item, tagKey);
+                            if (hit) return hit;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+    }
+
+    _base64ToArrayBuffer(b64) {
+        const binStr = atob(b64);
+        const len = binStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+        return bytes.buffer;
+    }
 }

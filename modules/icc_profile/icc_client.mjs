@@ -76,7 +76,8 @@ class ICCProfile extends window.XOpatModuleSingleton {
         });
 
         this.loaded = false;
-        this.pendingTiles = {};
+        this._seq = 0;
+        this._jobs = new Map(); // requestId -> { resolve, reject, before? }
         this.debugMode = this.getStaticMeta("debugMode", false);
 
         this.earlyQueue = []; // { ref: WeakRef<Tile>, key, bmp, before?, token }
@@ -87,226 +88,187 @@ class ICCProfile extends window.XOpatModuleSingleton {
             })
             : null;
 
-        VIEWER_MANAGER.addHandler("before-first-open", this.init.bind(this));
+        // todo possible race condition: viewer created before worker ready?
+        this.init();
     }
 
     async init() {
         await this.ready;
-
-        VIEWER_MANAGER.broadcastHandler("open", (e) => this.initEvents(e.eventSource));
-
         this.debug = this.debug || makeDebugPanel();
 
+        VIEWER_MANAGER.addHandler("viewer-create", (e) => this.initEvents(e.viewer));
+
         this.worker.onmessage = async (e) => {
-            const { type, image, bitmap, contextId } = e.data;
+            const msg = e.data || {};
+            const { type, contextId } = msg;
 
             if (type === "profileSet") {
                 const ctx = this.getCtx(contextId);
                 ctx.status = "ready";
 
-                const q = ctx.queue;
-                ctx.queue = [];
-
-                for (const item of q) {
-                    // item has: tile, bmp, before?, jobId
-                    this.pendingTiles[item.jobId] = this.debugMode
-                        ? { tile: item.tile, before: item.before }
-                        : { tile: item.tile };
-
-                    this.worker.postMessage(
-                        { type: "processBitmap", bitmap: item.bmp, contextId: item.jobId },
-                        [item.bmp]
-                    );
+                const job = this._jobs.get(contextId);
+                if (job) {
+                    this._jobs.delete(contextId);
+                    job.resolve(true);
                 }
                 return;
             }
 
-            if (type === 'done') {
-                const tile = this.pendingTiles[contextId];
-                if (!tile) return;
+            if (type === "doneBitmap") {
+                const job = this._jobs.get(contextId);
+                if (!job) return;
+                this._jobs.delete(contextId);
 
-                // Convert raw RGB back to RGBA
-                const rgb = new Uint8Array(image);
-                const rgba = new Uint8ClampedArray((rgb.length/3) * 4);
-                for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
-                    rgba[j]   = rgb[i];
-                    rgba[j+1] = rgb[i+1];
-                    rgba[j+2] = rgb[i+2];
-                    rgba[j+3] = 255;
-                }
+                const { bitmap } = msg;
 
-                const canvas = document.createElement('canvas');
-                canvas.width = tile.source.bounds.width;   // or tile.source.dimensions?
-                canvas.height = tile.source.bounds.height;
-                const ctx = canvas.getContext('2d');
-                ctx.putImageData(new ImageData(rgba, canvas.width, canvas.height), 0, 0);
-
-                // Update tile’s image (this will be drawn by OSD)
-                tile.getCanvasContext = () => ctx;
-                tile.context2D = ctx;
-                tile.hasTransparencyChannel = false;
-
-                delete this.pendingTiles[contextId];
-                window.VIEWER.forceRedraw();
-
-            } else if (type === 'doneBitmap') {
-                const rec = this.pendingTiles[contextId];
-                if (!rec) return;
-                const { tile, before } = rec;
-                delete this.pendingTiles[contextId];
-
-                if (this.debugMode && before) {
+                if (this.debugMode && job.before) {
                     this.debug = this.debug || makeDebugPanel();
-                    await drawBitmapToCanvas(before, this.debug.before);
+                    await drawBitmapToCanvas(job.before, this.debug.before);
                     await drawBitmapToCanvas(bitmap, this.debug.after);
                     drawDelta(this.debug.before, this.debug.after, this.debug.delta);
-                    // free the extra bitmap we created just for debug
-                    if (before.close) before.close();
+                    if (job.before.close) job.before.close();
                 }
 
-                // patch the tile (always)
-                if (tile.context2D) delete tile.context2D;
-                const cache = tile.cacheImageRecord;
-                if (cache._renderedContext) delete cache._renderedContext;
-                cache._data = bitmap;
+                job.resolve(bitmap);
+                return;
+            }
 
-                window.VIEWER.forceRedraw();
+            // Keep legacy "done" support (optional), but resolve via jobs too.
+            if (type === "done") {
+                const job = this._jobs.get(contextId);
+                if (!job) return;
+                this._jobs.delete(contextId);
+
+                const { image } = msg; // raw RGB ArrayBuffer
+                job.resolve(image);
+                return;
+            }
+
+            if (type === "error") {
+                const job = this._jobs.get(contextId);
+                if (job) {
+                    this._jobs.delete(contextId);
+                    job.reject(new Error(msg.message ?? msg.reason ?? "ICC worker error"));
+                } else {
+                    console.error("[ICC worker error]", msg);
+                }
             }
         };
     }
 
     initEvents(viewer) {
-        viewer.world.addHandler("add-item", (e) => {
-            const source = e.item.source;
-            if (!source?.downloadICCProfile) return;
-
-            const contextId = source.url;          // stable per slide/source
-            const ctx = this.getCtx(contextId);
-
-            // Only fetch once per context
-            if (ctx.status === "ready" || ctx.status === "none" || ctx.status === "error") return;
-            if (ctx.status === "loading" && ctx._started) return;
-            ctx._started = true;
-
-            source.downloadICCProfile()
-                .then((data) => {
-                    if (data == null) {
-                        ctx.status = "none";            // no profile -> process without conversion
-                        // optionally: drain queued tiles without conversion (or just drop queue)
-                        ctx.queue.length = 0;
-                        return;
-                    }
-                    if (!(data instanceof ArrayBuffer)) {
-                        ctx.status = "error";
-                        ctx.queue.length = 0;
-                        throw new Error("Invalid ICC profile data (expected ArrayBuffer)");
-                    }
-
-                    // Ask worker to install the profile for THIS contextId
-                    this.worker.postMessage({ type: "setProfile", profile: data, contextId }, [data]);
-                    // status flips to "ready" when worker replies profileSet for this contextId
-                })
-                .catch((err) => {
-                    console.warn("[ICC] Failed to load profile; continuing without conversion", err);
-                    ctx.status = "error";
-                    ctx.queue.length = 0;
-                });
-        });
-        // window.VIEWER.world.addHandler("remove-item", (e) => {
-        //     remove unused profiles
-        // });
-
-        viewer.addHandler("tile-loaded", async (e) => {
-            if (!e.data) return;
-            const source = e.tiledImage?.source;
+        viewer.addHandler("tile-source-created", async (e) => {
+            const source = e.tileSource;
             if (!source?.downloadICCProfile) return;
 
             const contextId = source.url;
             const ctx = this.getCtx(contextId);
 
-            const jobId = e.tile.cacheKey;
-            const data = e.data;
+            // Prevent duplicate loading
+            if (ctx.status !== "loading" && ctx._started) return;
+            ctx._started = true;
 
-            let bmpForWorker;
-            let beforeForDebug = null;
+            // 1. Create a promise that resolves ONLY when the Worker is fully ready
+            ctx.readyPromise = new Promise((resolve, reject) => {
+                source.downloadICCProfile()
+                    .then((data) => {
+                        if (data == null) {
+                            ctx.status = "none";
+                            resolve(false); // No profile needed
+                            return;
+                        }
+                        if (!(data instanceof ArrayBuffer)) {
+                            throw new Error("Invalid ICC profile data");
+                        }
 
-            if (data instanceof HTMLImageElement) {
-                bmpForWorker = await createImageBitmap(data);
-                if (this.debugMode) beforeForDebug = await createImageBitmap(data);
-            } else if (data instanceof CanvasRenderingContext2D) {
-                bmpForWorker = data.canvas.transferToImageBitmap();
-                if (this.debugMode) beforeForDebug = data.canvas.transferToImageBitmap();
-            } else if (data instanceof HTMLCanvasElement) {
-                bmpForWorker = data.transferToImageBitmap();
-                if (this.debugMode) beforeForDebug = data.transferToImageBitmap();
-            } else {
-                console.warn("tile-loaded: unsupported data type", data);
-                return;
-            }
+                        // We hijack the existing job system to wait for the worker's reply
+                        this._jobs.set(contextId, {
+                            resolve: () => {
+                                ctx.status = "ready";
+                                resolve(true); // Profile ready!
+                            },
+                            reject: (err) => {
+                                ctx.status = "error";
+                                reject(err);
+                            }
+                        });
 
-            // If profile isn't ready, queue for this context
-            if (ctx.status === "loading") {
-                ctx.queue.push({ tile: e.tile, bmp: bmpForWorker, before: beforeForDebug, jobId });
-                return;
-            }
+                        // Send to worker
+                        this.worker.postMessage({ type: "setProfile", profile: data, contextId }, [data]);
+                    })
+                    .catch((err) => {
+                        console.warn("[ICC] Failed to load profile", err);
+                        ctx.status = "error";
+                        resolve(false); // Graceful degradation
+                    });
+            });
 
-            // If no profile (or failed), you can either:
-            // (a) do nothing (no conversion), OR
-            // (b) still processBitmap with an identity transform in worker
-            if (ctx.status !== "ready") return;
+            // 3. Return the promise so the event emitter waits (if it supports it)
+            return ctx.readyPromise;
+        });
 
-            this.pendingTiles[jobId] = this.debugMode
-                ? { tile: e.tile, before: beforeForDebug }
-                : { tile: e.tile };
-
-            this.worker.postMessage(
-                { type: "processBitmap", bitmap: bmpForWorker, contextId: jobId },
-                [bmpForWorker]
-            );
-        }, null, Infinity);
-    }
-
-    attachIccToViewer(viewer, iccClient) {
-        // Run early in the invalidation pipeline (priority < 0 tends to run earlier than default 0)
         viewer.addHandler(
             "tile-invalidated",
             async (e) => {
                 const tile = e.tile;
                 const tiledImage = e.tiledImage;
-
-                // 1) Decide whether this tile should be color-managed
-                //    (you likely key off the TileSource or item metadata)
                 const source = tiledImage?.source;
                 const ctxId = source?.url || source?.id || tiledImage?.id;
+
                 if (!ctxId) return;
 
-                // If profile not ready yet, do nothing (tile draws uncorrected for now).
-                // Optionally you can trigger download here, then requestInvalidate later.
-                if (!iccClient.hasProfileFor(ctxId)) return;
+                // [FIX] Access the raw context to check for the promise
+                const ctx = this.profileState.get(ctxId);
 
-                // 2) Get the cache record that is about to become the drawable "main cache".
-                //    In this prerelease, the mutation point is the cache record, NOT tile.image/context2D.
-                //
-                //    Different builds pass different properties; prefer e.cache if present, else tile.getCache().
-                const cache =
-                    e.cache || e.cacheRecord || tile.getCache?.(tile.cacheKey) || tile.getCache?.();
+                // 4. BLOCKING WAIT: If we are loading, pause this tile until ready
+                if (ctx && ctx.status === 'loading' && ctx.readyPromise) {
+                    await ctx.readyPromise;
+                }
+
+                // 5. Now check if we actually have a profile (ready)
+                if (!this.hasProfileFor(ctxId)) return;
+
+                const cache = tile.getCache();
                 if (!cache) return;
+                if (cache.withTileReference) cache.withTileReference(tile);
 
-                // 3) Get an ImageBitmap from the cache (copy=true by default; safe for transfer)
-                //    If your cache already *is* an ImageBitmap, this stays cheap.
-                const bmp = await cache.getDataAs("imageBitmap"); // CacheRecord.getDataAs(...) :contentReference[oaicite:8]{index=8}
+                const bmp = await cache.getDataAs("imageBitmap");
                 if (!bmp) return;
 
-                // 4) Process in worker and write back into THE cache record.
-                const corrected = await iccClient.processBitmapForContext(ctxId, bmp);
+                const before = this.debugMode ? await cache.getDataAs("imageBitmap") : null;
 
-                // 5) Replace cached data so future draws/viewport changes reuse corrected pixels.
-                //    This is the “put it into the original cache” step you want.
-                await cache.setDataAs(corrected, "imageBitmap"); // CacheRecord.setDataAs(...) :contentReference[oaicite:9]{index=9}
+                // Since we awaited above, the worker is guaranteed ready now
+                const corrected = await this.processBitmapForContext(ctxId, bmp, before);
+                await cache.setDataAs(corrected, "imageBitmap");
             },
             null,
             -10
         );
+    }
+
+    hasProfileFor(contextId) {
+        const ctx = this.profileState.get(contextId);
+        return ctx?.status === "ready";
+    }
+
+    processBitmapForContext(profileContextId, bmp, beforeForDebug = null) {
+        // requestId is just for correlating the response
+        const requestId = `${profileContextId}::${++this._seq}`;
+
+        return new Promise((resolve, reject) => {
+            this._jobs.set(requestId, { resolve, reject, before: beforeForDebug });
+
+            this.worker.postMessage(
+                {
+                    type: "processBitmap",
+                    bitmap: bmp,
+                    contextId: requestId,
+                    // if you later support multiple profiles concurrently, you can add:
+                    // profileContextId
+                },
+                [bmp]
+            );
+        });
     }
 }
 

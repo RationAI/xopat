@@ -42,7 +42,11 @@ addPlugin('dicom', class extends XOpatPlugin {
         this.defaultPatient = this.getOptionOrConfiguration('patientUID');
         this.defaultStudy   = this.getOptionOrConfiguration('studyUID');
         this.defaultSeries  = this.getOptionOrConfiguration('seriesUID');
-        this.frameOrder = this.getOption('frameOrder', undefined);
+        this.frameOrder = {
+            frameOrderByInstance: this.getOption("frameOrderByInstance", null),
+            frameOrderBySeries: this.getOption("frameOrderBySeries", null),
+            frameOrder: this.getOption("frameOrder", null),
+        };
 
         this.lastSopInstanceUID = null;
 
@@ -172,7 +176,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                         seriesUID: data.seriesUID,
                         useRendered: this.useRendered,
                         patientDetails: this.state.activePatientDetails,
-                        frameOrder: this.frameOrder
+                        ...this.frameOrder
                     });
 
                     // Keep identity stable and aligned with the browser:
@@ -360,7 +364,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                         seriesUID,
                         useRendered: this.useRendered,
                         patientDetails: this.state.activePatientDetails,
-                        frameOrder: this.frameOrder
+                        ...this.frameOrder
                     });
                     return { id: seriesUID, tileSource, dataReference: { studyUID, seriesUID } };
                 }
@@ -373,9 +377,11 @@ addPlugin('dicom', class extends XOpatPlugin {
             module.addHandler("save-annotations", async (e) => {
                 const token = XOpatUser.instance().getSecret();
 
-                // 1. Get Context (Slide Metadata)
-                const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
-                if (!tiledImage || !tiledImage.source || typeof tiledImage.source.getMetadata !== 'function') {
+                // IMPORTANT: use the annotations module viewer, not global VIEWER
+                const viewer = module.viewer; // <- tracked active viewer inside OSDAnnotations
+                const tiledImage = viewer?.scalebar?.getReferencedTiledImage?.();
+
+                if (!tiledImage?.source || typeof tiledImage.source.getMetadata !== "function") {
                     Dialogs.show("Cannot save: No active DICOM slide found.", 5000, Dialogs.MSG_ERR);
                     return;
                 }
@@ -386,77 +392,57 @@ addPlugin('dicom', class extends XOpatPlugin {
                     return;
                 }
 
-                // Add patient context for the converter
                 meta.patient = this.state.activePatientDetails;
 
-                // 2. Get Annotations using the new DICOM converter
                 try {
-                    const exportOptions = {
-                        format: "dicom",
-                        serialize: false,
-                        meta: meta
-                    };
-
-                    // Use the converter to transform OSD objects to DICOM structure
+                    const exportOptions = { format: "dicom", serialize: false, meta };
                     const conversion = await OSDAnnotations.Convertor.encodePartial(exportOptions, module.fabric);
 
-                    if (!conversion.objects || conversion.objects.length === 0) {
-                        return;
-                    }
+                    if (!conversion.objects?.length) return;
 
-                    // 3. Finalize: Wrap structure into DICOM P10 Binary
                     const dicomBuffer = OSDAnnotations.Convertor.encodeFinalize("dicom", conversion);
 
-                    // 4. Upload via STOW-RS
-                    const response = await DicomTools.stow(
-                        this.serviceUrl,
-                        token,
-                        meta.studyUID,
-                        dicomBuffer
-                    );
-
+                    const response = await DicomTools.stow(this.serviceUrl, token, meta.studyUID, dicomBuffer);
                     console.log("STOW Response:", response);
-                    e.setHandled('Annotations saved successfully.');
+
+                    e.setHandled("Annotations saved successfully.");
                 } catch (ex) {
                     console.error("DICOM Save Failed:", ex);
                 }
             });
 
-            // Fetch & load available data
-            const token = XOpatUser.instance().getSecret();
-            const tiledImage = VIEWER.scalebar.getReferencedTiledImage();
+            VIEWER_MANAGER.broadcastHandler("open", async (e) => {
+                const viewer = e.eventSource;          // <-- the viewer that just opened something
+                    // viewer-specific slide metadata (do NOT use global VIEWER)
+                const tiledImage = viewer.scalebar?.getReferencedTiledImage?.();
+                if (!tiledImage?.source?.getMetadata) return;
 
-            if (tiledImage?.source) {
                 const meta = tiledImage.source.getMetadata().imageInfo;
+                meta.patient = this.state.activePatientDetails;
 
-                try {
-                    Dialogs.show("Loading annotations...", 2000);
+                // Clear existing objects for that viewer before loading
+                await module.fabric.loadObjects({ objects: [] }, true);
 
-                    // 1. Find latest SR
-                    const latestSOP = await DicomTools.findLatestAnnotation(this.serviceUrl, token, meta.studyUID);
-                    if (latestSOP) {
-                        // 2. Fetch SR Instance (P10 Binary)
-                        const url = `${this.serviceUrl}/studies/${meta.studyUID}/series/${latestSOP.seriesUID}/instances/${latestSOP.sopUID}`;
-                        const res = await fetch(url, {
-                            headers: {Accept: 'application/dicom', Authorization: `Bearer ${token}`}
-                        });
-                        const buffer = await res.arrayBuffer();
+                const token = XOpatUser.instance().getSecret();
 
-                        // 3. Decode using the Converter
-                        const options = {format: "dicom", meta: meta};
-                        const imported = await OSDAnnotations.Convertor.decode(options, buffer, module.fabric);
+                // IMPORTANT: do not use study-only search; filter at least by seriesUID
+                const latestSOP = await DicomTools.findLatestAnnotation(
+                    this.serviceUrl, token, meta.studyUID, meta.seriesUID, meta.frameOfReferenceUID
+                );
 
-                        // 4. Inject into viewer
-                        if (imported && imported.objects) {
-                            await module.fabric.loadObjects(imported); // Or module.import(imported)
-                            Dialogs.show(`Loaded ${imported.objects.length} annotations.`, 3000);
-                        }
-                    }
-                } catch (ex) {
-                    console.error("Load failed", ex);
-                    Dialogs.show("Failed to load annotations.", 5000, Dialogs.MSG_ERR);
+                if (!latestSOP) return;
+
+                const url = `${this.serviceUrl}/studies/${meta.studyUID}/series/${latestSOP.seriesUID}/instances/${latestSOP.sopUID}`;
+                const res = await fetch(url, {
+                    headers: { Accept: "application/dicom", Authorization: `Bearer ${token}` },
+                });
+                const buffer = await res.arrayBuffer();
+
+                const imported = await OSDAnnotations.Convertor.decode({ format: "dicom", meta }, buffer, module.fabric);
+                if (imported?.objects?.length) {
+                    await module.fabric.loadObjects(imported, true);
                 }
-            }
+            });
 
         })
     }
