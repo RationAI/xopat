@@ -578,7 +578,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             context: $("#bottom-container"),
             bar: "",
             init: function () {
-                
 
                 this.bar = new UI.Join({
                     id: "mobile-navbar", 
@@ -632,6 +631,9 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                         this.context[0].style.height = "0px";
                     }
                 });
+                window.dispatchEvent(new CustomEvent('app:layout-change', {
+                    detail: { width: window.innerWidth }
+                }));
             }
         },
 
@@ -1240,7 +1242,7 @@ ${label}
     window.addEventListener('resize', () => {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
-            // Vyšle globální zprávu
+            // todo, either use window events directly, or convert to the openseadragon event system!
             window.dispatchEvent(new CustomEvent('app:layout-change', { 
                 detail: { width: window.innerWidth } 
             }));

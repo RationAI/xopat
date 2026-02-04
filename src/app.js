@@ -132,12 +132,17 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     const _CONF_GUARD = Symbol('guard');
     const _CONF_REGISTRY = new Map();
+
     /**
-     * Represents a single slide/background configuration.
-     * - Sanitizes IDs (removes invalid chars).
-     * - Generates IDs if missing.
+     * The BackgroundConfig class is used to represent the background configuration object.
+     * Unlike the BackgroundItem, which is serialized JSON representation of the background item,
+     * this class is the actual background item object used in the viewer with same properties as
+     * BackgroundConfig.
+     *
+     * @class BackgroundConfig
+     * @extends {BackgroundItem}
      */
-    window.BackgroundConfig = class {
+    window.BackgroundConfig = class BackgroundConfig {
         constructor(data, guard) {
             if (guard !== _CONF_GUARD) {
                 throw new Error('Use BackgroundConfig.from(...) to create your background!');
@@ -523,7 +528,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         return window.BackgroundConfig.from(bg);
     };
 
-// Optional helper if you want a single semantic check everywhere
+    /**
+     *
+     * @param {BackgroundItem|BackgroundConfig} a
+     * @param b
+     * @return {boolean}
+     */
     window.APPLICATION_CONTEXT.sameBackground = function sameBackground(a, b) {
         if (a === b) return true;
         if (!a || !b) return false;
@@ -976,7 +986,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         return updated;
     };
 
-    function handleSyntheticOpenEvent(viewer, successLoadedItemCount) {
+    function handleSyntheticOpenEvent(viewer, successLoadedItemCount, totalItemCount) {
         const world = viewer.world;
         if (world.getItemCount() < 1) {
             viewer.addTiledImage({
@@ -992,7 +1002,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                      * @returns {BackgroundItem|VisualizationItem|undefined}
                      */
                     event.item.getConfig = type => undefined;
-                    //TODO: USER_INTERFACE.toggleDemoPage(true);
+                    viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t('error.invalidDataHtml') : undefined);
                     handleSyntheticEventFinishWithValidData(viewer, 0, 1);
                 }
             });
@@ -1000,7 +1010,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
 
         if (successLoadedItemCount === 0) {
-            viewer.toggleDemoPage(true, $.t('error.invalidDataHtml'));
+            viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t('error.invalidDataHtml') : undefined);
         }
         // else {
         //     // TODO propose fix in OpenSeadragon... also this might be a deadlock
@@ -1093,6 +1103,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (runLoader) {
             runLoader();
             runLoader = null;
+        }
+
+        if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
+            viewer.raiseEvent('visualization-ready', { viewer });
         }
 
         if (!viewer.__initialized) {
@@ -1256,8 +1270,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         //todo consider return false if some dialog refuses the reload
         await Dialogs.awaitHidden();
 
-        // -- update CONFIG if new values are provided (undefined => keep ; null not expected here)
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+        const isBgSame = background === undefined || (
+            Array.isArray(background) &&
+            background.length === config.background.length &&
+            background.every((bg, i) => APPLICATION_CONTEXT.sameBackground(bg, config.background[i]))
+        );
+
+        // -- update CONFIG if new values are provided (undefined => keep ; null not expected here)
         if (typeof data !== "undefined") config.data = data;
         if (typeof background !== "undefined") config.background = background;
         if (typeof visualizations !== "undefined") config.visualizations = visualizations;
@@ -1353,12 +1373,61 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             return make(env.client.image_group_server, d);
         };
 
+        const openPlaceholder = (viewer, errorMessage, index, originalSource, onOpen) => {
+            viewer.addTiledImage({
+                tileSource: {
+                    type: "_blank",
+                    error:
+                        errorMessage ||
+                        $.t("error.slide.pending") + " " + $.t("error.slide.imageLoadFail") + " " +
+                        (originalSource && originalSource.toString ? originalSource.toString() : "")
+                },
+                opacity: 0,
+                index,
+                success: event => {
+                    event.item.__targetIndex = index;
+                    /**
+                     * @this {OpenSeadragon.TiledImage}
+                     * @function getConfig
+                     * @param {string} [type=undefined]
+                     * @memberof OpenSeadragon.TiledImage
+                     * @returns {BackgroundItem|VisualizationItem|undefined}
+                     */
+                    event.item.getConfig = type => undefined;
+                    onOpen(false);
+                },
+                error: event => {
+                    // event.item is not set, only event.source
+                    console.error(event);
+                    onOpen(false);
+                }
+            });
+        };
+
         // Helper: open one tile into a viewer with bookkeeping
-        const openTile = (viewer, source, kind, index, ctx) => {
+        const openTile = async (viewer, source, kind, index, ctx) => {
+            // First create a tile source class
+            const originalSource = source.source || source;
+            const tileSource = await viewer.instantiateTileSourceClass({
+                tileSource: originalSource
+            }).then(ev => ev.source).catch(ev => ev.message || String(ev));
+
+            if (typeof tileSource === "string") {
+                console.error(`Failed to instantiate tile source for ${kind} ${index}: ${tileSource}`);
+                await viewer.raiseEventAwaiting(
+                    'tile-source-failed', { viewer, originalSource, kind, index, tileSource: null, error: tileSource }
+                ).catch(e => console.warn("Exception in 'tile-source-failed' event handler: ", e));
+                return new Promise(resolve => openPlaceholder(viewer, tileSource, index, originalSource, resolve));
+            }
+
+            await viewer.raiseEventAwaiting(
+                'tile-source-created', { viewer, originalSource, kind, index, tileSource, error: null }
+            ).catch(e => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
+
             return new Promise((resolve) => {
                 viewer.addTiledImage({
-                    tileSource: source.source || source,
+                    tileSource,
                     index,
                     success: event => {
                         event.item.__targetIndex = index;
@@ -1388,38 +1457,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         resolve(true);
                     },
                     error: (e) => {
+                        // todo consider event?
                         console.warn(e);
                         // fallback blank item (hidden)
-                        viewer.addTiledImage({
-                            tileSource: {
-                                type: "_blank",
-                                error:
-                                    (e && e.message) ||
-                                    $.t("error.slide.pending") +
-                                    " " +
-                                    $.t("error.slide.imageLoadFail") +
-                                    " " +
-                                    (source && source.toString ? source.toString() : "")
-                            },
-                            opacity: 0,
-                            index,
-                            success: event => {
-                                event.item.__targetIndex = index;
-                                /**
-                                 * @this {OpenSeadragon.TiledImage}
-                                 * @function getConfig
-                                 * @param {string} [type=undefined]
-                                 * @memberof OpenSeadragon.TiledImage
-                                 * @returns {BackgroundItem|VisualizationItem|undefined}
-                                 */
-                                event.item.getConfig = type => undefined;
-                                resolve(false);
-                            },
-                            error: event => {
-                                // event.item is not set, only event.source
-                                resolve(false);
-                            }
-                        });
+                        openPlaceholder(viewer, e.message || e, index, originalSource, resolve);
                     }
                 });
             });
@@ -1427,98 +1468,54 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         // Helper: configure shaders/rendering for a viewer + open its images
         const openIntoViewer = async (entry, viewerIndex) => {
-            VM.resetViewer(viewerIndex);
             const viewer = VM.viewers[viewerIndex];
+            const isSurgical = isBgSame && viewer.isOpen() && viewer.world.getItemCount() > 0; //
 
-            const toOpen = [];
+            // (A) Identify Backgrounds
             const openedBase = [];
-
-            // (A) BACKGROUNDS
             if (entry.type === "stacked") {
                 for (const bgi of entry.bgIndices) {
                     const bg = bgs[bgi];
-                    if (!bg) continue;
-                    toOpen.push(bgUrlFromEntry(bg));
-                    openedBase.push(bg);
+                    if (bg) openedBase.push(bg);
                 }
             } else {
                 const bgi = entry.bgIndices[0];
-                if (Number.isInteger(bgi)) {
-                    const bg = bgs[bgi];
-                    if (bg) {
-                        toOpen.push(bgUrlFromEntry(bg));
-                        openedBase.push(bg);
-                    }
-                }
+                if (Number.isInteger(bgi) && bgs[bgi]) openedBase.push(bgs[bgi]);
             }
 
-            // (B) Decide visualization(s) for this viewer
-            // stacked: activeViz must be a single number (or undefined)
-            // non-stacked:
-            //   - if activeViz is number => apply to all viewers
-            //   - if array => align by viewerIndex
+            // (B) Decide Visualization Index
             let visIndexForThis = undefined;
             if (stacked) {
-                if (Number.isInteger(activeViz)) visIndexForThis = activeViz;
+                visIndexForThis = Number.isInteger(activeViz) ? activeViz : (Array.isArray(activeViz) ? activeViz[0] : undefined);
             } else {
-                if (Array.isArray(activeViz)) {
-                    const v = activeViz[viewerIndex];
-                    visIndexForThis = Number.isInteger(v) ? v : undefined;
-                } else if (Number.isInteger(activeViz)) {
-                    visIndexForThis = activeViz;
-                }
+                visIndexForThis = Array.isArray(activeViz) ? activeViz[viewerIndex] : (Number.isInteger(activeViz) ? activeViz : undefined);
             }
 
             const renderingWithWebGL = Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
 
-            // (C) If rendering with WebGL, prepare renderer and append visualization sources
-            let shaderConfigMap = {};
-            let numVisLayersAtEnd = 0;
-
-            // Configure renderer (background layers first)
+            // (C) Prepare Render Plan
             const renderOutput = {};
-            for (let i = 0; i < openedBase.length; i++) {
-                const bgRef = openedBase[i];
-                // todo this code is duplicated in tools, once adding support for shaders, create api from it
-                renderOutput[bgRef.id] = {
-                    id: bgRef.id,
-                    type: "identity",
-                    tiledImages: [i],
-                    name: bgRef.name || cfg.data[bgRef.dataReference]
-                };
-            }
+            openedBase.forEach((bgRef, i) => {
+                renderOutput[bgRef.id] = { id: bgRef.id, type: "identity", tiledImages: [i], name: bgRef.name || cfg.data[bgRef.dataReference] };
+            });
+
+            const vizUrlFromEntries = (dataIndex) => {
+                const proto = !isSecureMode && activeV.protocol ? activeV.protocol : env.client.data_group_protocol;
+                const make = new Function("path,data", "return " + proto);
+                return make(env.client.image_group_server, [cfg.data[dataIndex]]);
+            };
+
+            let shaderConfigMap = {};
+            const toOpen = openedBase.map(bg => bgUrlFromEntry(bg)); // Initial list is backgrounds
+            const lastBgIndex = toOpen.length;
 
             if (renderingWithWebGL) {
-                try {
-                    UTILITIES.testRendering();
-                } catch (e) {
-                    console.error(e);
-                    USER_INTERFACE.Errors.show(
-                        $.t("error.renderTitle"),
-                        `${$.t("error.renderDesc")} <br><code>${e}</code>`,
-                        true
-                    );
-                }
-
-                const vizUrlFromEntries = (dataIndex) => {
-                    // todo multiple tilesource support....
-                    // if (vis.tileSource instanceof OpenSeadragon.TileSource) {
-                    //     return vis.tileSource;
-                    // }
-                    const proto = !isSecureMode && activeV.protocol ? activeV.protocol : env.client.data_group_protocol;
-                    const make = new Function("path,data", "return " + proto);
-                    // todo old support for arrays, make this somehow fallback compatible and change it
-                    const d = [cfg.data[dataIndex]];
-                    return make(env.client.data_group_server, d);
-                };
-
                 APPLICATION_CONTEXT.prepareRendering();
                 const activeV = vis[visIndexForThis];
-                const sourcesToOpen = {};
-                const lastBgIndex = toOpen.length;
-                let counter = toOpen.length;
-
                 shaderConfigMap = activeV.shaders || {};
+                const sourcesToOpen = {};
+                let counter = lastBgIndex;
+
                 for (const shaderId in shaderConfigMap) {
                     const shaderCfg = shaderConfigMap[shaderId];
                     shaderCfg.tiledImages = [];
@@ -1534,52 +1531,64 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                         shaderCfg.tiledImages.push(idx);
                     }
                 }
-
-                numVisLayersAtEnd = counter - lastBgIndex;
                 Object.assign(renderOutput, shaderConfigMap);
             }
 
-            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
-            if (viewer.drawer && viewer.drawer.overrideConfigureAll) {
-                viewer.drawer.overrideConfigureAll(renderOutput);
-            }
-
-            // (D) Finally add the images to the viewer world
-            if (toOpen.length === 0) {
-                // Add a single hidden blank to keep viewer usable
-                toOpen.push({ type: "_blank" });
-            }
-
-            // helpers for contextual getConfig in items
-            let lastBgIdx = toOpen.length - numVisLayersAtEnd - 1;
-            const ctx = {
-                bgIndexForItem: (itemIndex) => {
-                    // itemIndex within the sequence [0..lastBgIdx] are backgrounds
-                    // map local background order back to cfg.background index
-                    if (entry.type === "stacked") {
-                        // 0..lastBgIdx
-                        return entry.bgIndices[itemIndex];
-                    } else {
-                        return entry.bgIndices[0];
+            // (D) Execution: Full Reset vs Surgical Update
+            if (!isSurgical) {
+                VM.resetViewer(viewerIndex); //
+            } else {
+                // Remove only visualization layers that don't match the new 'toOpen' list
+                const currentCount = viewer.world.getItemCount();
+                for (let i = currentCount - 1; i >= lastBgIndex; i--) {
+                    const item = viewer.world.getItemAt(i);
+                    const sourceUrl = item.source.url || item.source;
+                    // If the existing source isn't in our new visualization list, pull it
+                    if (!toOpen.slice(lastBgIndex).some(newSrc => (newSrc.url || newSrc) === sourceUrl)) {
+                        viewer.world.removeItem(item);
                     }
-                },
+                }
+            }
+
+            // Configure the drawer
+            UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+            if (viewer.drawer?.overrideConfigureAll) {
+                viewer.drawer.overrideConfigureAll(renderOutput); //
+            }
+
+            // (E) Layer Synchronization
+            const ctx = {
+                bgIndexForItem: (i) => entry.type === "stacked" ? entry.bgIndices[i] : entry.bgIndices[0],
                 vizIndexForItem: () => visIndexForThis
             };
 
-            // Open backgrounds first, then viz layers
-            let idx = 0;
             let successOpened = 0;
-            for (; idx <= lastBgIdx; idx++) {
-                if (await openTile(viewer, toOpen[idx], "background", idx, ctx) === true) {
+            for (let i = 0; i < toOpen.length; i++) {
+                const isBg = i < lastBgIndex;
+                const existingItem = isSurgical ? viewer.world.getItemAt(i) : null;
+
+                // Skip if surgically updating and item already exists with same source
+                if (existingItem && (existingItem.source.url || existingItem.source) === (toOpen[i].url || toOpen[i])) {
+                    successOpened++;
+                    continue;
+                }
+
+                if (await openTile(viewer, toOpen[i], isBg ? "background" : "visualization", i, ctx)) {
                     successOpened++;
                 }
             }
-            for (; idx < toOpen.length; idx++) {
-                if (await openTile(viewer, toOpen[idx], "visualization", idx, ctx) === true) {
-                    successOpened++;
-                }
+
+            // Only fire full re-init events if it wasn't a surgical update
+            if (!isSurgical) {
+                handleSyntheticOpenEvent(viewer, successOpened, toOpen.length);
+            } else {
+                // TODO - use event reaction instead?
+                viewer.getMenu().getShadersTab().updateVisualizationList(
+                    APPLICATION_CONTEXT.config.visualizations,
+                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)?.[0]
+                );
+                viewer.raiseEvent('visualization-ready', { viewer });
             }
-            handleSyntheticOpenEvent(viewer, successOpened);
         };
 
         // Show a gentle “loading too long” message if it drags on

@@ -1,5 +1,6 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
+import {Loading} from "../elements/loading.mjs";
 
 /**
  * @namespace UI.Explorer
@@ -205,6 +206,11 @@ export class Explorer extends BaseComponent {
         this._store = new Map();
 
         this._io = null;
+        this.loader = new Loading({
+            id: `${this.id}-loader`,
+            overlay: true,
+            type: "spinner"
+        });
 
         // bind
         this._navigate = this._navigate.bind(this);
@@ -460,23 +466,16 @@ export class Explorer extends BaseComponent {
     }
 
     _showScopedLoader({ title = "", description = "" } = {}) {
-        const el = this._getLoaderEl(); if (!el) return;
-        const t = el.querySelector(`#${this.id}-loader-title`);
-        const d = el.querySelector(`#${this.id}-loader-desc`);
-        if (t) { t.textContent = title; t.style.display = title ? "" : "none"; }
-        if (d) { d.textContent = description; d.style.display = description ? "" : "none"; }
-        el.style.display = "";
+        this.loader.show(title, description);
     }
 
     _hideScopedLoader() {
-        const el = this._getLoaderEl(); if (!el) return;
-        el.style.display = "none";
+        this.loader.hide();
     }
 
     _asyncWithScopedSpinner(fn, delayMs = 300, info = {}) {
         this._pendingLoads++;
         if (this._pendingLoads === 1) {
-            // first task: arm the timer
             this._loaderTimer = setTimeout(() => {
                 this._showScopedLoader(info);
                 this._loaderTimer = null;
@@ -486,8 +485,10 @@ export class Explorer extends BaseComponent {
         const finalize = () => {
             this._pendingLoads = Math.max(0, this._pendingLoads - 1);
             if (this._pendingLoads === 0) {
-                // last task finished: clear timer and hide overlay
-                if (this._loaderTimer) { clearTimeout(this._loaderTimer); this._loaderTimer = null; }
+                if (this._loaderTimer) {
+                    clearTimeout(this._loaderTimer);
+                    this._loaderTimer = null;
+                }
                 this._hideScopedLoader();
             }
         };
@@ -571,10 +572,10 @@ export class Explorer extends BaseComponent {
         if (lvl.mode === "virtual") {
             listWrap.appendChild(this._renderVirtualList(levelIndex, parent, bucket));
         } else {
-            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket)); // ⬅️ uses bucket.currentPage
+            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket));
         }
 
-        return div({ class: this.classMap.base, id: this.id }, header, listWrap);
+        return div({ class: this.classMap.base, id: this.id }, header, listWrap, this.loader.create());
     }
 
     _renderPagedList(levelIndex, parent, bucket) {
@@ -689,15 +690,18 @@ export class Explorer extends BaseComponent {
 
         // Re-compute on resize as well
         const ro = new ResizeObserver(() => {
-            // Only adjust spacers, don’t rebuild all items
-            if (rowH) {
+            // Wrap the DOM modification in requestAnimationFrame
+            requestAnimationFrame(() => {
+                if (!rowH || !document.body.contains(viewport)) return;
+
                 const vpH = viewport.clientHeight || 0;
                 const scrollTop = viewport.scrollTop || 0;
                 const visStart = Math.max(0, Math.floor(scrollTop / rowH));
                 const visEnd = Math.min(items.length, Math.ceil((scrollTop + vpH) / rowH));
+
                 topSpacer.style.height = `${visStart * rowH}px`;
                 bottomSpacer.style.height = `${(items.length - visEnd) * rowH}px`;
-            }
+            });
         });
         ro.observe(viewport);
 

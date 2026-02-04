@@ -130,6 +130,23 @@ It works just like the OSD event, but it also tells you how many times the viewe
 initial load). Has extra argument `firstLoad` which is true for the first load of the particular viewer instance.
 Called every time the viewer is reloaded.
 
+### async `tile-source-created` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: OpenSeadragon.TileSource, error: null}
+Fired when a tile source is created - the protocol connection to a server or service is established.
+You can perform additional actions like other initialization dependent on the data source.
+
+### async `tile-source-failed` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: null, error: string}
+Fired when a tile source is created - the protocol connection to a server or service failed.
+
+### `visualization-ready` | e: `{visualization: VisualizationItem}
+Fired when a visualization is ready for rendering. Unlike open event, this event
+is fired each time a visualization is changed. Visualization can be updated even
+if the viewer is not reloaded.
+
+### `show-demo-page` | e: `{id: string, show: function, errror: string|undefined}`
+When the viewer does not open any valid data, it shows a demo page. This event allows to use custom UI to show the demo page.
+If the viewer captures an error during loading, the error message is included.
+The first call wins - other show(...) calls are ignored.
+
 #### `warn-user` | e: `{originType: string, originId: string, code: string, message: string, trace: any}
 User warning: the core UI system shows this as a warning message to the user, non-forcibly (e.g. it is not shown in case
 a different notification is being shown). Parameters should be strictly kept:

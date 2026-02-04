@@ -20,6 +20,7 @@ import { Input } from "./classes/elements/input.mjs";
 import { Badge } from "./classes/elements/badge.mjs";
 import { Title } from "./classes/elements/title.mjs";
 import { Collapse } from "./classes/elements/collapse.mjs";
+import { Loading } from "./classes/elements/loading.mjs";
 
 // COMPONENTS
 import { Menu } from "./classes/components/menu.mjs";
@@ -93,7 +94,7 @@ const UI = {
     // Elements
     BaseComponent,
     Button, FAIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
-    StretchGrid, Input, Badge, Title, Collapse,
+    StretchGrid, Input, Badge, Title, Collapse, Loading,
 
     // Components
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,

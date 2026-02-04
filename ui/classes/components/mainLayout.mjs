@@ -340,15 +340,17 @@ export class MainLayout extends BaseComponent {
             </div>`).create());
         topSide.attachTo(document.getElementById('top-container'));
 
-        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0;" });
+        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 999999;" });
         toolbarsContainer.attachTo(document.getElementById('bottom-container'));
 
 
         // --- dock ---
         const dock = new Div({
             id:`${this.id}-dock`,
-            extraClasses:{ base:"bg-base-200 border-l border-base-300 shrink-0 overflow-hidden" },
-            extraProperties:{ style:`width:${this.widthPx}px;` }
+            extraClasses: {
+                base: "bg-base-200 border-l border-base-300 shrink-0 overflow-hidden flex flex-col"
+            },
+            extraProperties: { style: `width:${this.widthPx}px;` }
         });
         if (this._tabsArr.length) {
             const menu = new TabsMenu({ id:`${this.id}-menu` }, ...this._tabsArr);

@@ -144,6 +144,8 @@ OpenSeadragon.Tools = class {
 
     /**
      * Create thumbnail screenshot
+     * TODO FIX THIS - VIEWER REFERENCE is too BIG to capture a thumbnail - we should download manually just a proportion of the image,
+     *   right now we force the whole tiled image load, which depends on the screen size and is not optimal (especially if navigator is not defined)
      * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
      * @param {OpenSeadragon.Point} size the output size
      * @param {number} timeout
@@ -195,10 +197,15 @@ OpenSeadragon.Tools = class {
             }
             if (source.getThumbnail) {
                 // if we have a thumbnail, replace the source with single-image thumbnail
-                let thumb = await source.getThumbnail();
-                if (thumb) {
-                    thumb = await UTILITIES.imageLikeToImage(thumb);
-                    if (thumb) source = new OpenSeadragon.PreviewSlideSource({image: thumb});
+                try {
+                    let thumb = await source.getThumbnail();
+                    if (thumb) {
+                        thumb = await UTILITIES.imageLikeToImage(thumb);
+                        if (thumb) source = new OpenSeadragon.PreviewSlideSource({image: thumb});
+                    }
+                } catch (e) {
+                    // failed to load thumbnail via API, still, continue manual reconstruction
+                    console.warn("Failed to retrieve thumbnail via API, continuing with manual reconstruction.", e);
                 }
             }
             return source;
@@ -233,7 +240,7 @@ OpenSeadragon.Tools = class {
                         ti.update(true);
                         const updateReminder = setInterval(() => {
                             if (exited) clearInterval(updateReminder);
-                            ti.update(false);
+                            ti.update(true);
                         }, 500);
                         images.push(ti);
 
@@ -265,8 +272,9 @@ OpenSeadragon.Tools = class {
             } else {
                 timeoutRef = setTimeout(() => {
                     exited = true;
-                    images.forEach(i => i.destroy());
-                    reject("Failed to retrieve tiled images and their tiles before timeout.");
+                    resolve(images);
+                    // images.forEach(i => i.destroy());
+                    // reject("Failed to retrieve tiled images and their tiles before timeout.");
                 }, timeout);
             }
         }).then(async images => {
@@ -399,17 +407,18 @@ OpenSeadragon.Tools = class {
         };
 
         if (!eventArgs.imagePreview) {
-            this.viewer.tools.navigatorThumbnail(bgSpec, {x: width, y: height}, 60000).then(ctx => {
+            try {
+                const ctx = await this.viewer.tools.navigatorThumbnail(bgSpec, {x: width, y: height}, 60000);
                 let data = ctx.canvas.toDataURL();
                 if (data.length < 1000) {
                     console.warn("Image preview is too small, probably missing data - replacing with preview.");
                     data = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
                 }
                 image.src = data;
-            }).catch(e => {
+            } catch (e) {
                 console.error(e);
                 image.src = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
-            });
+            }
         } else if (typeof eventArgs.imagePreview === "string") {
             image.src = eventArgs.imagePreview;
         } else {

@@ -37,6 +37,47 @@ addPlugin('slide-info', class extends XOpatPlugin {
             }
         });
 
+        VIEWER_MANAGER.broadcastHandler('show-demo-page', e => {
+            // Only show our custom UI if there isn't a specific loading error
+            if (e.error) return;
+
+            const showExplorer = () => {
+                if (this.menu) {
+                    this.menu.open();
+                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', true);
+                }
+            };
+
+            const openBtn = new UI.Button({
+                onClick: showExplorer,
+                extraClasses: "btn-primary btn-lg shadow-lg",
+            }, "Open Slide Manager").create();
+
+            new OpenSeadragon.MouseTracker({
+                element: openBtn,
+                handler: (event) => {
+                    // This prevents OSD from panning the viewer when you click the button
+                    event.preventDefaultAction = true;
+                }
+            });
+
+            const demoUI = van.tags.div({
+                    id: e.id,
+                    class: "flex flex-col items-center justify-center h-full p-4 text-center m-8"
+                },
+                van.tags.div({ class: "mb-6 opacity-20" },
+                    new UI.FAIcon({ name: "fa-images", extraClasses: "text-9xl" }).create()
+                ),
+                van.tags.h2({ class: "text-2xl font-bold mb-2" }, "No Slide Loaded"),
+                van.tags.p({ class: "max-w-md mb-6 opacity-70" },
+                    "Please select a slide from the Slide Manager. If not visible, slide manager can be opened via View menu."
+                ),
+                openBtn
+            );
+
+            e.show(demoUI);
+        });
+
         this._customControlButtons = undefined;
         this._customControlsInitialized = false;
         if (this.slideSwitching) {

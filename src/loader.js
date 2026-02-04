@@ -1582,9 +1582,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Parse BG Item Name Safely
          * @param {BackgroundItem|number|StandaloneBackgroundItem} indexOrItem
-         * @param stripSuffix
+         * @param {boolean} [stripSuffix=true]
          */
-        nameFromBGOrIndex: function (indexOrItem, stripSuffix) {
+        nameFromBGOrIndex: function (indexOrItem, stripSuffix = true) {
             // todo some error if not a string, that name must be provided etc...
             const item = typeof indexOrItem === "number" ? APPLICATION_CONTEXT.config.background[indexOrItem] : indexOrItem;
             if (!item) return "unknown";
@@ -2288,7 +2288,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
                 if (enable) {
                     const {h1, br, img, p, div} = van.tags;
-                    viewer.addOverlay(div({ id: id },
+                    // todo ensure the outer div always has ID, even when someone added ID from outside
+                    let toSet = div({ id: id },
                         h1("xOpat - The WSI Viewer"),
                         p("The viewer is missing the target data to view; this might happen, if"),
                         div({innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml')}),
@@ -2296,10 +2297,22 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         p({ class:"text-small mx-6 text-center" },
                             "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
                         img({ src:"docs/assets/xopat-banner.png", style:"width:80%;display:block;margin:0 auto;" })
-                    ), new OpenSeadragon.Rect(0, 0, 1, 1));
+                    );
+                    const doOverlay = (overlay) => {
+                        if (!toSet) return;
+                        viewer.addOverlay(overlay || toSet, new OpenSeadragon.Rect(0, 0, 1, 1));
+                        toSet = null;
+                    };
+
+                    viewer.raiseEvent('show-demo-page', {
+                        id: id,
+                        show: doOverlay,
+                    });
+
+                    doOverlay();
                 } else {
                     const overlay = document.getElementById(id);
-                    viewer.removeOverlay(overlay);
+                    if (overlay) viewer.removeOverlay(overlay);
                 }
             };
 

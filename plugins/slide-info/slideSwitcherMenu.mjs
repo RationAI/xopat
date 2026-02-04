@@ -37,17 +37,16 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this.t = this.options.startTop ?? 80;
 
             const body = document.createElement("div");
-            body.className = "flex-1 min-h-0 overflow-hidden flex flex-col";
+            body.className = "h-full w-full flex flex-col overflow-hidden";
 
-            // 1. Selection Header (Minified Panel)
-            this._headerHost = div({ class: "flex-none bg-base-200 border-b border-base-300 empty:hidden transition-all" });
-
-            // 2. Toolbar
+            this._headerHost = div({
+                class: "flex-none bg-base-200 border-b border-base-300 empty:hidden"
+            });
             const toolbar = this._renderToolbar();
 
             // 3. Explorer Content
             const contentHost = document.createElement("div");
-            contentHost.className = "flex-1 min-h-0 overflow-auto";
+            contentHost.className = "flex-1 min-h-0 relative w-full overflow-hidden";
 
             body.append(this._headerHost, toolbar, contentHost);
 
@@ -291,24 +290,28 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (!this._headerHost) return;
         this._headerHost.innerHTML = "";
 
-        if (this.selectedItems.size === 0) {
-            this._headerHost.classList.add("hidden");
-            return;
-        }
+        requestAnimationFrame(() => {
+            this._headerHost.innerHTML = "";
 
-        this._headerHost.classList.remove("hidden");
-        const count = this.selectedItems.size;
+            if (this.selectedItems.size === 0) {
+                this._headerHost.classList.add("hidden");
+                return;
+            }
 
-        const title = div({ class: "text-xs font-bold text-base-content/50 uppercase tracking-wider px-2 py-1" },
-            `Selected (${count})`
-        );
-        const listContainer = div({ class: "flex flex-wrap gap-2 p-2 max-h-[160px] overflow-y-auto" });
+            this._headerHost.classList.remove("hidden");
+            const count = this.selectedItems.size;
 
-        this.selectedItems.forEach((entry) => {
-            listContainer.appendChild(this._renderCompactCard(entry.item, entry.config));
+            const title = div({class: "text-xs font-bold text-base-content/50 uppercase tracking-wider px-2 py-1"},
+                `Selected (${count})`
+            );
+            const listContainer = div({class: "flex flex-wrap gap-2 p-2 max-h-[160px] overflow-y-auto"});
+
+            this.selectedItems.forEach((entry) => {
+                listContainer.appendChild(this._renderCompactCard(entry.item, entry.config));
+            });
+
+            this._headerHost.append(title, listContainer);
         });
-
-        this._headerHost.append(title, listContainer);
     }
 
     _renderCompactCard(item, config) {
@@ -572,47 +575,41 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     // ---------- Utilities ----------
 
     _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
-        setTimeout(() => {
-            const cacheKey = bg.id;
-            const cached = cacheMap[cacheKey];
-            const availablePreview = !!cached && !(cached instanceof Promise);
+        const cacheKey = bg.id;
 
-            const applyPreview = (node) => {
-                if (!node) return;
-                let current = document.getElementById(replacedImageNode.id);
-                // Also check inside parent if detached
-                if (!current && parentNode) {
-                    current = parentNode.querySelector(`#${replacedImageNode.id}`);
-                }
-                if (!current) return;
+        // 1. If we have a finished HTML element in cache, apply it immediately
+        if (cacheMap[cacheKey] instanceof HTMLElement) {
+            this._applyToDOM(cacheMap[cacheKey], replacedImageNode, parentNode, imageClasses);
+            return;
+        }
 
-                const clone = node.cloneNode(true);
-                clone.id = replacedImageNode.id;
-                clone.className = imageClasses;
-                clone.alt = replacedImageNode.alt || "";
-                clone.draggable = false;
+        if (cacheMap[cacheKey] instanceof Promise) {
+            cacheMap[cacheKey].then(node => {
+                this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
+            });
+            return;
+        }
 
-                current.replaceWith(clone);
-                if (!cacheMap[cacheKey]) cacheMap[cacheKey] = node;
-            };
-
-            if (availablePreview) {
-                applyPreview(cached);
-            } else if (cached && typeof cached.then === "function") {
-                cached.then(applyPreview).catch(err => console.error("Failed to reuse image preview", err));
-            } else {
-                cacheMap[cacheKey] = method(bg)
-                    .then(node => {
-                        cacheMap[cacheKey] = node;
-                        applyPreview(node);
-                        return node;
-                    })
-                    .catch(err => {
-                        console.error("Failed to create image preview", err);
-                        delete cacheMap[cacheKey];
-                    });
+        cacheMap[cacheKey] = method(bg).then(node => {
+            if (node) {
+                cacheMap[cacheKey] = node; // Store the actual DOM node for future re-renders
+                this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
             }
+            return node;
+        }).catch(err => {
+            console.error("Thumbnail loading failed:", err);
+            delete cacheMap[cacheKey];
         });
+    }
+
+    _applyToDOM(sourceNode, targetNode, parent, classes) {
+        const current = document.getElementById(targetNode.id) || parent?.querySelector(`#${targetNode.id}`);
+        if (!current) return; // It's okay if it's missing now; the cache handles the next render
+
+        const clone = sourceNode.cloneNode(true);
+        clone.id = targetNode.id;
+        clone.className = classes;
+        current.replaceWith(clone);
     }
 
     _isLinked(viewer) {
