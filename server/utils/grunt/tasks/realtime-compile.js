@@ -35,9 +35,17 @@ const hash = (s) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 1
 
 async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs, minify, inputOverride }) {
     const inputToUse = inputOverride || inputCSS;
-    const args = ["-c", toPosix(configFile), "-i", toPosix(inputToUse), "-o", toPosix(outFile)];
-    // For the initial full build we DO NOT pass --content (uses config's default).
-    if (contentGlobs && contentGlobs.length) args.push("--content", contentGlobs.join(","));
+    const args = [
+        "-c", `"${toPosix(configFile)}"`,
+        "-i", `"${toPosix(inputToUse)}"`,
+        "-o", `"${toPosix(outFile)}"`
+    ];
+
+    if (contentGlobs && contentGlobs.length) {
+        // Content globs also need to be quoted if they contain spaces
+        const quotedGlobs = contentGlobs.map(g => `"${toPosix(g)}"`).join(",");
+        args.push("--content", quotedGlobs);
+    }
     if (!minify) args.push("--no-minify");
 
     grunt.log.writeln(`[twinc-merge] npx tailwindcss ${args.join(" ")}`);
@@ -120,9 +128,12 @@ module.exports = function (grunt) {
                         // todo refactor this to have building logics only on a single place
                         if (workspace["main"]) {
                             return new Promise((resolve, reject) => {
-                                const child = spawn("npx", ["esbuild", ...esbuildArgs,
-                                        `--outfile=${itemPath}/index.workspace.js`, `${itemPath}/${workspace["main"]}`],
-                                    {stdio: "inherit", shell: process.platform === "win32"});
+                                const child = spawn("npx", [
+                                    "esbuild",
+                                    ...esbuildArgs,
+                                    `--outfile="${itemPath}/index.workspace.js"`,
+                                    `"${itemPath}/${workspace["main"]}"`
+                                ], { stdio: "inherit", shell: process.platform === "win32" });
                                 child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
                             });
                         } else {
@@ -144,8 +155,10 @@ module.exports = function (grunt) {
             grunt.log.writeln("[twinc-merge] Rebuild UI...");
 
             return new Promise((resolve, reject) => {
-                const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"],
-                    { stdio: "inherit", shell: process.platform === "win32" });
+                const child = spawn("npx", [
+                    "esbuild", "--bundle", "--sourcemap", "--format=esm",
+                    "--outfile=\"ui/index.js\"", "ui/index.mjs"
+                ], { stdio: "inherit", shell: process.platform === "win32" });
                 child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
             });
         }
