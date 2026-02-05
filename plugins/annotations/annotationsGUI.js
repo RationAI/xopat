@@ -294,8 +294,11 @@ ${UIComponents.Elements.checkBox({
 <button id="annotation-list-button-mp" class="btn rounded-0" onclick="${this.THIS}.switchMenuList('annot');">Annotations</button>
 <button id="author-list-button-mp" class="btn rounded-0" style="display: none;" onclick="${this.THIS}.switchMenuList('authors');">Authors</button>
 </div>
-<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative"><span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
-<span class="material-icons text-small">edit</span> Edit</span><div id="preset-list-inner-mp"></div></div>
+<div id="preset-list-mp" class="flex-1 pl-2 pr-1 mt-2 position-relative">
+    ${this.enablePresetModify ? `
+    <span class="btn-pointer border-1 rounded-2 text-small position-absolute top-0 right-4" id="preset-list-mp-edit" onclick="${this.THIS}.showPresets();">
+        <span class="material-icons text-small">edit</span> Edit</span>` : ''}
+    <div id="preset-list-inner-mp"></div></div>
 <div id="annotation-list-mp" class="mx-2" style="display: none;"></div>
 <div id="author-list-mp" class="mx-2" style="display: none;"><div id="author-list-inner-mp"></div></div>`,
 			"annotations-panel",
