@@ -24,8 +24,10 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
 
             $workspace = $dir_path . "package.json";
             if (file_exists($workspace)) {
-                if (!file_exists($full_path . 'index.workspace.js')) {
-                    error_log('Module ' . $full_path . ' has package.json but no index.workspace.js! The module needs to be compiled first!');
+                $has_js = file_exists($full_path . 'index.workspace.js');
+                $has_mjs = $has_js || file_exists($full_path . 'index.workspace.mjs');
+                if (!$has_mjs) {
+                    error_log('Module ' . $full_path . ' has package.json but no index.workspace.(m)js! The module needs to be compiled first!');
                 }
 
                 $packageData = (new Comment)->decode(file_get_contents($workspace), true);
@@ -33,7 +35,9 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 if (!isset($data['includes']) || !is_array($data['includes'])) {
                     $data['includes'] = [];
                 }
-                array_unshift($data['includes'], 'index.workspace.js');
+                array_unshift($data['includes'], $has_js ? 'index.workspace.js' : 'index.workspace.mjs');
+
+                $data['includes'] = expand_include_globs($dir_path, $data['includes']);
 
                 // Fill missing fields from package.json
                 if (!isset($data['id']) || $data['id'] === '' ) {

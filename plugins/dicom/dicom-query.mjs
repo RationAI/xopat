@@ -361,7 +361,7 @@ export default class DicomTools {
 
             // only consider multi-frame tiled instances as pyramid candidates
             const frames = Number(ds?.["00280008"]?.Value?.[0] ?? 0);
-            if (!(frames > 1 && rows > 0 && cols > 0 && rows <= 512 && cols <= 512)) {
+            if (!(frames > 1 && rows > 0 && cols > 0 && rows <= 1024 && cols <= 1024)) { // Increased to 1024
                 continue;
             }
 
@@ -682,11 +682,14 @@ export default class DicomTools {
             }
         }
 
-        console.warn("WSI frame-map mismatch; cannot map frames reliably", {
-            instanceUID,
-            totalWidth, totalHeight, tileWidth, tileHeight,
-            tilesX, tilesY, expected, numberOfFrames
-        });
+        if (this._hasWarnedFrameMismatch !== instanceUID) {
+            console.warn("WSI frame-map mismatch; cannot map frames reliably", {
+                instanceUID,
+                totalWidth, totalHeight, tileWidth, tileHeight,
+                tilesX, tilesY, expected, numberOfFrames
+            });
+            this._hasWarnedFrameMismatch = instanceUID;
+        }
     }
 
     static _injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight) {
@@ -713,7 +716,6 @@ export default class DicomTools {
                 insertIdx = i; break;
             }
         }
-
         const newLevel = {
             width: totalWidth ?? null,
             height: totalHeight ?? null,

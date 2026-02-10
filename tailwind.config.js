@@ -6,8 +6,8 @@ module.exports = {
     content: [
         './.cache/tw-accumulated.html',
         './ui/**/*.{html,js,mjs}',
-        './modules/**/*.{html,js}',
-        './plugins/**/*.{html,js}',
+        './modules/**/*.{html,js,mjs}',
+        './plugins/**/*.{html,js,mjs}',
         './src/**/*.{html,js}',
         '!**/*.min.js',
         // TODO how to ignore

@@ -1,5 +1,5 @@
 const {parse} = require("comment-json");
-const {safeScanDir} = require("./utils");
+const {safeScanDir, expandIncludeGlobs} = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
@@ -24,14 +24,17 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
             let workspace = fullPath + "package.json";
             if (fileExists(workspace)) {
-                if (!fileExists(fullPath + "index.workspace.js")) {
-                    console.warn(`Module ${fullPath} has package.json but no index.workspace.js! The module needs to be compiled first!`);
+                const hasJs = fileExists(fullPath + "index.workspace.js");
+                const hasMjs = hasJs || fileExists(fullPath + "index.workspace.mjs");
+                if (!hasMjs) {
+                    console.warn(`Module ${fullPath} has package.json but no index.workspace.(m)js! The module needs to be compiled first!`);
                 }
 
                 let packageData = parse(readFile(workspace));
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift("index.workspace.js");
+                data["includes"].unshift(hasJs ? "index.workspace.js" : "index.workspace.mjs");
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
 
                 data["id"] = data["id"] || packageData["name"];
                 data["name"] = data["name"] || packageData["name"];
@@ -187,6 +190,10 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
         if (production && fileExists(`${directory}${item["directory"]}/index.min.js`)) {
             return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
+        }
+
+        if (production && fileExists(`${directory}${item["directory"]}/index.workspace.min.js`)) {
+            return result + `    <script src="${directory}${item["directory"]}/index.workspace.min.js?v=${version}"></script>\n`;
         }
 
         for (let file of item["includes"]) {

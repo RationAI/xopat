@@ -29,6 +29,45 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this.frameOrder = options.frameOrder || null;
         this.frameOrderBySeries = options.frameOrderBySeries || null;
         this.frameOrderByInstance = options.frameOrderByInstance || null;
+        this._hasWarnedFrameMismatch = false;
+
+        this._initializeCornerstoneLoader();
+    }
+
+    _initializeCornerstoneLoader() {
+        if (typeof cornerstoneWADOImageLoader === 'undefined' || DICOMWebTileSource._cwilInitialized) return;
+
+        // 1. Manually link a dummy/core object if 'cornerstone' isn't global
+        // WADO Loader 1.4.x often checks 'cornerstone.enabled' or internal config
+        if (typeof cornerstone !== 'undefined') {
+            cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
+        }
+
+        // 2. Force the internal config to have an 'enabled' state
+        cornerstoneWADOImageLoader.configure({
+            useWebWorkers: true,
+            decodeConfig: {
+                usePDFJS: false,
+            }
+        });
+
+        // 3. Set the worker path (ensure this matches your dist folder)
+        const workerPath = 'dist/index.worker.bundle.min.worker.js';
+        cornerstoneWADOImageLoader.webWorkerManager.initialize({
+            maxWebWorkers: navigator.hardwareConcurrency || 4,
+            startWebWorkersOnDemand: true,
+            webWorkerPath: workerPath,
+            taskConfiguration: {
+                'decodeTask': {
+                    loadCodecsOnStartup: true,
+                    initializeCodecsOnStartup: true,
+                    usePDFJS: false,
+                    strict: false
+                }
+            }
+        });
+
+        DICOMWebTileSource._cwilInitialized = true;
     }
 
     supports(data) { return data && data.type === "dicomweb"; }
@@ -42,11 +81,13 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
                 : 'multipart/related; type="image/jpeg", multipart/related; type="image/png"';
         }
 
-        // Native (non-rendered): request bulk pixel data with TS wildcard.
-        // (Server may respond multipart/related; type="application/octet-stream")
-        return 'multipart/related; type="image/jpeg"; transfer-syntax=1.2.840.10008.1.2.4.50';
-        // TODO: add JP2K support via module to support the below
-        // return 'multipart/related; type="application/octet-stream"; transfer-syntax=*';
+        // Force the server to send the original compressed bitstream (J2K)
+        // instead of trying to transcode it to baseline JPEG.
+        return [
+            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.90',
+            'multipart/related; type="application/octet-stream"; transfer-syntax=1.2.840.10008.1.2.4.91',
+            'multipart/related; type="application/octet-stream"; transfer-syntax=*'
+        ].join(', ');
     }
 
     indexOfBytes(hay, needle, from = 0) {
@@ -89,12 +130,30 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
             const headerBytes = data.subarray(partStart, headersEnd);
             const bodyStart = headersEnd + hdrSep.length;
-            const bodyBytes = data.subarray(bodyStart, partEnd);
+            let bodyBytes = data.subarray(bodyStart, partEnd);
+
+            // trim trailing CRLF before boundary
+            const n = bodyBytes.length;
+            if (n >= 2 && bodyBytes[n-2] === 0x0d && bodyBytes[n-1] === 0x0a) {
+                bodyBytes = bodyBytes.subarray(0, n-2);
+            }
 
             const headerText = dec.decode(headerBytes);
             const headers = {};
-            headerText.split('\r\n').forEach(line => { const i = line.indexOf(':'); if (i > 0) headers[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim(); });
+            headerText.split('\r\n').forEach(line => {
+                const i = line.indexOf(':');
+                if (i > 0) {
+                    const key = line.slice(0, i).trim().toLowerCase();
+                    const value = line.slice(i + 1).trim();
+                    headers[key] = value;
 
+                    // FIX: Extract transfer-syntax if it's hidden inside Content-Type
+                    if (key === 'content-type' && value.includes('transfer-syntax=')) {
+                        const tsMatch = value.match(/transfer-syntax=([^; ]+)/);
+                        if (tsMatch) headers['transfer-syntax'] = tsMatch[1].replace(/['"]/g, "");
+                    }
+                }
+            });
             parts.push({ headers, bytes: bodyBytes });
 
             if (next === nextEnd || next < 0) break;
@@ -271,30 +330,160 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         if (!res.ok) return context.fail("Failed to fetch DICOM frame.", res);
 
+        // 1. Check for native browser formats (Rendered JPEG/PNG)
         const ct = (res.headers.get('content-type') || '').toLowerCase();
         if (ct.startsWith('image/jpeg') || ct.startsWith('image/png')) {
             const blob = await res.blob();
             return context.finish(blob, res, "rasterBlob");
         }
 
+        // 2. Extract frame from Multipart response
         const parts = await this.parseMultipartRelated(res);
         if (!parts.length) return context.fail("DICOM response carries no frames!", res);
+
         const { headers, bytes } = parts[0];
-        const type = (headers['content-type'] || '').toLowerCase() || 'application/octet-stream';
-        if (parts.length > 2) console.warn("DICOM response carries multiple frames!", res);
+        let transferSyntax = (headers['transfer-syntax'] || '').trim();
 
-        const bitmapOptions = this.useRendered
-            ? {} // Default: browser corrects image for display
-            : { colorSpaceConversion: 'none' }; // RAW: browser gives us exact pixels
+        if (!transferSyntax) {
+            const ct = headers['content-type'] || "";
+            if (ct.includes('image/jp2')) transferSyntax = "1.2.840.10008.1.2.4.91"; // Assume J2K Lossy
+            else if (ct.includes('image/jpeg')) transferSyntax = "1.2.840.10008.1.2.4.50"; // Assume Baseline
+        }
 
+        // 3. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
-            const bmp = await createImageBitmap(new Blob([bytes]), bitmapOptions);
+            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax);
             return context.finish(bmp, res, "imageBitmap");
         } catch (err) {
-            console.error("Bitmap creation failed", err);
-            return context.fail("Bitmap failure", res);
+            console.error("[DICOM] Cornerstone decoding failed", err);
+            return context.fail("Cornerstone Decode failure", res);
         }
     }
+
+    // tile-source.mjs
+    async _decodeWithCornerstone(pixelData, transferSyntax) {
+        const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
+        let data = pixelData;
+
+        // Strip DICOM Item Tag if present (FE FF 00 E0)
+        if (data[0] === 0xFE && data[1] === 0xFF && data[2] === 0x00 && data[3] === 0xE0) {
+            data = data.subarray(8);
+        }
+
+        const metadata = {
+            rows: this.tileHeight,
+            columns: this.tileWidth,
+            bitsAllocated: 8,
+            samplesPerPixel: 3,              // used as a fallback only
+            pixelRepresentation: 0,
+            planarConfiguration: 0,
+            photometricInterpretation: this.photometricInterpretation || "RGB",
+        };
+
+        const options = {
+            preScale: { enabled: false },
+            decodeConfig: { isJP2: false }
+        };
+
+        // IMPORTANT: CWIL 1.4.x JPEG path needs a canvas object
+        const decodeCanvas = document.createElement("canvas");
+
+        const decodedFrame = await cornerstoneWADOImageLoader.decodeImageFrame(
+            metadata, ts, data, decodeCanvas, options
+        );
+
+        if (decodedFrame.photometricInterpretation === 'YBR_FULL') {
+            cornerstoneWADOImageLoader.convertYBRFullByPixel(decodedFrame);
+        }
+
+        decodedFrame.width = decodedFrame.width || decodedFrame.columns || this.tileWidth;
+        decodedFrame.height = decodedFrame.height || decodedFrame.rows || this.tileHeight;
+        decodedFrame.samplesPerPixel = decodedFrame.samplesPerPixel || 3;
+
+        if (!decodedFrame.width || !decodedFrame.height) {
+            throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
+        }
+
+        return await this._decodedToBitmap(decodedFrame);
+    }
+
+    // todo move this to webassembly or a worker
+    async _decodedToBitmap(decodedData) {
+        const w = decodedData.width;
+        const h = decodedData.height;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext("2d");
+        const imgData = ctx.createImageData(w, h);
+
+        // ---- normalize pixelData to a TypedArray ----
+        let pixels = decodedData.pixelData;
+        if (!pixels) throw new Error("Decoder result is missing pixelData.");
+
+        // Some CWIL paths return ArrayBuffer instead of TypedArray -> length is undefined -> black tiles
+        const bits = decodedData.bitsAllocated || decodedData.bitsPerSample || 8;
+
+        if (pixels instanceof ArrayBuffer) {
+            pixels = (bits > 8) ? new Uint16Array(pixels) : new Uint8Array(pixels);
+        } else if (pixels.buffer instanceof ArrayBuffer && typeof pixels.length !== "number") {
+            // very defensive: if something array-buffer-like without length
+            pixels = (bits > 8)
+                ? new Uint16Array(pixels.buffer, pixels.byteOffset || 0, (pixels.byteLength || pixels.buffer.byteLength) / 2)
+                : new Uint8Array(pixels.buffer, pixels.byteOffset || 0, pixels.byteLength || pixels.buffer.byteLength);
+        }
+
+        const numPx = w * h;
+        const spp = decodedData.samplesPerPixel ?? 1;
+        const planar = decodedData.planarConfiguration ?? 0;
+
+        // helper for 16-bit -> 8-bit display
+        const to8 = (v) => (bits > 8 ? (v >> 8) : v) & 0xff;
+
+        // ---- map to RGBA ----
+        if (spp === 1) {
+            for (let i = 0; i < numPx; i++) {
+                const v = to8(pixels[i] ?? 0);
+                const o = i * 4;
+                imgData.data[o] = v;
+                imgData.data[o + 1] = v;
+                imgData.data[o + 2] = v;
+                imgData.data[o + 3] = 255;
+            }
+        } else if (spp >= 3) {
+            if (planar === 1) {
+                // planar: R plane, then G, then B
+                const planeSize = numPx;
+                const rOff = 0;
+                const gOff = planeSize;
+                const bOff = planeSize * 2;
+
+                for (let i = 0; i < numPx; i++) {
+                    const o = i * 4;
+                    imgData.data[o]     = to8(pixels[rOff + i] ?? 0);
+                    imgData.data[o + 1] = to8(pixels[gOff + i] ?? 0);
+                    imgData.data[o + 2] = to8(pixels[bOff + i] ?? 0);
+                    imgData.data[o + 3] = 255;
+                }
+            } else {
+                // interleaved: RGBRGB...
+                for (let i = 0; i < numPx; i++) {
+                    const s = i * spp; // supports spp=3 or spp=4
+                    const o = i * 4;
+                    imgData.data[o]     = to8(pixels[s] ?? 0);
+                    imgData.data[o + 1] = to8(pixels[s + 1] ?? 0);
+                    imgData.data[o + 2] = to8(pixels[s + 2] ?? 0);
+                    imgData.data[o + 3] = 255;
+                }
+            }
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+        return await createImageBitmap(canvas);
+    }
+
 
     async getLabel() {
         if (!this.wsi?.macroInstanceUID) return null;

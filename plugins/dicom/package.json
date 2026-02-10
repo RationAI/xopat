@@ -1,0 +1,18 @@
+{
+  "name": "dicom",
+  "version": "1.0.0",
+  "description": "DICOMweb plugin for xOpat",
+  "author": "Aiosa",
+  "type": "commonjs",
+  "main": "index.workspace.mjs",
+  "scripts": {
+    "build": "echo 'Done'."
+  },
+  "dependencies": {
+    "@cornerstonejs/dicom-image-loader": "4.3.10",
+    "cornerstone-wado-image-loader": "^4.13.2"
+  },
+  "copy": {
+    "../../node_modules/cornerstone-wado-image-loader/dist/*.js": "dist/"
+  }
+}

@@ -1011,6 +1011,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         if (successLoadedItemCount === 0) {
             viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t('error.invalidDataHtml') : undefined);
+        } else {
+            viewer.toggleDemoPage(false);
         }
         // else {
         //     // TODO propose fix in OpenSeadragon... also this might be a deadlock

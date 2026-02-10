@@ -28,25 +28,6 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks("grunt-contrib-connect");
     grunt.loadNpmTasks("grunt-contrib-watch");
-    // grunt.loadNpmTasks("grunt-contrib-clean");
-
-    const uglification = {
-        options: {
-            sourceMap: true,
-            beautify: false,
-            banner: '/*! <%= pkg.name %> - v<%= pkg.version %> - ' +
-                '<%= grunt.template.today("yyyy-mm-dd") %> */'
-        },
-        plugins: {
-            files: {},
-        },
-        modules: {
-            files: {},
-        },
-        ui: {
-            files: {},
-        }
-    };
 
     grunt.initConfig({
         pkg: grunt.file.readJSON('package.json'),
@@ -76,47 +57,15 @@ module.exports = function(grunt) {
             }
         },
         uglify: {
-            ...grunt.util.reduceModules( (acc, module, folder) => {
-                //we cannot minify items that have third-party network deps, object describes source URL
-                if (module.includes.some(i => typeof i === "object")) {
-                    grunt.log.write(" (non-minifiable)");
-                    return acc;
-                }
-
-                acc.modules.files[`modules/${folder}/index.min.js`] =
-                    module.includes.map(i => `modules/${folder}/${i}`);
-                if (module.__workspace_item_entry__) {
-                    const mainFile = module.__workspace_item_entry__;
-                    exec(`npx esbuild ${esbuildArgs.join(" ")} --outfile=modules/${folder}/index.workspace.js ${mainFile}`);
-                    acc.modules.files[`modules/${folder}/index.min.js`].unshift(`modules/${folder}/index.workspace.js`);
-                }
-                return acc;
-            }, uglification, true, true),
-
-            ...grunt.util.reducePlugins((acc, plugin, folder) => {
-                //we cannot minify items that have third-party network deps, object describes source URL
-                if (plugin.includes.some(i => typeof i === "object")) {
-                    grunt.log.write(" (non-minifiable)");
-                    return acc;
-                }
-
-                acc.plugins.files[`plugins/${folder}/index.min.js`] =
-                    plugin.includes.map(i => `plugins/${folder}/${i}`);
-                if (plugin.__workspace_item_entry__) {
-                    const mainFile = plugin.__workspace_item_entry__;
-                    exec(`npx esbuild ${esbuildArgs.join(" ")} --outfile=plugins/${folder}/index.workspace.js ${mainFile}`);
-                    acc.plugins.files[`plugins/${folder}/index.min.js`].unshift(`plugins/${folder}/index.workspace.js`);
-                }
-                return acc;
-            }, uglification, true, true),
-
-            ...grunt.util.reduceUI((acc, ui, folder) => {
-                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
-                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"];
-                return acc;
-            }, uglification, true, true),
+            options: {
+                sourceMap: true,
+                banner: '/*! <%= pkg.name %> <%= grunt.template.today("yyyy-mm-dd") %> */'
+            },
+            modules: { files: {} },
+            plugins: { files: {} },
+            ui: { files: { 'ui/index.min.js': ['ui/index.js'] } }
         },
-        // Custom twinc task
+        // Configuration for realtime dev incremental build/watch
         twinc: {
             inputCSS:   './src/assets/tailwind-spec.css',
             configFile: './tailwind.config.js',
@@ -125,7 +74,7 @@ module.exports = function(grunt) {
             watch: [
                 'ui/**/*.{html,js,mjs}',
                 'modules/**/*.{html,js,mjs}',
-                'plugins/**/*.{html,js}',
+                'plugins/**/*.{html,js,mjs}',
                 'src/**/*.{html,js}'
             ],
             ignore: [
@@ -138,32 +87,71 @@ module.exports = function(grunt) {
             ],
             minify: true,
             debounceMs: 150,
+            // todo make this more approachable
             // usePolling: true, interval: 250, // if needed on WSL/Docker/UNC
         },
     });
 
-    grunt.registerTask('default', []);
-    grunt.registerTask('minify', ["uglify"]);
-    grunt.registerTask('all', ["uglify", "css"]);
+    grunt.registerTask('workspaceBuild', 'Compile all workspaces', async function() {
+        const done = this.async();
+        const build = async (acc, data) => {
+            const pkg = grunt.file.readJSON(`${data.directory}/package.json`);
+            await grunt.util.buildWorkspaceItem(data.directory, pkg);
+        };
+        await grunt.util.reduceModules(build, []);
+        await grunt.util.reducePlugins(build, []);
+        done();
+    });
 
-    // todo enable build-only step
-    grunt.registerTask('build', 'Build Necessary Parts of the Viewer', function () {
-        // todo only on a single place:
-        exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+    // DYNAMIC MINIFICATION CONFIG
+    grunt.registerTask('prepMinify', function() {
+        const moduleFiles = {};
+        const pluginFiles = {};
+
+        grunt.util.reduceModules((acc, mod, folder) => {
+            moduleFiles[`modules/${folder}/index.min.js`] = mod.includes
+                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
+                .map(i => `${mod.directory}/${i}`);
+        }, {});
+
+        grunt.util.reducePlugins((acc, plug, folder) => {
+            pluginFiles[`plugins/${folder}/index.min.js`] = plug.includes
+                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
+                .map(i => `${plug.directory}/${i}`);
+        }, {});
+
+        grunt.config.set('uglify.modules.files', moduleFiles);
+        grunt.config.set('uglify.plugins.files', pluginFiles);
     });
-    grunt.registerTask('plugins', ["uglify:plugins"]);
-    grunt.registerTask('modules', ["uglify:modules"]);
-    grunt.registerTask('ui', ["uglify:ui"]);
-    grunt.registerTask('buildUI', function (){
-        grunt.log.writeln('esbuild');
-        const result = exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
-        grunt.log.writeln(result);
-    })
-    grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
-        grunt.log.writeln('Tailwind');
-        //TODO change back to minify
-        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --no-minify');
-        grunt.log.writeln(result);
+
+    grunt.registerTask('minify', ['workspaceBuild', 'buildUI', 'prepMinify', 'uglify']);
+    grunt.registerTask('default', ['minify']);
+
+    grunt.registerTask('default', ['minify']);
+    grunt.registerTask('all', ['minify']);
+
+    grunt.registerTask('build', ['workspaceBuild', 'buildUI']);
+    grunt.registerTask('buildUI', async function() {
+        const done = this.async();
+        const { spawnAsync } = require("./server/utils/mixins/build-logic");
+        await spawnAsync("npx", ["esbuild", "--bundle", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"]);
+        done();
     });
-    // Default task(s).
+    grunt.registerTask('css', async function() {
+        const done = this.async();
+        const { spawnAsync } = require("./server/utils/mixins/build-logic");
+        await spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
+        done();
+    });
+    grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {
+        const done = this.async();
+        const cleanItem = async (acc, data) => {
+            const pkg = grunt.file.readJSON(`${data.directory}/package.json`);
+            await grunt.util.cleanWorkspaceItem(data.directory, pkg);
+        };
+        await grunt.util.reduceModules(cleanItem, []);
+        await grunt.util.reducePlugins(cleanItem, []);
+        // todo consider also .dev-cache and core files
+        done();
+    });
 };

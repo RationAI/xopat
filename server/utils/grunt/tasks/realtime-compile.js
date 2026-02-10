@@ -22,8 +22,9 @@ const postcss = require("postcss");
 const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
-const esbuildArgs = require("../../esbuild-args");
-const {pathsEqual} = require("./pathsEqual");
+
+const { buildWorkspaceItem } = require("../../mixins/build-logic");
+const {pathsEqual} = require("../../mixins/pathsEqual");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -32,6 +33,11 @@ const exists = (p) => { try { fs.accessSync(p, fs.constants.F_OK); return true; 
 const ensureDir = (p) => fs.mkdirSync(p, { recursive: true });
 const uniq = (a) => [...new Set(a)];
 const hash = (s) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
+const nodeLogger = {
+    log: (msg) => console.log(msg),
+    warn: (msg) => console.warn(msg),
+    error: (msg) => console.error(msg)
+};
 
 async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs, minify, inputOverride }) {
     const inputToUse = inputOverride || inputCSS;
@@ -107,47 +113,25 @@ module.exports = function (grunt) {
         }
 
         async function detectAndRebuildWorkspaceElements(files) {
-            async function rebuildWorkspaceItem(childPath) {
-                let itemPath = path.dirname(childPath);
+            const processedDirs = new Set();
+            for (const f of files) {
+                console.log(f);
+                let itemPath = path.dirname(f);
                 while (itemPath && itemPath.length > 4) {
-                    // todo: coverts always, consider optimizing
+                    console.log(itemPath);
                     if (pathsEqual(itemPath, root)) break;
-                    const workspaceItem = path.join(itemPath, "package.json");
-                    if (exists(workspaceItem)) {
-                        // todo avoid parsing unless the file itself changed? cache somehow
-                        const workspace = JSON.parse(fs.readFileSync(workspaceItem, "utf8"));
-                        // todo in future let the workspace item redefine default build
-                        // if (workspace.scripts?.build) {
-                        //     grunt.log.writeln(`[twinc-merge] Rebuild workspace item ${workspaceItem}...`);
-                        //     await new Promise((resolve, reject) => {
-                        //         const child = spawn("npm", ["run", "dev"], { cwd: itemPath, stdio: "inherit", shell: process.platform === "win32" });
-                        //         child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm run dev exited ${code}`))));
-                        //     });
-                        //     return;
-                        // }
-                        // todo refactor this to have building logics only on a single place
-                        if (workspace["main"]) {
-                            return new Promise((resolve, reject) => {
-                                const child = spawn("npx", [
-                                    "esbuild",
-                                    ...esbuildArgs,
-                                    `--outfile="${itemPath}/index.workspace.js"`,
-                                    `"${itemPath}/${workspace["main"]}"`
-                                ], { stdio: "inherit", shell: process.platform === "win32" });
-                                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
-                            });
-                        } else {
-                            grunt.log.warn(`[twinc-merge] No "main" field found in ${workspaceItem}.`);
-                        }
-                        break;
-                    }
-                    if (exists(path.join(itemPath, "include.json"))) {
+                    const pkgPath = path.join(itemPath, "package.json");
+                    if (fs.existsSync(pkgPath) && !processedDirs.has(itemPath)) {
+                        console.log("found", pkgPath);
+                        processedDirs.add(itemPath);
+                        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+                        // Shared logic handles overrides and copying
+                        await buildWorkspaceItem(itemPath, pkg, nodeLogger);
                         break;
                     }
                     itemPath = path.dirname(itemPath);
                 }
             }
-            return Promise.all(files.map(rebuildWorkspaceItem));
         }
 
         async function rebuildUI() {
@@ -157,7 +141,7 @@ module.exports = function (grunt) {
             return new Promise((resolve, reject) => {
                 const child = spawn("npx", [
                     "esbuild", "--bundle", "--sourcemap", "--format=esm",
-                    "--outfile=\"ui/index.js\"", "ui/index.mjs"
+                    "--outfile=ui/index.js", "ui/index.mjs"
                 ], { stdio: "inherit", shell: process.platform === "win32" });
                 child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
             });
@@ -274,6 +258,7 @@ module.exports = function (grunt) {
             }
 
             async function runBuildCycle(retry = true) {
+                console.log("runBuildCycle");
                 if (isBuilding && retry) return;               // don't drop; the pending flags/sets remain queued
                 isBuilding = true;
 
@@ -327,25 +312,36 @@ module.exports = function (grunt) {
             function onEvt(evt) {
                 return (p) => {
                     const file = absPosix(root, p);
-                    try { if (!fs.statSync(file).isFile()) return; } catch { return; }
-                    if (!matchesWatch(file)) return;
 
-                    grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
+                    // 1. Check matching first
+                    if (!matchesWatch(file)) {
+                        // Uncomment the line below to debug path mismatches
+                        // grunt.log.writeln(`[DEBUG] Ignored (no match): ${file}`);
+                        return;
+                    }
 
+                    // 2. Handle Deletion
                     if (evt === "unlink") {
+                        grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
                         const rel = manifest[file];
                         if (rel) {
                             try { fs.unlinkSync(path.join(cacheDir, rel)); } catch {}
                             delete manifest[file];
                             fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
                         }
-                        // If the removed file was under /ui/, ensure we also kick a UI bundle rebuild
                         if (file.includes('/ui/')) pendingNeedsUI = true;
                         queueMergeOnly();
                         return;
                     }
 
-                    // add/change → queue delta; UI flag will be set inside queueDelta()
+                    // 3. Handle Add/Change (Only stat if it's not a deletion)
+                    try {
+                        if (!fs.statSync(file).isFile()) return;
+                    } catch (e) {
+                        return; // File vanished between event and stat
+                    }
+
+                    grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
                     queueDelta(file);
                 };
             }

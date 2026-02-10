@@ -307,7 +307,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const listContainer = div({class: "flex flex-wrap gap-2 p-2 max-h-[160px] overflow-y-auto"});
 
             this.selectedItems.forEach((entry) => {
-                listContainer.appendChild(this._renderCompactCard(entry.item, entry.config));
+                listContainer.appendChild(this._renderSlideCard(entry.item, false));
             });
 
             this._headerHost.append(title, listContainer);
@@ -446,7 +446,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
             if (!L.renderItem) {
                 L.renderItem = (item, { itemIndex }) => {
-                    if (!L.canOpen(item)) return this._renderSlideCard(item, itemIndex);
+                    if (!L.canOpen(item)) return this._renderSlideCard(item);
                     return div({ class: "flex items-center gap-2 px-2 py-2" },
                         span(item.label || item.name || item.id || "Item")
                     );
@@ -468,7 +468,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     // ---------- Card Rendering ----------
 
-    _renderSlideCard(item, index) {
+    _renderSlideCard(item, withImagery = true) {
         const bg = this._getConfig(item);
         if (!bg) return div({ class: "text-error" }, "Error: No Config");
 
@@ -479,7 +479,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const checked = this.selectedItems.has(id);
         const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
 
-        const WRAP_CLASS = "relative overflow-hidden aspect-[4/3] w-[250px]";
+        const WRAP_CLASS = "relative overflow-hidden aspect-[4/3] w-full";
         const HOST_CLASS = "flex items-center justify-center";
         const THUMBNAIL_CLASS = "block w-[86%] h-[86%] object-contain select-none pointer-events-none";
         const LABEL_CLASS = "block max-w-[120px] absolute bottom-0 right-0";
@@ -492,28 +492,43 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
-        const labelImage = img({
-            id: `${this.windowId}-label-${id}`,
-            class: LABEL_CLASS,
-            alt: name,
-            draggable: "false",
-            src: APPLICATION_CONTEXT.url + "src/assets/image.png"
-        });
+        let thumbWrap, syncButton;
+        if (withImagery) {
+            const labelImage = img({
+                id: `${this.windowId}-label-${id}`,
+                class: LABEL_CLASS,
+                alt: name,
+                draggable: "false",
+                src: APPLICATION_CONTEXT.url + "src/assets/image.png"
+            });
 
-        const thumbWrap = div(
-            { class: WRAP_CLASS },
-            div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage),
-            div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
-            labelImage
-        );
+            thumbWrap = div(
+                { class: WRAP_CLASS },
+                div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage),
+                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
+                labelImage
+            );
 
-        if (bg?.id) {
-            let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
-            this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
-            this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, LABEL_CLASS);
+            if (bg?.id) {
+                let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
+                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
+                this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, LABEL_CLASS);
+            }
+        } else {
+            const linked = this._isLinked(viewer);
+            thumbWrap = div(
+                { class: WRAP_CLASS },
+                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
+            );
+
+            syncButton = button({
+                id: `${this.windowId}-lnk-${id}`,
+                class: "btn btn-ghost btn-xs",
+                disabled: !viewer,
+                title: viewer ? (linked ? "Synced — click to unsync" : "Not synced — click to sync") : "Not open",
+                onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
+            }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
         }
-
-        const linked = this._isLinked(viewer);
 
         const controls = div(
             { class: "flex items-center gap-2 p-2" },
@@ -526,14 +541,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 onclick: (e) => e.stopPropagation(),
                 onchange: (e) => this._toggleItem(item, e.target.checked),
                 title: "Add/remove from view"
-            }),
-            button({
-                id: `${this.windowId}-lnk-${id}`,
-                class: "btn btn-ghost btn-xs",
-                disabled: !viewer,
-                title: viewer ? (linked ? "Synced — click to unsync" : "Not synced — click to sync") : "Not open",
-                onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-            }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create())
+            }), syncButton
         );
 
         return div(
@@ -542,7 +550,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 class:
                     "slide-card group bg-base-200 border border-base-300 transition " +
                     (checked ? "ring ring-primary ring-offset-1 " : "") +
-                    "flex flex-row relative",
+                    "flex flex-row relative w-full",
                 onclick: (e) => this._onCardRootClick(e, item)
             },
             controls,

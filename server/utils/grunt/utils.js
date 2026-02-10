@@ -1,6 +1,8 @@
 const {parse} = require("comment-json");
 const {execSync: exec} = require("child_process");
 const path = require("path");
+const buildLogic = require("../mixins/build-logic");
+
 module.exports = function(grunt) {
     grunt.utils = grunt.utils || {};
 
@@ -97,6 +99,10 @@ module.exports = function(grunt) {
                     data["description"] = data["description"] || packageData["description"];
 
                     data["__workspace_item_entry__"] = `${itemDirectory}/${packageData["main"]}`;
+
+                    if (!data.includes.includes("index.workspace.js")) {
+                        data.includes.unshift("index.workspace.js");
+                    }
                 }
                 if (log) grunt.log.write(`${data["id"] || packageData["name"] || contextName} is a workspace: ${workspaceFile}`);
             }
@@ -122,5 +128,23 @@ module.exports = function(grunt) {
             if (log) grunt.log.write(`UI invalid: missing ${item}\n`);
         }
         return initialValue;
+    };
+
+    grunt.util.buildWorkspaceItem = async function(itemDirectory, packageData) {
+        const logger = {
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg)
+        };
+        return buildLogic.buildWorkspaceItem(itemDirectory, packageData, logger);
+    };
+
+    grunt.util.cleanWorkspaceItem = async function(itemDirectory, packageData) {
+        const logger = {
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg)
+        };
+        return buildLogic.cleanWorkspaceItem(itemDirectory, packageData, logger);
     };
 };

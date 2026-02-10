@@ -1810,6 +1810,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             }
         }
 
+        // Valid state - nothing opened
+        if (viewer.world.getItemCount() === 1 && firstItem.source instanceof OpenSeadragon.EmptyTileSource) {
+            return '__empty__';
+        }
+
         const path = APPLICATION_CONTEXT.config.data[firstItem?.getConfig()?.dataReference]
             || firstItem?.source.url || "--unknown--";
         result = viewer.__cachedUUID = UTILITIES.generateID(path);
@@ -1937,7 +1942,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             let viewer;
             if (uniqueId.startsWith("osd-")) {
                 viewer = this.viewers.find(v => v.id === uniqueId);
-                if (_warn) {
+                if (_warn && !viewer) {
                     console.warn(`Viewer with id ${uniqueId} not found, provided id is not UniqueViewerId: using ${viewer.id} for ${viewer.uniqueId} viewer detection. This might result in unexpected behavior.`);
                 }
             } else {
@@ -1951,28 +1956,43 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {BackgroundItem|StandaloneBackgroundItem|VisualizationItem} config
          */
         getViewerForConfig(config) {
-            // todo consider: if (config.__cachedRef)
-
             if (!config) return undefined;
 
-            let data = APPLICATION_CONTEXT.config.data;
+            const dataRegistry = APPLICATION_CONTEXT.config.data;
             let receivedData = config.dataReference;
+
+            // If it's a number, resolve it from the registry.
+            // If it's already an object/string (Standalone), use it as is.
             if (typeof receivedData === "number") {
-                receivedData = data[receivedData];
+                receivedData = dataRegistry[receivedData];
             }
 
-            // non-strict comparator
-            let comparator = typeof receivedData === "object" ?
-                (a, b) =>  typeof a === "object" && Object.keys(a).every(x => !b[x] || a[x] == b[x])
-                : (a, b) => a == b;
+            if (!receivedData) return undefined;
+
+            // Robust comparator for objects (UIDs) vs strings (Paths)
+            let comparator = (a, b) => {
+                if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+                    // Check if all keys in A match B (e.g. studyUID and seriesUID)
+                    const keysA = Object.keys(a);
+                    if (keysA.length === 0) return false;
+                    return keysA.every(x => a[x] == b[x]);
+                }
+                return a === b;
+            };
 
             for (let viewer of this.viewers) {
+                // world.getItemAt(0) is usually the background layer
                 for (let index = 0; index < viewer.world.getItemCount(); index++) {
                     const item = viewer.world.getItemAt(index);
                     const conf = item?.getConfig();
                     if (conf) {
-                        const activeDataEl = data[conf.dataReference];
-                        if (comparator(receivedData, activeDataEl)) {
+                        let activeDataEl = conf.dataReference;
+                        // If the viewer's internal config uses a numeric index, resolve it
+                        if (typeof activeDataEl === "number") {
+                            activeDataEl = dataRegistry[activeDataEl];
+                        }
+
+                        if (activeDataEl && comparator(receivedData, activeDataEl)) {
                             return viewer;
                         }
                     }

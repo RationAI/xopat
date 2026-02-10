@@ -1,6 +1,6 @@
 const {parse} = require("comment-json")
 const {loadModules} = require("./modules");
-const {safeScanDir} = require("./utils");
+const {safeScanDir, expandIncludeGlobs} = require("./utils");
 
 module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
@@ -35,14 +35,19 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
             let workspace = fullPath + "package.json";
             if (fileExists(workspace)) {
-                if (!fileExists(fullPath + "index.workspace.js")) {
-                    console.warn(`Plugin ${fullPath} has package.json but no index.workspace.js! The plugin needs to be compiled first!`);
+                const hasJs = fileExists(fullPath + "index.workspace.js");
+                const hasMjs = hasJs || fileExists(fullPath + "index.workspace.mjs");
+                if (!hasMjs) {
+                    console.warn(`Plugin ${fullPath} has package.json but no index.workspace.(m)js! The plugin needs to be compiled first!`);
                 }
 
                 let packageData = parse(readFile(workspace));
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift("index.workspace.js");
+                data["includes"].unshift(hasJs ? "index.workspace.js" : "index.workspace.mjs");
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+
+
                 data["id"] = data["id"] || packageData["name"];
                 data["name"] = data["name"] || packageData["name"];
                 data["author"] = data["author"] || packageData["author"];

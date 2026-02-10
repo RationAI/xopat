@@ -48,18 +48,19 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 }
             };
 
-            const openBtn = new UI.Button({
-                onClick: showExplorer,
-                extraClasses: "btn-primary btn-lg shadow-lg",
-            }, "Open Slide Manager").create();
-
-            new OpenSeadragon.MouseTracker({
-                element: openBtn,
-                handler: (event) => {
-                    // This prevents OSD from panning the viewer when you click the button
-                    event.preventDefaultAction = true;
-                }
-            });
+            // TODO: does not work, OSD overlays are hidden behind another canvas - either annotations
+            // const openBtn = new UI.Button({
+            //     onClick: showExplorer,
+            //     extraClasses: "btn-primary btn-lg shadow-lg",
+            // }, "Open Slide Manager").create();
+            //
+            // new OpenSeadragon.MouseTracker({
+            //     element: openBtn,
+            //     handler: (event) => {
+            //         // This prevents OSD from panning the viewer when you click the button
+            //         event.preventDefaultAction = true;
+            //     }
+            // });
 
             const demoUI = van.tags.div({
                     id: e.id,
@@ -72,7 +73,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 van.tags.p({ class: "max-w-md mb-6 opacity-70" },
                     "Please select a slide from the Slide Manager. If not visible, slide manager can be opened via View menu."
                 ),
-                openBtn
+                // openBtn
             );
 
             e.show(demoUI);

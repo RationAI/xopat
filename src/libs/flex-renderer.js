@@ -1051,7 +1051,7 @@
     ];
 
     $.FlexRenderer.jsonReplacer = function (key, value) {
-        return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
+        return key.startsWith("_") || ["eventSource", "tiledImage", "tileSource"].includes(key) ? undefined : value;
     };
 
     /**
@@ -5765,25 +5765,27 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "undefined"];
             this.rebuildCounter = 0;
 
-            // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
-            this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
-            this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
-            this.viewer.world.addHandler("remove-item", (e) => {
-                const tiledImage = e.item;
-                // if managed internally on the instance (regardless of renderer state), handle removal
-                if (tiledImage.__shaderConfig) {
-                    this.renderer.removeShader(tiledImage.__shaderConfig.id);
-                    delete tiledImage.__shaderConfig;
-                    if (tiledImage.__wglCompositeHandler) {
-                        tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
+            if (!options.offScreen) {
+                // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
+                this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
+                this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
+                this.viewer.world.addHandler("remove-item", (e) => {
+                    const tiledImage = e.item;
+                    // if managed internally on the instance (regardless of renderer state), handle removal
+                    if (tiledImage.__shaderConfig) {
+                        this.renderer.removeShader(tiledImage.__shaderConfig.id);
+                        delete tiledImage.__shaderConfig;
+                        if (tiledImage.__wglCompositeHandler) {
+                            tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
+                        }
                     }
-                }
-                // if now managed externally, just request rebuild, also updates order
-                if (!this._configuredExternally) {
-                    // Update keys
-                    this._requestRebuild();
-                }
-            });
+                    // if now managed externally, just request rebuild, also updates order
+                    if (!this._configuredExternally) {
+                        // Update keys
+                        this._requestRebuild();
+                    }
+                });
+            }
         } // end of constructor
 
         /**
@@ -6079,21 +6081,22 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 return $.Promise.resolve();
             }
 
+            const _self = this;
             return new $.Promise((success, _) => {
-                this._rebuildHandle = setTimeout(() => {
-                    if (!this._configuredExternally) {
-                        this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
+                _self._rebuildHandle = setTimeout(() => {
+                    if (!_self._configuredExternally) {
+                        _self.renderer.setShaderLayerOrder(_self.viewer.world._items.map(item =>
                             item.__shaderConfig.id));
                     }
-                    this._buildStamp = Date.now();
-                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
+                    _self._buildStamp = Date.now();
+                    _self.renderer.setDimensions(0, 0, _self.canvas.width, _self.canvas.height, _self.viewer.world.getItemCount());
                     // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
-                    this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
-                    this.rebuildCounter++;
-                    this._rebuildHandle = null;
+                    _self.renderer.registerProgram(null, _self.renderer.webglContext.secondPassProgramKey);
+                    _self.rebuildCounter++;
+                    _self._rebuildHandle = null;
                     success();
                     setTimeout(() => {
-                        this.viewer.forceRedraw();
+                        _self.viewer.forceRedraw();
                     });
                 }, timeout);
             });
@@ -8212,7 +8215,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2025-12-12
 //! Git commit: --8e90ea9-dirty

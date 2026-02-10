@@ -37,6 +37,7 @@ If you develop an external item and need to use NPM packages, there is a way to 
  however from now on optional
  - run ``npm i`` to install your new dependencies
  - you now also need to run a watcher task on the plugin files as well, so that changes are re-compiled
+ - for more information, see ``src/NPM_MODULES_PLUGINS.md``
 
 
 ### Bundling

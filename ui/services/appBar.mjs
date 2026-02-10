@@ -250,13 +250,13 @@ export class AppBar {
                         id: item.id,
                         icon: item.iconName,
                         label: item.title,
-                        selected: APPLICATION_CONTEXT.getOption(`${id}-selected`, false),
+                        selected: APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, false),
                         onClick: () => {
                             for (let child of this.rightMenuTabs[id]) {
                                 child.toggleHiden();
                             }
-                            item.selected = !APPLICATION_CONTEXT.getOption(`${id}-selected`, item.selected);
-                            APPLICATION_CONTEXT.setOption(`${id}-selected`, item.selected);
+                            item.selected = !APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, item.selected);
+                            APPLICATION_CONTEXT.AppCache.set(`${id}-selected`, item.selected);
                             // Important: return true to keep the menu open if you want multi-select behavior
                             return true;
                         }

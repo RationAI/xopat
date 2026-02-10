@@ -7,8 +7,8 @@
   // Provide service URL of your DICOM API
   "serviceUrl": "http://localhost:8042/dicom-web",
   "includes": [
-    "dcmjs.min.js",
-    "dicom.mjs"
+    "dist/cornerstoneWADOImageLoader.bundle.min.js",
+    "dist/index.worker.bundle.min.worker.js"
   ],
   // Default study to open
   "defaultStudy": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522"
