@@ -54,6 +54,10 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     } catch (err) {
                         console.error("File Browser failed to list cases!", err);
                         Dialogs.show(`Could not list cases for the path ${contextPath}!`, 5000, Dialogs.MSG_ERR);
+                        return {
+                            items: [],
+                            total: 0,
+                        };
                     }
 
                     if (!parent) {
@@ -66,7 +70,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                             if (!res.ok) {
                                 throw new Error(slides);
                             }
-                            slides = JSON.parse(cases);
+                            slides = JSON.parse(slides);
                             for (const c of slides || []) {
                                 items.push(makeSlideItem(c.local_id || c.id));
                             }
@@ -88,7 +92,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                     };
                 },
 
-                renderItem: (item, { itemIndex }) => {
+                renderItem: (item) => {
                     if (item.type === "case") {
                         return div(
                             { class: "flex items-center gap-2 px-2 py-2 hover:bg-base-300 rounded cursor-pointer text-base-content/80"},
@@ -96,7 +100,8 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                             span(item.label)
                         );
                     }
-                    return this.slideMenu._renderSlideCard(itemIndex, item);
+                    // todo: private methods should not be touched, make it possible to call default
+                    return this.slideMenu._renderSlideCard(item);
                 },
 
                 canOpen(item) {
@@ -108,20 +113,19 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                 }
             };
 
-            const bgItemGetter = (item) => {
-                const path = item.rel_path || item.path;
-                return {
-                    id: item.label,
-                    name: item.label,
-                    dataReference: path,
-                    getViewer() { return null; },
-                };
-            };
-
             info.setCustomBrowser({
                 id: "rationai-wsi-file-browser",
                 levels: dynamicLevel,
-                bgItemGetter,
+                customItemToBackground: (item) => ({
+                    id: item.label,
+                    name: item.label,
+                    dataReference: item.rel_path || item.path,
+                }),
+                backgroundToCustomItem: (bg) => ({
+                    label: bg.id,
+                    type: "slide",
+                    path: BackgroundConfig.data(bg)[0],
+                }),
             });
         });
     }

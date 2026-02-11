@@ -105,7 +105,7 @@ addPlugin('dicom', class extends XOpatPlugin {
 
             evt.visualizations = null;
 
-            // Branch per the requested behaviour
+            // TODO: if we have existing session data setup, we should skip overriding with default
             if (hasSeries) {
                 // Open this single series immediately.
                 // Build foreground data; no background needed (unless you want siblings too)
@@ -152,15 +152,11 @@ addPlugin('dicom', class extends XOpatPlugin {
                     await this.populateStudyDetails(this.state.activeStudy, token);
                 }
                 await this.populatePatientDetails(this.defaultPatient, token);
-                // Nothing issued as background yet
-                evt.data = [];
-                evt.background = [];
+                // do NOT wipe the config, keep it remember old session
             } else {
                 // Nothing given: no prefetch. UI will call the lazy loaders below.
                 this.state.patients = [];
-                // Leave everything else empty for now; UI will subsequently pick a patient/study/series
-                evt.data = [];
-                evt.background = [];
+                // do NOT wipe the config, keep it remember old session
             }
         }, null, -1);
 
@@ -168,7 +164,9 @@ addPlugin('dicom', class extends XOpatPlugin {
             for (let i = 0; i < (evt.background || []).length; i++) {
                 let bg = evt.background[i];
 
-                const data = evt.data?.[bg.dataReference];
+                const dataRef = bg.dataReferences ? bg.dataReferences[0] : bg.dataReference;
+                const data = evt.data?.[dataRef] || dataRef;
+
                 if (typeof data === "object" && data.studyUID && data.seriesUID) {
                     bg.tileSource = new DICOMWebTileSource({
                         baseUrl: this.serviceUrl,
@@ -185,14 +183,15 @@ addPlugin('dicom', class extends XOpatPlugin {
                 }
 
                 // Ensure BackgroundConfig instance
-                if (window.APPLICATION_CONTEXT?.registerConfig) {
-                    evt.background[i] = window.APPLICATION_CONTEXT.registerConfig(bg);
-                }
+                evt.background[i] = window.APPLICATION_CONTEXT.registerConfig(bg);
             }
         });
 
         this.integrateWithPlugin('slide-info', async info => {
             const {span, div} = vanjs.tags;
+
+            // await will let the viewer potentially open, prevent the default behavior to kick in
+            info.setWillInitCustomBrowser();
 
             const patientsSupported = await this._supportsPatients(this.serviceUrl, XOpatUser.instance().getSecret());
 
@@ -353,7 +352,7 @@ addPlugin('dicom', class extends XOpatPlugin {
                 },
                 canOpen: () => true,
             }, studiesLevel, imagesLevel] : [studiesLevel, imagesLevel];
-            info.setCustomBrowser({ id: "dicom-browser", levels, bgItemGetter: (item) => {
+            info.setCustomBrowser({ id: "dicom-browser", levels, customItemToBackground: (item) => {
                     const seriesUID = item.seriesUID;
                     const studyUID  = item.studyUID || this.state.activeStudy;
                     // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
@@ -367,6 +366,10 @@ addPlugin('dicom', class extends XOpatPlugin {
                         ...this.frameOrder
                     });
                     return { id: seriesUID, tileSource, dataReference: { studyUID, seriesUID } };
+                }, backgroundToCustomItem: (bgConfig) => {
+                    // TODO: this is only partial revival of the original item, you can add more properties here
+                    const data = BackgroundConfig.data(bgConfig);
+                    return { seriesUID: data[0].seriesUID, studyUID: data[0].studyUID };
                 }
             });
         });

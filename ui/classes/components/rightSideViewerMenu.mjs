@@ -155,7 +155,6 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     onLayoutChange(details) {
-        console.log("RightSideViewerMenu onLayoutChange", details);
         if (details.width < 600) {
             this.setClass("mobile", "mobile");
             this.setClass("display", "hidden");

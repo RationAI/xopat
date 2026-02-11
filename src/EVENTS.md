@@ -86,8 +86,9 @@ from the available data in the viewer.
 #### `before-plugin-load` | e: `{id: string}
 Fired before a plugin is loaded within a system (at runtime).
 
-#### `plugin-loaded` | e: `{id: string, plugin: XOpatPlugin}
-Fired when plugin is loaded within a system (at runtime).
+#### `plugin-loaded` | e: `{id: string, plugin: XOpatPlugin, isInitialLoad: boolean}
+Fired when plugin is loaded within a system (at runtime). Carries a flag whether the plugin was loaded automatically
+(initial load) or not.
 
 #### `plugin-failed` | e: `{id: string, message:string}
 Fired when plugin fails to load within a system (at runtime).

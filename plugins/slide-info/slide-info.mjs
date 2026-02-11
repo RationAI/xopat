@@ -140,28 +140,48 @@ addPlugin('slide-info', class extends XOpatPlugin {
     }
 
     /**
-     * @callback getBGStandaloneItem
-     * @param {object} item
+     * @callback customItemToBackground
+     * @param {object} item item that is being browsed: a generic object that you returned from the hierarchy getter
      * @returns {StandaloneBackgroundItem}
      * The return value should include optional ID property.
      */
 
     /**
+     * @callback backgroundToCustomItem
+     * @param {StandaloneBackgroundItem} item item that is being browsed: a generic object that you returned from the hierarchy getter
+     * @returns {object}
+     * The return value should include optional ID property.
+     */
+
+    /**
      * Set custom browser hierarchy for the slide item browser.
+     * Note that you should do this before the viewer is opened. If you cannot do it, you can use setWillInitCustomBrowser instead,
+     * and initialize the UI later on.
      * @param {UI.Explorer.Options|undefined|false} config if falsey value, customization is disabled
-     * @param {getBGStandaloneItem} config.bgItemGetter a function that from explorer leaf item returns BG configuration,
+     * @param {customItemToBackground} config.customItemToBackground a function that from explorer leaf item returns BG configuration,
      *  the configuration must be of a type StandaloneBackgroundItem as the browsing is not dependent on the active session.
+     * @param {backgroundToCustomItem} config.backgroundToCustomItem a function that does the opposite of customItemToBackground,
+     *  since the viewer can open a cached session and needs to know the original item to open.
      */
     setCustomBrowser(config) {
         if (!this.slideBrowser) {
             console.warn("Slide browser is disabled, skipping setCustomBrowser call.");
             return;
         }
-        if (this.hasCustomBrowser && this.menu.orgConfig?.id !== config?.id) {
+        if (this.hasCustomBrowser && this.menu.orgConfig?.id && this.menu.orgConfig?.id !== config?.id) {
             console.warn(`Slide browser is already configured with different ID ${this.menu.orgConfig.id}, consider keeping only one browsing configuration. Overwriting with ${config.id}.`);
         }
         this.menu.refresh(config);
         this.hasCustomBrowser = !!config;
+    }
+
+    /**
+     * In case you cannot set the browser hierarchy before the viewer is opened, you can use this method to set the configuration
+     * and initialize the UI later on.
+     */
+    setWillInitCustomBrowser() {
+        this.menu.refresh({});
+        this.hasCustomBrowser = true;
     }
 
     /**

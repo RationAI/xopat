@@ -147,14 +147,74 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (guard !== _CONF_GUARD) {
                 throw new Error('Use BackgroundConfig.from(...) to create your background!');
             }
-            Object.assign(this, data);
+
+            // Internal storage for the "de-indexed" raw values
+            this._rawValues = [];
+            this._raw = { ...data };
+
+            const globalData = APPLICATION_CONTEXT.config.data || [];
+
+            // 1. Support both singular and plural during initialization
+            let incomingRefs = data.dataReferences || data.dataReference || [];
+            if (!Array.isArray(incomingRefs)) incomingRefs = [incomingRefs];
+
+            // "De-indexing": Cache the true values immediately
+            this._rawValues = incomingRefs.map(ref => typeof ref === 'number' ? globalData[ref] : ref);
+
+            // Clean up the object surface to avoid property collisions
+            delete this._raw.dataReferences;
+            delete this._raw.dataReference;
+            Object.assign(this, this._raw);
+
+            // 2. Proxied dataReference (Singular - Legacy)
+            Object.defineProperty(this, 'dataReference', {
+                get: () => {
+                    const refs = this.dataReferences; // Uses the smart getter below
+                    return Array.isArray(refs) ? refs[0] : refs;
+                },
+                set: (val) => {
+                    // Setting the singular property updates the plural internal state
+                    this.dataReferences = [val];
+                },
+                enumerable: true
+            });
+
+            // 3. Smart dataReferences (Plural - Future Proof)
+            Object.defineProperty(this, 'dataReferences', {
+                get: () => {
+                    const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
+                    const indices = [];
+                    let allValid = true;
+
+                    for (const val of this._rawValues) {
+                        const idx = currentGlobalData.indexOf(val);
+                        if (idx !== -1) {
+                            indices.push(idx);
+                        } else {
+                            allValid = false;
+                            break;
+                        }
+                    }
+
+                    // Returns indices only if ALL values exist in global data
+                    if (allValid && indices.length === this._rawValues.length && indices.length > 0) {
+                        return indices;
+                    }
+
+                    return this._rawValues;
+                },
+                set: (val) => {
+                    const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
+                    const incoming = Array.isArray(val) ? val : [val];
+                    this._rawValues = incoming.map(v => typeof v === 'number' ? currentGlobalData[v] : v);
+                },
+                enumerable: true
+            });
         }
 
-        static from(config) {
+        static from(config, registerAsSource = true) {
             if (!config) throw new Error('config must be defined');
 
-            config.id = BackgroundConfig.processId(config.id, config);
-            // Ensure numeric references
             function fixRef(ref) {
                 if (typeof ref === "string") {
                     const pref = Number.parseInt(ref, 10);
@@ -165,53 +225,72 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 return ref;
             }
 
-            if (config['dataReference']) {
-                config['dataReferences'] = fixRef(config['dataReference']);
-            }
+            // Standardize input keys
             if (Array.isArray(config['dataReferences'])) {
                 config['dataReferences'] = config['dataReferences'].map(fixRef);
+            } else if (config['dataReference'] !== undefined) {
+                config['dataReference'] = fixRef(config['dataReference']);
             }
 
-            if (_CONF_REGISTRY.has(config.id)) {
-                return _CONF_REGISTRY.get(config.id);
+            config.id = BackgroundConfig.processId(config.id, config);
+            const exists = _CONF_REGISTRY.has(config.id);
+            const instance = exists ? _CONF_REGISTRY.get(config.id) : new BackgroundConfig(config, _CONF_GUARD);
+
+            if (registerAsSource) {
+                const refs = instance.dataReferences;
+                if (refs.length > 0 && typeof refs[0] !== 'number') {
+                    const globalData = APPLICATION_CONTEXT._dangerouslyAccessConfig().data;
+                    instance._rawValues.forEach(val => {
+                        if (val !== null && !globalData.includes(val)) {
+                            globalData.push(val);
+                        }
+                    });
+                }
             }
 
-            config = new BackgroundConfig(config, _CONF_GUARD);
-            _CONF_REGISTRY.set(config.id, config);
-            return config;
+            if (!exists) _CONF_REGISTRY.set(instance.id, instance);
+            return instance;
         }
 
         /**
-         * Sanitizes a given ID or generates one from the config object.
-         * @param {string|null} id - The existing ID (if any)
-         * @param {object} context - The config object to derive ID from if missing
+         * Get data reference IDs from the configuration.
+         * @param item
          */
+        static data(item) {
+            // we don't really check if it is mixed, we expect correct dataReferences format
+            if (typeof item.dataReferences[0] === "number") {
+                const data = APPLICATION_CONTEXT.config.data;
+                return item.dataReferences.map(ref => data[ref]);
+            }
+            return item.dataReferences;
+        }
+
         static processId(id, context) {
             if (id) return UTILITIES.sanitizeID(id);
 
-            if (typeof context.dataReference === 'string') {
-                return UTILITIES.sanitizeID(context.dataReference);
-            }
+            const ref = (Array.isArray(context.dataReferences) ? context.dataReferences[0] : null)
+                || context.dataReference;
 
-            let val = null;
-            // TODO do not allow touching DATA array directly, force usage of standalone item
-            if (typeof context.dataReference === 'number') {
-                const globalData = APPLICATION_CONTEXT?.config?.data;
-                // todo DATA might not be set at all, or not contain the proper reference!
-                const path = globalData[context.dataReference];
+            if (typeof ref === 'string') return UTILITIES.sanitizeID(ref);
+            if (typeof ref === 'number') {
+                const path = APPLICATION_CONTEXT.config.data[ref];
                 if (path && typeof path !== "object") return UTILITIES.sanitizeID(String(path));
-                if (path) val = path[Object.keys(path)[0]];
+                if (path) return UTILITIES.generateID(JSON.stringify(path));
             }
 
-            if (!val) {
-                val = context[Object.keys(context)[0]];
-            }
-            console.warn('ID Creator could not determine config ID, using generated ID based on first key of the object!', val);
-            return UTILITIES.generateID(String(val));
+            if (ref && typeof ref === 'object') return UTILITIES.generateID(JSON.stringify(ref));
+
+            return UTILITIES.generateID("bg-" + Math.random());
         }
 
         toJSON() {
-            return { ...this };
+            const out = { ...this };
+            // Serialization includes both for compatibility
+            delete out.dataReferences; // todo clean this duality
+            out.dataReference = Array.isArray(out.dataReferences) ? out.dataReferences[0] : out.dataReferences;
+            delete out._rawValues;
+            delete out._raw;
+            return out;
         }
     }
 
@@ -1228,7 +1307,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             );
             await this.openViewerWith(event.data, event.background || [], event.visualizations || []);
             // Only after: before, auto-load would trigger many messages..
-            VIEWER_MANAGER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', { plugin: PLUGINS[e.id].name }), 2500, Dialogs.MSG_INFO));
+            VIEWER_MANAGER.addHandler('plugin-loaded', e => {
+                if (!e.isInitialLoad) {
+                    Dialogs.show($.t('messages.pluginLoadedNamed', { plugin: PLUGINS[e.id].name }), 2500, Dialogs.MSG_INFO);
+                }
+            });
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1242,6 +1325,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
 
     /**
+     * TODO get rid completely of data array, keep it only on the outer interface level
+     *
      * Open desired configuration into one or more viewer instances (no VIEWER global access here).
      * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
      * - In non-stacked mode with multiple backgrounds selected, creates multiple viewers (one per bg).
@@ -1285,9 +1370,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (typeof visualizations !== "undefined") config.visualizations = visualizations;
 
         if (Array.isArray(config.background)) {
-            config.background = config.background.map(bg =>
-                (bg instanceof window.BackgroundConfig) ? bg : window.BackgroundConfig.from(bg)
-            );
+            // always call from(...) it will remap data references to indexes
+            config.background = config.background.map(bg => window.BackgroundConfig.from(bg));
         }
 
         const cfg = APPLICATION_CONTEXT.config;

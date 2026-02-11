@@ -1,7 +1,8 @@
 # xOpat DICOM Plugin (WSI via DICOMweb)
 
 This plugin enables xOpat to load **Whole Slide Images (WSI)** from any **DICOMweb** server  
-(e.g. Google Cloud Healthcare, Orthanc, dcm4chee).
+(e.g. Google Cloud Healthcare, Orthanc, dcm4chee). You need to run a build task
+for the plugin to work - it uses package.json. See the workspace item readme for details.
 
 It integrates with:
 - Slide browser (`slide-info`)

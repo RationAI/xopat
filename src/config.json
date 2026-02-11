@@ -25,7 +25,6 @@
      *   js_cookie_same_site: ?string,
      *   js_cookie_secure: ?boolean,
      *   secureMode: ?boolean,
-     *   redirectUrl: ?string,
      *   production: ?boolean
      * }} xoClientSetup
      */
@@ -63,8 +62,6 @@
             "secureMode": false,
             /* Production mode (serve minified files if available) */
             "production": false,
-            /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "redirectUrl": "redirect.php",
             /* OpenSeadragon.Options to pass, some values are overridden as necessary. */
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
@@ -85,7 +82,6 @@
             "js_cookie_domain": null,
             "secureMode": true,
             "production": true,
-            "redirectUrl": "redirect.php",
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
             }

@@ -28,6 +28,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     // ---------- Public API ----------
 
     open() {
+        if (this._preventOpen) {
+            return;
+        }
         if (!this._dock) {
             this.windowId = this.options.id ?? "slide-switcher";
             this.title = this.options.title ?? "Slide Switcher";
@@ -82,18 +85,29 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._dock && this._dock.close();
     }
 
+    /**
+     *
+     * @param {object|null} newConfig object - custom hierarchy configuration, or null to disable custom hierarchy,
+     *   or empty object to set 'preload' mode - standalone is set to true, but open is disabled until refresh is re-called
+     */
     refresh(newConfig) {
         if (!newConfig) {
             this.orgConfig = null;
-            this.configGetter = (item) => item.originalItem;
+            this.customToBg = (item) => item.originalItem;
+            this.bgToCustom = (bg) => ({ originalItem: bg });
             this.standalone = false;
         } else if (newConfig.levels) {
             this.orgConfig = newConfig;
-            this.configGetter = newConfig.bgItemGetter;
+            this.customToBg = newConfig.customItemToBackground;
+            this.bgToCustom = newConfig.backgroundToCustomItem;
             this.standalone = true;
-            if (!this.configGetter) throw new Error("bgItemGetter is required for retrieving custom bg configurations!");
+            if (!this.customToBg) throw new Error("customItemToBackground is required for retrieving custom bg configurations!");
+            if (!this.bgToCustom) throw new Error("backgroundToCustomItem is required for retrieving custom bg configurations!");
+        } else {
+            this._preventOpen = true;
+            return;
         }
-
+        this._preventOpen = false;
         this._levels = this._buildLevels();
         this.selectedItems.clear();
         this._syncWithViewer(); // todo check if this is not called too often
@@ -115,12 +129,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         if (!item) return null;
         if (this._configCache.has(item)) return this._configCache.get(item);
 
-        let conf = this.configGetter(item);
+        let conf = this.customToBg(item);
         if (conf) {
-            // Always normalize to canonical BackgroundConfig instance (stable identity)
-            // registerConfig is now guaranteed by core (app.js patch #2)
             conf = APPLICATION_CONTEXT.registerConfig(conf);
-
             this._configCache.set(item, conf);
         }
         return conf;
@@ -150,17 +161,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 const regBg = APPLICATION_CONTEXT.registerConfig ? APPLICATION_CONTEXT.registerConfig(bg) : bg;
                 if (!regBg?.id) return;
 
-                const itemWrapper = {
-                    id: `bg-${idx}`,
-                    label: globalThis.UTILITIES.nameFromBGOrIndex(regBg),
-                    originalItem: regBg,
-                    __bgIndex: idx
-                };
+                const item = this.bgToCustom(regBg);
+                this._configCache.set(item, regBg);
 
-                // Make sure _getConfig(itemWrapper) returns the right thing
-                this._configCache.set(itemWrapper, regBg);
-
-                this.selectedItems.set(regBg.id, { item: itemWrapper, config: regBg });
+                this.selectedItems.set(regBg.id, { item: item, config: regBg });
             });
     }
 
@@ -470,7 +474,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _renderSlideCard(item, withImagery = true) {
         const bg = this._getConfig(item);
-        if (!bg) return div({ class: "text-error" }, "Error: No Config");
+        if (!bg) return div({ class: "text-error", style: "pointer-events: none;" }, "Error: No Config");
 
         const id = bg.id; // Stable ID from registry
         const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
@@ -611,6 +615,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _applyToDOM(sourceNode, targetNode, parent, classes) {
+        if (!sourceNode) {
+            console.warn("SlideSwitcher: No source node provided for cloning", targetNode.id);
+            return;
+        }
+
         const current = document.getElementById(targetNode.id) || parent?.querySelector(`#${targetNode.id}`);
         if (!current) return; // It's okay if it's missing now; the cache handles the next render
 

@@ -315,12 +315,8 @@ form.submit();
      * @returns {void}
      */
     window.UTILITIES.copyUrlToClipboard = function() {
-        let baseUrl = APPLICATION_CONTEXT.getOption("redirectUrl", "");
-        if (!baseUrl.match(/^https?:\/\//)) { //protocol required
-            baseUrl = APPLICATION_CONTEXT.url + baseUrl;
-        }
         const data = UTILITIES.serializeAppConfig();
-        UTILITIES.copyToClipboard(baseUrl + "#" + encodeURIComponent(data));
+        UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
     };
 
     /**

@@ -314,7 +314,7 @@ export class AppBar {
             const item = this.otherWindows[id];
             if (!item) return;
             item.selected = !!selected;
-            APPLICATION_CONTEXT.setOption(`${id}-selected`, item.selected);
+            APPLICATION_CONTEXT.AppCache.set(`${id}-selected`, item.selected);
             this._visualMenuNeedsRefresh = true;
         },
     }

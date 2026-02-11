@@ -170,10 +170,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             /**
              * Plugin was loaded dynamically at runtime.
              * @property {string} id plugin id
+             * @property {XOpatPlugin} plugin
+             * @property {boolean} isInitialLoad
              * @memberof VIEWER_MANAGER
              * @event plugin-loaded
              */
-            VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: plugin.id, plugin: plugin});
+            VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: plugin.id, plugin: plugin, isInitialLoad: REGISTERED_PLUGINS !== undefined});
             return true;
         } catch (e) {
             /**
@@ -1525,6 +1527,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 callback(targetPlugin);
                 return true;
             }
+            // TODO: consider async event that awaits loading handlers -> this could help e.g. delaying slide opening
             VIEWER_MANAGER.addHandler('plugin-loaded', e => {
                 if (e.id === pluginId) callback(e.plugin);
             });

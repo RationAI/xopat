@@ -365,40 +365,67 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
         let data = pixelData;
 
-        // Strip DICOM Item Tag if present (FE FF 00 E0)
         if (data[0] === 0xFE && data[1] === 0xFF && data[2] === 0x00 && data[3] === 0xE0) {
             data = data.subarray(8);
         }
 
+        const rows = this.tileHeight || 256;
+        const cols = this.tileWidth || 256;
+
+        const pi0 = (this.photometricInterpretation || "RGB").toUpperCase();
+
+        const spp0 = (pi0 === "YBR_FULL_422") ? 2 : (this.samplesPerPixel || 3);
+
         const metadata = {
-            rows: this.tileHeight,
-            columns: this.tileWidth,
+            rows,
+            columns: cols,
             bitsAllocated: 8,
-            samplesPerPixel: 3,              // used as a fallback only
+            bitsStored: 8,
+            highBit: 7,
             pixelRepresentation: 0,
             planarConfiguration: 0,
-            photometricInterpretation: this.photometricInterpretation || "RGB",
+            samplesPerPixel: spp0,
+            photometricInterpretation: pi0,
         };
 
         const options = {
             preScale: { enabled: false },
-            decodeConfig: { isJP2: false }
+            decodeConfig: { isJP2: false },
         };
 
-        // IMPORTANT: CWIL 1.4.x JPEG path needs a canvas object
         const decodeCanvas = document.createElement("canvas");
 
         const decodedFrame = await cornerstoneWADOImageLoader.decodeImageFrame(
             metadata, ts, data, decodeCanvas, options
         );
+        const w = decodedFrame.columns || cols;
+        const h = decodedFrame.rows || rows;
+        const pi = (decodedFrame.photometricInterpretation || metadata.photometricInterpretation || "").toUpperCase();
 
-        if (decodedFrame.photometricInterpretation === 'YBR_FULL') {
-            cornerstoneWADOImageLoader.convertYBRFullByPixel(decodedFrame);
+        if (pi.startsWith("YBR")) {
+            if (ts === "1.2.840.10008.1.2.4.50") {
+                // Baseline JPEG – browser always returns RGB - nothing to do
+                decodedFrame.samplesPerPixel = 3;
+            } else {
+                // Output buffer: RGBA
+                const rgba = new Uint8ClampedArray(w * h * 4);
+                // Correct signature: (imageFrame, outputBuffer, useAlpha)
+                cornerstoneWADOImageLoader.convertColorSpace(decodedFrame, rgba, true);
+                decodedFrame.pixelData = rgba;
+                decodedFrame.samplesPerPixel = 4;     // matches RGBA buffer
+            }
+
+            decodedFrame.photometricInterpretation = "RGB";
+            decodedFrame.planarConfiguration = 0; // interleaved
         }
 
-        decodedFrame.width = decodedFrame.width || decodedFrame.columns || this.tileWidth;
-        decodedFrame.height = decodedFrame.height || decodedFrame.rows || this.tileHeight;
-        decodedFrame.samplesPerPixel = decodedFrame.samplesPerPixel || 3;
+        // Test if 4 channels -> RGBA
+        if (decodedFrame.imageData && decodedFrame.imageData.data?.length === w * h * 4) {
+            return await createImageBitmap(decodedFrame.imageData);
+        }
+
+        decodedFrame.width = decodedFrame.width || decodedFrame.columns || cols;
+        decodedFrame.height = decodedFrame.height || decodedFrame.rows || rows;
 
         if (!decodedFrame.width || !decodedFrame.height) {
             throw new Error(`Invalid dimensions: ${decodedFrame.width}x${decodedFrame.height}`);
