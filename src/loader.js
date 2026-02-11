@@ -1752,6 +1752,8 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
                      */
                     function getPixelData(screen, viewportPosition, tiledImage) {
                         function changeTile() {
+                            // TODO fix
+                            return undefined;
                             let tiles = tiledImage.lastDrawn;
                             //todo verify tiles order, need to ensure we prioritize higher resolution!!!
                             for (let i = 0; i < tiles.length; i++) {

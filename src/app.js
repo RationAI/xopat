@@ -445,7 +445,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @function getMetadata
      * @return {SlideMetadata|undefined}
      */
-    OpenSeadragon.TileSource.prototype.getMetadata = function () { };
+    OpenSeadragon.TileSource.prototype.getMetadata = function () { return {}; };
 
     /**
      * Extension of OpenSeadragon: Retrieve slide thumbnail. This can simplify the

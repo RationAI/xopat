@@ -70,7 +70,7 @@ export class ShaderSideMenu extends BaseComponent {
 
                     const message = tiledImage.source.getMetadata();
                     const node = this.shaderNodeCells[key];
-                    if (message.error && node) {
+                    if (message !== undefined &&message.error && node) {
                         const alert = new Alert({
                             mode: "warning",
                             title: $.t('main.shaders.faulty'),
