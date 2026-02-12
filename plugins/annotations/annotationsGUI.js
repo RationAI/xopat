@@ -1869,15 +1869,23 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 
 	_updateMainMenuPresetList() {
 		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
-
 		let pushed = false;
 		this.context.presets.foreach(preset => {
-			const containerCss =
-				this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
+			// const containerCss =
+			// 	this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
+
+			// Hides unused presets completely
+			if (this.isUnpreferredPreset(preset.presetID)) {
+				return;
+			}
 			const icon = preset.objectFactory.getIcon();
+// 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
+// onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
+// oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
+// <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
 onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
 			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
 			pushed = true;
@@ -2271,7 +2279,8 @@ class="btn m-2">Set for left click </button></div>`
 	 * @returns {boolean} true if the preset is not preferred
 	 */
 	isUnpreferredPreset(presetID) {
-		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+		// return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
+		return !this._preferredPresets.has(presetID);
 	}
 
     showMeasurementsWindow() {
