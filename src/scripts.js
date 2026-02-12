@@ -50,35 +50,56 @@ function initXopatScripts() {
         }
         VIEWER_MANAGER.addHandler('key-up', function(e) {
             if (e.focusCanvas) {
-                let zoom = null,
-                    speed = 0.3;
-                switch (e.key) {
-                    case "Down": // IE/Edge specific value
-                    case "ArrowDown":
-                        adjustBounds(0, speed);
-                        break;
-                    case "Up": // IE/Edge specific value
-                    case "ArrowUp":
-                        adjustBounds(0, -speed);
-                        break;
-                    case "Left": // IE/Edge specific value
-                    case "ArrowLeft":
-                        adjustBounds(-speed, 0);
-                        break;
-                    case "Right": // IE/Edge specific value
-                    case "ArrowRight":
-                        adjustBounds(speed, 0);
-                        break;
-                    case "+":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
-                        return;
-                    case "-":
-                        zoom = VIEWER.viewport.getZoom();
-                        VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
-                        return;
-                    default:
-                        return; // Quit when this doesn't handle the key event.
+                if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                    let zoom = null,
+                        speed = 0.3;
+                    switch (e.key) {
+                        case "Down": // IE/Edge specific value
+                        case "ArrowDown":
+                            adjustBounds(0, speed);
+                            break;
+                        case "Up": // IE/Edge specific value
+                        case "ArrowUp":
+                            adjustBounds(0, -speed);
+                            break;
+                        case "Left": // IE/Edge specific value
+                        case "ArrowLeft":
+                            adjustBounds(-speed, 0);
+                            break;
+                        case "Right": // IE/Edge specific value
+                        case "ArrowRight":
+                            adjustBounds(speed, 0);
+                            break;
+                        case "+":
+                            zoom = VIEWER.viewport.getZoom();
+                            VIEWER.viewport.zoomTo(zoom + zoom * speed * 3);
+                            return;
+                        case "-":
+                            zoom = VIEWER.viewport.getZoom();
+                            VIEWER.viewport.zoomTo(zoom - zoom * speed * 2);
+                            return;
+                        default:
+                            return; // Quit when this doesn't handle the key event.
+                    }
+                }
+                //rotation with alt
+                if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                    switch (e.key) {
+                        case "r":
+                        case "R":
+                            VIEWER.viewport.setRotation(0);
+                            return;
+                        case "q":
+                        case "Q": // Rotate Left
+                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() - 90);
+                            return;
+                        case "e":
+                        case "E": // Rotate Right
+                            VIEWER.viewport.setRotation(VIEWER.viewport.getRotation() + 90);
+                            return;
+                        default:
+                            return;
+                    }
                 }
             }
 
@@ -216,12 +237,19 @@ function initXopatScripts() {
         if (staticPreview) data.params.isStaticPreview = true;
         if (!withCookies) data.params.bypassCookies = true;
         data.params.bypassCacheLoadTime = true;
-        // todo: multi-position support
-        data.params.viewport = {
-            zoomLevel: VIEWER.viewport.getZoom(),
-            point: VIEWER.viewport.getCenter()
-        };
 
+        const snapshotViewport = (viewer) => ({
+            zoomLevel: viewer.viewport.getZoom(),
+            point: viewer.viewport.getCenter(),
+            rotation: viewer.viewport.getRotation(),
+        });
+        const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
+        if (viewers.length <= 1) {
+            const v = viewers[0] || VIEWER;
+            data.params.viewport = snapshotViewport(v);
+        } else {
+            data.params.viewport = viewers.map(snapshotViewport);
+        }
         //by default omit underscore
         return JSON.stringify(data, OpenSeadragon.FlexRenderer.jsonReplacer);
     };
@@ -587,7 +615,8 @@ ${await UTILITIES.getForm()}
         if (imageLike instanceof Blob) {
             type = "rasterBlob";
         } else if (typeof imageLike === 'string') {
-            type = "imageUrl";
+            //todo
+            throw "TODO: neds to implement image src loading";
         } else {
             throw "Invalid imageLike type";
         }

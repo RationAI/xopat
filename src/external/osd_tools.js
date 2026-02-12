@@ -296,9 +296,9 @@ OpenSeadragon.Tools = class {
             config.tiledImages = images.map((_, idx) => idx);
 
             const originalTiledImages = config.tiledImages;
-            const w = images[0].source.height;
-            const h = images[0].source.width;
-            const ar = h / w;
+            const w = images[0].source.width;
+            const h = images[0].source.height;
+            const ar = w / h;
             const bounds = new OpenSeadragon.Rect(0, 0, 1, 1/ar);
             const preserve = size.preserveAspectRatio || size.preserveAspectRatio === undefined;
             if (preserve) {
@@ -388,6 +388,10 @@ OpenSeadragon.Tools = class {
         };
 
         await VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs);
+
+        if (eventArgs.imagePreview && typeof eventArgs.imagePreview.then === "function") {
+            eventArgs.imagePreview = await eventArgs.imagePreview;
+        }
 
         if (eventArgs.imagePreview instanceof Image) {
             const imageEl = eventArgs.imagePreview;

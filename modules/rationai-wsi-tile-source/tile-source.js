@@ -128,7 +128,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 innerFormat: data.format,
                 ajaxHeaders: headers,
                 multifetch: false,
+                // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
+                    // empaia stores pixel size in nanometers, we need microns
                     micronsX: chosenMq?.x / 1000,
                     micronsY: chosenMq?.y / 1000,
                 },
@@ -284,10 +286,17 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`;
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`;
+    }
+
+    async getThumbnail({ targetWidth = 512 } = {}) {
+        // todo multifetch - how to handle multiple thumbnails?
+        targetWidth = Math.min(targetWidth, 500); //default max value
+        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`)
+            .then(async res => res.blob());
     }
 
     /**
@@ -295,7 +304,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     async downloadICCProfile() {
         const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
-        return fetch(url).then(async res => res.arrayBuffer())
+        return fetch(url).then(async res => res.arrayBuffer());
     }
 
     _setDownloadHandler(isMultiplex) {

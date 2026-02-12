@@ -137,8 +137,9 @@
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
             if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = location.x + 8 + "px";
-                this.magnificationContainer.style.top = location.y - this.magnificationContainerHeight - 50 + "px";
+                this.magnificationContainer.style.left = location.x + 36 + "px";
+                const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
+                this.magnificationContainer.style.top = (location.y - h - 12) + "px";
             }
 
         }.bind(this);
@@ -223,12 +224,34 @@
         formatArea: function (unit) {return getWithSquareUnitRounded(unit, this.areaMetric())},
 
         _init: function (options) {
+            if (!this._ui) {
+                this._ui = {
+                    rotSliderEl: null,
+                    magSliderEl: null,
+                    onRotate: null,
+                    onZoom: null
+                };
+                this._originalClassTarget = noUiSlider.cssClasses.target;
+            }
             if (!options.destroy) {
                 this.id = options.viewer.id + "-scale-bar";
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
-                    this.scalebarContainer.classList.add("relative", "m-0", "pointer-events-none");
+                    this.scalebarContainer.classList.add(
+                        "absolute",
+                        "m-0",
+                        "pointer-events-none",
+                        "select-none",
+                        "glass",
+                        "backdrop-blur-[2px]",
+                        "px-3",
+                        "py-1",
+                        "ring-1",
+                        "ring-base-300/40",
+                        "text-xs",
+                        "font-semibold"
+                    );
                     this.scalebarContainer.id = this.id;
                 }
                 this.viewer.container.appendChild(this.scalebarContainer);
@@ -243,24 +266,152 @@
 
                         if (this.magnificationContainer) return;
 
+                        const viewport = this.viewer.viewport;
+                        const inside = "oklch(var(--b2))";
+                        const outside = "oklch(var(--er))";
+
                         this.magnificationContainer = document.createElement("div");
                         this.magnificationContainer.id = this.id + "-magnification";
                         this.magnificationContainer.classList.add(
-                            "relative",
+                            "absolute",
                             "m-0",
-                            "glass",
-                            "backdrop-blur-[2px]",
-                            "pr-2", "pt-1", "pb-2",
-                            "rounded-lg",
-                            "shadow-sm",
-                            "ring-1", "ring-base-300/40",
-                            "flex", "flex-col", "items-center", "gap-1.5",
+                            "text-base-content",
+                            "flex",
+                            "flex-row",
+                            "items-stretch",
+                            "pointer-events-auto",
+                            "select-none",
+                            "min-w-[240px]"            // ensures both slider + labels fit
                         );
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
-                        this.magnificationContainer.style.width  = "50px";
+                        this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width = "auto";
+
+                        const mkBtn = (iconClass, id, title) => {
+                            const b = document.createElement("button");
+                            b.type = "button";
+                            if (id) b.dataset.role = id;
+                            if (title) b.title = title;
+                            b.className =
+                                "btn btn-xs btn-square rounded-xl " +
+                                "bg-base-200 hover:bg-base-300 border-base-300 " +
+                                "text-base-content shadow";
+                            b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
+                            return b;
+                        };
+
+                        // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
+                        const rotCol = document.createElement("div");
+                        rotCol.className = "flex flex-col items-center pb-2";
+
+                        const rotReadout = document.createElement("div");
+                        rotReadout.className =
+                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+
+                        const rotSliderContainer = document.createElement("div");
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+
+                        this._ui.rotSliderEl = rotSliderContainer;
+
+                        rotCol.append(rotReadout, rotSliderContainer);
+                        this.magnificationContainer.appendChild(rotCol);
+
+                        noUiSlider.cssClasses.target += ' noUi-reverse';
+                        noUiSlider.create(rotSliderContainer, {
+                            start: viewport.getRotation() % 360,
+                            range: { min: 0, max: 360 },
+                            direction: "rtl",
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            step: 1,
+                            pips: {
+                                mode: "values",
+                                values: [0, 90, 180, 270, 360], // 5 pips
+                                density: 6,
+                                format: { to: (v) => `${Math.round(v)}°` },
+                            },
+                        });
+
+// pip styling
+                        rotSliderContainer.querySelectorAll(".noUi-value-vertical").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+// rail styling
+                        const rotSliderEl = rotSliderContainer.noUiSlider.target;
+                        rotSliderEl.style.width = "6px";
+                        rotSliderEl.style.border = "none";
+                        rotSliderEl.style.background = inside;
+
+// feedback-loop guard
+                        let rotPrevent = false;
+
+// Slider -> Viewport
+                        const setRotation = (deg) => {
+                            const normalized = ((deg % 360) + 360) % 360;
+                            this.viewer.viewport.setRotation(normalized);
+                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                        };
+
+                        rotSliderContainer.noUiSlider.on("slide", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+                        rotSliderContainer.noUiSlider.on("change", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+
+// Viewport -> Slider
+                        const reflectRotation = () => {
+                            if (rotPrevent) return;
+                            const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360; // FIX: this.viewer
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(r);
+                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotPrevent = false;
+                        };
+                        this.viewer.addHandler("rotate", reflectRotation);
+                        this._ui.onRotate = reflectRotation;
+
+// Clicking pips MUST rotate as well (programmatic set doesn't always fire 'change')
+                        rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
+                            pip.classList.add("cursor-pointer", "hover:text-base-content");
+                            pip.addEventListener("click", (e) => {
+                                const t = (e.target.textContent || "").replace("°", "").trim();
+                                const v = parseFloat(t);
+                                if (!isNaN(v)) {
+                                    rotSliderContainer.noUiSlider.set(v);
+                                    setRotation(v); // <-- this is the missing piece
+                                }
+                            });
+                        });
+
+                        const homeRot = rotSliderContainer.querySelectorAll(".noUi-value")
+                            .item(0); // first one is 0° in our list
+                        if (homeRot) {
+                            homeRot.classList.remove("text-base-content/60");
+                            homeRot.classList.add("text-base-content", "font-semibold");
+                            // optional: add a little badge-ish feel
+                            homeRot.style.opacity = "1";
+                        }
+
+
+
+
 
                         // --- Dynamic Range & Log Scale Calculation ---
-                        const viewport = this.viewer.viewport;
                         const minZoom = viewport.getMinZoom();
                         const maxZoom = viewport.getMaxZoom();
 
@@ -287,7 +438,12 @@
                             80, 160, 240, 480
                         ];
                         let pipValues = possibleSteps.filter(v => v >= minMag && v <= maxMag);
-
+                        if (nativeMag >= minMag && nativeMag <= maxMag) {
+                            const eps = nativeMag * 1e-6 + 1e-9;
+                            const hasNative = pipValues.some(v => Math.abs(v - nativeMag) <= eps);
+                            if (!hasNative) pipValues.push(nativeMag);
+                            pipValues.sort((a,b) => a - b);
+                        }
                         // Ensure strict bounds are handled cleanly (optional, mostly for range)
                         // We convert these Magnification values to Log2 values for the slider configuration
                         const toLog = (v) => Math.log2(v);
@@ -303,42 +459,50 @@
                         // Top is Min Value (due to 'rtl'), Bottom is Max Value.
                         const totalRange = range.max - range.min;
                         const nativeVal = toLog(nativeMag);
+
                         let percentNative = ((nativeVal - range.min) / totalRange) * 100;
                         percentNative = Math.max(0, Math.min(100, percentNative));
-                        const bgStyle = `linear-gradient(to top, 
-rgba(255, 255, 255, 1) 0%, 
-rgba(255, 255, 255, 1) ${percentNative}%, 
-rgba(255, 100, 100, 1) ${percentNative}%, 
-rgba(255, 100, 100, 1) 100%)`;
+                        const bgStyle = `linear-gradient(to top,
+  ${inside} 0%,
+  ${inside} ${percentNative}%,
+  ${outside} ${percentNative}%,
+  ${outside} 100%
+)`;
 
                         const sliderContainer = document.createElement("span");
-
-                        const mkBtn = (iconClass) => {
-                            const b = document.createElement("button");
-                            b.type = "button";
-                            b.className = "btn btn-ghost btn-xs min-h-0 w-7 h-7 p-0 rounded-md text-base-content/70 hover:text-base-content bg-transparent border-transparent";
-                            b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
-                            return b;
-                        };
-
-
-                        // Max Zoom Button (Zoom In / Plus) - Goes at Bottom
-                        let plusBtn = mkBtn("fa-plus");
-                        this.magnificationContainer.appendChild(plusBtn);
-
+                        sliderContainer.className = "relative flex-1 w-1.5 my-2";
                         const sliderWrap = document.createElement("div");
-                        sliderWrap.className = "relative flex-1 flex items-center justify-center w-full";
+                        sliderWrap.className = "relative flex-1 flex flex-col items-center justify-center w-full";
                         sliderWrap.style.minHeight = "120px";
-                        this.magnificationContainer.appendChild(sliderWrap);
+
+                        this._ui.magSliderEl = sliderContainer;
+                        const magCol = document.createElement("div");
+                        magCol.className = "flex flex-col items-center pb-2";
+
+                        const magInput = document.createElement("input");
+                        magInput.type = "number";
+                        magInput.inputMode = "decimal";
+                        magInput.step = "0.1";
+                        magInput.className = "input input-xs";
+                        magInput.min = String(minMag);
+                        magInput.max = String(maxMag);
+                        magInput.style.width = "45px";
+                        magInput.style.transform = "translate(14px, 0)";
+                        magInput.className =
+                            "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
+                        magInput.style.padding = "0";
+                        magInput.style.height = "24px";
+                        magInput.style.fontSize = "11px";
+
+                        sliderWrap.appendChild(magInput);
+
+                        magCol.appendChild(sliderWrap);
                         sliderWrap.appendChild(sliderContainer);
 
+                        this.magnificationContainer.appendChild(magCol);
                         this.viewer.container.appendChild(this.magnificationContainer);
 
-                        // Min Zoom Button (Zoom Out / Minus) - Goes at Top
-                        let minusBtn = mkBtn("fa-minus");
-                        this.magnificationContainer.appendChild(minusBtn);
-
-                        // --- Initialize noUiSlider ---
+                        noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
                             range: range,
                             start: toLog(vpZoomToMag(viewport.getZoom())),
@@ -371,6 +535,38 @@ rgba(255, 100, 100, 1) 100%)`;
                         sliderEl.style.border = "none";
                         sliderEl.style.background = bgStyle;
 
+                        // Keep input in sync with current magnification
+                        const setInputFromMag = (mag) => {
+                            // show nicely: <1 keeps 1 decimal; >=1 rounds to 1 decimal as well (feel free to tweak)
+                            magInput.value = (mag < 1 ? mag.toFixed(1) : mag.toFixed(1));
+                        };
+                        setInputFromMag(vpZoomToMag(viewport.getZoom()));
+
+                        const homeLog = nativeVal;
+                        let bestEl = null;
+                        let bestDist = Infinity;
+
+                        sliderContainer.querySelectorAll(".noUi-value").forEach((el) => {
+                            const v = parseFloat(el.getAttribute("data-value"));
+                            if (!isFinite(v)) return;
+                            const d = Math.abs(v - homeLog);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestEl = el;
+                            }
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+                        // todo consider restoring home-magnification pipe
+
                         // --- Event Handlers ---
 
                         // Slide Change -> Update Zoom
@@ -392,9 +588,11 @@ rgba(255, 100, 100, 1) 100%)`;
                             sliderContainer.noUiSlider._prevented = true;
                             sliderContainer.noUiSlider.set(toLog(currentMag));
                             sliderContainer.noUiSlider._prevented = false;
+                            setInputFromMag(currentMag);
+
                         };
                         this.viewer.addHandler('zoom', reflectUpdate);
-
+                        this._ui.onZoom = reflectUpdate;
                         // Helper for Buttons
                         const stepSlider = (direction) => {
                             const currLog = parseFloat(sliderContainer.noUiSlider.get());
@@ -436,9 +634,6 @@ rgba(255, 100, 100, 1) 100%)`;
                             }
                         };
 
-                        minusBtn.addEventListener("click", () => stepSlider(-1));
-                        plusBtn.addEventListener("click", () => stepSlider(1));
-
                         // Click on Pips - FIXED HANDLER
                         // We use an arrow function here to preserve 'this' as the Scalebar instance (for this.viewer access if needed)
                         // but we access the DOM element via the 'e.target' or the 'p' closure variable.
@@ -460,14 +655,36 @@ rgba(255, 100, 100, 1) 100%)`;
                             });
                         });
 
+                        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+                        const applyMagFromInput = () => {
+                            const raw = parseFloat(magInput.value);
+                            if (!isFinite(raw)) return;
+
+                            const mag = clamp(raw, minMag, maxMag);
+                            const logVal = toLog(mag);
+
+                            // update slider + zoom using the same mapping as everywhere else
+                            sliderContainer.noUiSlider.set(logVal);
+                            this.viewer.viewport.zoomTo(magToVpZoom(mag));
+
+                            setInputFromMag(mag);
+                        };
+                        magInput.addEventListener("change", applyMagFromInput);
+                        magInput.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                magInput.blur();
+                                applyMagFromInput();
+                            }
+                        });
+                        magInput.addEventListener("blur", applyMagFromInput);
+
                         this.refreshHandler();
                     };
 
-                    if (this.viewer.isOpen()) {
-                        initSlider();
-                    } else {
-                        this.viewer.addOnceHandler('open', initSlider);
-                    }
+                    if (this.viewer.isOpen()) initSlider();
+                    else this.viewer.addOnceHandler('open', initSlider);
                 }
 
                 this.setMinWidth(options.minWidth || "150px");
@@ -480,11 +697,48 @@ rgba(255, 100, 100, 1) 100%)`;
                 });
             } else {
                 this._active = false;
+
+                // Remove viewport handler
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
-                let container = document.getElementById(this.id);
-                if (container) container.remove();
-                if (this.magnificationContainer) this.magnificationContainer.remove();
+
+                // Remove rotation handler
+                if (this._ui.onRotate) {
+                    this.viewer.removeHandler("rotate", this._ui.onRotate);
+                }
+
+                // Remove zoom handler
+                if (this._ui.onZoom) {
+                    this.viewer.removeHandler("zoom", this._ui.onZoom);
+                }
+
+                // Destroy rotation slider
+                if (this._ui.rotSliderEl?.noUiSlider) {
+                    this._ui.rotSliderEl.noUiSlider.destroy();
+                }
+
+                // Destroy magnification slider
+                if (this._ui.magSliderEl?.noUiSlider) {
+                    this._ui.magSliderEl.noUiSlider.destroy();
+                }
+
+                // Remove DOM nodes
+                if (this.scalebarContainer) {
+                    this.scalebarContainer.remove();
+                }
+
+                if (this.magnificationContainer) {
+                    this.magnificationContainer.remove();
+                }
+
                 this.magnificationContainer = null;
+
+                // Reset UI state
+                this._ui = {
+                    rotSliderEl: null,
+                    magSliderEl: null,
+                    onRotate: null,
+                    onZoom: null
+                };
             }
         },
 
@@ -605,7 +859,15 @@ rgba(255, 100, 100, 1) 100%)`;
             this.scalebarContainer.style.borderTop = "none";
         },
         drawMicroscopyScalebar: function(size, text) {
-            this.scalebarContainer.style.borderBottom = this.barThickness + "px solid " + this.color;
+            this.scalebarContainer.style.borderBottom =
+                this.barThickness + "px solid " + this.color;
+
+            this.scalebarContainer.style.borderLeft =
+                this.barThickness + "px solid " + this.color;
+
+            this.scalebarContainer.style.borderRight =
+                this.barThickness + "px solid " + this.color;
+
             this.scalebarContainer.innerHTML = text;
             this.scalebarContainer.style.width = size + "px";
         },

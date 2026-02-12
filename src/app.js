@@ -154,8 +154,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             const globalData = APPLICATION_CONTEXT.config.data || [];
 
-            // 1. Support both singular and plural during initialization
-            let incomingRefs = data.dataReferences || data.dataReference || [];
+            // incoming refs can be number zero === false
+            let incomingRefs = typeof data.dataReference === "number" ?  data.dataReference :
+                (data.dataReferences || data.dataReference || []);
             if (!Array.isArray(incomingRefs)) incomingRefs = [incomingRefs];
 
             // "De-indexing": Cache the true values immediately
@@ -710,8 +711,6 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     });
 
     initXopatScripts();
-    //Ensure reliable ID and class instance for every background item
-    CONFIG.background = CONFIG.background.map(c => BackgroundConfig.from(c));
 
     /**
      * Event to fire if you want to avoid explicit warning handling,
@@ -788,11 +787,12 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     /**
      * Set current viewer real world measurements. Set undefined values to fallback to pixels.
      * @param {OpenSeadragon.Viewer} viewer
-     * @param microns
-     * @param micronsX
-     * @param micronsY
+     * @param {number|undefined} microns
+     * @param {number|undefined} micronsX
+     * @param {number|undefined} micronsY
+     * @param {string} name the wsi name, for dialog message
      */
-    window.UTILITIES.setImageMeasurements = function (viewer, microns, micronsX, micronsY) {
+    window.UTILITIES.setImageMeasurements = function (viewer, microns, micronsX, micronsY, name) {
         let ppm = microns, ppmX = micronsX, ppmY = micronsY,
             lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
         if (ppmX && ppmY) {
@@ -814,11 +814,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             while (index < values.length) {
                 const dev = Math.abs(magMicrons - values[index]);
                 // Select the best match with the smallest deviation
-                if (dev < best && dev < values[index]) {
+                if (dev < best && dev <= values[index]) {
                     best = dev;
                     mag = values[index + 1]; // Adjust to get the corresponding magnification
                 }
                 index += 2;
+
+                if (mag === undefined) {
+                    if (magMicrons > 4) {
+                        Dialogs.show($.t("error.macroImage", {image: name}), 10000, Dialogs.MSG_WARN);
+                    } else {
+                        console.error("Failed to find matching magnification for microns!", microns);
+                    }
+                }
             }
         }
 
@@ -1129,23 +1137,25 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             const tiledImage = viewer.world.getItemAt(referenceImage);
             const imageData = tiledImage?.getConfig();
 
+            let name;
             if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-                const name = imageData.name || UTILITIES.fileNameFromPath(
+                name = imageData.name || UTILITIES.fileNameFromPath(
                     APPLICATION_CONTEXT.config.data[imageData.dataReference]
                 );
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
                 const active = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)?.[0];
-                const name = UTILITIES.fileNameFromPath(APPLICATION_CONTEXT.config.data[active] || 'unknown');
+                name = UTILITIES.fileNameFromPath(APPLICATION_CONTEXT.config.data[active] || 'unknown');
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', { slide: name }), true);
             } else if (!imageData) {
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
             } else {
-                const name = imageData.name || $.t('common.Image');
+                name = imageData.name || $.t('common.Image');
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             }
 
             if (imageData) {
+                // microns can come both from the background config and the tileSource api
                 const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
                 if (!hasMicrons || !hasDimMicrons) {
                     const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
@@ -1159,7 +1169,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             }
 
-            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY);
+            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY, name);
             viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
             if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
@@ -1194,19 +1204,111 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             viewer.__initialized = true;
             eventOpts.firstLoad = true;
 
-            // todo consider viewport per background
-            let focus = APPLICATION_CONTEXT.getOption("viewport");
-            if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                viewer.viewport.panTo({ x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y) }, true);
-                viewer.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
-            }
+            const normalizeViewport = (vp) => {
+                if (!vp || typeof vp !== "object") return null;
+                if (!vp.point || vp.zoomLevel == null) return null;
+                return {
+                    zoomLevel: Number.parseFloat(vp.zoomLevel),
+                    point: {
+                        x: Number.parseFloat(vp.point.x),
+                        y: Number.parseFloat(vp.point.y),
+                    },
+                    rotation: vp.rotation == null ? undefined : Number.parseFloat(vp.rotation),
+                };
+            };
+
+            const applyViewport = (viewer, vp) => {
+                const v = normalizeViewport(vp);
+                if (!v) return false;
+
+                // pan first, then zoom; both immediate to avoid animation race on open
+                viewer.viewport.panTo(v.point, true);
+                viewer.viewport.zoomTo(v.zoomLevel, null, true);
+                if (v.rotation != null && Number.isFinite(v.rotation)) {
+                    viewer.viewport.setRotation(v.rotation, true);
+                }
+                return true;
+            };
+
+// Build a stable cache key per viewer+background.
+// Uses background.id when present; otherwise falls back gracefully.
+            const viewportCacheKey = (viewer) => {
+                const bgCfg = viewer.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background");
+                const bgId = bgCfg?.id || bgCfg?.dataReference || "unknown-bg";
+                return `viewport:${APPLICATION_CONTEXT.sessionName}:${bgId}`;
+            };
+
+// Install throttled caching of viewport changes.
+            const installViewportCaching = (viewer) => {
+                // respect existing bypassCache behaviour
+                if (APPLICATION_CONTEXT.getOption("bypassCache", false)) return;
+
+                const key = viewportCacheKey(viewer);
+
+                const snapshot = () => ({
+                    zoomLevel: viewer.viewport.getZoom(),
+                    point: viewer.viewport.getCenter(),
+                    rotation: viewer.viewport.getRotation(),
+                });
+
+                const save = UTILITIES.makeThrottled(() => {
+                    try {
+                        APPLICATION_CONTEXT.AppCache.set(key, snapshot());
+                    } catch (e) {
+                        console.warn("Failed to cache viewport", e);
+                    }
+                }, 150);
+
+                const onZoom = () => save();
+                const onPan = () => save();
+                const onRotate = () => save();
+
+                viewer.addHandler("zoom", onZoom);
+                viewer.addHandler("pan", onPan);
+                viewer.addHandler("rotate", onRotate);
+
+                viewer.addHandler("destroy", () => {
+                    try { save.finish?.(); } catch (_) {}
+                    viewer.removeHandler("zoom", onZoom);
+                    viewer.removeHandler("pan", onPan);
+                    viewer.removeHandler("rotate", onRotate);
+                });
+            };
+
+// ---- APPLY STORED VIEWPORT (multi-view aware, backward compatible) ----
+            (() => {
+                const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
+                const focus = APPLICATION_CONTEXT.getOption("viewport", null, true, true);
+
+                // 1) Explicit viewport in params wins (backward compat)
+                if (Array.isArray(focus)) {
+                    // per-viewer viewport array
+                    for (let i = 0; i < viewers.length; i++) {
+                        if (focus[i]) applyViewport(viewers[i], focus[i]);
+                    }
+                } else if (focus && typeof focus === "object") {
+                    // old format: one viewport object → apply to all viewers
+                    for (const v of viewers) applyViewport(v, focus);
+                } else {
+                    // 2) Otherwise try per-viewer cache (by background id)
+                    for (const v of viewers) {
+                        const cached = APPLICATION_CONTEXT.AppCache.get(viewportCacheKey(v));
+                        // getOption already does parsing sometimes; cache may be string or object depending on storage
+                        const parsed = typeof cached === "string" ? (() => { try { return JSON.parse(cached); } catch { return null; } })() : cached;
+                        if (parsed) applyViewport(v, parsed);
+                    }
+                }
+
+                // 3) Always install caching after we’ve done initial restore
+                for (const v of viewers) installViewportCaching(v);
+            })();
 
             // todo needs to trigger valid navigator ID
-            if (window.innerHeight < 630 || window.innerWidth < 900) {
-                if (window.innerWidth >= 900) {
-                    $('#navigator-pin').click();
-                }
-            }
+            // if (window.innerHeight < 630 || window.innerWidth < 900) {
+            //     if (window.innerWidth >= 900) {
+            //         $('#navigator-pin').click();
+            //     }
+            // }
 
             window.onerror = null;
 

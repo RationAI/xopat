@@ -229,15 +229,20 @@
     transform: translate(0, 50%);
 }
 .noUi-marker-vertical.noUi-marker {
-    width: 5px;
-    height: 2px;
+    width: 6px; height: 2px;
     margin-top: -1px;
+    left: -3px;
 }
 .noUi-marker-vertical.noUi-marker-sub {
     width: 10px;
 }
 .noUi-marker-vertical.noUi-marker-large {
-    width: 15px;
+    width: 10px !important;
+}
+
+.noUi-reverse .noUi-marker-vertical.noUi-marker {
+    right: 4px;
+    left: auto;
 }
 
 /* Tooltip */
@@ -299,7 +304,6 @@
 
 /* Pips: push labels to the right, soften color */
 .noUi-pips-vertical { left: 100%; height: 100%; }        /* move labels away from track */
-.noUi-marker-vertical.noUi-marker { width: 4px; height: 2px; }
 .noUi-value {
     color: oklch(var(--bc) / 0.6);
     font-size: 12px;
@@ -307,4 +311,5 @@
 }
 .noUi-value-vertical { padding-left: 0; transform: translate(0, -50%); }
 
-.noUi-value-large {left: calc(100% + 10px);}
+.noUi-value-large {left: calc(100% + 15px);}
+.noUi-reverse  .noUi-value-large {right: calc(100% + 17px); left: auto; text-align: right;}

@@ -7,7 +7,7 @@
   "includes": [
     "file-browser.js"
   ],
-  "modules": [],
+  "modules": ["rationai-wsi-tile-source"],
   // RationAI WSI Service URL
   "wsiService": "http://localhost:8080"
 }

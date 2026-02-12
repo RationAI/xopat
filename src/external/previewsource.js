@@ -9,11 +9,15 @@ OpenSeadragon.PreviewSlideSource = class extends OpenSeadragon.TileSource {
 
     constructor(options) {
         console.assert(options.image instanceof HTMLImageElement, "PreviewSlideSource requires image within the constructor!");
+        const img = options.image;
         options.ready = true;
-        options.height = image.height || 256;
-        options.width = image.width || 256;
-        options.tileWidth = image.width || 256;
-        options.tileHeight = image.height || 256;
+        options.width = img.naturalWidth || img.width || 256;
+        options.height = img.naturalHeight || img.height || 256;
+        // Single-tile pyramid
+        options.tileWidth = options.width;
+        options.tileHeight = options.height;
+        options.minLevel = 0;
+        options.maxLevel = 0;
         super(options);
         this.tilesUrl = options.image.src;
     }
