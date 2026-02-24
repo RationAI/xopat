@@ -57,6 +57,7 @@ class AnnotationsGUI extends XOpatPlugin {
 		 * @type {Set<string>}
 		 */
 		this._preferredPresets = new Set();
+		this._presetCollections = new Set();
 		this.user = XOpatUser.instance();
 
 		this.registerAsEventSource();
@@ -1868,35 +1869,36 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 	}
 
 	_updateMainMenuPresetList() {
-		const html = ['<div style="max-height: 115px; overflow-y: auto;">'];
+		const html = ['<div style="max-height: 400px; overflow-y: auto;">'];
 		let pushed = false;
-		this.context.presets.foreach(preset => {
-			// const containerCss =
-			// 	this.isUnpreferredPreset(preset.presetID) ? 'opacity-50' : '';
+		const groups = this._getGroupedVisiblePresets();
 
-			// Hides unused presets completely
-			if (this.isUnpreferredPreset(preset.presetID)) {
-				return;
+		for (let group of groups) {
+			html.push(`<p class="mb-1 mt-2">${group.name}</p>`);
+
+			for (let preset of group.presets) {
+				const icon = preset.objectFactory.getIcon();
+				html.push(`
+<span style="width: 170px; text-overflow: ellipsis;"
+onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');"
+oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');"
+class="d-inline-block pointer">
+<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>
+<span class="d-inline-block pt-2">${preset.meta['category']?.value || 'unknown'}</span>
+</span>
+			`);
+				pushed = true;
 			}
-			const icon = preset.objectFactory.getIcon();
-// 			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
-// onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-// oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer ${containerCss}">
-// <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
-			html.push(`<span style="width: 170px; text-overflow: ellipsis; max-lines: 1;"
-onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');" 
-oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');" class="d-inline-block pointer">
-<span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>`);
-			html.push(`<span class="d-inline-block pt-2" type="text">${preset.meta['category'].value || 'unknown'}</span></span>`);
-			pushed = true;
-		});
+		}
 
-		if (!pushed) html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
+		if (!pushed) {
+			html.push(`To start annotating, please <a onclick="${this.THIS}.showPresets();">create some class presets</a>.`);
+		}
+
 		html.push('</div>');
 		$("#preset-list-inner-mp").html(html.join(''));
-		if (this._fireBoardUpdate) {
-			this.context.history.refresh();
-		}
+
+		if (this._fireBoardUpdate) this.context.history.refresh();
 		this._fireBoardUpdate = true;
 	}
 
@@ -2247,6 +2249,50 @@ class="btn m-2">Set for left click </button></div>`
 		if (this.needsSave) {
 			this.exportToFile();
 		}
+	}
+
+	_getGroupedVisiblePresets() {
+		const presetManager = this.context.presets;
+		const allPresets = Object.values(presetManager._presets);
+		const recorded = new Set();
+		const groups = [];
+
+		if (this._presetCollections?.length) {
+			for (let collection of this._presetCollections) {
+				const visible = collection.presets
+					.map(p => presetManager.get(p.presetID))
+					.filter(p => p && !this.isUnpreferredPreset(p.presetID));
+				if (!visible.length) continue;
+
+				groups.push({
+					name: collection.collection.name,
+					presets: visible
+				});
+
+				visible.forEach(p => recorded.add(p.presetID));
+			}
+		}
+
+		const unknown = allPresets.filter(p =>
+			!recorded.has(p.presetID) &&
+			!this.isUnpreferredPreset(p.presetID)
+		);
+
+		if (unknown.length) {
+			groups.push({
+				name: "Unknown / Unsorted",
+				presets: unknown
+			});
+		}
+		return groups;
+	}
+
+	/**
+	 * Set available preset collections for the GUI
+	 * @param {collection[]} collections array of presetIDs
+	 */
+	setPresetCollections(collections) {
+		this._presetCollections = collections || [];
 	}
 
 	/**
