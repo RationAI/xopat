@@ -1283,14 +1283,15 @@ ${UIComponents.Elements.select({
 				handler = this._clickPresetSelect.bind(this, true);
 			}
 			this.context.presets.foreach(preset => {
+				if (this.isUnpreferredPreset(preset.presetID)) return;
 				let category = preset.getMetaValue('category') || 'unknown';
 				let icon = preset.objectFactory.getIcon();
-				const containerCss =
-					this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
+				// const containerCss =
+				// 	this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
 				actions.push({
 					icon: icon,
 					iconCss: `color: ${preset.color};`,
-					containerCss,
+					// containerCss,
 					title: category,
 					action: () => {
 						this._presetSelection = preset.presetID;
