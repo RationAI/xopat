@@ -57,7 +57,8 @@ class AnnotationsGUI extends XOpatPlugin {
 		 * @type {Set<string>}
 		 */
 		this._preferredPresets = new Set();
-		this._presetCollections = new Set();
+		this._presetCollections = [];
+		this._presetCollectionIDs = new Set();
 		this.user = XOpatUser.instance();
 
 		this.registerAsEventSource();
@@ -1901,6 +1902,7 @@ class="d-inline-block pointer">
 
 		if (this._fireBoardUpdate) this.context.history.refresh();
 		this._fireBoardUpdate = true;
+		this.raiseEvent("preset-list-updated");
 	}
 
 	/**
@@ -2294,6 +2296,17 @@ class="btn m-2">Set for left click </button></div>`
 	 */
 	setPresetCollections(collections) {
 		this._presetCollections = collections || [];
+		this._presetCollectionIDs = new Set(this._presetCollections.map(c => c.collection.id));
+	}
+
+	/**
+	 * Add a single collection to the GUI
+	 * @param {collection} collection
+	 */
+	addPresetCollection(collection) {
+		if (this._presetCollectionIDs.has(collection.collection.id)) return;
+		this._presetCollectionIDs.add(collection.collection.id);
+		this._presetCollections.push(collection);
 	}
 
 	/**
