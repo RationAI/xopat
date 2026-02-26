@@ -1871,9 +1871,9 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 	}
 
 	_updateMainMenuPresetList() {
-		const html = ['<div style="max-height: 400px; overflow-y: auto;">'];
+		const html = ['<div style="max-height: 300px; overflow-y: auto;">'];
 		let pushed = false;
-		const groups = this._getGroupedVisiblePresets();
+		const groups = this.getGroupedVisiblePresets();
 
 		for (let group of groups) {
 			html.push(`<p class="mb-1 mt-2">${group.name}</p>`);
@@ -2254,7 +2254,7 @@ class="btn m-2">Set for left click </button></div>`
 		}
 	}
 
-	_getGroupedVisiblePresets() {
+	getGroupedVisiblePresets() {
 		const presetManager = this.context.presets;
 		const allPresets = Object.values(presetManager._presets);
 		const recorded = new Set();
