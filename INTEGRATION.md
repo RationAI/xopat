@@ -189,7 +189,7 @@ setSourceOptions(options) {
  * Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meagning. These are documented in the 
  * return function.
- * @return {SlideMetadata|undefined}
+ * @return {TileSourceMetadata|undefined}
  */
 getMetadata() {
     return undefined;

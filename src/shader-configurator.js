@@ -87,40 +87,103 @@ var ShaderConfigurator = {
     _uniqueId: "live-setup-",
 
     staticShadersDocs: function() {
-        // TODO fix this
-        return "";
-
         let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
         const uiControls = this._buildControls();
-        for (let shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
-            let id = shader.type();
 
-            html.push( "<div class='flex'><div style='min-width: 150px'><p class='text-lg font-semibold mb-0'>",
-                shader.name(), "</p><p style='max-width: 150px;'>", shader.description(),
-                "</p></div><div class='inline-block mx-1 px-1 py-1 cursor-pointer align-top rounded-md' style='border: 3px solid transparent'>",
-                "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-md' src='modules/webgl/shaders/",
-                shader.type(),".png'></div><div><code class='f4'>", id, "</code>");
+        for (let Shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
+            const id = Shader.type();
 
-            const supports = this.getAvailableControlsForShader(shader);
-            for (let control in supports) {
-                let supported = supports[control];
-                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
-                    "class='position-relative'><span class='flex-1'>Control <code>",
-                    control, "</code> | Supports: ", supported.join(", ") ,"</span></span></div>");
+            // Static metadata from ShaderLayer subclasses
+            const name        = Shader.name      ? Shader.name()        : id;
+            const description = Shader.description ? Shader.description() : "";
+            const previewSrc  = (typeof Shader.preview === "function")
+                ? Shader.preview()
+                : ("modules/webgl/shaders/" + id + ".png");
+
+            html.push(
+                "<div class='flex'>",
+                "<div style='min-width: 150px'>",
+                "<p class='text-lg font-semibold mb-0'>", name, "</p>",
+                "<p style='max-width: 150px;'>", description, "</p>",
+                "</div>",
+                "<div class='inline-block mx-1 px-1 py-1 cursor-pointer align-top rounded-md' ",
+                "style='border: 3px solid transparent'>",
+                "<img alt='' style='max-width: 150px; max-height: 150px;' ",
+                "class='rounded-md' src='", previewSrc, "'>",
+                "</div>",
+                "<div><code class='f4'>", id, "</code>"
+            );
+
+            // --- Sources + channel usage (new multi-channel support) ---
+            if (typeof Shader.sources === "function") {
+                const sources = Shader.sources();
+                if (sources && sources.length) {
+                    html.push("<hr>");
+                    html.push("<div><strong>Sources and channel usage</strong></div>");
+
+                    sources.forEach((src, idx) => {
+                        const desc = src.description || "";
+                        let accepted = "any";
+
+                        if (typeof src.acceptsChannelCount === "function") {
+                            const ok = [];
+                            // We don’t know the real upper bound; 1–32 is reasonable for docs.
+                            for (let n = 1; n <= 32; n++) {
+                                if (src.acceptsChannelCount(n)) ok.push(n);
+                            }
+                            accepted = ok.length ? ok.join(", ") : "none";
+                        }
+
+                        html.push(
+                            "<div style='margin-left: 0.5rem;'>",
+                            "<span>Source <code>", idx, "</code>: ",
+                            desc,
+                            " <span class='text-small'>(accepts channel counts: ",
+                            accepted,
+                            ")</span>",
+                            "</span>",
+                            "</div>"
+                        );
+                    });
+                }
             }
 
+            // --- Controls support (existing logic) ---
+            const supports = this.getAvailableControlsForShader(Shader);
+            for (let control in supports) {
+                const supported = supports[control];
+                html.push(
+                    "<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' ",
+                    "class='position-relative'><span class='flex-1'>Control <code>",
+                    control,
+                    "</code> | Supports: ",
+                    supported.join(", "),
+                    "</span></span></div>"
+                );
+            }
+
+            // --- Custom params (existing logic) ---
             let didParams = false;
-            for (let param in shader.customParams) {
+            const customParams = Shader.customParams || {};
+            for (let param in customParams) {
                 if (!didParams) {
                     didParams = true;
                     html.push("<hr>");
                 }
-                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+                const meta = customParams[param];
+                html.push(
+                    "<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' ",
                     "class='position-relative'><span class='flex-1'>Parameter <code>",
-                    param, "</code> <br><span class='text-small'>", shader.customParams[param].usage ,"</span></span></span></div>");
+                    param,
+                    "</code> <br><span class='text-small'>",
+                    meta.usage || "",
+                    "</span></span></span></div>"
+                );
             }
+
             html.push("</div></div><br>");
         }
+
         html.push("</div><br>");
         return html.join("");
     },

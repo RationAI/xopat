@@ -31,28 +31,38 @@ export class Toast extends BaseComponent {
     constructor() {
         super({ id: "dialogs-container" });
         this._durationMs = 5000;
-
-        this._importance = {
-            key: "info",
-            icon: ICONS.info
-        }; // { key, icon }
+        this._importance = { key: "info", icon: ICONS.info };
         this._buttons = [];
         this._onClosed = null;
+        this._onPendingClick = null;
+        this._hideT = null;
     }
 
     /**
-     * @param {{html:string, importance?:{class?:string,icon?:string}|{key:string,icon?:string}, durationMs?:number, buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>}} p
+     * Scheduler can hook this so user can cycle pending toasts.
+     * @param {Function} cb
      */
-    setContent({ html, importance, durationMs, buttons }) {
+    setOnPendingClick(cb) {
+        this._onPendingClick = cb;
+    }
+
+    /**
+     * @param {{
+     *  html:string,
+     *  importance?:{key:string,icon?:string},
+     *  durationMs?:number,
+     *  buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>,
+     *  count?:number,
+     *  pending?:number
+     * }} p
+     */
+    setContent({ html, importance, durationMs, buttons, count = 1, pending = 0 }) {
         if (typeof durationMs === "number") this._durationMs = durationMs;
 
         if (importance) {
             this._importance = { key: importance.key, icon: importance.icon || ICONS[importance.key] || ICONS.info };
         } else {
-            this._importance = {
-                key: "info",
-                icon: ICONS.info
-            };
+            this._importance = { key: "info", icon: ICONS.info };
         }
 
         this._buttons = normalizeButtons(buttons || []);
@@ -64,21 +74,51 @@ export class Toast extends BaseComponent {
         const btnBar   = this.root.querySelector("[data-buttons]");
         const progress = this.root.querySelector("[data-progress]");
         const accent   = this.root.querySelector("[data-accent]");
+        const countEl  = this.root.querySelector("[data-count]");
+        const pendEl   = this.root.querySelector("[data-pending]");
 
-        // neutral Primer-like surface (kept constant)
         card.className =
             "relative isolate flex items-center gap-2 " +
             "rounded-md border border-base-300 bg-base-200/95 text-base-content shadow-sm " +
-            "pr-3 pl-1 py-2 min-w-[260px] max-w-[520px] w-max";
+            "px-3 py-2 " +
+            "min-w-[320px] w-[min(520px,calc(100vw-2rem))]";
 
-        // left accent + progress color by importance
         const skin = SKINS[this._importance.key] || SKINS.info;
         accent.className = `absolute left-0 top-0 h-full w-[3px] rounded-l-xl ${skin.accent}`;
-        progress.className = `pointer-events-none absolute left-0 right-0 bottom-0 h-0.5 ${skin.progress} animate-toastbar`;
 
-        // icon + message
+        // FIX: Reset progress bar animation to ensure it restarts from 0%
+        progress.style.animation = 'none';
+        void progress.offsetWidth; // Force reflow
+        progress.style.animation = null;
+        progress.className = `pointer-events-none absolute left-0 right-0 bottom-0 h-0.5 ${skin.progress} animate-toastbar`;
+        progress.style.animationDuration = `${this._durationMs}ms`;
+
         iconEl.innerHTML = this._importance.icon || ICONS.info;
         msgEl.innerHTML = html ?? "";
+
+        // count badge for duplicates
+        if (countEl) {
+            const c = Math.max(1, Number(count) || 1);
+            countEl.textContent = c > 1 ? `×${c}` : "";
+            countEl.className =
+                c > 1
+                    ? "badge badge-ghost badge-sm ml-1 text-[11px]"
+                    : "hidden";
+            if (c > 1) countEl.classList.remove("hidden");
+        }
+
+        // pending badge for “many dialogs”
+        if (pendEl) {
+            const p = Math.max(0, Number(pending) || 0);
+            if (p > 0) {
+                pendEl.textContent = `+${p}`;
+                pendEl.className = "badge badge-neutral badge-sm cursor-pointer select-none";
+                pendEl.classList.remove("hidden");
+            } else {
+                pendEl.textContent = "";
+                pendEl.className = "hidden";
+            }
+        }
 
         // buttons
         btnBar.innerHTML = "";
@@ -97,31 +137,32 @@ export class Toast extends BaseComponent {
 
     show() {
         if (!this.root) return;
-        if (this._hideTimeout) {
-            clearTimeout(this._hideTimeout);
-            this._hideTimeout = null;
-        }
-        this.root.classList.remove("hidden", "opacity-0");
-        this.root.classList.add("flex", "opacity-100");
 
-        // restart progress anim
-        const bar = this.root.querySelector("[data-progress]");
-        bar?.classList.remove("animate-toastbar");
-        void bar?.offsetWidth; // reflow
-        bar?.classList.add("animate-toastbar");
+        if (this._hideT) {
+            clearTimeout(this._hideT);
+            this._hideT = null;
+        }
+
+        this.root.classList.remove("hidden");
+        // force layout so transition runs
+        void this.root.offsetWidth;
+        this.root.classList.remove("opacity-0");
+        this.root.classList.add("opacity-100");
     }
 
     hide() {
         if (!this.root) return;
-        this.root.classList.add("opacity-0");
         this.root.classList.remove("opacity-100");
-        this._hideTimeout = setTimeout(() => {
+        this.root.classList.add("opacity-0");
+
+        const ms = 150;
+        clearTimeout(this._hideT);
+        this._hideT = setTimeout(() => {
             this.root.classList.add("hidden");
-            this.root.classList.remove("flex");
-            this._hideTimeout = null;
+            this._hideT = null;
         }, 150);
     }
-    
+
     setOnUserClose(callback) {
         this._onClosed = callback;
     }
@@ -131,7 +172,6 @@ export class Toast extends BaseComponent {
     }
 
     create() {
-        // bottom-centered container (like original)
         this.root = div(
             {
                 id: this.id,
@@ -140,22 +180,42 @@ export class Toast extends BaseComponent {
                     "fixed left-1/2 bottom-4 -translate-x-1/2 z-[5050] " +
                     "toast toast-bottom toast-center"
             },
-            // single toast (can be extended to stack)
             div(
                 { "data-toast-card": "", class: "relative" },
-                // left accent bar
                 div({ "data-accent": "", class: "absolute left-0 top-0 h-full w-[3px] rounded-l-md bg-info" }),
-                // content row
-                div({ class: "flex items-center gap-2 pl-[10px] w-full" }, // 10px so accent + border feel like original
-                    div({ "data-icon": "", class: "shrink-0 text-base-content/80 pl-2" }),
-                    span({ "data-msg": "", class: "text-[13px] leading-snug whitespace-normal break-words" }),
+
+                div(
+                    { class: "flex items-center gap-2 pl-[10px] w-full" },
+
+                    div({ class: "shrink-0 flex items-center gap-1 pl-2 text-base-content/80" },
+                        div({ "data-icon": "", class: "shrink-0" }),
+                        // duplicate counter
+                        span({ "data-count": "", class: "hidden" })
+                    ),
+
+                    // message expands, keeps layout stable
+                    span({ "data-msg": "", class: "flex-1 text-[13px] leading-snug whitespace-normal break-words" }),
+
+                    // pending indicator (click to cycle next)
+                    button(
+                        {
+                            type: "button",
+                            class: "hidden",
+                            "data-pending": "",
+                            onclick: () => this._onPendingClick && this._onPendingClick(),
+                            "aria-label": "Show next notification"
+                        },
+                        ""
+                    ),
+
                     div({ "data-buttons": "", class: "ml-1 inline-flex gap-1" }),
+
                     button(
                         {
                             type: "button",
                             class: "btn btn-ghost btn-xs h-6 w-6 min-h-0 p-0 ml-1 text-base-content/70 hover:text-base-content",
                             onclick: () => {
-                                this.hide()
+                                this.hide();
                                 this._onClosed && this._onClosed();
                             },
                             "aria-label": "Close"
@@ -163,10 +223,13 @@ export class Toast extends BaseComponent {
                         span({ innerHTML: ICONS.close })
                     )
                 ),
-                // bottom progress
+
                 div({ "data-progress": "", class: "pointer-events-none absolute left-0 right-0 bottom-0 h-0.5 bg-info/70 animate-toastbar" })
             )
         );
+
+        this.root.addEventListener("mouseenter", () => this._onHover?.(true));
+        this.root.addEventListener("mouseleave", () => this._onHover?.(false));
         return this.root;
     }
 }
@@ -184,13 +247,11 @@ Toast.MSG_ERROR = { key: "error", icon: ICONS.error };
  *  - isHidden(): boolean
  */
 Toast.Scheduler = class {
-
     /**
-     *
      * @param {Toast|undefined} view
      */
     constructor(view) {
-        if (view) this.mount(view)
+        if (view) this.mount(view);
     }
 
     /**
@@ -198,75 +259,142 @@ Toast.Scheduler = class {
      */
     mount(view) {
         this._view = view;
+
+        /** @type {Array<any>} */
         this._queue = [];
+
+        /** @type {Map<string, any>} */
+        this._groups = new Map();
+
         this._timer = null;
-        this._opts  = null;
+        this._opts = null;
         this._locked = false;
+
+        /** @type {null|any} */
         this._current = null;
+
+        this._deadline = 0;
+        this._remaining = 0;
+        this._paused = false;
+
         view.setOnUserClose(() => {
             this._hideImpl(false, false);
+        });
+
+        view.setOnPendingClick(() => {
+            // cycle immediately to next pending toast
+            if (this._queue.length > 0) {
+                this._hideImpl(true, false);
+            }
         });
     }
 
     /**
      * Add/show a toast.
-     * @param {string} text
+     * @param {string} text HTML allowed
      * @param {number} [delayMS=5000]
      * @param {object} [importance=Toast.MSG_INFO]
-     * @param {object} [props={}]  { queued=true, buttons, onShow, onHide }
+     * @param {object} [props={}] { queued=true, mode='default'|'replace', buttons, onShow, onHide }
      */
-    show(text, delayMS, importance, props = {}) {
+    show(text, delayMS = 5000, importance = Toast.MSG_INFO, props = {}) {
         if (this._locked) return false;
 
-        const queued = props.queued !== false; // default true
-        const job = { text, delayMS, importance, props };
+        const mode = props?.mode || "default";
+        const jobKey = this._makeKey(text, importance, props);
+        const now = Date.now();
 
-        // Nothing showing -> display immediately
-        if (!this._timer && (!this._view || this._view.isHidden())) {
-            this._showImpl(text, delayMS, importance, props);
+        if (mode === "replace") {
+            const job = {
+                key: jobKey, text, delayMS, importance, props,
+                count: 1, createdAt: now, lastAt: now,
+            };
+            this._hideImpl(true, false, true); // Use 'immediate' flag to avoid blink
+            this._showJob(job);
             return true;
         }
 
-        // If we're showing something and queuing is allowed, consider preemption
-        if (queued) {
-            if (this._current && LEVELS[importance.key] > LEVELS[this._current.importance.key]) {
-                // Preempt: push current back, then show the more important one
-                this._requeue(this._current);  // put interrupted item back
-                this._hideImpl(/*timeoutCleaned*/true, /*callOnHide*/false); // cancel timer, don't call onHide
-                this._showImpl(text, delayMS, importance, props);
-            } else {
-                // Normal enqueue
-                this._requeue(job);
+        const queued = props.queued !== false;
+
+        // SCENARIO A: Update currently visible toast
+        if (this._current && this._current.key === jobKey) {
+            this._current.count = (this._current.count || 1) + 1;
+            this._current.lastAt = now;
+
+            // FIX: The badge needs the most current queue length
+            this._renderCurrent();
+
+            // FIX: Timer "Soft Bump"
+            // Instead of resetting to 5s, we just ensure it has at least 3s left.
+            const remaining = this._deadline - Date.now();
+            if (remaining < 2500) {
+                this._restartTimer(3000);
             }
             return true;
         }
 
-        // Not queued and something is up: try preempt; else ignore
-        if (this._current && LEVELS[importance.key] > LEVELS[this._current.importance.key]) {
-            this._requeue(this._current);
-            this._hideImpl(true, false);
-            this._showImpl(text, delayMS, importance, props);
+        // SCENARIO B: Update a job already waiting in the queue
+        const existing = this._groups.get(jobKey);
+        if (existing && existing !== this._current) {
+            existing.count = (existing.count || 1) + 1;
+            existing.lastAt = now;
+            // No need to requeue/move; keeping FIFO within importance is usually better for stability
+            this._renderCurrent();
             return true;
         }
-        return false; // ignored
+
+        // SCENARIO C: New Job
+        const job = { key: jobKey, text, delayMS, importance, props, count: 1, createdAt: now, lastAt: now };
+
+        if (!this._timer && (!this._view || this._view.isHidden())) {
+            this._showJob(job);
+            return true;
+        }
+
+        if (queued) {
+            if (this._current && LEVELS[importance.key] > LEVELS[this._current.importance.key]) {
+                this._requeue(this._current);
+                this._hideImpl(true, false, true); // Immediate swap for higher importance
+                this._showJob(job);
+            } else {
+                this._requeue(job);
+                this._renderCurrent();
+            }
+            return true;
+        }
+
+        return false;
     }
 
-    /**
-     * Hide the current toast.
-     * @param {boolean} [withCallback=true]
-     */
+    setHoverHandlers(onEnter, onLeave) {
+        this._onHover = (isEnter) => (isEnter ? onEnter?.() : onLeave?.());
+    }
+
     hide(withCallback = true) {
         this._hideImpl(false, withCallback);
     }
 
-    /**
-     * Await until queue is empty, no timer is running and the view is hidden.
-     * @returns {Promise<void>}
-     */
+    pause() {
+        if (!this._timer || this._paused) return;
+        clearTimeout(this._timer);
+        this._timer = null;
+        this._remaining = Math.max(0, this._deadline - Date.now());
+        this._paused = true;
+    }
+
+    resume() {
+        if (!this._paused) return;
+        this._paused = false;
+        if (this._remaining > 0) {
+            this._deadline = Date.now() + this._remaining;
+            this._timer = setTimeout(() => this._hideImpl(true), this._remaining);
+        }
+    }
+
     async awaitHidden() {
         return new Promise(resolve => {
             const interval = setInterval(() => {
-                const idle = this._queue.length === 0 &&
+                const idle =
+                    this._queue.length === 0 &&
                     this._timer === null &&
                     (!this._view || this._view.isHidden());
                 if (idle) {
@@ -277,30 +405,93 @@ Toast.Scheduler = class {
         });
     }
 
-    /**
-     * Prevent accepting any new toast jobs.
-     */
     lock() { this._locked = true; }
-
-    /**
-     * Allow accepting new toast jobs again.
-     */
     unlock() { this._locked = false; }
-
-    /**
-     * Are we locked?
-     */
     isLocked() { return this._locked; }
 
+    clearQueue() {
+        for (const j of this._queue) this._groups.delete(j.key);
+        this._queue.length = 0;
+        this._renderCurrent();
+    }
+
+    // ---------------- internals ----------------
+
+    _makeKey(text, importance, props) {
+        // normalize just enough to group “same message”
+        const msg = String(text ?? "").trim().replace(/\s+/g, " ");
+        const imp = importance?.key || "info";
+
+        // include buttons in the signature so “same text but different actions” doesn't merge incorrectly
+        const btnSig = JSON.stringify(normalizeButtons(props?.buttons || []).map(b => ({
+            label: b.label,
+            class: b.class || ""
+        })));
+
+        return `${imp}::${msg}::${btnSig}`;
+    }
+
+    _removeFromQueue(job) {
+        const idx = this._queue.indexOf(job);
+        if (idx >= 0) this._queue.splice(idx, 1);
+    }
+
+    _restartTimer(delayMS) {
+        if (this._timer) clearTimeout(this._timer);
+        this._remaining = delayMS;
+        this._deadline = Date.now() + delayMS;
+        this._timer = setTimeout(() => this._hideImpl(true), delayMS);
+    }
+
+    _renderCurrent() {
+        if (!this._view || !this._current) return;
+        this._view.setContent({
+            html: this._current.text,
+            importance: this._current.importance,
+            durationMs: this._current.delayMS,
+            buttons: this._current.props?.buttons,
+            count: this._current.count || 1,
+            pending: this._queue.length
+        });
+    }
+
+    _showJob(job) {
+        this._ensureView();
+        this._current = job;
+        this._opts = job.props || null;
+
+        this._groups.delete(job.key);
+        this._removeFromQueue(job);
+
+        this._renderCurrent(); // Use the helper to keep logic DRY
+        this._view.show();
+
+        if (job.delayMS >= 1000) {
+            this._restartTimer(job.delayMS);
+        } else {
+            this._timer = null;
+        }
+
+        if (this._opts?.onShow) {
+            try { this._opts.onShow(); } catch {}
+        }
+    }
+
     /**
-     * Clear the queue (doesn't touch the currently displayed toast).
+     * @param {boolean} timeoutCleaned
+     * @param {boolean} callOnHide
+     * @param {boolean} immediate - New flag to skip animation for rapid swaps
      */
-    clearQueue() { this._queue.length = 0; }
-
-    // -------------------- internals --------------------
-
-    _hideImpl(timeoutCleaned, callOnHide = true) {
-        if (this._view) this._view.hide();
+    _hideImpl(timeoutCleaned, callOnHide = true, immediate = false) {
+        if (this._view) {
+            if (immediate) {
+                // Instantly hide to prevent animation overlap during preemption
+                this._view.root.classList.add("hidden");
+                this._view.root.classList.replace("opacity-100", "opacity-0");
+            } else {
+                this._view.hide();
+            }
+        }
 
         if (!timeoutCleaned && this._timer) {
             clearTimeout(this._timer);
@@ -308,67 +499,48 @@ Toast.Scheduler = class {
                 try { this._opts.onHide(); } catch {}
             }
         }
-        // Reset current
+
         this._timer = null;
         this._opts = null;
         this._current = null;
 
-        // Next job: pick the highest-importance, FIFO within same importance
         const next = this._dequeue();
         if (next) {
-            this._showImpl(next.text, next.delayMS, next.importance, next.props);
-        }
-    }
-
-    _showImpl(text, delayMS, importance, opts) {
-        this._current = { text, delayMS, importance, props: opts };
-        this._ensureView();
-
-        this._view.setContent({
-            html: text,
-            importance,
-            durationMs: delayMS,
-            buttons: opts?.buttons,
-        });
-        this._view.show();
-
-        if (delayMS >= 1000) {
-            if (this._timer) clearTimeout(this._timer);
-            this._timer = setTimeout(() => this._hideImpl(true), delayMS);
-        } else {
-            this._timer = null; // no auto-hide
-        }
-
-        this._opts = opts || null;
-        if (this._opts?.onShow) {
-            try { this._opts.onShow(); } catch {}
+            // When showing the next item from the queue,
+            // the view.show() will handle the fade-in.
+            this._showJob(next);
         }
     }
 
     _ensureView() {
-        if (!this._view || typeof this._view.setContent !== 'function') {
-            throw new Error('Toast: view is not initialized or invalid.');
+        if (!this._view || typeof this._view.setContent !== "function") {
+            throw new Error("Toast: view is not initialized or invalid.");
         }
     }
 
-    // Insert into queue so that higher importance comes first, FIFO within same importance
+    // Higher importance first; FIFO within same importance.
     _requeue(job) {
         if (!job) return;
+
+        // store as a group for dedupe lookups
+        this._groups.set(job.key, job);
+
         if (this._queue.length === 0) {
             this._queue.push(job);
             return;
         }
-        // Find insertion index: before first item with lower importance
-        let i = 0;
 
+        let i = 0;
         while (i < this._queue.length && LEVELS[this._queue[i].importance.key] >= LEVELS[job.importance.key]) i++;
         this._queue.splice(i, 0, job);
     }
 
     _dequeue() {
-        return this._queue.shift() || null;
+        const j = this._queue.shift() || null;
+        if (j) this._groups.delete(j.key);
+        return j;
     }
-}
+};
 
 
 function normalizeButtons(buttons) {

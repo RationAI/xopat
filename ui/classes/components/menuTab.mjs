@@ -4,6 +4,8 @@ import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 
+import { VisibilityManager } from "../mixins/visibilityManager.mjs";
+
 const { span } = van.tags
 
 /**
@@ -29,9 +31,24 @@ class MenuTab extends BaseComponent {
         this.id = item.id;
 
         const [headerButton, contentDiv] = this._createTab(item);
-
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
+        this.visibilityManager = new VisibilityManager(this).init(
+            () => {
+                if (this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "");
+                    this.hidden = false;
+                }
+            },
+            () => {
+                if (!this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "hidden");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "hidden");
+                    this.hidden = true;
+                }
+            }
+        );
     }
 
     /**
@@ -49,7 +66,6 @@ class MenuTab extends BaseComponent {
         this.title = inText;
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
-
 
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,
@@ -91,13 +107,14 @@ class MenuTab extends BaseComponent {
         }
     }
 
+    // todo implement focus as API of the FlagManagerLike
     focus() {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton && tab.headerButton.id != this.headerButton?.id) {
                 tab._removeFocus();
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
             }
-        };
+        }
 
         if (this._focused) {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
@@ -105,7 +122,7 @@ class MenuTab extends BaseComponent {
         } else {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
             this._setFocus();
-        };
+        }
     }
 
     unfocus(){
@@ -188,22 +205,6 @@ class MenuTab extends BaseComponent {
         
         } else if(this.parent.orientation==="LEFT"){
             nodes[0].classList.add("-rotate-90");
-        }
-    }
-
-    toggleHiden() {
-        if (this.hidden) {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "");
-            }
-            this.contentDiv.setClass("display", "");
-            this.hidden = false;
-        } else {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "hidden");
-            }
-            this.contentDiv.setClass("display", "hidden");
-            this.hidden = true;
         }
     }
 }

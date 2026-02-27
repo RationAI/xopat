@@ -262,15 +262,11 @@ class Menu extends BaseComponent {
 
         this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
+        // todo implement focus manager, similar to visibility manager
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();
-        }
-        else {
+        } else {
             this.tabs[id]._removeFocus();
-        }
-
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-hidden`, false)){
-            this.tabs[id].toggleHiden();
         }
     }
 
@@ -296,16 +292,13 @@ class Menu extends BaseComponent {
 
         this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
+        // todo move to focus manager like visibility manager
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();
-        }
-        else{
+        } else{
             this.tabs[id]._removeFocus();
         }
 
-        if (APPLICATION_CONTEXT.AppCache.get(`${id}-hidden`, false)){
-            this.tabs[id].toggleHiden();
-        }
     }
 
     clickHeader() {

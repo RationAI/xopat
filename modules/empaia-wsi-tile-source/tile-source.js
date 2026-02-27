@@ -228,10 +228,20 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         };
     }
 
-    getLevelScale( level ) {
-        level = this.maxLevel-level;
+    getLevelScale(level) {
+        const serverLevel = this.maxLevel - level;
         const levels = this.data.levels;
-        return levels[level].extent.x / levels[0].extent.x;
+
+        const getDS = (lvl, idx) => {
+            if (lvl.downsample_factor != null) return Number(lvl.downsample_factor);
+            if (lvl.downsample != null)        return Number(lvl.downsample);
+            // worst-case fallback
+            return Math.pow(2, idx);
+        };
+
+        const dsBase = getDS(levels[0], 0);
+        const dsHere = getDS(levels[serverLevel], serverLevel);
+        return dsBase / dsHere;
     }
 
     getMetadata() {

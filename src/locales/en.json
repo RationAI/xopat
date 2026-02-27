@@ -52,11 +52,33 @@
         "maskDisable": "Enable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
+        "notAvailable": "No visualization available.",
+        "shader": "Shader",
+        "type": "Shader type",
+        "modeShow": "Overlay",
+        "modeBlend": "Mask",
+        "modeBlendClip": "Clip mask",
+        "modeShowShort": "Show",
+        "modeBlendShort": "Mask",
+        "modeClipShort": "Clip",
+        "blendConfigure": "Configure blending",
+        "blendMode": "Blend mode",
+        "blend": "Blend",
         "faulty": "Possibly faulty layer.",
+        "blendingTitle": "Blending",
+        "blendingInfoShow": "Layer is shown without masking.",
+        "blendingInfoMask": "Layer is used as a mask over layers below.",
+        "blendingInfoMaskClip": "Layer is used as a clipping mask over layers below.",
         "defaultTitle": "Custom Visualization",
         "cacheByOrder": "Remember settings by layers order",
         "cacheByName": "Remember settings by layer name",
-        "notAvailable": "No overlays available",
+        "cacheClear": "Clear cache",
+        "cacheHit": "Loaded from cache",
+        "cacheMiss": "Not cached",
+        "clipHint": "The layer is masking the element directly below.",
+        "cacheStale": "",
+        "cacheTitle": "Layer visuals are cached",
+        "cacheInfo": "The layer remembers parameter values set before.",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
@@ -77,7 +99,8 @@
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
         "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved.",
-        "viewerSidebars": "Viewer Side Menus"
+        "viewerSidebars": "Viewer Side Menus",
+        "viewerToolbars": "Tool Bars"
       }
     },
     "messages": {
@@ -184,7 +207,8 @@
       "Tissues": "Tissues",
       "Source": "Source",
       "selectAll": "Select All",
-      "deselectAll": "Deselect All"
+      "deselectAll": "Deselect All",
+      "Close": "Close"
     }
   }
 }

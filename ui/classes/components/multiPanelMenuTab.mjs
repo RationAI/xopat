@@ -88,7 +88,7 @@ class MultiPanelMenuTab extends MenuTab {
                 if (window.innerWidth < 600) {
                     return;
                 }
-                this.toggleHiden();
+                this.visibilityManager.toggle();
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-hidden`, this.hidden);
                 event.stopPropagation();
             }
@@ -124,7 +124,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.fullId = this.parent.id + "-c-" + item.id;
         this.mainDiv = new Div({
             id: this.fullId,
-            extraClasses: {display: "", flex: "flex flex-row", pointer: "pointer-events-none", position: "relative"},
+            extraClasses: {display: "", flex: "flex flex-row", position: "relative"},
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;" }
         }, this.openDiv, this.openButton);
 

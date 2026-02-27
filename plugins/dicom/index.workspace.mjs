@@ -168,14 +168,17 @@ addPlugin('dicom', class extends XOpatPlugin {
                 const data = evt.data?.[dataRef] || dataRef;
 
                 if (typeof data === "object" && data.studyUID && data.seriesUID) {
-                    bg.tileSource = new DICOMWebTileSource({
-                        baseUrl: this.serviceUrl,
-                        studyUID: data.studyUID,
-                        seriesUID: data.seriesUID,
-                        useRendered: this.useRendered,
-                        patientDetails: this.state.activePatientDetails,
-                        ...this.frameOrder
-                    });
+                    evt.data[dataRef] = {
+                        dataID: data,
+                        tileSource: new DICOMWebTileSource({
+                            baseUrl: this.serviceUrl,
+                            studyUID: data.studyUID,
+                            seriesUID: data.seriesUID,
+                            useRendered: this.useRendered,
+                            patientDetails: this.state.activePatientDetails,
+                            ...this.frameOrder
+                        })
+                    }
 
                     // Keep identity stable and aligned with the browser:
                     bg.id = bg.id || data.seriesUID;
@@ -355,17 +358,17 @@ addPlugin('dicom', class extends XOpatPlugin {
             info.setCustomBrowser({ id: "dicom-browser", levels, customItemToBackground: (item) => {
                     const seriesUID = item.seriesUID;
                     const studyUID  = item.studyUID || this.state.activeStudy;
-                    // Use your plugin's method or APPLICATION_CONTEXT to open the WSI viewer
-                    // Example using DICOMWebTileSource:
-                    const tileSource = new DICOMWebTileSource({
-                        baseUrl: this.serviceUrl,
-                        studyUID,
-                        seriesUID,
-                        useRendered: this.useRendered,
-                        patientDetails: this.state.activePatientDetails,
-                        ...this.frameOrder
-                    });
-                    return { id: seriesUID, tileSource, dataReference: { studyUID, seriesUID } };
+                    // We need to construct tile source manually -> use DataOverride type to pass overload data initialization
+                    return { id: seriesUID, dataReference: {
+                        dataID: {studyUID, seriesUID}, tileSource: new DICOMWebTileSource({
+                            baseUrl: this.serviceUrl,
+                            studyUID,
+                            seriesUID,
+                            useRendered: this.useRendered,
+                            patientDetails: this.state.activePatientDetails,
+                            ...this.frameOrder
+                        })}
+                    };
                 }, backgroundToCustomItem: (bgConfig) => {
                     // TODO: this is only partial revival of the original item, you can add more properties here
                     const data = BackgroundConfig.data(bgConfig);

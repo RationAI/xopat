@@ -95,6 +95,7 @@
 
         //Defaults
         this.viewer = options.viewer;
+        this.ViewportSyncAPI = new ViewportSyncAPI(this.viewer);
 
         this.setDrawScalebarFunction(options.type || $.ScalebarType.MICROSCOPY);
         this.color = options.color || "black";
@@ -281,24 +282,13 @@
                             "items-stretch",
                             "pointer-events-auto",
                             "select-none",
-                            "min-w-[240px]"            // ensures both slider + labels fit
                         );
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "auto";
 
-                        const mkBtn = (iconClass, id, title) => {
-                            const b = document.createElement("button");
-                            b.type = "button";
-                            if (id) b.dataset.role = id;
-                            if (title) b.title = title;
-                            b.className =
-                                "btn btn-xs btn-square rounded-xl " +
-                                "bg-base-200 hover:bg-base-300 border-base-300 " +
-                                "text-base-content shadow";
-                            b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
-                            return b;
-                        };
+                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
+                        this.magnificationContainer.appendChild(sync);
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                         const rotCol = document.createElement("div");
@@ -1201,5 +1191,420 @@
 
     function isDefined(variable) {
         return typeof (variable) !== "undefined";
+    }
+
+    function SyncToggleButton(viewer, tool) {
+        const enabled = van.state(!!tool?.isEnabled?.());
+
+        // NEW: calibration UI state
+        const busy = van.state(false);
+        const progressText = van.state(""); // e.g. "Pick points 1/3"
+        const isRef = van.state(false);
+
+        const updateFromTool = () => {
+            enabled.val = !!tool?.isEnabled?.();
+
+            const S = tool?.constructor?._session;
+            isRef.val = !!enabled.val && !!S?.leaderId && viewer.uniqueId === S.leaderId;
+        };
+
+        const setProgress = (txt) => { progressText.val = txt || ""; };
+        const setBusy = (b) => { busy.val = !!b; };
+
+        // Expose hooks so tool can update the button
+        tool.__ui = { setProgress, setBusy };
+
+        const onClick = async () => {
+            if (!tool) return;
+
+            if (busy.val) return;
+            setBusy(true);
+
+            if (VIEWER_MANAGER.viewers.length < 2) {
+                Dialogs?.show?.("Sync is possible with more than one slide opened.");
+                setBusy(false);
+                return;
+            }
+
+            try {
+                if (enabled.val) {
+                    tool.disable();
+                    enabled.val = false;
+                    setProgress("");
+                    Dialogs?.show?.("Sync disabled", 1200, Dialogs.MSG_INFO);
+                } else {
+                    setProgress("0/3");
+                    await tool.enable(); // will drive progress via callbacks
+                    enabled.val = true;
+                    setProgress("");
+                    Dialogs?.show?.("Sync enabled", 1200, Dialogs.MSG_SUCCESS);
+                }
+            } catch (e) {
+                console.error(e);
+                tool.disable?.();
+                enabled.val = false;
+                setProgress("");
+                Dialogs?.show?.("Sync not enabled", 1600, Dialogs.MSG_WARN);
+            } finally {
+                setBusy(false);
+            }
+        };
+
+        viewer.__syncToolChanged = updateFromTool;
+
+        return van.tags.button(
+            {
+                class: () =>
+                    [
+                        "btn btn-xs absolute",
+                        enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "btn-outline"
+                    ].join(" "),
+                style: "top: -40px;",
+                onclick: onClick,
+                title: () => (enabled.val ? "Disable sync" : "Enable sync"),
+            },
+            van.tags.span(
+                { class: "flex items-center gap-2" },
+                () => {
+                    if (busy.val && progressText.val) return `Sync: ${progressText.val}`;
+                    if (!enabled.val) return "Sync: OFF";
+                    return isRef.val ? "Sync: REF" : "Sync: ON";
+                }
+            )
+        );
+    }
+
+    class ViewportSyncAPI {
+
+        constructor(viewer) {
+            this.master = viewer;
+            this.enabled = false;
+            this.points = new Map(); // viewer.uniqueId -> [{x,y}*3]
+            this.transforms = new Map(); // target.uniqueId -> {A,b,scale,rotDeg}
+            this.context = 0;
+        }
+
+        isEnabled() { return this.enabled; }
+
+        async enable() {
+            if (this.enabled) return;
+
+            // 1) Ensure we have reference points for the leading viewer
+            // The leader is: the first viewer that gets linked in this session.
+            // We'll keep it simple: if no leader points exist yet, this viewer becomes leader.
+            if (!ViewportSyncAPI._session) ViewportSyncAPI._session = { context: 0, leaderId: null, leaderPts: null };
+
+            const S = ViewportSyncAPI._session;
+
+            if (!S.leaderId) {
+                // This viewer becomes the leader; calibrate ONLY this viewer once.
+                this.__ui?.setProgress?.("0/3");
+                const refPts = await this.calibrateViewer(this.master);
+                S.leaderId = this.master.uniqueId;
+                S.leaderPts = refPts;
+                // Link ONLY this viewer
+                this.master.tools.link(S.context);
+                this.enabled = true;
+                this.master.__syncToolChanged();
+                return;
+            }
+
+            // 2) Non-leader: calibrate THIS viewer only, align it to leader, then link it.
+            this.__ui?.setProgress?.("0/3");
+            const tgtPts = await this.calibrateViewer(this.master);
+
+            const t = this._similarityFrom3(S.leaderPts, tgtPts);
+            if (!t) throw new Error("Calibration invalid");
+
+            const leaderViewer = (window.VIEWER_MANAGER?.viewers || []).find(v => v?.uniqueId === S.leaderId);
+            if (!leaderViewer) throw new Error("Leader viewer not found");
+
+            this._alignTargetToLeaderNow(leaderViewer, this.master, t);
+
+            // join link session only now
+            this.master.tools.link(S.context, (leaderViewer, leaderState) => {
+
+                const refItem = leaderViewer.world.getItemAt(0);
+                const tgtItem = this.master.world.getItemAt(0);
+                if (!refItem || !tgtItem) return null;
+
+                const refCenterImg =
+                    refItem.viewportToImageCoordinates(leaderState.center);
+
+                if (!isFinite(refCenterImg.x) || !isFinite(refCenterImg.y))
+                    return null;
+
+                const mapped = this._mul2x2_vec(t.A, refCenterImg);
+
+                const targetCenterImg = {
+                    x: mapped.x + t.b.x,
+                    y: mapped.y + t.b.y
+                };
+
+                const tgtCenterVp =
+                    tgtItem.imageToViewportCoordinates(
+                        new OpenSeadragon.Point(
+                            targetCenterImg.x,
+                            targetCenterImg.y
+                        )
+                    );
+
+                if (!isFinite(tgtCenterVp.x) || !isFinite(tgtCenterVp.y))
+                    return null;
+
+                return {
+                    center: tgtCenterVp,
+                    zoom: leaderState.zoom / (t.scale || 1),
+                    rotation: leaderState.rotation + t.rotDeg,
+                    flip: leaderState.flip
+                };
+            });
+            this.enabled = true;
+        }
+
+        disable() {
+            if (!this.enabled) return;
+            const S = ViewportSyncAPI._session || { context: 0 };
+
+            this.master.tools?.unlink?.(S.context);
+            this.enabled = false;
+
+            // If the leader was disabled, clear leader reference so next enable establishes a new leader.
+            if (S.leaderId === this.master.uniqueId) {
+                S.leaderId = null;
+                S.leaderPts = null;
+            }
+        }
+
+        async calibrateViewer(viewer) {
+            return new Promise((resolve, reject) => {
+                let cleanupPick = null;
+
+                cleanupPick = this.pickThreePoints(
+                    (pts) => {
+                        Dialogs.show("Calibration saved", 1200, Dialogs.MSG_SUCCESS);
+                        this.__ui?.setProgress?.("");
+                        resolve(pts);
+                    },
+                    () => {
+                        this.__ui?.setProgress?.("");
+                        reject(new Error("Calibration cancelled"));
+                    },
+                    (current, total) => {
+                        this.__ui?.setProgress?.(`${current}/${total}`);
+                    },
+                    { timeoutMs: 15000 }
+                );
+            });
+        }
+
+        /**
+         * Ask user to pick three points. The scalebar then stores the navigation sync data for it
+         * @param onDone
+         * @param onCancel
+         * @return {(function(): void)|*}
+         */
+        pickThreePoints(onDone, onCancel, onProgress, opts = {}) {
+            const viewer = this.master;
+            const pts = [];
+            const overlays = [];
+            const total = 3;
+
+            const timeoutMs = Math.max(1000, opts.timeoutMs ?? 30000); // “reasonable time”
+            let timeoutRef = null;
+
+            const removeAll = () => {
+                for (const o of overlays) {
+                    try { viewer.removeOverlay(o.el); } catch {}
+                }
+                overlays.length = 0;
+            };
+
+            const cancel = () => {
+                viewer.removeHandler("canvas-click", handler);
+                window.removeEventListener("keydown", keyHandler, true);
+                if (timeoutRef) clearTimeout(timeoutRef);
+                removeAll();
+                onCancel?.();
+            };
+
+            const finish = () => {
+                viewer.removeHandler("canvas-click", handler);
+                window.removeEventListener("keydown", keyHandler, true);
+                if (timeoutRef) clearTimeout(timeoutRef);
+                removeAll();
+                onDone?.(pts);
+            };
+
+            const restartTimeout = () => {
+                if (timeoutRef) clearTimeout(timeoutRef);
+                timeoutRef = setTimeout(() => {
+                    Dialogs?.show?.("Sync calibration timed out", 1600, Dialogs.MSG_WARN);
+                    cancel();
+                }, timeoutMs);
+            };
+
+            const addMarker = (imgPt, item) => {
+                // Convert IMAGE coords -> VIEWPORT coords for overlays
+                const vpPt = item.imageToViewportCoordinates(
+                    new OpenSeadragon.Point(imgPt.x, imgPt.y)
+                );
+
+                const el = document.createElement("div");
+                el.className =
+                    "w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full " +
+                    "bg-error ring-2 ring-base-100 shadow pointer-events-none";
+                el.style.display = "grid";
+                el.style.placeItems = "center";
+                el.style.fontSize = "10px";
+                el.style.fontWeight = "700";
+                el.style.color = "white";
+                el.textContent = String(pts.length);
+
+                viewer.addOverlay({
+                    element: el,
+                    location: vpPt, // <-- viewport coords
+                    placement: OpenSeadragon.Placement.CENTER
+                });
+
+                overlays.push({ el, img: imgPt });
+            };
+
+            const removeLast = () => {
+                if (!pts.length) return;
+                pts.pop();
+                const o = overlays.pop();
+                if (o?.el) {
+                    try { viewer.removeOverlay(o.el); } catch {}
+                }
+                onProgress?.(pts.length, total);
+                restartTimeout();
+            };
+
+            const keyHandler = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    cancel();
+                } else if (ev.key === "Backspace") {
+                    ev.preventDefault();
+                    removeLast();
+                }
+            };
+
+            const handler = (e) => {
+                if (!e?.position) return;
+
+                const item = viewer.world.getItemAt(0);
+                if (!item) return;
+
+                const vp = viewer.viewport.pointFromPixel(e.position);
+                const img = item.viewportToImageCoordinates(vp);
+                if (!isFinite(img.x) || !isFinite(img.y)) return;
+
+                pts.push({ x: img.x, y: img.y });
+                onProgress?.(pts.length, total);
+
+                addMarker(img, item);
+                restartTimeout();
+
+                if (pts.length >= total) finish();
+                e.preventDefaultAction = true;
+            };
+
+            // single instruction toast once (you already do this pattern)
+            Dialogs?.show?.("Click three points on the slide to calibrate sync.", 5000, Dialogs.MSG_INFO);
+            onProgress?.(0, total);
+
+            viewer.addHandler("canvas-click", handler);
+            window.addEventListener("keydown", keyHandler, true);
+            restartTimeout();
+
+            // return cleanup for callers (calibrateViewer uses this)
+            return cancel;
+        }
+
+        _alignTargetToLeaderNow(leaderViewer, targetViewer, t) {
+            const state = leaderViewer.tools.readViewportState();
+
+            const refItem = leaderViewer.world.getItemAt(0);
+            if (!refItem) return;
+
+            const refCenterImg = refItem.viewportToImageCoordinates(state.center);
+
+            const mapped = this._mul2x2_vec(t.A, refCenterImg);
+            const targetCenterImg = { x: mapped.x + t.b.x, y: mapped.y + t.b.y };
+
+            const tgtItem = targetViewer.world.getItemAt(0);
+            if (!tgtItem) return;
+
+            const tgtCenterVp = tgtItem.imageToViewportCoordinates(new OpenSeadragon.Point(targetCenterImg.x, targetCenterImg.y));
+
+
+            targetViewer.tools.applyViewportState({
+                center: tgtCenterVp,
+                zoom: state.zoom / (t.scale || 1),
+                rotation: state.rotation + t.rotDeg,
+                flip: leaderViewer.viewport.flip
+            });
+        }
+
+        _invert2x2(m) {
+            const [a,b,c,d] = m; // [a b; c d]
+            const det = a*d - b*c;
+            if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+            const invDet = 1 / det;
+            return [ d*invDet, -b*invDet, -c*invDet, a*invDet ];
+        }
+
+        _mul2x2(a, b) {
+            // a,b are [a b c d]
+            return [
+                a[0]*b[0] + a[1]*b[2],
+                a[0]*b[1] + a[1]*b[3],
+                a[2]*b[0] + a[3]*b[2],
+                a[2]*b[1] + a[3]*b[3],
+            ];
+        }
+
+        _mul2x2_vec(m, v) {
+            return { x: m[0]*v.x + m[1]*v.y, y: m[2]*v.x + m[3]*v.y };
+        }
+
+        _similarityFrom3(refPts, tgtPts) {
+            // Build matrices from vectors: R = [r2-r1, r3-r1], T = [t2-t1, t3-t1]
+            const r1 = refPts[0], r2 = refPts[1], r3 = refPts[2];
+            const t1 = tgtPts[0], t2 = tgtPts[1], t3 = tgtPts[2];
+
+            const R = [
+                (r2.x - r1.x), (r3.x - r1.x),
+                (r2.y - r1.y), (r3.y - r1.y),
+            ];
+            const T = [
+                (t2.x - t1.x), (t3.x - t1.x),
+                (t2.y - t1.y), (t3.y - t1.y),
+            ];
+
+            const Rinv = this._invert2x2(R);
+            if (!Rinv) return null;
+
+            // A = T * inv(R)
+            const A = this._mul2x2(T, Rinv);
+
+            // translation b = t1 - A*r1
+            const Ar1 = this._mul2x2_vec(A, r1);
+            const b = { x: t1.x - Ar1.x, y: t1.y - Ar1.y };
+
+            // Extract rotation + uniform scale from A (approx)
+            const col0 = { x: A[0], y: A[2] };
+            const col1 = { x: A[1], y: A[3] };
+            const s0 = Math.hypot(col0.x, col0.y);
+            const s1 = Math.hypot(col1.x, col1.y);
+            const scale = (s0 + s1) / 2 || 1;
+
+            const rotRad = Math.atan2(col0.y, col0.x);
+            const rotDeg = rotRad * 180 / Math.PI;
+
+            return { A, b, scale, rotDeg };
+        }
     }
 }(OpenSeadragon));

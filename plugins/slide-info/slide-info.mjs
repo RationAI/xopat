@@ -39,12 +39,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
 
         VIEWER_MANAGER.broadcastHandler('show-demo-page', e => {
             // Only show our custom UI if there isn't a specific loading error
-            if (e.error) return;
+            if (e.htmlError) return;
 
             const showExplorer = () => {
                 if (this.menu) {
                     this.menu.open();
-                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', true);
+                    USER_INTERFACE.AppBar.View.setSelected('slide-info-switcher', true);
                 }
             };
 
@@ -121,21 +121,23 @@ addPlugin('slide-info', class extends XOpatPlugin {
     pluginReady() {
         if (this.slideBrowser) {
             this.menu = new SlideSwitcherMenu({
-                onClose: () => !this._preventChange && USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false)
+                onClose: () => !this._preventChange && USER_INTERFACE.AppBar.View.setSelected('slide-info-switcher', false)
             });
-            // todo this does not follow plugin API!
-            const selected = USER_INTERFACE.AppBar.View.registerViewItem('slide-info-switcher', 'fa-window-restore', 'Slide Manager', selected => {
-                this._preventChange = true;
-                if (selected) {
-                    this.menu.close();
-                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', false);
-                } else {
+
+            const manager = new UI.Mixins.VisibilityManager('slide-info.switcher').init(
+                () =>  {
+                    this._preventChange = true;
                     this.menu.open();
-                    USER_INTERFACE.AppBar.View.setTabSelected('slide-info-switcher', true);
-                }
-                this._preventChange = false;
-            });
-            if (selected) setTimeout(() => this.menu.open());
+                    this._preventChange = false;
+                }, () => {
+                    this._preventChange = true;
+                    this.menu.close();
+                    this._preventChange = false;
+                },
+                false
+            );
+
+            USER_INTERFACE.AppBar.View.append('slide-info-switcher', 'fa-window-restore', 'Slide Manager', manager);
         }
     }
 

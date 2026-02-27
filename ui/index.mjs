@@ -45,11 +45,15 @@ import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mj
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
 import { DockableWindow } from "./classes/components/dockableWindow.mjs";
+import { StatusBar } from "./classes/components/statusBar.mjs";
 
-// COMPONENTS
+// SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
 import { AppBar } from "./services/appBar.mjs";
 import { FloatingManager } from "./services/floatingManager.mjs";
+
+// MIXINS
+import { VisibilityManager } from "./classes/mixins/visibilityManager.mjs";
 
 class ServiceContainer {
     _globalTooltip = null;
@@ -100,10 +104,14 @@ const UI = {
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,
     ShaderSideMenu, FloatingWindow, MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
     Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton,
-    DockableWindow,
+    DockableWindow, StatusBar,
 
     // Services -> instantiated
-    Services: new ServiceContainer()
+    Services: new ServiceContainer(),
+    // Other
+    Mixins: {
+        VisibilityManager
+    }
 };
 
 globalThis.UI = UI;

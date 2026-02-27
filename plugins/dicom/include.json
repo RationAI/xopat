@@ -1,6 +1,4 @@
 {
-  "id": "dicom",
-  "version": "1.0.0",
   "description": "",
   "author": "Aiosa",
   "name": "DICOM Integration",

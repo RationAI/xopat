@@ -6,6 +6,8 @@ import { FAIcon } from "../../elements/fa-icon.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import van from "../../../vanjs.mjs";
 
+import {VisibilityManager} from "../../mixins/visibilityManager.mjs";
+
 const { div, span, i } = van.tags;
 
 /**
@@ -82,8 +84,14 @@ class Toolbar extends BaseComponent {
         this._observer = null;
         this._lastBox = null;
 
-        USER_INTERFACE.AppBar.View.registerViewItem(
-            this.id, "fa-gear", this.id, this.toggleVisible.bind(this)
+        this.visibility = new VisibilityManager(this);
+        USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
+            {
+                id: this.id,
+                icon: "fa-gear",
+                title: this.id, // todo name!!!!
+                visibilityManager: this.visibility
+            }
         );
     }
 
@@ -161,6 +169,7 @@ class Toolbar extends BaseComponent {
         this._outerEl = div(
             {
                 ...this.commonProperties,
+                class: ((this.commonProperties?.class ?? "") + " flex items-center").trim(),
                 style: `
         position: fixed;
         left: ${left}px;
@@ -184,10 +193,11 @@ class Toolbar extends BaseComponent {
                 // --- Handle (Simplified) ---
                 // Removed fixed width styles and large badge classes for a cleaner look
                 div({
-                        class: "handle pointer-events-auto self-center text-secondary p-2 cursor-grab active:cursor-grabbing",
+                        // DaisyUI-themed drag handle (visible across themes)
+                        class: "handle pointer-events-auto self-center px-2 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-grab active:cursor-grabbing hover:bg-base-300/80",
                         style: "touch-action: none;"
                     },
-                    i({ class: "fa-solid fa-grip-lines" }) // Changed icon to simple lines, or keep fa-grip-horizontal
+                    i({ class: "fa-solid fa-grip-lines text-base-content" })
                 ),
 
                 // --- Close Button (Commented Out) ---
@@ -195,7 +205,7 @@ class Toolbar extends BaseComponent {
                 div({
                     class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
                     style: "width: min(45px, 90%);",
-                    onclick: () => this.toggleVisible()
+                    onclick: () => this.visibility.set(false)
                 }, i({ class: "fa-auto fa-xmark" }))
                 */
             ),
@@ -203,6 +213,7 @@ class Toolbar extends BaseComponent {
         );
 
         this._rootWrap = this._outerEl.querySelector("[data-toolbar-root]");
+        this.visibility.initOnRootNode(this._outerEl);
 
         queueMicrotask(() => {
             this._updateOrientationFromPosition(true);
@@ -231,7 +242,7 @@ class Toolbar extends BaseComponent {
                     },
                     // 💡 live orientation update while dragging
                     onMove: () => {
-                        this._updateOrientationFromPosition(/*force*/false);
+                        this._updateOrientationFromPosition(/*force*/false, { dragging: true });
                         // also tell children to re-measure if they care (choice groups, etc.)
                         if (this._rootWrap) {
                             this._rootWrap.dispatchEvent(new CustomEvent("toolbar:measure", {
@@ -264,11 +275,18 @@ class Toolbar extends BaseComponent {
         // Vertical Mode:   outerEl = Col (Handle Top),  wrap = Col (Items vertical)
 
         if (this._outerEl) {
-            this._outerEl.classList.remove("flex-row", "flex-col");
+            this._outerEl.classList.remove("flex-row", "flex-col", "flex-col-reverse");
             if (dir === "horizontal") {
                 this._outerEl.classList.add("flex-row");
             } else {
-                this._outerEl.classList.add("flex-col");
+                // If the toolbar is touching the top of the screen, put the handle *below*
+                // the toolbar to avoid a weird gap above the first row of tools.
+                const top = this._outerEl.getBoundingClientRect().top;
+                if (top <= 1) {
+                    this._outerEl.classList.add("flex-col-reverse");
+                } else {
+                    this._outerEl.classList.add("flex-col");
+                }
             }
         }
 
@@ -298,25 +316,18 @@ class Toolbar extends BaseComponent {
         }
     }
 
-    toggleVisible() {
-        if (this._outerEl.classList.contains("display-none")) {
-            this._outerEl.classList.remove("display-none");
-            APPLICATION_CONTEXT.setOption(`${this.id}-selected`, "true");
-            return;
-        }
-        this._outerEl.classList.add("display-none");
-        APPLICATION_CONTEXT.setOption(`${this.id}-selected`, "false");
-    }
+    
     isVisible() { return !this._outerEl.classList.contains("display-none"); }
-    _toggle_body() {
-        if (this.body.classMap.display === "display-none") {
-            this.body.setClass("display", "");
-            APPLICATION_CONTEXT.AppCache.get(`${this.id}-body-visible`, "true");
-        } else {
-            this.body.setClass("display", "display-none");
-            APPLICATION_CONTEXT.AppCache.set(`${this.id}-body-visible`, "false");
-        }
-    }
+    
+    // _toggle_body() {
+    //     if (this.body.classMap.display === "display-none") {
+    //         this.body.setClass("display", "");
+    //         APPLICATION_CONTEXT.AppCache.get(`${this.id}-body-visible`, "true");
+    //     } else {
+    //         this.body.setClass("display", "display-none");
+    //         APPLICATION_CONTEXT.AppCache.set(`${this.id}-body-visible`, "false");
+    //     }
+    // }
 
     // ----- observers & orientation -----
     _setupObservers() {
@@ -360,13 +371,28 @@ class Toolbar extends BaseComponent {
         notifyMeasure();
     }
 
-    _updateOrientationFromPosition(force = false) {
+    _updateOrientationFromPosition(force = false, opts = {}) {
         if (!this._outerEl || !this._rootWrap) return;
 
         const rect = this._outerEl.getBoundingClientRect();
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         const snapDist = this._edgeThreshold;
+        const dragging = !!opts.dragging;
+
+        // When dragging near corners, width/height changes after an orientation flip can cause
+        // edge-distance calculations to oscillate. Capture a stable "drag size" for the whole drag.
+        if (dragging) {
+            if (!this._dragSize) {
+                this._dragSize = { w: rect.width, h: rect.height, max: Math.max(rect.width, rect.height) };
+            }
+        } else {
+            this._dragSize = null;
+        }
+        // Add a little hysteresis to prevent rapid flip-flopping when the toolbar size changes
+        // between horizontal/vertical near an edge (common in corners).
+        const enterEdge = this._edgeThreshold;
+        const leaveEdge = this._edgeThreshold + 24;
 
         // current position
         let left = rect.left;
@@ -379,38 +405,41 @@ class Toolbar extends BaseComponent {
         const distT = rect.top;
         const distB = vh - (rect.top + rect.height);
 
-        // --- snap to left/right ---
-        if (distL <= snapDist) {
-            left = 0;
-            snapped = true;
-        } else if (distR <= snapDist) {
-            left = vw - rect.width;
-            snapped = true;
-        }
+        if (!dragging) {
+            // --- snap to left/right ---
+            if (distL <= snapDist) {
+                left = 0;
+                snapped = true;
+            } else if (distR <= snapDist) {
+                left = vw - rect.width;
+                snapped = true;
+            }
 
-        // --- snap to top/bottom ---
-        if (distT <= snapDist) {
-            top = 0;
-            snapped = true;
-        } else if (distB <= snapDist) {
-            top = vh - rect.height;
-            snapped = true;
-        }
+            // --- snap to top/bottom ---
+            if (distT <= snapDist) {
+                top = 0;
+                snapped = true;
+            } else if (distB <= snapDist) {
+                top = vh - rect.height;
+                snapped = true;
+            }
 
-        if (snapped) {
-            const l = Math.round(left);
-            const t = Math.round(top);
-            this._outerEl.style.left = `${l}px`;
-            this._outerEl.style.top  = `${t}px`;
+            if (snapped) {
+                const l = Math.round(left);
+                const t = Math.round(top);
+                this._outerEl.style.left = `${l}px`;
+                this._outerEl.style.top  = `${t}px`;
 
-            // remember snapped pos
+                // remember snapped pos
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
 
-            // let FloatingManager re-clamp if needed (top bar, margins, etc.)
-            if (this._fmToken && UI.Services.FloatingManager.clampNow) {
-                UI.Services.FloatingManager.clampNow(this._fmToken);
+                // let FloatingManager re-clamp if needed (top bar, margins, etc.)
+                if (this._fmToken && UI.Services.FloatingManager.clampNow) {
+                    UI.Services.FloatingManager.clampNow(this._fmToken);
+                }
             }
+
         }
 
         // --- orientation: vertical near a side edge, else horizontal ---
@@ -421,10 +450,23 @@ class Toolbar extends BaseComponent {
 
         const curLeft = parseFloat(this._outerEl.style.left) || rect.left;
         const distL2 = curLeft;
-        const distR2 = vw - (curLeft + rect.width);
-        const nearSide = (distL2 <= this._edgeThreshold) || (distR2 <= this._edgeThreshold);
+        const effW = (dragging && this._dragSize) ? this._dragSize.max : rect.width;
+        const distR2 = vw - (curLeft + effW);
 
-        this._setOrientation(nearSide ? "vertical" : "horizontal", force);
+        // Hysteresis:
+        // - If we're currently horizontal, only enter vertical when we're clearly near a side edge.
+        // - If we're currently vertical, only return to horizontal once we've moved away from the edge.
+        const nearSideEnter = (distL2 <= enterEdge) || (distR2 <= enterEdge);
+        const awayFromSideLeave = (distL2 > leaveEdge) && (distR2 > leaveEdge);
+
+        let nextDir;
+        if (this._dir === "vertical") {
+            nextDir = awayFromSideLeave ? "horizontal" : "vertical";
+        } else {
+            nextDir = nearSideEnter ? "vertical" : "horizontal";
+        }
+
+        this._setOrientation(nextDir, force);
     }
 
     focus(id) {

@@ -113,19 +113,22 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
                 }
             };
 
+            const normPath = (p) => (p || "").replace(/^\/+/, "");
+            const toViewerRef = (p) => normPath(p).replaceAll("/", ">");  // if your viewer uses '>'
+            const toFsPath = (ref) => (ref || "").replaceAll(">", "/");   // explorer uses '/'
+
             info.setCustomBrowser({
                 id: "rationai-wsi-file-browser",
                 levels: dynamicLevel,
                 customItemToBackground: (item) => ({
-                    id: item.label,
                     name: item.label,
-                    dataReference: item.rel_path || item.path,
+                    dataReference: toViewerRef(item.rel_path || item.path),
                 }),
-                backgroundToCustomItem: (bg) => ({
-                    label: bg.id,
-                    type: "slide",
-                    path: BackgroundConfig.data(bg)[0],
-                }),
+                backgroundToCustomItem: (bg) => {
+                    const ref = BackgroundConfig.data(bg)[0];
+                    const fsPath = toFsPath(ref);
+                    return { type: "slide", path: fsPath, label: fsPath.split("/").pop() };
+                },
             });
         });
     }

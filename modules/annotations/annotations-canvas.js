@@ -1505,7 +1505,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         let screenToPixelCoords = function (x, y) {
             //cannot use this.viewer.scalebar.imagePixelSizeOnScreen() because of canvas margins
-            return this.viewer.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
+            return this.viewer.scalebar.getReferencedTiledImage()?.windowToImageCoordinates(new OpenSeadragon.Point(x, y));
         }.bind(this);
 
         //prevents event bubling if the up event was handled by annotations

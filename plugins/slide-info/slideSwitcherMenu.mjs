@@ -509,7 +509,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             thumbWrap = div(
                 { class: WRAP_CLASS },
                 div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage),
-                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
+                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-primary rounded" }, name),
                 labelImage
             );
 
@@ -522,7 +522,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const linked = this._isLinked(viewer);
             thumbWrap = div(
                 { class: WRAP_CLASS },
-                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-white rounded" }, name),
+                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-primary rounded" }, name),
             );
 
             syncButton = button({
@@ -551,6 +551,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return div(
             {
                 id: `${this.windowId}-card-${id}`,
+                style: (withImagery ? "max-height:120px;overflow:hidden;" : "max-height: 30px;"),
                 class:
                     "slide-card group bg-base-200 border border-base-300 transition " +
                     (checked ? "ring ring-primary ring-offset-1 " : "") +

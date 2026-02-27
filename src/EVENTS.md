@@ -77,7 +77,7 @@ old value. New value can be retrieved once the viewer is reloaded.
 Existing viewer is removed at position ``index`` in the screen. Existing viewers shrink
 so that the index is occupied if ``viewers.length > index``.
 
-#### `get-preview-url` | e: `{server: string, image: string, usesCustomProtocol: boolean, imagePreview: null}`
+#### `get-preview-url` | e: `{server: string, image: string, imagePreview: null}`
 Fired when the UI wants to know what is a slide _preview url_, which can be constructed
 from ``server`` on which `image` slide identification lives. If `imagePreview`
 is not set to be a valid string or blob value by the event handlers, it is created automatically 
@@ -143,7 +143,7 @@ Fired when a visualization is ready for rendering. Unlike open event, this event
 is fired each time a visualization is changed. Visualization can be updated even
 if the viewer is not reloaded.
 
-### `show-demo-page` | e: `{id: string, show: function, errror: string|undefined}`
+### `show-demo-page` | e: `{id: string, show: function, htmlError: string|undefined}`
 When the viewer does not open any valid data, it shows a demo page. This event allows to use custom UI to show the demo page.
 If the viewer captures an error during loading, the error message is included.
 The first call wins - other show(...) calls are ignored.

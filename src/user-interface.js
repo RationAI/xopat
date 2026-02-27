@@ -49,6 +49,11 @@ function initXopatUI() {
             // attach using your component system (works even if BaseComponent has helpers)
             (document.body || document.documentElement).appendChild(view.create());
 
+            view.setHoverHandlers?.(
+                () => this._scheduler.pause(),
+                () => this._scheduler.resume()
+            );
+
             // Close all child modals if parent dies (kept from your original)
             window.addEventListener("unload", () => {
                 if (this._modals) {
@@ -60,6 +65,10 @@ function initXopatUI() {
                 }
             });
         },
+        ////////////////////////////////////////
+        // TODO METHODS BELOW are deprecated //
+        // and should be replaced by core ui API
+        //////////////////////////////////////
 
         /**
          * Show custom/dialog window
@@ -72,8 +81,10 @@ function initXopatUI() {
          * @param params.defaultHeight custom height, can be a CSS value (string) or a number (pixels)
          * @param params.allowClose whether to show 'close' button, default true
          * @param params.allowResize whether to allow user to change the window size, default false
+         * @deprecated
          */
         showCustom: function(parentId, header, content, footer, params = { allowClose: true }) {
+            console.warn("Dialogs.showCustom() is deprecated.");
             let result = this._buildComplexWindow(false, parentId, header, content, footer,
                 `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`, params);
             if (result) $("body").append(result);
@@ -91,8 +102,10 @@ function initXopatUI() {
          * @param title non-formatted title string (for messages, window title tag...)
          * @param header HTML content to put in the header
          * @param content HTML content
+         * @deprecated
          */
         showCustomModal: function(parentId, title, header, content) {
+            console.warn("Dialogs.showCustomModal() is deprecated.");
             if (this.getModalContext(parentId)) {
                 console.error("Modal window " + title + " with id '" + parentId + "' already exists.");
                 return;
@@ -104,8 +117,10 @@ function initXopatUI() {
 
         /**
          * Open Monaco Editor
+         * @deprecated
          */
         openEditor: function(parentId, title, inputText, language, onSave) {
+            console.warn("Dialogs.openEditor() is deprecated.");
             if (this.getModalContext(parentId)) {
                 console.log("Modal window with id '" + parentId + "' already exists. Using the window.");
                 this._modals[parentId].callback = onSave;
@@ -951,52 +966,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * Status bar
          * @namespace USER_INTERFACE.Status
          */
-        Status: {
-            context: null,
-            closed: false,
-            /**
-             * Show status bar with message
-             * @param {string} message
-             */
-            show(message) {
-                if (this.closed) return;
-                if (!this.context) {
-                    this._init();
-                }
-                // this.context.classList.remove("hover-dim"); not working: does not trigger animation
-                this.context.firstElementChild.innerHTML = message;
-                // this.context.classList.add("hover-dim");
-            },
-            /**
-             * Close the menu, so that it is not visible at all.
-             */
-            setClosed(closed) {
-                if (closed && this.context) {
-                    document.body.removeChild(this.context);
-                    delete this.context;
-                }
-                this.closed = closed;
-            },
-            _init() {
-                let node = document.createElement("div");
-                node.setAttribute("id", "viewer-status-bar");
-                node.setAttribute("class", "position-fixed fixed-bg-opacity bg-opacity px-2 py-1 rounded-2 overflow-hidden");
-                node.style.color = "var(--color-text-primary)";
-                node.style.pointerEvents = 'none';
-                node.style.maxWidth = 'calc(100vw - 750px)';
-                node.style.bottom = '10px';
-                node.style.right = '45px';
-                let content = document.createElement("span");
-                content.setAttribute("class", "one-liner");
-                node.appendChild(content);
-                document.getElementById("middle-container").appendChild(node);
-                this.context = node;
-
-                if (!APPLICATION_CONTEXT.getOption("statusBar", true)){
-                    $('#viewer-status-bar').toggleClass('hidden');
-                }
-            }
-        },
+        Status: new UI.StatusBar(),
 
         /**
          * UI Fullscreen Loading
@@ -1248,4 +1218,6 @@ ${label}
             }));
         }, 200);
     });
+    // todo better way, some layout api
+    USER_INTERFACE.Status.attachTo(document.getElementById('osd'));
 }

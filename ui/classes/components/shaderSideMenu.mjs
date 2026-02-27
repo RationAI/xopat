@@ -28,6 +28,7 @@ export class ShaderSideMenu extends BaseComponent {
         this.selectedVisualization = "";
         this.shaderNodeCells = {};
         this.opacity = typeof opts.opacity === "number" ? opts.opacity : 1;
+        this.classMap["base"] = "p-0 flex flex-col max-h-full"
 
         this.cb = {
             onShaderChange: opts.onShaderChange,
@@ -75,7 +76,8 @@ export class ShaderSideMenu extends BaseComponent {
                             mode: "warning",
                             title: $.t('main.shaders.faulty'),
                             description: `<code>${message.error}</code>`,
-                            compact: true
+                            compact: true,
+                            extraClasses: { margin: "mb-2" }, //todo some horizontal margin
                         });
 
                         alert.prependedTo(node);
@@ -92,6 +94,14 @@ export class ShaderSideMenu extends BaseComponent {
              */
             viewer.raiseEvent('visualization-used', e);
         });
+
+        this._refreshOrder = (node) => {
+            const listItems = Array.prototype.map.call(node.children, child => child.dataset.id);
+            listItems.reverse();
+            // todo no change on the navigator...
+            viewer.drawer.renderer.setShaderLayerOrder(listItems);
+            viewer.drawer.rebuild();
+        };
     }
 
     _setCacheOpen(open) {
@@ -112,9 +122,9 @@ export class ShaderSideMenu extends BaseComponent {
         // Shader select
         this.visualizationSelect = select(
             {
-                id: this.options.id + "-shaders",
+                id: this.id + "-shaders",
                 name: "shaders",
-                class: "select select-bordered select-sm align-middle w-4/5 max-w-xs cursor-pointer text-xl text-lg",
+                class: "select select-ghost select-sm w-full max-w-xs cursor-pointer",
                 "aria-label": "Visualization",
                 value: this.selectedVisualization,
                 onchange: e => {
@@ -136,15 +146,14 @@ export class ShaderSideMenu extends BaseComponent {
 
         // todo implement using dropdown!
         this._cacheDropdownWrap = div(
-            { class: "dropdown dropdown-end float-right relative" },
+            { class: "dropdown dropdown-end relative" },
             // trigger
             span(
                 {
-                    id: this.options.id + "-cache-snapshot",
+                    id: this.id + "-cache-snapshot",
                     tabindex: "0",
                     role: "button",
-                    class: "fa-auto fa-bookmark btn btn-ghost btn-circle btn-sm align-middle",
-                    style: "vertical-align:sub;",
+                    class: "fa-auto fa-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 pt-2",
                     title: $.t("main.shaders.saveCookies"),
                     onclick: (e) => {
                         e.stopPropagation();
@@ -157,7 +166,8 @@ export class ShaderSideMenu extends BaseComponent {
             ul(
                 {
                     tabindex: "0",
-                    class: "dropdown-content menu shadow bg-base-100 rounded-box w-48 z-[1]",
+                    class: "dropdown-content menu shadow bg-base-100 rounded-box z-[1]",
+                    style: "min-width: 18rem;"
                 },
                 li(
                     a(
@@ -190,7 +200,7 @@ export class ShaderSideMenu extends BaseComponent {
             )
         );
 
-        return div({}, this.visualizationSelect, this._cacheDropdownWrap, br());
+        return div({ class: "flex flex-row" }, this.visualizationSelect, this._cacheDropdownWrap);
     }
 
     create() {
@@ -207,7 +217,6 @@ export class ShaderSideMenu extends BaseComponent {
             blendingEq
         );
 
-        // Panel root
         return div(
             { id: this.options.id + "-panel-shaders", class: "p-2" },
             content,
@@ -271,12 +280,18 @@ export class ShaderSideMenu extends BaseComponent {
                 }];
             });
         }, undefined, e => {
-            const listItems = Array.prototype.map.call(e.target.parentNode.children, child => child.dataset.id);
-            listItems.reverse();
-            // todo no change on the navigator...
-            viewer.drawer.renderer.setShaderLayerOrder(listItems);
-            viewer.drawer.rebuild();
+            this._refreshOrder(e.target.parentNode);
         });
+    }
+
+    /**
+     * Refresh visualization shader order based on the UI DOM parent container child list
+     * children are expected to have data-id attribute set to the shader id
+     * @param node
+     * @private
+     */
+    _refreshOrder(node) {
+        console.error("called before init().");
     }
     
     clearLayers() {
@@ -298,7 +313,7 @@ export class ShaderSideMenu extends BaseComponent {
             if (shaderConfig.params.hasOwnProperty(key)) {
                 filters[key] = {
                     name: OpenSeadragon.FlexRenderer.ShaderLayer.filterNames[key],
-                    value: shaderConfig._renderContext.getFilterValue(key, shaderConfig.params[key])
+                    value: shaderLayer.getFilterValue(key, shaderConfig.params[key])
                 };
             }
         }
@@ -313,24 +328,70 @@ export class ShaderSideMenu extends BaseComponent {
                 onToggleVisible: (checked) => {
                     let shader = uiLayer.cfg;
                     if (shader) {
-                        if (checked) {
-                            shader.visible = true;
-                            // todo change visual using this.something()
-                            //self.parentNode.parentNode.classList.remove("shader-part-error");
-                        } else {
-                            shader.visible = false;
-                            //self.parentNode.parentNode.classList.add("shader-part-error");
-                        }
+                        shader.visible = !!checked;
                         viewer.drawer.rebuild(0);
-                    } else {
-                        console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${uiLayer.id}': bad initialization?`);
                     }
                 },
-                // todo cleanup the code, enable the functionality through this UI class
-                onChangeType: (type) => UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
-                onChangeMode: (nextMode) => UTILITIES.changeModeOfLayer(shaderLayer.id, nextMode),
-                onSetFilter: (key, val) => UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
-                onClearCache: () => UTILITIES.clearShaderCache(shaderLayer.id)
+                onChangeType: (type) =>
+                    UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
+
+                // NEW: explicit mode change (no toggle, and we also keep blend mode)
+                onChangeMode: (mode, blend) => {
+                    const shader = viewer.drawer.renderer.getShaderLayer(shaderLayer.id);
+                    if (!shader) {
+                        console.error(`Invalid layer id '${shaderLayer.id}' in onChangeMode`);
+                        return;
+                    }
+                    const cfg = shader.getConfig(shaderLayer.id);
+
+                    cfg.params = cfg.params || {};
+                    cfg.params.use_mode = mode;
+                    if (blend) {
+                        cfg.params.use_blend = blend;
+                    }
+
+                    shader.resetMode(cfg.params);
+                    viewer.drawer.rebuild(0);
+                },
+
+                // NEW: explicit blend change; keep current mode
+                onChangeBlend: (mode, blend) => {
+                    const shader = viewer.drawer.renderer.getShaderLayer(shaderLayer.id);
+                    if (!shader) {
+                        console.error(`Invalid layer id '${shaderLayer.id}' in onChangeBlend`);
+                        return;
+                    }
+                    const cfg = shader.getConfig(shaderLayer.id);
+
+                    cfg.params = cfg.params || {};
+                    if (mode) {
+                        cfg.params.use_mode = mode;   // keep in sync
+                    }
+                    cfg.params.use_blend = blend;
+
+                    shader.resetMode(cfg.params);
+                    viewer.drawer.rebuild(0);
+                },
+
+                onSetFilter: (key, val) =>
+                    UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
+                onClearCache: () =>
+                    UTILITIES.clearShaderCache(shaderLayer.id),
+                onReorder: (dir) => {
+                    const parent = this.layerContainer;
+                    const node = this.shaderNodeCells[shaderLayer.id];
+                    if (!parent || !node) return;
+
+                    if (dir === "up") {
+                        const prev = node.previousElementSibling;
+                        if (prev) parent.insertBefore(node, prev);
+                    } else if (dir === "down") {
+                        const next = node.nextElementSibling;
+                        if (next) parent.insertBefore(next, node);
+                    }
+
+                    this._refreshOrder(parent);
+                },
             }
         });
 

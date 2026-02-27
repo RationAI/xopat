@@ -281,7 +281,7 @@ try {
          */
     draggable: (parentContainerId, onEnabled=undefined, onStartDrag=undefined, onEndDrag=undefined) => {
             const children = typeof parentContainerId === "string" ?
-                document.getElementById(parentContainerId)?.children : parentContainerId;
+                document.getElementById(parentContainerId)?.children : parentContainerId.children;
             if (!children) throw "Actions::draggable needs valid parent ID to access an element in DOM!";
         Array.prototype.forEach.call(children, (item) => {enableDragItem(item)});
 

@@ -126,6 +126,9 @@
         "scaleBar": true,
         "toolBar": true,
         "statusBar": true,
+        // default background color, a hex RGB or RGBA
+        "background": null,
+        // todo update docs, this can carry multiple viewport configurations, also consider moving multiple params to the viewer-dependent configuration
         // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
         // point is in the viewport coordinate system of OpenSeadragon
         "viewport": null,
@@ -199,7 +202,8 @@
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js",
-            "render": "flex-renderer.js"
+            "render": "flex-renderer.js",
+            //"geotiff": "geotiff-tilesource.min.js"
         },
         // src/external  key: source / [sources,list]
         "external": {

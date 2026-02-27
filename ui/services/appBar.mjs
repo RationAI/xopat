@@ -97,12 +97,8 @@ export class AppBar {
 
         if (window.innerWidth < 600) {
             this.rightMenu.setClass("display", "hidden");
-            console.log("Here")
-            console.log(this.rightMenu)
         } else {
-            console.log("Here")
             this.rightMenuCollapsed.setClass("display", "hidden");
-            console.log(this.rightMenuCollapsed)
         }
 
         // Fullscreen button switch
@@ -157,11 +153,10 @@ export class AppBar {
     setBanner(banner) {
         const bItem = this.rightMenu.getTab("banner");
         if (banner) {
-            bItem.toggleHiden();
+            bItem.visibilityManager.on();
             bItem.setVisuals(banner);
         } else {
-            //todo might dissinc
-            bItem.toggleHiden();
+            bItem.visibilityManager.off();
         }
     }
 
@@ -208,9 +203,24 @@ export class AppBar {
     View = {
         init(subMenu) {
             this.subMenu = subMenu;
-            this.rightMenuTabs = {};
             this.otherWindows = {};
             this._visualMenuNeedsRefresh = false;
+
+            // Allowed Groups supported by this view
+            this.structure = {
+                'sideViewerMenu': {
+                    id: 'viewer-sidebars',
+                    label: $.t('main.bar.viewerSidebars'),
+                    icon: 'fa-columns',
+                    section: 'global-windows',
+                },
+                'toolbarMenu': {
+                    id: 'viewer-toolbars',
+                    label: $.t('main.bar.viewerToolbars'),
+                    icon: 'fa-columns',
+                    section: 'global-windows',
+                }
+            };
         },
 
         _refreshVisualDropdown: function () {
@@ -225,98 +235,167 @@ export class AppBar {
                 label: $.t('main.global.clone'),
             });
 
-            // 2. Custom Windows
+            // 2. Custom Windows (from View.append)
             for (let id in this.otherWindows) {
                 const item = this.otherWindows[id];
+                const vm = item.visibilityManager;
+
+                if (!vm) {
+                    console.error(`View.append: missing visibilityManager for "${id}"`);
+                    continue;
+                }
+
                 this.subMenu.addItem({
+                    id,
                     icon: item.icon,
                     label: item.label,
-                    selected: item.selected,
+                    // selected state comes from VisibilityManager
+                    selected: vm.is(),
                     onClick: () => {
-                        item.selected = APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, item.selected);
-                        item.onClick?.(item.selected);
+                        const next = !vm.is();
+                        vm.set(next);
+                        // keep menu open for multi-select behavior
+                        return true;
                     },
                     section: 'global-windows',
                 });
             }
 
-            // 3. Viewer Sidebars (Nested Dropdown)
-            // Collect sidebar items into an array
-            const sidebarChildren = [];
-            for (let id in this.rightMenuTabs) {
-                const item = this.rightMenuTabs[id][0];
-                if (item) {
-                    sidebarChildren.push({
-                        id: item.id,
-                        icon: item.iconName,
-                        label: item.title,
-                        selected: APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, false),
+            // 3. Structured groups (sidebars, toolbars, etc.)
+            for (let id in this.structure) {
+                const item = this.structure[id];
+                const subItemSpecs = this[id];
+                if (!subItemSpecs) return;
+
+                const subChildren = [];
+                for (let subItem of subItemSpecs) {
+                    const vm = subItem.visibilityManager;
+                    if (!vm) {
+                        console.error(`View.registerViewComponent: "${subItem.id}" has no visibilityManager`);
+                        continue;
+                    }
+
+                    subChildren.push({
+                        id: subItem.id,
+                        icon: subItem.iconName || subItem.icon, // iconName old, backward compatibility
+                        label: subItem.title,
+                        selected: vm.is(),
                         onClick: () => {
-                            for (let child of this.rightMenuTabs[id]) {
-                                child.toggleHiden();
-                            }
-                            item.selected = !APPLICATION_CONTEXT.AppCache.get(`${id}-selected`, item.selected);
-                            APPLICATION_CONTEXT.AppCache.set(`${id}-selected`, item.selected);
-                            // Important: return true to keep the menu open if you want multi-select behavior
+                            const next = !vm.is();
+                            vm.set(next);
+                            // Important: return true to keep the menu open for multi-select
                             return true;
                         }
                     });
                 }
-            }
 
-            // Add the parent item with children
-            if (sidebarChildren.length > 0) {
-                this.subMenu.addItem({
-                    id: 'viewer-sidebars',
-                    label: $.t('main.bar.viewerSidebars'),
-                    icon: 'fa-columns', // Example icon for sidebars
-                    children: sidebarChildren,
-                    section: 'global-windows',
-                    childSelectionStyle: "check"
-                });
+                // Add the parent item with children
+                if (subChildren.length > 0) {
+                    this.subMenu.addItem({
+                        ...item,
+                        children: subChildren,
+                        childSelectionStyle: "check"
+                    });
+                }
             }
         },
 
         /**
          * Register a view menu item. Views are displayed inside View dropdown and should
          * show available menus in the viewer with an option to hide them. Right-side menu
-         * panels are added automatically by other UI components using registerRightMenuTab.
-         * @return {boolean} true if the selection is currently active.
+         * panels are added automatically by other UI components using registerViewComponent.
+         *
+         * @param {string} ownerPluginId
+         * @param {string} icon
+         * @param {string} label
+         * @param {VisibilityManager} visibilityManager required visibility manager
          */
-        registerViewItem(ownerPluginId, icon, label, onClick) {
-            const selected = APPLICATION_CONTEXT.AppCache.get(`${ownerPluginId}-selected`, false);
+        append(ownerPluginId, icon, label, visibilityManager) {
+            if (!visibilityManager) {
+                throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
+            }
+
             this.otherWindows[ownerPluginId] = {
-                ownerPluginId, icon, label, onClick, selected
+                id: ownerPluginId,
+                icon,
+                label,
+                visibilityManager
             };
             this._visualMenuNeedsRefresh = true;
-            return selected;
         },
 
         /**
-         * Register menu tab that is driven by the core right menu for each viewer.
-         * Not advised to use manually, used in core UI.
-         * @param tab
-         * @private
+         * Set custom item programmatically selected, useful when you need to change the UI state.
+         * @param {string} ownerPluginId
+         * @param {boolean} selected
          */
-        registerRightMenuTab(tab) {
-            // todo support removal
-            let parent = this.rightMenuTabs[tab.id];
-            if (!parent) {
-                this.rightMenuTabs[tab.id] = parent = [tab];
-                this._visualMenuNeedsRefresh = true;
-            } else {
-                parent.push(tab)
-                parent.sort((a, b) => a.title.localeCompare(b.title));
+        setSelected: function (ownerPluginId, selected) {
+            const item = this.otherWindows[ownerPluginId];
+            if (!item || !item.visibilityManager) {
+                console.warn(`View.setSelected: unknown or unmanaged view "${ownerPluginId}"`);
+                return;
             }
-        },
 
-        setTabSelected: function (id, selected) {
-            const item = this.otherWindows[id];
-            if (!item) return;
-            item.selected = !!selected;
-            APPLICATION_CONTEXT.AppCache.set(`${id}-selected`, item.selected);
+            item.visibilityManager.set(Boolean(selected));
             this._visualMenuNeedsRefresh = true;
         },
+
+        /**
+         * Programmatically query the selection/visibility of a custom window.
+         * Delegates to the attached VisibilityManager.
+         * @param {string} ownerPluginId
+         * @param {boolean} [defaultValue=false] used when no manager exists
+         * @returns {boolean}
+         */
+        isSelected: function (ownerPluginId, defaultValue = false) {
+            const item = this.otherWindows[ownerPluginId];
+            if (!item || !item.visibilityManager) {
+                return defaultValue;
+            }
+            return item.visibilityManager.is();
+        },
+
+        /**
+         * Register a sub-item of a View menu category - toolbars, sidebars, etc.
+         * They represent a grouped core view category where users can toggle particular item.
+         * This is then used internally and does not allow customizing the behavior.
+         * For custom view menus, see append().
+         *
+         * TODO try forcing plugin ID passing
+         * @param {'sideViewerMenu'|'toolbarMenu'} category
+         * @param {UINamedItem & { visibilityManager: VisibilityManager }} tab
+         * @param {undefined} tab.body unused value
+         * @private
+         */
+        registerViewComponent(category, tab) {
+            if (!this.structure[category]) {
+                console.error(`Invalid category: ${category}`);
+                return;
+            }
+
+            if (!tab.visibilityManager) {
+                console.error(`View.registerViewComponent: "${tab.id}" requires tab.visibilityManager`);
+                return;
+            }
+
+            let childList = this[category];
+            if (!childList) {
+                this[category] = childList = [];
+            }
+
+            // Prevent duplicates
+            const index = childList.findIndex(item => item.id === tab.id);
+            if (index < 0) {
+                childList.push(tab);
+            } else {
+                childList.splice(index, 1, tab);
+            }
+
+            // todo support removal
+            // todo support order priority
+            childList.sort((a, b) => a.title.localeCompare(b.title));
+            this._visualMenuNeedsRefresh = true;
+        }
     }
 
 

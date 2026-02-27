@@ -67,7 +67,15 @@ Example configuration:
 ````
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
-- [R]`data` - an array OF `DataID` types (strings, objects...), identifiers such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
+- [R]`data` - an array OF `DataSpecification` types:
+  - [ONE OF] `DataID` type - identifiers (strings, objects...) such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
+  - [ONE OF] ``DataOverride``: can override data access and some metadata
+    - [R]`dataID` - `DataID` type
+    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
+    - [O]`microns` - size of pixel in micrometers, default `undefined`,
+    - [O]`protocol` - see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
+    - [-]`tileSource` - [usable only in code]
+
 - [O]`params` - an object, visualization parameters, supported:
     - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
     - [O]`locale` - language locale, default `en`
@@ -92,20 +100,20 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
     - [O]`fetchAsync` - deprecated
     - [O]`bypassCache` - do not allow using cached values for the user, default `false`
-    - [O]`bypassCacheLoadTime` - TODO: better name also affects cookies
+    - [O]`bypassCacheLoadTime` - at viewer initial loading, ignore cache - this can avoid pulling cached content into foreign session 
+    - [0]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
-    - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
+    - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
+    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional)
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
-    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
     - [O]`lossless` - deprecated
-    - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`protocol` - deprecated, moved to `DataOverride`
     - [O]`tileSource` - a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized
       - the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads using events
-    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
-    - [O]`microns` - size of pixel in micrometers, default `undefined`,
-    - [O]`micronsX` - horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
-    - [O]`micronsY` - vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+    - [O]`microns` - deprecated, moved to `DataOverride`
+    - [O]`micronsX` - deprecated, moved to `DataOverride`
+    - [O]`micronsY` - deprecated, moved to `DataOverride`
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
     - [O]`goalIndex` - preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
@@ -121,9 +129,8 @@ it is an inherited configuration interface of the WebGL module extended by optio
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
     - [O]`name` - visualization goal name
-    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
     - [O]`lossless` - deprecated
-    - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`protocol` - deprecated, moved to `DataOverride`
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
 
    

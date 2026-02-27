@@ -71,9 +71,9 @@ export class Alert extends BaseComponent {
         const soft = MODE_CLASS_SOFT[this.mode] ?? "";
         const look = this.soft ? soft : filled;
         this.classMap.base = [
-            "alert",                       // DaisyUI alert
+            "alert",
             look,
-            this.compact ? "py-1 px-2 text-sm" : "py-2 px-3",
+            this.compact ? "pt-1 pb-0 px-2 text-sm" : "py-2 px-3",
         ].filter(Boolean).join(" ");
     }
 
@@ -97,8 +97,8 @@ export class Alert extends BaseComponent {
         const alertNode = div(
             {
                 ...this.commonProperties,
+                ...this.extraProperties,
                 id: this.id,
-                class: this.classMap.base,
                 role: "alert",
                 tabindex: "0",
                 onclick: (e) => {

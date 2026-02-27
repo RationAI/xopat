@@ -250,7 +250,18 @@ function initXopatScripts() {
         } else {
             data.params.viewport = viewers.map(snapshotViewport);
         }
-        //by default omit underscore
+
+        for (const [k, v] of Object.entries(data.params)) {
+            if (typeof v === "string") {
+                const s = v.trim();
+                // cheap + safe: only try objects/arrays
+                if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
+                    try { data.params[k] = JSON.parse(s); } catch (_) {}
+                }
+            }
+        }
+
+        //by default omit underscore or any rendering entities using the replacer below
         return JSON.stringify(data, OpenSeadragon.FlexRenderer.jsonReplacer);
     };
 
@@ -345,6 +356,22 @@ form.submit();
     window.UTILITIES.copyUrlToClipboard = function() {
         const data = UTILITIES.serializeAppConfig();
         UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
+    };
+
+    /**
+     * Update the viewer URL with the current session data.
+     * @param withCookies
+     * @return {boolean}
+     */
+    window.UTILITIES.syncSessionToUrl = function syncSessionToUrl(withCookies = false) {
+        try {
+            const data = UTILITIES.serializeAppConfig();
+            history.replaceState(history.state, "", APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
+            return true;
+        } catch (e) {
+            console.warn("syncSessionToUrl failed:", e);
+            return false;
+        }
     };
 
     /**

@@ -29,7 +29,7 @@ class Checkbox extends BaseComponent {
         this.label = options["label"] || "";
         this.checked = options["checked"] || false;
         this.onchangeFunction = options["onchange"] || (() => {});
-        this.classMap["base"] = "cursor-pointer boxed";
+        this.classMap["base"] = "cursor-pointer";
     }
 
     create(){

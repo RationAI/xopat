@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2025-12-12
-//! Git commit: --8e90ea9-dirty
+//! Built on 2026-02-27
+//! Git commit: --32773b7-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -52,7 +52,8 @@
 
     /**
      * @typedef {Object} RenderOutput
-     * @property {Number} sourcesLength
+     * @property {Number} textureDepth
+     * @property {Number} stencilDepth
      */
 
     /**
@@ -84,11 +85,13 @@
          * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
          * @param {HTMLControlsHandler} incomingOptions.htmlHandler function that ensures individual ShaderLayer's controls' HTML is properly present at DOM
          * @param {function} incomingOptions.htmlReset              callback called when a program is reset - html needs to be cleaned
+         * @param {string|undefined} incomingOptions.backgroundColor #RGB or #RGBA hex, default undefined - transparent
          *
          * @param {Object} incomingOptions.canvasOptions
          * @param {Boolean} incomingOptions.canvasOptions.alpha
          * @param {Boolean} incomingOptions.canvasOptions.premultipliedAlpha
          * @param {Boolean} incomingOptions.canvasOptions.stencil
+         *
          *
          * @constructor
          * @memberof FlexRenderer
@@ -109,6 +112,7 @@
             this.interactive = incomingOptions.interactive === undefined ?
                 !!incomingOptions.htmlHandler : !!incomingOptions.interactive;
             this.htmlHandler = this.interactive ? incomingOptions.htmlHandler : null;
+            this._background = incomingOptions.backgroundColor || '#00000000';
 
             if (this.htmlHandler) {
                 if (!incomingOptions.htmlReset) {
@@ -183,11 +187,21 @@
          * @instance
          * @memberof FlexRenderer
          */
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
             this.canvas.width = width;
             this.canvas.height = height;
             this.gl.viewport(x, y, width, height);
-            this.webglContext.setDimensions(x, y, width, height, levels);
+            this.webglContext.setDimensions(x, y, width, height, levels, tiledImageCount);
+        }
+
+        /**
+         * Set viewer background color, supports #RGBA or #RGB syntax. Note that setting the value
+         * does not do anything until you recompile the shaders and should be done as early as possible,
+         * at best using the constructor options.
+         * @param (background)
+         */
+        setBackground(background) {
+            this._background = background || '#00000000';
         }
 
         /**
@@ -210,15 +224,18 @@
          */
         firstPassProcessData(source) {
             const program = this._programImplementations[this.webglContext.firstPassProgramKey];
+
             if (this.useProgram(program, "first-pass")) {
                 program.load();
             }
+
             const result = program.use(this.__firstPassResult, source, undefined);
+
             if (this.debug) {
-                this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
+                this._showOffscreenMatrix(result, {scale: 0.5, pad: 8});
             }
+
             this.__firstPassResult = result;
-            this.__firstPassResult.sourcesLength = source.length;
             return result;
         }
 
@@ -230,9 +247,11 @@
          */
         secondPassProcessData(renderArray, options = undefined) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
+
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
+
             return program.use(this.__firstPassResult, renderArray, options);
         }
 
@@ -252,6 +271,7 @@
             if (!program) {
                 program = this._programImplementations[key];
             }
+            // TODO consider deleting only if succesfully compiled to avoid critical errors
             if (this._programImplementations[key]) {
                 this.deleteProgram(key);
             }
@@ -269,6 +289,9 @@
                     this.createShaderLayer(shaderId, config, false);
                 }
             }
+            // Needs reference early
+            this._programImplementations[key] = program;
+            this.webglContext.setBackground(this._background);
 
             program.build(this._shaders, this.getShaderLayerOrder());
             // Used also to re-compile, set requiresLoad to true
@@ -278,10 +301,10 @@
             if (errMsg) {
                 this.gl.deleteProgram(webglProgram);
                 program._webGLProgram = null;
-                throw Error(errMsg);
+                this._programImplementations[key] = null;
+                throw new Error(errMsg);
             }
 
-            this._programImplementations[key] = program;
             if ($.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
@@ -289,6 +312,7 @@
                 program.created(webglProgram, this.canvas.width, this.canvas.height);
                 return key;
             }
+            // else todo consider some cleanup
             return undefined;
         }
 
@@ -608,7 +632,7 @@
                     dstGL: dst.gl,
                     srcTex: renderOutput.texture,
                     dstTex: prevDstTex,
-                    textureLayerCount: renderOutput.sourcesLength,
+                    textureLayerCount: renderOutput.textureDepth,
                     level,
                     format,
                     type,
@@ -626,7 +650,7 @@
                     dstGL: dst.gl,
                     srcTex: renderOutput.stencil,
                     dstTex: prevDstStencil,
-                    textureLayerCount: renderOutput.sourcesLength,
+                    textureLayerCount: renderOutput.stencilDepth,
                     level,
                     format,
                     type,
@@ -634,7 +658,8 @@
                 });
             }
 
-            out.sourcesLength = renderOutput.sourcesLength || 0;
+            out.textureDepth = renderOutput.textureDepth || 0;
+            out.stencilDepth = renderOutput.stencilDepth || 0;
             dst.__firstPassResult = out;
             return out;
         }
@@ -822,15 +847,17 @@
             return dstTex;
         }
 
-        _showOffscreenMatrix(renderOutput, length, {
+        _showOffscreenMatrix(renderOutput, {
             scale = 1,
             pad = 8,
             drawLabels = true,
             background = '#111'
         } = {}) {
-            // 2 columns: [Texture, Stencil], `length` rows
+            const colorLayers = renderOutput.textureDepth;
+            const stencilLayers = renderOutput.stencilDepth;
+
             const cols = 2;
-            const rows = length;
+            const rows = colorLayers;
             const width = Math.floor(this.canvas.width);
             const height = Math.floor(this.canvas.height);
             const cellW = Math.floor(width * scale);
@@ -897,7 +924,7 @@
             };
 
             // Iterate rows: each row = {texture i, stencil i}
-            for (let i = 0; i < length; i++) {
+            for (let i = 0; i < colorLayers; i++) {
                 // ---- texture ----
                 if (isGL2 && renderOutput.texture /* texture array */) {
                     attachLayer(renderOutput.texture, i);
@@ -920,8 +947,9 @@
                 ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
 
                 // ---- stencil ----
-                if (isGL2 && renderOutput.stencil /* texture array */) {
-                    attachLayer(renderOutput.stencil, i);
+                if (isGL2 && renderOutput.stencil /* texture array */ && stencilLayers > 0) {
+                    const stencilLayer = Math.min(i, stencilLayers - 1);
+                    attachLayer(renderOutput.stencil, stencilLayer);
                 } else {
                     console.error('No valid texture binding for "stencil" at index', i);
                     continue;
@@ -1051,7 +1079,7 @@
     ];
 
     $.FlexRenderer.jsonReplacer = function (key, value) {
-        return key.startsWith("_") || ["eventSource", "tiledImage", "tileSource"].includes(key) ? undefined : value;
+        return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     };
 
     /**
@@ -1706,6 +1734,9 @@
 
             // channels used for sampling data from the texture
             this.__channels = null;
+            // channel offset
+            this.__baseChannels = null;
+
             // which blend mode is being used
             this._mode = null;
             // parameters used for applying filters
@@ -2029,67 +2060,167 @@
 
             // regex to compare with value used with use_channel, to check its correctness
             const channelPattern = new RegExp('[rgba]{1,4}');
-            const parseChannel = (controlName, def, sourceDef) => {
-                const predefined = this.constructor.defaultControls[controlName];
+            this.__channels = [];
+            this.__baseChannels = [];
 
+            const parseChannel = (def, sourceDef, index) => {
+                const controlName = `use_channel${index}`;
+                const predefined = this.constructor.defaultControls[controlName];
+                const baseName = `use_channel_base${index}`;
+                const predefinedBase = this.constructor.defaultControls[baseName];
+
+                let base = 0;
+                let channel;
+
+                // 1) read raw channel value from options or predefined
                 if (options[controlName] || predefined) {
-                    let channel = predefined && predefined.required;
+                    channel = predefined && predefined.required;
                     if (!channel) {
                         channel = force ? options[controlName] :
                             this.loadProperty(controlName, options[controlName] || predefined.default);
                     }
+                }
 
-                    // (if channel is not defined) or (is defined and not string) or (is string and doesn't contain __channelPattern)
-                    if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
-                        console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
-                        this.storeProperty(controlName, def);
-                        channel = predefined.default || def;
+                // 2) parse inline "N:pattern" syntax if used
+                if (typeof channel === "string") {
+                    const m = channel.match(/^(\d+):(.*)$/);
+                    if (m) {
+                        base = parseInt(m[1], 10) || 0;
+                        channel = m[2];
                     }
+                }
+
+                // 3) explicit base override via use_channel_baseX
+                if (options[baseName] || predefinedBase) {
+                    base = predefinedBase && predefinedBase.required;
+                    if (!base) {
+                        base = force ? options[baseName] :
+                            this.loadProperty(baseName, options[baseName] || predefinedBase.default);
+                    }
+                    base = parseInt(base, 10);
+                }
+
+                if (Number.isNaN(base) || base < 0) {
+                    base = 0;
+                }
+
+                // 4) validate / normalize channel pattern as before
+                if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
+                    console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
+                    this.storeProperty(controlName, def);
+                    channel = predefined && predefined.default ? predefined.default : def;
+                }
+
+                if (!sourceDef.acceptsChannelCount(channel.length)) {
+                    console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
+                    this.storeProperty(controlName, def);
+                    channel = predefined && predefined.default ? predefined.default : def;
 
                     if (!sourceDef.acceptsChannelCount(channel.length)) {
+                        channel = def;
                         console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
-                        this.storeProperty(controlName, def);
-                        channel = predefined.default || def;
-
-                        // if def is not compatible with the channel count, try to stack it
-                        if (!sourceDef.acceptsChannelCount(channel.length)) {
-                            channel = def;
-                            console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
-                            while (channel.length < 5 && !sourceDef.acceptsChannelCount(channel.length)) {
-                                channel += def;
-                            }
-                            this.storeProperty(controlName, channel);
+                        while (channel.length < 5 && !sourceDef.acceptsChannelCount(channel.length)) {
+                            channel += def;
                         }
-                    }
-
-                    if (channel !== options[controlName]) {
                         this.storeProperty(controlName, channel);
                     }
-                    return channel;
                 }
-                return def;
+
+                if (channel !== options[controlName]) {
+                    this.storeProperty(controlName, channel);
+                }
+
+                this.__channels[index] = channel;
+                this.__baseChannels[index] = base;
             };
 
-            this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, "r", source));
+            const sources = this.constructor.sources();
+            for (let i = 0; i < sources.length; i++) {
+                parseChannel("r", sources[i], i);
+            }
         }
 
         /**
-         * Method for texture sampling with applied channel restrictions and filters.
+         * Unified texture sampling helper.
          *
-         * @param {String} textureCoords valid GLSL vec2 object
-         * @param {Number} otherDataIndex UNUSED; index of the data source, for backward compatibility left here
-         * @param {Boolean} raw whether to output raw value from the texture (do not apply filters)
+         * Usage:
+         *   sampleChannel("v_texCoord")                      // sourceIndex=0, baseChannel=0
+         *   sampleChannel("v_texCoord", 1)                   // sourceIndex=1, baseChannel=0
+         *   sampleChannel("v_texCoord", { baseChannel: 4 })  // sourceIndex=0, baseChannel=4
+         *   sampleChannel("v_texCoord", 0, { baseChannel: 8, raw: true })
          *
-         * @return {String} glsl code for correct texture sampling within the ShaderLayer's methods for generating glsl code (e.g. getFragmentShaderExecution)
+         * Returns GLSL:
+         *   float, vec2, vec3, or vec4 depending on use_channel pattern.
          */
-        sampleChannel(textureCoords, otherDataIndex = 0, raw = false) {
-            const chan = this.__channels[otherDataIndex];
-            let sampled = `${this.webglContext.sampleTexture(otherDataIndex, textureCoords)}.${chan}`;
+        sampleChannel(textureCoords, sourceIndexOrOptions = 0, maybeOptions = undefined) {
+            let sourceIndex = 0;
+            let raw = false;
 
-            if (raw) {
-                return sampled;
+            let opt = null;
+
+            if (typeof sourceIndexOrOptions === "object") {
+                // sampleChannel(uv, { ... })
+                opt = sourceIndexOrOptions || {};
+                sourceIndex = opt.sourceIndex || 0;
+            } else {
+                // sampleChannel(uv, sourceIndex, maybeOptions/raw)
+                sourceIndex = sourceIndexOrOptions || 0;
+
+                if (typeof maybeOptions === "object") {
+                    opt = maybeOptions || {};
+                } else if (typeof maybeOptions === "boolean") {
+                    raw = maybeOptions;
+                }
             }
-            return this.filter(sampled);
+
+            // Default baseChannel from resetChannel
+            let baseChannel = this.getDefaultChannelBase(sourceIndex);
+
+            // Override from options if provided
+            if (opt) {
+                if (typeof opt.baseChannel === "number") {
+                    baseChannel = opt.baseChannel;
+                }
+                if (opt.raw != null) { // eslint-disable-line eqeqeq
+                    raw = !!opt.raw;
+                }
+            }
+
+            const chanPattern = this.__channels[sourceIndex] || "r";
+            const glslExpr = this._buildChannelSampleExpr(sourceIndex, textureCoords, baseChannel, chanPattern);
+
+            return raw ? glslExpr : this.filter(glslExpr);
+        }
+
+        /**
+         * Get number of channels for a given sourceIndex.
+         * @param sourceIndex
+         * @return {number|*|number}
+         */
+        getSourceChannelCount(sourceIndex = 0) {
+            const cfg = this.getConfig();
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return 4;
+            }
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.webglContext.renderer.drawer;
+            if (!drawer || worldIndex == null) {  // eslint-disable-line eqeqeq
+                return 4;
+            }
+            return drawer.getChannelCount(worldIndex);
+        }
+
+        /**
+         * Get the default channel base offset for a given sourceIndex.
+         * @param sourceIndex
+         * @return {number} channel offset, usually 0, read from use_channel_baseX controls
+         */
+        getDefaultChannelBase(sourceIndex = 0) {
+            let baseChannel = this.__baseChannels[sourceIndex];
+            if (typeof baseChannel !== "number") {
+                baseChannel = 0;
+            }
+            return baseChannel;
         }
 
         /**
@@ -2100,7 +2231,6 @@
         getTextureSize(otherDataIndex = 0) {
             return this.webglContext.getTextureSize(otherDataIndex);
         }
-
 
         // BLENDING LOGIC
         /**
@@ -2113,6 +2243,63 @@
         resetMode(options = {}, force = true) {
             this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options, force);
             this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options, force);
+        }
+
+        /**
+         * Build GLSL that samples the requested components.
+         * @param {number} sourceIndex   index into config.tiledImages
+         * @param {string} uv            GLSL vec2 identifier
+         * @param {number} baseChannel   first flattened channel index to use
+         * @param {string} pattern       e.g. "r", "rg", "rgba", "bgra"
+         */
+        _buildChannelSampleExpr(sourceIndex, uv, baseChannel, pattern) {
+            // pattern is relative channel order, we must convert "rgba" to offsets 0,1,2,3
+            const offsets = [];
+            for (const ch of pattern) {
+                let off;
+                if (ch === "r") {
+                    off = 0;
+                } else if (ch === "g") {
+                    off = 1;
+                } else if (ch === "b") {
+                    off = 2;
+                } else if (ch === "a") {
+                    off = 3;
+                } else {
+                    continue;
+                } // or warn
+                offsets.push(off);
+            }
+            if (offsets.length === 0) {
+                offsets.push(0);
+            }
+
+            // If this is the common simple case (baseChannel==0, contiguous, canonical "xyz"):
+            const contiguous =
+                baseChannel === 0 &&
+                offsets.length <= 4 &&
+                offsets.every((o, i) => o === i);
+
+            if (contiguous) {
+                // Use the old fast path: osd_texture + swizzle
+                return `${this.webglContext.sampleTexture(sourceIndex, uv)}.${pattern}`;
+            }
+
+            // TODO: we should call here API of the underlying engine to get sampling method, not hardcoding it here!
+            //       we should also rely on osd_channel_pack instead of calling X times osd_channel
+            const comps = offsets.map(off => `osd_channel(${sourceIndex}, ${baseChannel + off}, ${uv})`);
+
+            if (comps.length === 1) {
+                return comps[0];
+            }
+            if (comps.length === 2) {
+                return `vec2(${comps.join(", ")})`;
+            }
+            if (comps.length === 3) {
+                return `vec3(${comps.join(", ")})`;
+            }
+            // 4 or more → vec4, extra components ignored
+            return `vec4(${comps.slice(0, 4).join(", ")})`;
         }
 
         _resetOption(name, supportedValueList, options = {}, force = true) {
@@ -4035,6 +4222,131 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
     }
 };
 $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
+
+$.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IControl {
+    constructor(owner, name, webGLVariableName, params) {
+        super(owner, name, webGLVariableName);
+        this.atlas = owner.webglContext.secondAtlas;
+        this._params = this.getParams(params);
+    }
+
+    init() {
+        this.encodedTextureId = this.load(this.params.default);
+
+        this.textureId = Number.parseInt(this.encodedTextureId, 10);
+
+        if (this.params.interactive) {
+            const _this = this;
+
+            let number = document.getElementById(`${this.id}_number`);
+            if (number) {
+                let updater = function(e) {
+                    _this.set(e.target.value);
+                    _this.owner.invalidate();
+                };
+
+                number.value = this.encodedTextureId;
+                number.addEventListener("change", updater);
+            }
+
+            let button = document.getElementById(`${this.id}_button`);
+            if (button) {
+                let updater = function(e) {
+                    let file = document.getElementById(`${_this.id}_file`);
+
+                    if (file.files && file.files.length) {
+                        const fr = new FileReader();
+                        fr.onload = function() {
+                            const image = new Image();
+                            image.onload = function() {
+                                _this.atlas.addImage(image);
+                                _this.atlas._commitUploads();
+                            };
+                            image.src = fr.result;
+                        };
+                        fr.readAsDataURL(file.files[0]);
+                    } else {
+                        alert("No file selected");
+                    }
+                };
+
+                button.addEventListener("click", updater);
+            }
+        }
+    }
+
+    set(encodedTextureId) {
+        this.encodedTextureId = encodedTextureId;
+        this.textureId = Number.parseInt(this.encodedTextureId, 10);
+
+        this.changed("default", this.textureId, this.encodedTextureId, this);
+        this.store(this.encodedTextureId);
+        this._needsLoad = true;
+    }
+
+    define() {
+        return `uniform int ${this.webGLVariableName}_textureId;`;
+    }
+
+    glLoaded(program, gl) {
+        this.textureIdLocation = gl.getUniformLocation(program, this.webGLVariableName + "_textureId");
+        this._needsLoad = true;
+    }
+
+    glDrawing(program, gl) {
+        if (this._needsLoad) {
+            gl.uniform1i(this.textureIdLocation, this.textureId);
+            this._needsLoad = false;
+        }
+    }
+
+    toHtml(classes = "", css = "") {
+        return `<span>${this.params.title}</span>
+        <div class="${classes}" style="${css}">
+            Selected: <input type="number" id="${this.id}_number" min="-1" max="16" step="1"><br>
+            <input type="file" id="${this.id}_file" accept="image/png"><br>
+            <button id="${this.id}_button">Add Image</button>
+        </div>`;
+    }
+
+    sample(value = undefined, valueGlType = 'void') {
+        if (!value) {
+            throw new Error("Requires a vec2 value/variable specifying the texture coordinate to sample at");
+        }
+
+        if (valueGlType === 'vec2') {
+            return `osd_atlas_texture(${this.webGLVariableName}_textureId, ${value})`;
+        }
+
+        throw new Error(`Incompatible parameter type '${valueGlType}' for image sampling control '${this.name}'; only vec2 is supported`);
+    }
+
+    get supports() {
+        return {
+            title: "Images",
+            interactive: true,
+            default: -1,
+        };
+    }
+
+    get supportsAll() {
+        return {};
+    }
+
+    get raw() {
+        return this.textureId;
+    }
+
+    get encoded() {
+        return this.encodedTextureId;
+    }
+
+    get type() {
+        return "vec4";
+    }
+};
+$.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image);
+
 })(OpenSeadragon);
 
 (function($) {
@@ -4190,12 +4502,19 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
          * @param {Number} width
          * @param {Number} height
          * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
-         *
+         * @param {Number} tiledImageCount number of tiled images carrying the levels
          * @instance
          * @memberof FlexRenderer
          */
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
             //no-op
+        }
+
+        /**
+         * Set viewer background color, supports #RGBA syntax
+         * @param (background)
+         */
+        setBackground(background) {
         }
 
         destroy() {
@@ -4329,7 +4648,7 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
         }
 
 // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
 
         }
 
@@ -4384,13 +4703,15 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
         }
 
         /**
-         * Add an image. Returns a stable atlasId.
+         * Add an image. Returns a stable textureId.
          * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
-         * @param {number} [w]
-         * @param {number} [h]
+         * @param {{
+         *   width?: number,
+         *   height?: number,
+         * }} [opts]
          * @returns {number}
          */
-        addImage(source, w, h) {
+        addImage(source, opts) {
             throw new Error('TextureAtlas2DArray.addImage: not implemented');
         }
 
@@ -4398,8 +4719,7 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
          * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
          * @param textureUnit
          */
-        bind(textureUnit) {
-        }
+        bind(textureUnit) {}
 
         /**
          * Get WebGL Atlas shader code. This code must define the following function:
@@ -4454,10 +4774,30 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
     }
 
     init() {
-        const textureAtlas = this.atlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
-        //todo consider passing reference to this
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, textureAtlas), "firstPass");
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, textureAtlas), "secondPass");
+        this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+
+        const countryIcon = new Image();
+        countryIcon.src = "/icons/place/country-icon.png";
+        countryIcon.onload = () => {
+            this.firstAtlas.addImage(countryIcon);
+        };
+
+        const cityIcon = new Image();
+        cityIcon.src = "/icons/place/city-icon.png";
+        cityIcon.onload = () => {
+            this.firstAtlas.addImage(cityIcon);
+        };
+
+        const villageIcon = new Image();
+        villageIcon.src = "/icons/place/village-icon.png";
+        villageIcon.onload = () => {
+            this.firstAtlas.addImage(villageIcon);
+        };
+
+        this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
     }
 
     getVersion() {
@@ -4469,21 +4809,48 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
      * @returns {string} glsl code for texture sampling
      */
     sampleTexture(index, vec2coords) {
-        return `osd_texture(${index}, ${vec2coords})`;
+        // todo make pack index configurable and use this instead of hardcoding functions inside shaderlayer sampleChannel(...)
+        return `osd_texture(${index}, 0, ${vec2coords})`;
+    }
+
+    sampleTextureAtlas(textureId, vec2coords) {
+        return `osd_atlas_texture(${textureId}, ${vec2coords})`;
     }
 
     getTextureSize(index) {
         return `osd_texture_size(${index})`;
     }
 
-    setDimensions(x, y, width, height, levels) {
-        this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels);
-        this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels);
+    setDimensions(x, y, width, height, levels, tiledImageCount) {
+        this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
+        this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
         //todo consider some elimination of too many calls
     }
 
+    setBackground(background) {
+        // todo this is not very nice, we need to call setBg before programs are compiled in a generic way, so
+        //  we hit a case where first program is compiled and this setter called, while second program is not available
+        const program = this.renderer.getProgram(this.secondPassProgramKey);
+        if (!program) {
+            return;
+        }
+        let hex = background.replace(/^#/, "").trim();
+        if (hex.length === 6) {
+            hex += "FF";
+        }
+        if (hex.length !== 8) {
+            throw new Error("Hex must be RRGGBB or RRGGBBAA");
+        }
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
+        const a = parseInt(hex.slice(6, 8), 16) / 255;
+        this.renderer.getProgram(this.secondPassProgramKey)._bgColor = `vec4(${r.toFixed(6)}, ${g.toFixed(6)}, ${b.toFixed(6)}, ${a.toFixed(6)})`;
+    }
+
     destroy() {
-        this.atlas.destroy();
+        this.firstAtlas.destroy();
+        this.secondAtlas.destroy();
     }
 
     getBlendingFunction(name) {
@@ -4597,9 +4964,10 @@ return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
 $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgram {
     constructor(context, gl, atlas) {
         super(context, gl, atlas);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
+        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32) - 1; // subtracting 1 to allow texture atlas to be bound; TODO: only bind texture atlas when it is needed
         //todo this might be limiting in some wild cases... make it configurable..? or consider 1d texture
         this.textureMappingsUniformSize = 64;
+        this._bgColor = 'vec4(.0)';
     }
 
     build(shaderMap, keyOrder) {
@@ -4610,9 +4978,14 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
                 '', $.FlexRenderer.ShaderLayer.__globalIncludes);
             return;
         }
+
+        // todo consider clip test before setting intermediate color -> but we would have to test all clips, not just one
+        //   no clip: whole viewport has the color
+        //   clip: only rendered parts have the background color (likely more desirable)
         let definition = '',
             execution = `
-vec4 intermediate_color = vec4(.0);
+vec4 intermediate_color = ${this._bgColor};
+overall_color = intermediate_color;
 vec4 clip_color = vec4(.0);
 `,
             customBlendFunctions = '';
@@ -4700,6 +5073,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         if (remainingBlenForShaderID) {
             execution += getRemainingBlending();
         }
+
         this.vertexShader = this._getVertexShaderSource();
         this.fragmentShader = this._getFragmentShaderSource(definition, execution,
             customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
@@ -4722,6 +5096,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
 
+        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
         this.vao = gl.createVertexArray();
     }
 
@@ -4735,6 +5110,25 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
             renderInfo.shader.glLoaded(this.webGLProgram, gl);
         }
         this.atlas.load(this.webGLProgram);
+
+        const renderer = this.context.renderer;
+        const packInfo = renderer.__flexPackInfo || {};
+        const layout = packInfo.layout || {};
+        const baseLayer = layout.baseLayer || [];
+        const packCount = layout.packCount || [];
+        const channelCount = packInfo.channelCount || [];
+
+        const maxTI = this._dataLayerCount;
+        const tiInfo = new Int32Array(maxTI * 3);
+        for (let i = 0; i < maxTI; i++) {
+            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
+            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+            tiInfo[i * 3] = base;
+            tiInfo[i * 3 + 1] = pc;
+            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+        }
+
+        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
     }
 
     /**
@@ -4758,8 +5152,10 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
             instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
         }
 
+        // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
         gl.uniform1iv(this._instanceOffsets, instanceOffsets);
         gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
         gl.uniform3fv(this._shaderVariables, shaderVariables);
 
         gl.activeTexture(gl.TEXTURE0);
@@ -4770,9 +5166,16 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
-        this.atlas.bind(gl.TEXTURE2);
+        this.atlas.bind(gl.TEXTURE2, 2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
         gl.bindVertexArray(null);
 
         return renderOutput;
@@ -4786,7 +5189,9 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     }
 
     // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-    setDimensions(x, y, width, height, levels) {
+    setDimensions(x, y, width, height, levels, tiledImageCount) {
+        this._dataLayerCount = levels;
+        this._tiledImageCount = tiledImageCount;
     }
 
     // PRIVATE FUNCTIONS
@@ -4830,9 +5235,14 @@ precision mediump int;
 precision mediump float;
 precision mediump sampler2DArray;
 
-uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
+// Stores shader index -> pointer to u_instanceTextureIndexes
 uniform int u_instanceOffsets[${this.textureMappingsUniformSize}];
+// Stores texture indexes for each shader, beginning at index obtained from u_instanceOffsets
+uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
+// Carries shader global attributes (opacity, pixelSize, zoom)
 uniform vec3 u_shaderVariables[${this.textureMappingsUniformSize}];
+// For each tiled image, we store (base texture offset, pack count, channel count)
+uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
 
 in vec2 v_texture_coords;
 
@@ -4845,22 +5255,50 @@ float zoom;
 uniform sampler2DArray u_inputTextures;
 uniform sampler2DArray u_stencilTextures;
 
-vec4 osd_texture(int index, vec2 coords) {
+int osd_pack_count(int sourceIndex) {
     int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return texture(u_inputTextures, vec3(coords, float(index)));
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    return u_tiInfo[worldIndex].y;
 }
 
-vec4 osd_stencil_texture(int instance, int index, vec2 coords) {
+int osd_channel_count(int sourceIndex) {
+    int offset = u_instanceOffsets[instance_id];
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    ivec3 info = u_tiInfo[worldIndex];
+    if (info.z <= 0) {
+        return info.y * 4;
+    }
+    return info.z;
+}
+
+vec4 osd_texture(int sourceIndex, int packIndex, vec2 coords) {
+    int offset = u_instanceOffsets[instance_id];
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    int base = u_tiInfo[worldIndex].x;
+    int pc = u_tiInfo[worldIndex].y;
+    packIndex = clamp(packIndex, 0, pc - 1);
+    return texture(u_inputTextures, vec3(coords, float(base + packIndex)));
+}
+
+float osd_channel(int sourceIndex, int channelIndex, vec2 coords) {
+    int pack = channelIndex >> 2;
+    int comp = channelIndex & 3;
+    vec4 v = osd_texture(sourceIndex, pack, coords);
+         if (comp == 0) return v.r;
+    else if (comp == 1) return v.g;
+    else if (comp == 2) return v.b;
+    else                return v.a;
+}
+
+vec4 osd_stencil_texture(int instance, int sourceIndex, vec2 coords) {
     int offset = u_instanceOffsets[instance];
-    index = u_instanceTextureIndexes[offset + index];
+    int index = u_instanceTextureIndexes[offset + sourceIndex];
     return texture(u_stencilTextures, vec3(coords, float(index)));
 }
 
-ivec2 osd_texture_size(int index) {
-    int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return textureSize(u_inputTextures, index).xy;
+// todo index unused, but we might want to keep it (other rendering engines might need it on the API level, not necessarily here in GLSL)
+ivec2 osd_texture_size(int sourceIndex) {
+    return textureSize(u_inputTextures, 0).xy;
 }
 
 ${this.atlas.getFragmentShaderDefinition()}
@@ -4906,7 +5344,7 @@ $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgra
      */
     constructor(context, gl, atlas) {
         super(context, gl, atlas);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
+        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32) - 1; // subtracting 1 to allow texture atlas to be bound; TODO: only bind texture atlas when it is needed
         this._textureIndexes = [...Array(this._maxTextures).keys()];
         // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
         //   make the first pass shader run multiple times if the number does not suffice
@@ -4920,14 +5358,16 @@ precision mediump float;
 
 layout(location = 0) in mat3 a_transform_matrix;
 // Generic payload args. Used for texture positions, vector positions and colors.
-layout(location = 4) in vec4 a_payload0; // first 4 texture coords or positions
-layout(location = 5) in vec4 a_payload1; // second 4 texture coords or colors
+layout(location = 4) in vec4 a_payload0; // first 4 raster texture coords or vector positions and atlas texture ID (x, y, z, textureId)
+layout(location = 5) in vec4 a_payload1; // second 4 raster texture coords or vector colors or icon parameters (x, y, width, height)
 
 uniform vec2 u_renderClippingParams;
 uniform mat3 u_geomMatrix;
 
-out vec2 v_texture_coords;
 flat out int instance_id;
+out vec2 v_texture_coords;
+out float v_vecDepth;
+flat out int v_textureId;
 out vec4 v_vecColor;
 
 const vec3 viewport[4] = vec3[4] (
@@ -4938,10 +5378,14 @@ const vec3 viewport[4] = vec3[4] (
 );
 
 void main() {
-    int vid = gl_VertexID & 3;
-    v_texture_coords = (vid == 0) ? a_payload0.xy :
-        (vid == 1) ? a_payload0.zw :
-             (vid == 2) ? a_payload1.xy : a_payload1.zw;
+    if (u_renderClippingParams.y > 0.5) {
+        v_texture_coords = vec2((a_payload0.x - a_payload1.x) / a_payload1.z, (a_payload0.y - a_payload1.y) / a_payload1.w);
+    } else {
+        int vid = gl_VertexID & 3;
+        v_texture_coords = (vid == 0) ? a_payload0.xy :
+            (vid == 1) ? a_payload0.zw :
+                (vid == 2) ? a_payload1.xy : a_payload1.zw;
+    }
 
     mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
 
@@ -4949,6 +5393,8 @@ void main() {
         matrix * vec3(a_payload0.xy, 1.0) :
         matrix * viewport[gl_VertexID];
 
+    v_vecDepth = a_payload0.z;
+    v_textureId = int(a_payload0.w);
     v_vecColor = a_payload1;
 
     gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
@@ -4959,38 +5405,63 @@ void main() {
 precision mediump int;
 precision mediump float;
 precision mediump sampler2D;
+precision mediump sampler2DArray;
 
 uniform vec2 u_renderClippingParams;
 
 flat in int instance_id;
 in vec2 v_texture_coords;
+in float v_vecDepth;
+flat in int v_textureId;
 in vec4 v_vecColor;
-uniform sampler2D u_textures[${this._maxTextures}];
+
+uniform sampler2DArray u_textures[${this._maxTextures}];
+uniform int u_tileLayer;
+
+${this.atlas.getFragmentShaderDefinition()}
 
 layout(location=0) out vec4 outputColor;
-layout(location=1) out float outputStencil;
+layout(location=1) out vec4 outputStencil;
 
 void main() {
     if (u_renderClippingParams.x < 0.5) {
-        // Iterate over tiles - textures for each tile (a texture array)
         for (int i = 0; i < ${this._maxTextures}; i++) {
-            // Iterate over data in each tile if the index matches our tile
             if (i == instance_id) {
                  switch (i) {
-    ${this.printN(x => `case ${x}: outputColor = texture(u_textures[${x}], v_texture_coords); break;`,
+    ${ this.printN(x =>
+                    `case ${x}: outputColor = texture(u_textures[${x}], vec3(v_texture_coords, float(u_tileLayer))); break;`,
                 this._maxTextures, "                ")}
                  }
                  break;
             }
         }
-        outputStencil = 1.0;
+
+        outputStencil = vec4(1.0);
+        gl_FragDepth = gl_FragCoord.z;
     } else if (u_renderClippingParams.y > 0.5) {
         // Vector geometry draw path (per-vertex color)
-        outputColor = v_vecColor;
-        outputStencil = 1.0;
+
+        vec4 stencil = vec4(1.0);
+        float depth = v_vecDepth / 255.0; // 2 ^ 8 - 1; 6 bits for z and 2 bits for y and x; assuming the maximal zoom level of tiles to be 64 (no other implementations seem to go past 25 so this should be plenty)
+
+        if (v_textureId < 0) {
+            outputColor = v_vecColor;
+        } else {
+            vec4 texColor = osd_atlas_texture(v_textureId, v_texture_coords); // required for icon rendering, needs texture atlas to be bound; TODO: use osd_atlas_texture only when texture atlas is bound
+            outputColor = texColor;
+
+            if (texColor.a < 1.0) {
+                stencil = vec4(0.0);
+                depth = 0.0;
+            }
+        }
+
+        outputStencil = stencil;
+        gl_FragDepth = depth;
     } else {
         // Pure clipping path: write only to stencil (color target value is undefined)
-        outputColor = vec4(0.0);
+        outputStencil = vec4(0.0);
+        gl_FragDepth = 0.0;
     }
 }
 `;
@@ -5021,6 +5492,7 @@ void main() {
         // Texture locations are 0->N uniform indexes, we do not load the data here yet as vao does not store them
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
+        this._tileLayerLoc = gl.getUniformLocation(program, "u_tileLayer");
 
         // Alias names to avoid confusion
         this._positionsBuffer = gl.getAttribLocation(program, "a_payload0");
@@ -5041,8 +5513,6 @@ void main() {
         gl.enableVertexAttribArray(this._positionsBuffer);
         gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
         this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
-
-
 
         /*
          * Rendering vector tiles. Positions of tiles are always rectangular (stretched and moved by the matrix),
@@ -5113,7 +5583,11 @@ void main() {
      */
     load() {
         this.gl.uniform1iv(this._inputTexturesLoc, this._textureIndexes);
-        this.gl.disable(this.gl.BLEND);
+
+        this.gl.enable(this.gl.BLEND);
+        this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+
+        this.atlas.load(this.webGLProgram);
     }
 
     /**
@@ -5121,38 +5595,63 @@ void main() {
      */
     use(renderOutput, sourceArray, options) {
         const gl = this.gl;
+
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
-        gl.enable(gl.STENCIL_TEST);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
+
+        gl.clearColor(0.0, 0.0, 0.0, 0.0);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.GEQUAL);
+        gl.clearDepth(0.0);
+
+        gl.enable(gl.STENCIL_TEST);
+
+        let isBlend = true;
 
         // this.fpTexture = this.fpTexture === this.colorTextureA ? this.colorTextureB : this.colorTextureA;
         // this.fpTextureClip = this.fpTextureClip === this.stencilTextureA ? this.stencilTextureB : this.stencilTextureA;
         this.fpTexture = this.colorTextureA;
         this.fpTextureClip = this.stencilTextureA;
 
-        this._renderOffset = 0;
-
         // Allocate reusable buffers once
         if (!this._tempMatrixData) {
             this._tempMatrixData = new Float32Array(this._maxTextures * 9);
             this._tempTexCoords = new Float32Array(this._maxTextures * 8);
         }
+
         let wasClipping = true; // force first init (~ as if was clipping was true)
 
         for (const renderInfo of sourceArray) {
             const rasterTiles = renderInfo.tiles;
-            const attachments = [];
-            // for (let i = 0; i < 1; i++) {
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
-                    this.fpTexture, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0);
 
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + 1,
-                    this.fpTextureClip, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0 + 1);
+            const attachments = [];
+
+            const targetColorLayer   = renderInfo.dataIndex;
+            const targetStencilLayer = renderInfo.stencilIndex;
+
+            // for (let i = 0; i < 1; i++) {
+
+            // color
+            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                this.colorTextureA, 0, targetColorLayer);
+            attachments.push(gl.COLOR_ATTACHMENT0);
+
+            // stencil
+            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1,
+                this.stencilTextureA, 0, targetStencilLayer);
+            attachments.push(gl.COLOR_ATTACHMENT0 + 1);
+
             //}
+
             gl.drawBuffers(attachments);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+            const packIndex = (typeof renderInfo.packIndex === "number") ? renderInfo.packIndex : 0;
+            gl.uniform1i(this._tileLayerLoc, packIndex);
+
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+            this.atlas.bind(gl.TEXTURE0 + this._maxTextures, this._maxTextures);
 
             // First, clip polygons if any required
             if (renderInfo.polygons.length) {
@@ -5186,6 +5685,12 @@ void main() {
 
             const tileCount = rasterTiles.length;
             if (tileCount) {
+                // Tiles MUST NOT blend - alpha channel can carry data just like another channel payload
+                if (isBlend) {
+                    gl.disable(gl.BLEND);
+                    isBlend = false;
+                }
+                isBlend = false;
                 // Then draw join tiles
                 gl.bindVertexArray(this.firstPassVao);
                 let currentIndex = 0;
@@ -5196,7 +5701,7 @@ void main() {
                         const tile = rasterTiles[currentIndex + i];
 
                         gl.activeTexture(gl.TEXTURE0 + i);
-                        gl.bindTexture(gl.TEXTURE_2D, tile.texture);
+                        gl.bindTexture(gl.TEXTURE_2D_ARRAY, tile.texture);
 
                         this._tempMatrixData.set(tile.transformMatrix, i * 9);
                         this._tempTexCoords.set(tile.position, i * 8);
@@ -5215,6 +5720,11 @@ void main() {
 
             const vectors = renderInfo.vectors;
             if (vectors && vectors.length) {
+                // Vectors MUST blend, as they can overlap within single layer
+                if (!isBlend) {
+                    gl.enable(gl.BLEND);
+                    isBlend = true;
+                }
                 // Signal geometry branch in shader
                 gl.uniform2f(this._renderClipping, 1, 1);
                 gl.bindVertexArray(this.firstPassVaoGeom);
@@ -5227,7 +5737,7 @@ void main() {
 
                         // Bind positions
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
                         // Bind per-vertex colors (normalized u8 → float 0..1)
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
@@ -5246,7 +5756,7 @@ void main() {
 
                         // Bind positions
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
                         // Bind per-vertex colors (normalized u8 → float 0..1)
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
@@ -5256,14 +5766,58 @@ void main() {
                         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
                         gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
                     }
+
+                    batch = vectorTile.points;
+                    if (batch) {
+                        if (!vectorTile.fills && !vectorTile.lines) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
+
+                    batch = vectorTile.icons;
+                    if (batch) {
+                        if (!vectorTile.fills && !vectorTile.lines && !vectorTile.points) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex icon parameters
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboParam);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.FLOAT, false, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
                 }
+
                 gl.uniform2f(this._renderClipping, 0, 0);
             }
-
-            this._renderOffset++;
         }
 
+        gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.STENCIL_TEST);
+
+        // blending by default ON
+        if (!isBlend) {
+            gl.enable(gl.BLEND);
+        }
+
         gl.bindVertexArray(null);
 
         if (!renderOutput) {
@@ -5271,21 +5825,28 @@ void main() {
         }
         renderOutput.texture = this.fpTexture;
         renderOutput.stencil = this.fpTextureClip;
+        renderOutput.textureDepth = this._dataLayerCount;
+        renderOutput.stencilDepth = this._tiledImageCount;
+
         return renderOutput;
     }
 
     unload() {
     }
 
-    setDimensions(x, y, width, height, dataLayerCount) {
+    setDimensions(x, y, width, height, dataLayerCount, tiledImageCount) {
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
         // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
-        this._createOffscreenTexture("stencilTextureA", width, height, dataLayerCount, this.gl.LINEAR);
+        this._createOffscreenTexture("stencilTextureA", width, height, tiledImageCount, this.gl.LINEAR);
         // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
+        this._dataLayerCount = dataLayerCount;
+        this._tiledImageCount = tiledImageCount;
+
         const gl  = this.gl;
+
         if (this.stencilClipBuffer) {
             gl.deleteRenderbuffer(this.stencilClipBuffer);
         }
@@ -5338,8 +5899,9 @@ void main() {
     }
 
     _createOffscreenTexture(name, width, height, layerCount, filter) {
-        layerCount = Math.max(layerCount, 1);
         const gl = this.gl;
+
+            layerCount = Math.max(layerCount, 1);
 
         let texRef = this[name];
         if (texRef) {
@@ -5361,6 +5923,7 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
 
     constructor(gl, opts) {
         super(gl, opts);
+
         this.version = 1;
         this._atlasUploadedVersion = -1;
 
@@ -5380,16 +5943,18 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
 
 
     /**
-     * Add an image. Returns a stable atlasId.
+     * Add an image. Returns a stable textureId.
      * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
-     * @param {number} [w]
-     * @param {number} [h]
+     * @param {{
+     *   width?: number,
+     *   height?: number,
+     * }} [opts]
      * @returns {number}
      */
-    addImage(source, w, h) {
-        const width = (typeof w === 'number') ? w :
+    addImage(source, opts) {
+        const width = (opts && opts.width && typeof opts.width === 'number') ? opts.width :
             (source && (source.width || source.naturalWidth || (source.canvas && source.canvas.width) || source.w));
-        const height = (typeof h === 'number') ? h :
+        const height = (opts && opts.height && typeof opts.height === 'number') ? opts.height :
             (source && (source.height || source.naturalHeight || (source.canvas && source.canvas.height) || source.h));
 
         if (!width || !height) {
@@ -5440,7 +6005,7 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
      * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
      * @param textureUnit
      */
-    bind(textureUnit) {
+    bind(textureUnit, textureUnitIndex) {
         const gl = this.gl;
 
         // textureUnit is the numeric unit index (0..N-1)
@@ -5448,7 +6013,9 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
 
         // only push uniform arrays when changed (fast and harmless during draw)
+
         if (this._atlasUploadedVersion !== this.version) {
+            gl.uniform1i(this._atlasTexLoc, textureUnitIndex);
             gl.uniform2fv(this._atlasScaleLoc, this._scale);
             gl.uniform2fv(this._atlasOffsetLoc, this._offset);
             gl.uniform1iv(this._atlasLayerLoc, this._layer);
@@ -5470,9 +6037,21 @@ uniform vec2  u_atlasScale[${this.maxIds}];
 uniform vec2  u_atlasOffset[${this.maxIds}];
 uniform int   u_atlasLayer[${this.maxIds}];
 
-vec4 osd_atlas_texture(int atlasId, vec2 uv) {
-    vec2 st = uv * u_atlasScale[atlasId] + u_atlasOffset[atlasId];
-    float layer = float(u_atlasLayer[atlasId]);
+vec4 osd_atlas_texture(int textureId, vec2 uv) {
+    if (textureId < 0) {
+        // return purple for non-existent texture
+        return vec4(1.0, 0.0, 1.0, 1.0);
+    }
+
+    // enable mirroring
+    uv = mod(uv, 2.0);
+    uv = uv - 1.0;
+    uv = sign(uv) * uv;
+    uv = 1.0 - uv;
+
+    vec2 st = u_atlasOffset[textureId] + uv * u_atlasScale[textureId];
+    float layer = float(u_atlasLayer[textureId]);
+
     return texture(u_atlasTex, vec3(st, layer));
 }
 `;
@@ -5495,12 +6074,12 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         this._commitUploads();
 
         // (optional) you can also pre-upload the uniform arrays here once right after commit
-        if (this._atlasUploadedVersion !== this.version) {
-            gl.uniform2fv(this._atlasScaleLoc, this._scale);
-            gl.uniform2fv(this._atlasOffsetLoc, this._offset);
-            gl.uniform1iv(this._atlasLayerLoc, this._layer);
-            this._atlasUploadedVersion = this.version;
-        }
+        // if (this._atlasUploadedVersion !== this.version) {
+        //     gl.uniform2fv(this._atlasScaleLoc, this._scale);
+        //     gl.uniform2fv(this._atlasOffsetLoc, this._offset);
+        //     gl.uniform1iv(this._atlasLayerLoc, this._layer);
+        //     this._atlasUploadedVersion = this.version;
+        // }
     }
 
     /**
@@ -5584,9 +6163,12 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
     }
 
     _ensureCapacityFor(width, height) {
+        const paddedWidth = width + 2 * this.padding;
+        const paddedHeight = height + 2 * this.padding;
+
         // try current layers first
         for (let li = 0; li < this.layers; li++) {
-            const pos = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            const pos = this._tryPlaceRect(li, paddedWidth, paddedHeight);
             if (pos) {
                 return { layer: li, x: pos.x, y: pos.y, willRealloc: false };
             }
@@ -5595,11 +6177,11 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         // if rectangle is bigger than layer extent, grow extent (power of 2)
         let newW = this.layerWidth;
         let newH = this.layerHeight;
-        if (width + this.padding * 2 > newW || height + this.padding * 2 > newH) {
-            while (newW < width + this.padding * 2) {
+        if (paddedWidth > newW || paddedHeight > newH) {
+            while (newW < paddedWidth) {
                 newW *= 2;
             }
-            while (newH < height + this.padding * 2) {
+            while (newH < paddedHeight) {
                 newH *= 2;
             }
             // reallocate texture with same layer count but bigger extent
@@ -5608,7 +6190,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
         // try again after extent growth
         for (let li = 0; li < this.layers; li++) {
-            const pos2 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            const pos2 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
             if (pos2) {
                 return { layer: li, x: pos2.x, y: pos2.y, willRealloc: false };
             }
@@ -5620,7 +6202,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
         // after adding layers there will be empty layers to place into
         const li = this._firstEmptyLayer();
-        const pos3 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+        const pos3 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
         return { layer: li, x: pos3.x, y: pos3.y, willRealloc: false };
     }
 
@@ -5687,7 +6269,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 shelf.x += w;
                 return { x: x, y: y };
             }
-
         }
 
         // start a new shelf
@@ -5762,30 +6343,28 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             // We have 'undefined' extra format for blank tiles
-            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "undefined"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
 
-            if (!options.offScreen) {
-                // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
-                this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
-                this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
-                this.viewer.world.addHandler("remove-item", (e) => {
-                    const tiledImage = e.item;
-                    // if managed internally on the instance (regardless of renderer state), handle removal
-                    if (tiledImage.__shaderConfig) {
-                        this.renderer.removeShader(tiledImage.__shaderConfig.id);
-                        delete tiledImage.__shaderConfig;
-                        if (tiledImage.__wglCompositeHandler) {
-                            tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
-                        }
+            // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
+            this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
+            this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
+            this.viewer.world.addHandler("remove-item", (e) => {
+                const tiledImage = e.item;
+                // if managed internally on the instance (regardless of renderer state), handle removal
+                if (tiledImage.__shaderConfig) {
+                    this.renderer.removeShader(tiledImage.__shaderConfig.id);
+                    delete tiledImage.__shaderConfig;
+                    if (tiledImage.__wglCompositeHandler) {
+                        tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
                     }
-                    // if now managed externally, just request rebuild, also updates order
-                    if (!this._configuredExternally) {
-                        // Update keys
-                        this._requestRebuild();
-                    }
-                });
-            }
+                }
+                // if now managed externally, just request rebuild, also updates order
+                if (!this._configuredExternally) {
+                    // Update keys
+                    this._requestRebuild();
+                }
+            });
         } // end of constructor
 
         /**
@@ -5809,7 +6388,9 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 usePrivateCache: true,
                 preloadCache: true,
                 copyShaderConfig: false,
-                handleNavigator: true
+                handleNavigator: true,
+                // hex bg color, by default transparent
+                backgroundColor: undefined
             };
         }
 
@@ -6059,6 +6640,46 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             this._destroyed = true;
         }
 
+        // todo documment
+        getPackCount(ti) {
+            const world = this.viewer.world;
+            if (!world) {
+                return 1;
+            }
+
+            let tiledImage = ti;
+            if (typeof ti === "number") {
+                tiledImage = world.getItemAt(ti);
+            }
+            if (!tiledImage) {
+                return 1;
+            }
+
+            return tiledImage.__flexPackCount || 1;
+        }
+
+        getChannelCount(ti) {
+            const world = this.viewer.world;
+            if (!world) {
+                return 4;
+            }
+
+            let tiledImage = ti;
+            if (typeof ti === "number") {
+                tiledImage = world.getItemAt(ti);
+            }
+            if (!tiledImage) {
+                return 4;
+            }
+
+            // fall back to packCount * 4, preserving old semantics
+            if (typeof tiledImage.__flexChannelCount === "number") {
+                return tiledImage.__flexChannelCount;
+            }
+            const pc = tiledImage.__flexPackCount || 1;
+            return pc * 4;
+        }
+
         _hasInvalidBuildState() {
             return this._requestBuildStamp > this._buildStamp;
         }
@@ -6074,29 +6695,30 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
             if (timeout === 0) {
                 this._buildStamp = Date.now();
-                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
+                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
+                this._updatePackLayout();
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                 this.rebuildCounter++;
                 return $.Promise.resolve();
             }
 
-            const _self = this;
             return new $.Promise((success, _) => {
-                _self._rebuildHandle = setTimeout(() => {
-                    if (!_self._configuredExternally) {
-                        _self.renderer.setShaderLayerOrder(_self.viewer.world._items.map(item =>
+                this._rebuildHandle = setTimeout(() => {
+                    if (!this._configuredExternally) {
+                        this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
                             item.__shaderConfig.id));
                     }
-                    _self._buildStamp = Date.now();
-                    _self.renderer.setDimensions(0, 0, _self.canvas.width, _self.canvas.height, _self.viewer.world.getItemCount());
+                    this._buildStamp = Date.now();
+                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                     // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
-                    _self.renderer.registerProgram(null, _self.renderer.webglContext.secondPassProgramKey);
-                    _self.rebuildCounter++;
-                    _self._rebuildHandle = null;
+                    this._updatePackLayout();
+                    this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                    this.rebuildCounter++;
+                    this._rebuildHandle = null;
                     success();
                     setTimeout(() => {
-                        _self.viewer.forceRedraw();
+                        this.viewer.forceRedraw();
                     });
                 }, timeout);
             });
@@ -6137,7 +6759,8 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 // this._renderingCanvas.width = this._outputCanvas.width;
                 // this._renderingCanvas.height = this._outputCanvas.height;
 
-                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this.viewer.world.getItemCount());
+                //todo batched?
+                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 this._size = viewportSize;
             };
             this.viewer.addHandler("resize", this._resizeHandler);
@@ -6176,6 +6799,8 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             let rotMatrix = $.Mat3.makeRotation(-view.rotation);
             let viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
 
+            this._ensurePackLayout();
+
             if (this._drawTwoPassFirst(tiledImages, view, viewMatrix)) {
                 this._drawTwoPassSecond(view);
             }
@@ -6189,10 +6814,9 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
          * @param {OpenSeadragon.Mat3} viewMatrix
          */
         _drawTwoPassFirst(tiledImages, viewport, viewMatrix) {
-            const gl = this._gl;
-
             // FIRST PASS (render things as they are into the corresponding off-screen textures)
             const TI_PAYLOAD = [];
+
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
@@ -6200,12 +6824,29 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
+                // rendering in 4 overlapping groups of non-overlapping tiles so the depth value stays relatively small
+                tilesToDraw.sort(
+                    (entryA, entryB) => {
+                        let levelA = entryA.tile.level;
+                        let levelOrderA = 2 * (entryA.tile.y % 2) + (entryA.tile.x % 2);
+
+                        let levelB = entryB.tile.level;
+                        let levelOrderB = 2 * (entryB.tile.y % 2) + (entryB.tile.x % 2);
+
+                        if (levelA === levelB) {
+                            return levelOrderB - levelOrderA;
+                        }
+
+                        return levelB - levelA;
+                    }
+                );
+
                 let overallMatrix = viewMatrix;
                 let imageRotation = tiledImage.getRotation(true);
                 // if needed, handle the tiledImage being rotated
 
                 // todo consider in-place multiplication, this creates insane amout of arrays
-                if( imageRotation % 360 !== 0) {
+                if (imageRotation % 360 !== 0) {
                     let imageRotationMatrix = $.Mat3.makeRotation(-imageRotation * Math.PI / 180);
                     let imageCenter = tiledImage.getBoundsNoRotate(true).getCenter();
                     let t1 = $.Mat3.makeTranslation(imageCenter.x, imageCenter.y);
@@ -6230,11 +6871,14 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                             //TODO consider drawing some error if the tile is in erroneous state
                             continue;
                         }
+
                         const transformMatrix = this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix);
+
                         if (tileInfo.texture) {
                             payload.push({
                                 transformMatrix,
-                                dataIndex: tiledImageIndex,
+                                dataIndex: tiledImage.__flexBaseLayer || tiledImageIndex, // color layer index
+                                stencilIndex: tiledImageIndex,
                                 texture: tileInfo.texture,
                                 position: tileInfo.position,
                                 tile: tile
@@ -6248,6 +6892,13 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                             if (tileInfo.vectors.lines) {
                                 tileInfo.vectors.lines.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.points) {
+                                tileInfo.vectors.points.matrix = transformMatrix;
+                            }
+                            if (tileInfo.vectors.icons) {
+                                tileInfo.vectors.icons.matrix = transformMatrix;
+                            }
+
                             vecPayload.push(tileInfo.vectors);
                         }
                     }
@@ -6264,6 +6915,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 } else {
                     polygons = [];
                 }
+
                 if (tiledImage._clip) {
                     const polygon = [
                         {x: tiledImage._clip.x, y: tiledImage._clip.y},
@@ -6277,21 +6929,27 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                     }));
                 }
 
-                TI_PAYLOAD.push({
-                    tiles: payload,
-                    vectors: vecPayload,
-                    polygons: polygons,
-                    dataIndex: tiledImageIndex,
-                    _temp: overallMatrix, // todo dirty
-                });
+                const packCount = tiledImage.__flexPackCount || 1;
+                const baseLayer = (tiledImage.__flexBaseLayer || 0);
+
+                for (let packIndex = 0; packIndex < packCount; packIndex++) {
+                    TI_PAYLOAD.push({
+                        tiles: payload,
+                        vectors: vecPayload,
+                        polygons: polygons,
+                        dataIndex: baseLayer + packIndex,
+                        stencilIndex: tiledImageIndex,
+                        packIndex: packIndex,
+                        _temp: overallMatrix, // todo dirty
+                    });
+                }
             }
 
             // todo flatten render data
 
-            if (!TI_PAYLOAD.length) {
-                this.renderer.gl.clear(gl.COLOR_BUFFER_BIT);
-                return false;
-            }
+            this.renderer.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
+
             this.renderer.firstPassProcessData(TI_PAYLOAD);
             return true;
         }
@@ -6404,6 +7062,34 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             return ratio * viewportZoom;
         }
 
+        //todo: this could be called only on change of TI, not each frame!
+        _updatePackLayout() {
+            const world = this.viewer.world;
+            const itemCount = world.getItemCount();
+
+            let baseLayer = [];
+            let packCount = [];
+            let total = 0;
+
+            for (let i = 0; i < itemCount; i++) {
+                const ti = world.getItemAt(i);
+                const pc = ti && ti.__flexPackCount ? ti.__flexPackCount : 1;
+                baseLayer[i] = total;
+                packCount[i] = pc;
+                total += pc;
+                ti.__flexBaseLayer = baseLayer[i];
+            }
+
+            if (!this.renderer.__flexPackInfo) {
+                this.renderer.__flexPackInfo = { packCount: [], channelCount: [] };
+            }
+            this.renderer.__flexPackInfo.layout = {
+                baseLayer: baseLayer,
+                packCount: packCount,
+                totalLayers: total
+            };
+        }
+
         /**
          * @returns {Boolean} true
          */
@@ -6499,7 +7185,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         internalCacheCreate(cache, tile) {
             let tiledImage = tile.tiledImage;
             let gl = this._gl;
-            let position;
 
             if (cache.type === "undefined") {
                 return null;
@@ -6511,30 +7196,37 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 data = data.canvas;
             }
 
-            // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
-            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines))) {
-                const tileInfo = { texture: null, position: null, vectors: {} };
+            const tileInfo = {
+                position: null,
+                texture: null,
+                vectors: undefined,
+            };
+
+            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
+                tileInfo.vectors = {};
 
                 const buildBatch = (meshes) => {
                     // Count totals
                     let vCount = 0,
                         iCount = 0;
                     for (const m of meshes) {
-                        vCount += (m.vertices.length / 2);
+                        vCount += (m.vertices.length / 4);
                         iCount += m.indices.length;
                     }
 
                     // Allocate batched arrays
-                    const positions = new Float32Array(vCount * 2);
+                    const positions = new Float32Array(vCount * 4);
                     const colors    = new Uint8Array(vCount * 4);  // normalized RGBA
+                    const parameters = new Float32Array(vCount * 4);
                     const indices   = new Uint32Array(iCount);
 
                     // Fill them
                     let vOfs = 0,
                         iOfs = 0,
                         baseVertex = 0;
+
                     for (const m of meshes) {
-                        positions.set(m.vertices, vOfs * 2);
+                        positions.set(m.vertices, vOfs * 4);
 
                         // fill color per-vertex (constant per feature)
                         const rgba = m.color ? m.color : [0, 0, 0, 1];
@@ -6542,7 +7234,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                         const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
                         const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
                         const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
-                        for (let k = 0; k < (m.vertices.length / 2); k++) {
+                        for (let k = 0; k < (m.vertices.length / 4); k++) {
                             const cOfs = (vOfs + k) * 4;
                             colors[cOfs + 0] = r;
                             colors[cOfs + 1] = g;
@@ -6550,14 +7242,18 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                             colors[cOfs + 3] = a;
                         }
 
+                        if (m.parameters) {
+                            parameters.set(m.parameters, vOfs * 4);
+                        }
+
                         // rebase indices
                         for (let k = 0; k < m.indices.length; k++) {
                             indices[iOfs + k] = baseVertex + m.indices[k];
                         }
 
-                        vOfs += (m.vertices.length / 2);
+                        vOfs += (m.vertices.length / 4);
                         iOfs += m.indices.length;
-                        baseVertex += (m.vertices.length / 2);
+                        baseVertex += (m.vertices.length / 4);
                     }
 
                     // Upload once
@@ -6569,11 +7265,15 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                     gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
                     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
 
+                    const vboParam = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboParam);
+                    gl.bufferData(gl.ARRAY_BUFFER, parameters, gl.STATIC_DRAW);
+
                     const ibo = gl.createBuffer();
                     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
                     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-                    return { vboPos, vboCol, ibo, count: indices.length };
+                    return { vboPos, vboCol, vboParam, ibo, count: indices.length };
                 };
 
                 if (data.fills && data.fills.length) {
@@ -6582,34 +7282,100 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 if (data.lines && data.lines.length) {
                     tileInfo.vectors.lines = buildBatch(data.lines);
                 }
+                if (data.points && data.points.length) {
+                    tileInfo.vectors.points = buildBatch(data.points);
+                }
+                if (data.icons && data.icons.length) {
+                    tileInfo.vectors.icons = buildBatch(data.icons);
+                }
 
                 return Promise.resolve(tileInfo);
             }
 
+            const isGpuTextureSet = data &&
+                typeof data.getType === "function" &&
+                data.getType() === "gpuTextureSet";
 
-            // if (cache.type === "vector-mesh") {
-            //     // We keep per-primitive VBOs so first pass can draw them without re-uploading every frame
-            //     const tileInfo = { texture: null, position: null, vectors: [] };
-            //
-            //     const meshes = Array.isArray(data.meshes) ? data.meshes : [];
-            //     for (const m of meshes) {
-            //         const positions = (m && m.positions) instanceof Float32Array ? m.positions : null;
-            //         if (!positions || positions.length === 0) continue;
-            //
-            //         const color = m.color && m.color.length === 4 ? m.color : [1, 0, 0, 1]; // default red
-            //
-            //         const vbo = gl.createBuffer();
-            //         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-            //         gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-            //         tileInfo.vectors.push({
-            //             buffer: vbo,
-            //             count: positions.length / 2,
-            //             color: new Float32Array(color)
-            //         });
-            //     }
-            //
-            //     return Promise.resolve(tileInfo);
-            // }
+            if (isGpuTextureSet) {
+                const gpu = data; // { width, height, packs: [...], channelCount? }
+                const width = gpu.width;
+                const height = gpu.height;
+                const packs = gpu.packs || [];
+                const packCount = packs.length || 1;
+
+                // store pack/channel info on the tiledImage
+                if (tiledImage) {
+                    const channelCount = gpu.channelCount || packCount * 4;
+                    if (!tiledImage.__flexPackCount) {
+                        tiledImage.__flexPackCount = packCount;
+                        this._packLayoutDirty = true;
+                    }
+                    if (!tiledImage.__flexChannelCount) {
+                        tiledImage.__flexChannelCount = channelCount;
+                        this._packLayoutDirty = true;
+                    }
+
+                    if (this.renderer && !this.renderer.__flexPackInfo) {
+                        this.renderer.__flexPackInfo = {
+                            packCount: [],
+                            channelCount: [],
+                        };
+                    }
+                    if (this.renderer && this.renderer.__flexPackInfo) {
+                        const tiIndex = this.viewer.world.getIndexOfItem(tiledImage);
+                        if (tiIndex >= 0) {
+                            this.renderer.__flexPackInfo.packCount[tiIndex] = packCount;
+                            this.renderer.__flexPackInfo.channelCount[tiIndex] = channelCount;
+                        }
+                    }
+                }
+
+                tileInfo.position = this._computeTilePosition(tile, tiledImage, width, height);
+
+                // Create per-tile TEXTURE_2D_ARRAY, one layer per pack
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+
+                const firstFmt = (packs[0] && packs[0].format) || "RGBA8";
+                const internalFormat = (firstFmt === "RGBA16F") ? gl.RGBA16F : gl.RGBA8;
+                const format = gl.RGBA;
+                const type = (firstFmt === "RGBA16F") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+                gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat, width, height, packCount);
+
+                for (let layer = 0; layer < packCount; layer++) {
+                    const pack = packs[layer];
+                    if (!pack) {
+                        continue;
+                    }
+                    const arr = pack.data; // TypedArray
+                    gl.texSubImage3D(
+                        gl.TEXTURE_2D_ARRAY,
+                        0,
+                        0, 0, layer,
+                        width, height, 1,
+                        format,
+                        type,
+                        arr
+                    );
+                }
+
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+                tileInfo.texture = texture;
+
+                if (this._packLayoutDirty) {
+                    //this._updatePackLayout();
+                    //this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
+                    this._packLayoutDirty = false;
+                    this._requestRebuild();
+                }
+
+                return $.Promise.resolve(tileInfo);
+            }
 
             return createImageBitmap(data).then(data => {
                 // if (!tiledImage.isTainted()) {
@@ -6620,59 +7386,32 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 //     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
                 //     this.setInternalCacheNeedsRefresh();
                 // } else {
-                let sourceWidthFraction, sourceHeightFraction;
-                if (tile.sourceBounds) {
-                    sourceWidthFraction = Math.min(tile.sourceBounds.width, data.width) / data.width;
-                    sourceHeightFraction = Math.min(tile.sourceBounds.height, data.height) / data.height;
-                } else {
-                    sourceWidthFraction = 1;
-                    sourceHeightFraction = 1;
-                }
 
-                let overlap = tiledImage.source.tileOverlap;
-                if (overlap > 0){
-                    // calculate the normalized position of the rect to actually draw
-                    // discarding overlap.
-                    let tileMeta = this._getTileRenderMeta(tile, tiledImage);
-
-                    let left = (tile.x === 0 ? 0 : tileMeta.overlapX) * sourceWidthFraction;
-                    let top = (tile.y === 0 ? 0 : tileMeta.overlapY) * sourceHeightFraction;
-                    let right = (tile.isRightMost ? 1 : 1 - tileMeta.overlapX) * sourceWidthFraction;
-                    let bottom = (tile.isBottomMost ? 1 : 1 - tileMeta.overlapY) * sourceHeightFraction;
-                    position = new Float32Array([
-                        left, bottom,
-                        left, top,
-                        right, bottom,
-                        right, top
-                    ]);
-                } else {
-                    position = new Float32Array([
-                        0, sourceHeightFraction,
-                        0, 0,
-                        sourceWidthFraction, sourceHeightFraction,
-                        sourceWidthFraction, 0
-                    ]);
-                }
-
-                const tileInfo = {
-                    position: position,
-                    texture: null,
-                    vectors: undefined,
-                };
+                const width  = data.width;
+                const height = data.height;
+                tileInfo.position = this._computeTilePosition(tile, tiledImage, width, height);
 
                 try {
-                    const texture = gl.createTexture();
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    const tex = gl.createTexture();
+                    gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
 
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    //gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+                    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, 1);
+                    gl.texSubImage3D(
+                        gl.TEXTURE_2D_ARRAY,
+                        0,
+                        0, 0, 0,
+                        width, height, 1,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        data
+                    );
 
-                    // upload the image data into the texture
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, data);
-                    tileInfo.texture = texture;
+                    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+                    tileInfo.texture = tex;
                     return tileInfo;
                 } catch (e){
                     // Todo a bit dirty re-use of the tainted flag, but makes the code more stable
@@ -6704,12 +7443,68 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
             });
         }
 
-        // internalCacheFree(data) {
-        //     if (data && data.texture) {
-        //         this._gl.deleteTexture(data.texture);
-        //         data.texture = null;
-        //     }
-        // }
+        /**
+         * Compute normalized tile texture coordinates (UVs) in source image space,
+         * including overlap trimming. Works for both normal images and gpuTextureSet.
+         */
+        _computeTilePosition(tile, tiledImage, dataWidth, dataHeight) {
+            let sourceWidthFraction, sourceHeightFraction;
+
+            if (tile.sourceBounds) {
+                sourceWidthFraction = Math.min(tile.sourceBounds.width, dataWidth) / dataWidth;
+                sourceHeightFraction = Math.min(tile.sourceBounds.height, dataHeight) / dataHeight;
+            } else {
+                sourceWidthFraction = 1;
+                sourceHeightFraction = 1;
+            }
+
+            const overlap = tiledImage.source.tileOverlap;
+            if (overlap > 0) {
+                // calculate the normalized position of the rect to actually draw
+                // discarding overlap.
+                const tileMeta = this._getTileRenderMeta(tile, tiledImage);
+
+                const left   = (tile.x === 0 ? 0 : tileMeta.overlapX) * sourceWidthFraction;
+                const top    = (tile.y === 0 ? 0 : tileMeta.overlapY) * sourceHeightFraction;
+                const right  = (tile.isRightMost ? 1 : 1 - tileMeta.overlapX) * sourceWidthFraction;
+                const bottom = (tile.isBottomMost ? 1 : 1 - tileMeta.overlapY) * sourceHeightFraction;
+
+                return new Float32Array([
+                    left, bottom,
+                    left, top,
+                    right, bottom,
+                    right, top
+                ]);
+            } else {
+                return new Float32Array([
+                    0, sourceHeightFraction,
+                    0, 0,
+                    sourceWidthFraction, sourceHeightFraction,
+                    sourceWidthFraction, 0
+                ]);
+            }
+        }
+
+        _ensurePackLayout() {
+            if (this._packLayoutDirty) {
+                this._updatePackLayout();
+                this._packLayoutDirty = false;
+            }
+        }
+
+        _computeOffscreenLayerCount() {
+            const world = this.viewer.world;
+            const items = world._items || [];
+            let total = 0;
+
+            for (let i = 0; i < items.length; i++) {
+                const ti = items[i];
+                const packCount = ti && ti.__flexPackCount ? ti.__flexPackCount : 1;
+                total += packCount;
+            }
+
+            return Math.max(total, 1);
+        }
 
         internalCacheFree(data) {
             if (!data) {
@@ -6730,6 +7525,16 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                     gl.deleteBuffer(data.vectors.lines.vboPos);
                     gl.deleteBuffer(data.vectors.lines.vboCol);
                     gl.deleteBuffer(data.vectors.lines.ibo);
+                }
+                if (data.vectors.points) {
+                    gl.deleteBuffer(data.vectors.points.vboPos);
+                    gl.deleteBuffer(data.vectors.points.vboCol);
+                    gl.deleteBuffer(data.vectors.points.ibo);
+                }
+                if (data.vectors.icons) {
+                    gl.deleteBuffer(data.vectors.icons.vboPos);
+                    gl.deleteBuffer(data.vectors.icons.vboCol);
+                    gl.deleteBuffer(data.vectors.icons.ibo);
                 }
                 data.vectors = null;
             }
@@ -6834,8 +7639,13 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
                 if (fullDrawPass) {
                     return Promise.all(tasks).then(() => {
-                        this.renderer.setDimensions(0, 0, size.x, size.y, tiledImages.length);
+                        // Sum of packs across all TIs:
+                        const colorLayers = drawer._computeOffscreenLayerCount();
+                        const stencilLayers = tiledImages.length; // one stencil layer per TI
+
+                        this.renderer.setDimensions(0, 0, size.x, size.y, colorLayers, stencilLayers);
                         this.draw(tiledImages, view);
+
                         const canvas = document.createElement('canvas');
                         const ctx = canvas.getContext('2d');
                         canvas.width = size.x;
@@ -6849,23 +7659,39 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                     });
                 }
 
-                this.renderer.setDimensions(0, 0, size.x, size.y, tiledImages.length);
+                let colorLayers   = tiledImages.length;
+                let stencilLayers = tiledImages.length;
+
+                if (view.renderer.__firstPassResult) {
+                    const srcFP = view.renderer.__firstPassResult;
+                    if (typeof srcFP.textureDepth === "number") {
+                        colorLayers = srcFP.textureDepth;
+                    }
+                    if (typeof srcFP.stencilDepth === "number") {
+                        stencilLayers = srcFP.stencilDepth;
+                    }
+                }
+
                 // Steal FP initialized textures if we differ in reference (different webgl context) or we have no state
                 if (view !== drawer || !this.renderer.__firstPassResult) {
                     // todo dirty, hide the __firstPassResult structure within the program logics
                     const program = view.renderer.getProgram('firstPass');
+                    colorLayers = drawer._computeOffscreenLayerCount();
                     this.renderer.__firstPassResult = {
                         texture: program.colorTextureA,
                         stencil: program.stencilTextureA,
+                        textureDepth: colorLayers,
+                        stencilDepth: stencilLayers,
                     };
                 }
+                this.renderer.setDimensions(0, 0, size.x, size.y, colorLayers, stencilLayers);
 
                 // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
                 view.renderer.copyRenderOutputToContext(this.renderer);
                 // ! must be called after copy, otherwise we would access wrong context
                 if (this.debug) {
-                    this.renderer._showOffscreenMatrix(this.renderer.__firstPassResult,
-                        tiledImages.length, {scale: 0.5, pad: 8});
+                    const fp = this.renderer.__firstPassResult;
+                    this.renderer._showOffscreenMatrix(fp, {scale: 0.5, pad: 8});
                 }
 
                 this._drawTwoPassSecond({
@@ -7385,6 +8211,56 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
 (function($) {
 /**
+ * Shader that uses a texture via a texture atlas
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+    static type() {
+        return "texture";
+    }
+
+    static name() {
+        return "Texture";
+    }
+
+    static description() {
+        return "use a texture via texture atlas";
+    }
+
+    static sources() {
+        return [
+            {
+                acceptsChannelCount: (x) => x === 4,
+                description: "first pass colors",
+            },
+        ];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                default: "rgba",
+            },
+            texture: {
+                default: { type: "image" },
+                accepts: (type, instance) => type === "vec4",
+            },
+        };
+    }
+
+    getFragmentShaderExecution() {
+        return `
+vec4 chan = ${this.sampleChannel('v_texture_coords', 0)};
+vec4 tex = ${this.texture.sample('v_texture_coords * 2.0', 'vec2')};
+
+return blendAlpha(chan, tex, min(chan.rgb, tex.rgb));
+`;
+    }
+});
+
+})(OpenSeadragon);
+
+(function($) {
+/**
  * Identity shader
  *
  * data reference must contain one index to the data to render using identity
@@ -7524,6 +8400,88 @@ ${this._renderer.htmlControls()}`;
 });
 })(OpenSeadragon);
 
+(function($) {
+
+    /**
+     * Single-channel fluorescence shader.
+     *
+     * Processes ONE logical channel from a multi-channel source.
+     * You can stack multiple instances of this shader with different configs.
+     *
+     * Channel selection is standardized:
+     *  - Swizzle pattern comes from use_channel0 (e.g. "r", "g", "rgba").
+     *  - Base channel index comes from:
+     *      1) use_channel_base0 in shader config, or inline "N:pattern"
+     *         in use_channel0 (e.g. "7:r"), via ShaderLayer.resetChannel,
+     *      2) fallback: config.channelIndex (legacy),
+     *      3) fallback: 0.
+     */
+    $.FlexRenderer.ShaderMediator.registerLayer(class SingleChannel extends $.FlexRenderer.ShaderLayer {
+
+        static type() {
+            return "single_channel";
+        }
+
+        static name() {
+            return "Single channel";
+        }
+
+        static description() {
+            return "Render one selected TIFF channel with a custom color.";
+        }
+
+        // One source: multi-channel TIFF/GeoTIFF scalar channels
+        static sources() {
+            return [{
+                // We treat each channel as a scalar; use_channel0 must be length 1.
+                acceptsChannelCount: (n) => n === 1,
+                description: "Multi-channel TIFF/GeoTIFF (scalar channels)"
+            }];
+        }
+
+        static get defaultControls() {
+            return {
+                // We want a single scalar per sample: "r"
+                use_channel0: {  // eslint-disable-line camelcase
+                    default: "r"
+                },
+
+                // Color for this channel
+                color: {
+                    default: {
+                        type: "color",
+                        default: "#ff00ff",
+                        title: "Channel color"
+                    },
+                    accepts: (type) => type === "vec3"
+                }
+            };
+        }
+
+        getFragmentShaderExecution() {
+            const ch = this.getDefaultChannelBase();
+
+            // Controls as GLSL expressions
+            const colorExpr   = this.color.sample("1.0", "float");
+
+            return `
+    // Total physical channels in source 0
+    int nPhys = osd_channel_count(0);
+
+    // If not enough channels, output transparent
+    if (${ch} < 0 || ${ch} >= nPhys) {
+        return vec4(0.0);
+    }
+
+    float fv = ${this.sampleChannel("v_texture_coords")};
+    vec3 col = fv * (${colorExpr});
+    return vec4(col, fv);
+`;
+        }
+    });
+
+})(OpenSeadragon);
+
 (function ($) {
 /**
  * MVTTileJSONSource
@@ -7582,7 +8540,9 @@ $.MVTTileSource = class extends $.TileSource {
                 for (const ctx of waiters) {
                     ctx.finish({
                         fills: t.fills.map(packMesh),
-                        lines: t.lines.map(packMesh)
+                        lines: t.lines.map(packMesh),
+                        points: t.points.map(packMesh),
+                        icons: t.icons.map(packMesh),
                     }, undefined, 'vector-mesh');
                 }
             } else {
@@ -7685,23 +8645,54 @@ function packMesh(m) {
         vertices: new Float32Array(m.vertices),
         indices: new Uint32Array(m.indices),
         color: m.color || [1, 0, 0, 1],
+        parameters: m.parameters ? new Float32Array(m.parameters) : undefined,
     };
 }
+
+const iconMapping = {
+    country: {
+        textureId: 0,
+        width: 256,
+        height: 256,
+    },
+    city: {
+        textureId: 1,
+        width: 256,
+        height: 256,
+    },
+    village: {
+        textureId: 2,
+        width: 256,
+        height: 256,
+    },
+};
 
 function defaultStyle() {
     // Super-minimal style mapping; replace as needed.
     // layerName => {type:'fill'|'line', color:[r,g,b,a], widthPx?:number, join?:'miter'|'bevel'|'round', cap?:'butt'|'square'|'round'}
     return {
         layers: {
-            water:     { type: 'fill', color: [0.65, 0.80, 0.93, 1] },
-            landuse:   { type: 'fill', color: [0.95, 0.94, 0.91, 1] },
-            park:      { type: 'fill', color: [0.88, 0.95, 0.88, 1] },
-            building:  { type: 'fill', color: [0.93, 0.93, 0.93, 1] },
-            waterway:  { type: 'line', color: [0.55, 0.75, 0.90, 1], widthPx: 1.2, join: 'round', cap: 'round' },
-            road:      { type: 'line', color: [0.60, 0.60, 0.60, 1], widthPx: 1.5, join: 'round', cap: 'round' },
+            water:          { type: 'fill', color: [0.10, 0.80, 0.80, 0.80] },
+            landcover:      { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
+            landuse:        { type: 'fill', color: [0.80, 0.80, 0.10, 0.80] },
+            park:           { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
+            boundary:       { type: 'line', color: [0.60, 0.20, 0.60, 1.00], widthPx: 2.0, join: 'round', cap: 'round' },
+            waterway:       { type: 'line', color: [0.10, 0.10, 0.80, 1.00], widthPx: 1.2, join: 'round', cap: 'round' },
+            transportation: { type: 'line', color: [0.80, 0.60, 0.10, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
+            road:           { type: 'line', color: [0.60, 0.60, 0.60, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
+            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.80] },
+            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
+            poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
+            housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
+            place:          {
+                type: 'icon',
+                color: [0.80, 0.10, 0.10, 1.00],
+                size: 1.2,
+                iconMapping: iconMapping, // TODO: somehow pass a function instead?
+            },
         },
         // Default if layer not listed
-        fallback: { type: 'line', color: [0.3, 0.3, 0.3, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
+        fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
     };
 }
 
@@ -8044,8 +9035,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-12-12
-//! Git commit: --8e90ea9-dirty
+//! Built on 2026-02-27
+//! Git commit: --32773b7-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8058,77 +9049,192 @@ function makeWorker() {
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
 // libs (Pbf, vectorTile, earcut) are concatenated before this file
 
-let EXTENT = 4096; let STYLE = {layers:{},fallback:{type:'line',color:[0,0,0,1],widthPx:1,join:'bevel',cap:'butt'}};
+let EXTENT = 4096;
+let STYLE = {
+    layers: {},
+    fallback: { type: 'line', color: [0, 0, 0, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
+};
+
 self.onmessage = async (e) => {
     const msg = e.data;
+
     try {
         if (msg.type === 'config') {
-            EXTENT = msg.extent || EXTENT; STYLE = msg.style || STYLE; return;
+            EXTENT = msg.extent || EXTENT;
+            STYLE = msg.style || STYLE;
+            return;
         }
+
         if (msg.type === 'tile') {
             const {key, url, z, x, y} = msg;
+
+            let tileDepth = (z << 2) + (2 * (y % 2) + (x % 2)) + 1; // we only need 2 bits to encode for the 4 possibilities for the combination of x and y
+
             // lazy-load libs
             if (!self.Pbf || !self.vectorTile || !self.earcut) {
                 throw new Error('Missing libs');
             }
             const resp = await fetch(url);
-            if (!resp.ok) throw new Error('HTTP '+resp.status);
+
+            if (!resp.ok) {
+                throw new Error('HTTP ' + resp.status);
+            }
+
             const buf = await resp.arrayBuffer();
             const vt = new self.vectorTile.VectorTile(new self.Pbf(new Uint8Array(buf)));
 
-            const fills = [], lines = [];
+            const fills = [];
+            const lines = [];
+            const points = [];
+            const icons = [];
+
             // Iterate layers
             for (const lname in vt.layers) {
                 const lyr = vt.layers[lname];
                 const lstyle = STYLE.layers[lname] || STYLE.fallback;
-                for (let i=0;i<lyr.length;i++) {
-                    const feat = lyr.feature(i);
+
+                for (let f = 0; f < lyr.length; f++) {
+                    const feat = lyr.feature(f);
                     const geom = feat.loadGeometry();
                     const fstyle = lstyle; // TODO: evaluate by properties/zoom if needed
+
                     if (feat.type === 3 && fstyle.type === 'fill') {
                         // Polygon with holes; MVT ring rule: outer CW, holes CCW (y down)
                         const polys = classifyRings(geom);
                         for (const poly of polys) {
-                            const flat = []; const holes = []; let len=0;
-                            for (let r=0;r<poly.length;r++) {
+                            const flat = [];
+                            const holes = [];
+                            let len = 0;
+
+                            for (let r = 0; r < poly.length; r++) {
                                 const ring = poly[r];
-                                if (r>0) holes.push(len);
-                                for (let k=0;k<ring.length;k++){ const p=ring[k]; flat.push(p.x, p.y); len++; }
+
+                                if (r > 0) {
+                                    holes.push(len);
+                                }
+
+                                for (let k = 0; k < ring.length; k++) {
+                                    const p = ring[k];
+                                    flat.push(p.x, p.y);
+                                    len++;
+                                }
                             }
+
                             const idx = self.earcut(flat, holes, 2);
+
                             if (idx.length) {
                                 // Normalize to 0..1 UV for the renderer
-                                const verts = new Float32Array(flat.length);
-                                for (let j=0;j<flat.length;j+=2){ verts[j] = flat[j]/lyr.extent; verts[j+1] = flat[j+1]/lyr.extent; }
+                                const vertCount = flat.length / 2;
+                                const verts = new Float32Array(4 * vertCount);
+                                for (let v = 0; v < vertCount; v += 1) {
+                                    verts[4 * v + 0] = flat[2 * v + 0] / lyr.extent;
+                                    verts[4 * v + 1] = flat[2 * v + 1] / lyr.extent;
+                                    verts[4 * v + 2] = tileDepth;
+                                    verts[4 * v + 3] = -1;
+                                }
                                 fills.push({ vertices: verts.buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
                             }
                         }
                     }
+
                     if (feat.type === 2 && fstyle.type === 'line') {
                         // Build stroke triangles (bevel joins + requested caps; miter threshold)
                         const widthPx = fstyle.widthPx || 1.0;
                         const widthTile = widthPx * (lyr.extent / (512)); // heuristic: px@512 tile
-                        for (let p=0;p<geom.length;p++) {
+                        for (let p = 0; p < geom.length; p++) {
                             const pts = geom[p];
-                            const mesh = strokePoly(pts, widthTile, fstyle.join||'bevel', fstyle.cap||'butt', fstyle.miterLimit||2.0);
+                            const mesh = strokePoly(pts, widthTile, fstyle.join || 'bevel', fstyle.cap || 'butt', fstyle.miterLimit || 2.0);
                             if (mesh && mesh.indices.length) {
-                                const verts = new Float32Array(mesh.vertices.length);
-                                for (let j=0;j<mesh.vertices.length;j+=2){ verts[j] = mesh.vertices[j]/lyr.extent; verts[j+1] = mesh.vertices[j+1]/lyr.extent; }
+                                const vertCount = mesh.vertices.length / 2;
+                                const verts = new Float32Array(4 * vertCount);
+                                for (let v = 0; v < vertCount; v += 1) {
+                                    verts[4 * v + 0] = mesh.vertices[2 * v + 0] / lyr.extent;
+                                    verts[4 * v + 1] = mesh.vertices[2 * v + 1] / lyr.extent;
+                                    verts[4 * v + 2] = tileDepth;
+                                    verts[4 * v + 3] = -1;
+                                }
                                 lines.push({ vertices: verts.buffer, indices: new Uint32Array(mesh.indices).buffer, color: fstyle.color });
                             }
                         }
+                    }
+
+                    if (feat.type === 1 && fstyle.type === 'point') {
+                        const size = (fstyle.size || 10.0) / 2.0;
+                        const verts = [];
+                        const idx = [0, 1, 2, 0, 2, 3];
+                        for (let p = 0; p < geom.length; p++) {
+                            const pts = geom[p];
+                            for (let pi = 0; pi < pts.length; pi += 1) {
+                                const pt = pts[pi];
+                                verts.push((pt.x + size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x - size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x - size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x + size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
+                            }
+                        }
+                        points.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
+                    }
+
+                    if (feat.type === 1 && fstyle.type === 'icon') {
+                        const size = fstyle.size || 1.0;
+                        const icon = fstyle.iconMapping[feat.properties.class] || { textureId: -1, width: 16, height: 16 };
+
+                        const verts = [];
+                        const idx = [0, 1, 3, 0, 2, 3];
+                        const parameters = [];
+
+                        for (let p = 0; p < geom.length; p++) {
+                            const pts = geom[p];
+                            for (let pi = 0; pi < pts.length; pi += 1) {
+                                const pt = pts[pi];
+
+                                const width = size * icon.width;
+                                const height = size * icon.height;
+
+                                const xStart = (pt.x - (width / 2.0)) / lyr.extent;
+                                const xEnd = (pt.x + (width / 2.0)) / lyr.extent;
+                                const yStart = (pt.y - (height / 2.0)) / lyr.extent;
+                                const yEnd = (pt.y + (height / 2.0)) / lyr.extent;
+
+                                verts.push(xStart, yStart, tileDepth, icon.textureId);
+                                verts.push(xEnd, yStart, tileDepth, icon.textureId);
+                                verts.push(xStart, yEnd, tileDepth, icon.textureId);
+                                verts.push(xEnd, yEnd, tileDepth, icon.textureId);
+
+                                for (let i = 0; i < 4; i += 1) {
+                                    parameters.push(xStart, yStart, width / lyr.extent, height / lyr.extent);
+                                }
+                            }
+                        }
+
+                        icons.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, parameters: new Float32Array(parameters).buffer });
                     }
                 }
             }
 
             // Transfer buffers
             const transfer = [];
-            for (const a of fills) { transfer.push(a.vertices, a.indices); }
-            for (const a of lines) { transfer.push(a.vertices, a.indices); }
-            self.postMessage({ type:'tile', key, ok:true, data:{ fills, lines } }, transfer);
+
+            for (const a of fills) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of lines) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of points) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of icons) {
+                transfer.push(a.vertices, a.indices, a.parameters);
+            }
+
+            self.postMessage({ type: 'tile', key, ok: true, data: { fills, lines, points, icons } }, transfer);
         }
     } catch (err) {
-        self.postMessage({ type:'tile', key: e.data && e.data.key, ok:false, error: String(err) });
+        self.postMessage({ type: 'tile', key: e.data && e.data.key, ok: false, error: String(err) });
     }
 };
 
@@ -8218,8 +9324,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 })(typeof self !== 'undefined' ? self : window);
 
 //! flex-renderer 0.0.1
-//! Built on 2025-12-12
-//! Git commit: --8e90ea9-dirty
+//! Built on 2026-02-27
+//! Git commit: --32773b7-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

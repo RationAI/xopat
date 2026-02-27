@@ -53,7 +53,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
-    $.t = $.t || (x => x);
+    $.t = $.t || (x => String(x).split(".").findLast(Boolean));
 
     /**
      * @type {XOpatElement[]}
@@ -2066,8 +2066,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     drawerOptions: {
                         'flex-renderer': {
                             webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
-                            // todo: support debug in some reasonable way
-                            // debug: window.APPLICATION_CONTEXT.getOption("webglDebugMode") || false,
+                            backgroundColor: APPLICATION_CONTEXT.getOption("background"),
+                            debug: !!window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
                             interactive: true,
                             htmlHandler: (shaderLayer, shaderConfig) => {
                                 viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
@@ -2327,8 +2327,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         toSet = null;
                     };
 
+                    /**
+                     * @event show-demo-page
+                     */
                     viewer.raiseEvent('show-demo-page', {
                         id: id,
+                        htmlError: explainErrorHtml,
                         show: doOverlay,
                     });
 

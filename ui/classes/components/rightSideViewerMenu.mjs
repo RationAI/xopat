@@ -39,7 +39,7 @@ export class RightSideViewerMenu extends BaseComponent {
         const originalAddTab = this.menu.addTab;
         this.menu.addTab = (item) => {
             const tabItem = originalAddTab.call(this.menu, item);
-            USER_INTERFACE.AppBar.View.registerRightMenuTab(tabItem);
+            USER_INTERFACE.AppBar.View.registerViewComponent("sideViewerMenu", tabItem);
         };
 
         this.menu.addTab(
@@ -64,14 +64,11 @@ export class RightSideViewerMenu extends BaseComponent {
 
         // defaultly open menus
         for (let i of Object.keys(this.menu.tabs)) {
+            // todo focus manager similar to visibility manager
             if (APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
                 this.menu.tabs[i]._setFocus();
             } else {
                 this.menu.tabs[i]._removeFocus();
-            }
-
-            if (APPLICATION_CONTEXT.AppCache.get(`${i}-hidden`, false)) {
-                this.menu.tabs[i].toggleHiden();
             }
         }
 

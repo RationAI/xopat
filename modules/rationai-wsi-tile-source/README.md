@@ -29,5 +29,8 @@ But this approach has its limitations.
 ### Options
 
 Options include:
-``fornat`` - one of `jpeg, png, tiff, bmp, gif`.
+``format`` - one of `jpeg, png, tiff, bmp, gif`.
 ``quality`` - for e.g. jpeg the image quality to request.
+``channels`` - if format is `tiff`, the channels to request (array of indexes) or `all` literal.
+
+You can set these optiosn

@@ -1,18 +1,18 @@
 /**
  * @typedef BackgroundItem
  * @type {object}
- * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
- * @property {?string} protocol see protocol construction below in advanced details
- * @property {?string} protocolPreview as above, must be able to generate file preview (fetch top-level tile)
- * @property {?OpenSeadragon.TileSource} tileSource a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
- *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
- * @property {?SlideSourceOptions} options options passed to the data source integration logics - TileSource class
- * @property {?number} microns size of pixel in micrometers, default `undefined`,
- * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
- * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
+ * @property {?Array<VisualizationShaderLayer>} shaders array of optional rendering specification
+ * @property {?string} protocol deprecated, use DataOverride instead
  * @property {?string} name custom tissue name, default the tissue path
  * @property {?number} goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
  * @property {?string} id unique ID for the background, created automatically from data path if not defined
+ */
+/**
+ * @typedef DataSpecification
+ * @type {DataID|DataOverride}
+ * Data Specification is the virtual representation of the data item. It can either directly specify the data item,
+ * or, it can contain a more-broad data specification overriding the default behavior of the data source integration.
  */
 /**
  * @typedef DataID
@@ -21,32 +21,48 @@
  * @type {string|object}
  */
 /**
+ * @typedef DataOverride
+ * @type {object}
+ * A more holistic data specification, which can provide custom options for the target protocol (underlying TileSource API), 
+ * and override the default fetching behavior (e.g. to use a custom data source). Usage of this object is not allowed in secure mode.
+ * @property {DataID} dataID actual data value, required - its presence is used to identify this object is DataOverride type
+ * @property {?SlideSourceOptions} options passed to the data source integration logics - TileSource class
+ * @property {?number} microns size of pixel in micrometers, default `undefined`,
+ * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property {?string} protocol see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
+ * @property {?OpenSeadragon.TileSource} tileSource a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
+ *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
+ */
+/**
  * @typedef StandaloneBackgroundItem
  * @type {BackgroundItem}
- * @property {DataID} dataReference actual value of the data item. Used when processing offscreen data for
+ * @property {DataSpecification} dataReference actual value of the data item. Used when processing offscreen data for
  * session-unrelated things (such as thumbnail preview for custom data).
  */
 /**
  * @typedef VisualizationItem
  * @type {object}
- * @property {number} dataReference index to the `data` array, can be only one unlike in `shaders`
- * @property {?string} protocol see protocol construction below in advanced details
- * @property {?string} protocolPreview as above, must be able to generate file preview (fetch top-level tile)
- * @property {SlideSourceOptions} options options passed to the data source integration logics - TileSource class
- * @property {?number} microns size of pixel in micrometers, default `undefined`,
- * @property {?number} micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
- * @property {?number} micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+ * @property {Array<VisualizationShaderLayer>} shaders array of shader specifications
+ * @property {?string} protocol deprecated, use DataOverride instead
  * @property {?string} name custom tissue name, default the tissue path
  * @property {?number} goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
  */
+/**
+ * @typedef VisualizationShaderLayer
+ * @property {string} type
+ * @property {Array<number>} dataReferences
+ * todo docs
+ */
 
 /**
- * @typedef TileSourceMetadata
- * @type object
- * @property {string} [error] error message, if the source should be treated as faulty one
- * @property {number} [microns] pixel size in micrometers (used instead of X+Y variant, chose one)
- * @property {number} [micronsX] pixel size in micrometers in X dimension (used together with micronsY instead of microns)
- * @property {number} [micronsY] pixel size in micrometers in Y dimension
+ * Slide Metadata
+ * @typedef {Object} TileSourceMetadata
+ * @property {object} [info=undefined] - info object that is used to store all information about the slide a user should see, if not provided, the whole return value is treated also as user info.
+ * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
+ * @property {number} [microns=undefined] - The microns in average.
+ * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.
+ * @property {number} [micronsY=undefined] - The pixel size in Y direction, can be used instead of microns.
  */
 
 /**
@@ -148,66 +164,40 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 throw new Error('Use BackgroundConfig.from(...) to create your background!');
             }
 
-            // Internal storage for the "de-indexed" raw values
-            this._rawValues = [];
             this._raw = { ...data };
+            this._rawValue = null;
 
             const globalData = APPLICATION_CONTEXT.config.data || [];
 
-            // incoming refs can be number zero === false
-            let incomingRefs = typeof data.dataReference === "number" ?  data.dataReference :
-                (data.dataReferences || data.dataReference || []);
-            if (!Array.isArray(incomingRefs)) incomingRefs = [incomingRefs];
+            // --- Normalize incoming reference ------------------
+            let ref = data.dataReference;
 
-            // "De-indexing": Cache the true values immediately
-            this._rawValues = incomingRefs.map(ref => typeof ref === 'number' ? globalData[ref] : ref);
+            if (typeof ref === "number") {
+                this._rawValue = globalData[ref];
+            } else {
+                this._rawValue = ref ?? null;
+            }
 
-            // Clean up the object surface to avoid property collisions
-            delete this._raw.dataReferences;
             delete this._raw.dataReference;
+            // legacy field, just in case
+            delete this._raw.dataReferences;
             Object.assign(this, this._raw);
 
-            // 2. Proxied dataReference (Singular - Legacy)
+            // --- Single dataReference property only --------------------------------
             Object.defineProperty(this, 'dataReference', {
                 get: () => {
-                    const refs = this.dataReferences; // Uses the smart getter below
-                    return Array.isArray(refs) ? refs[0] : refs;
-                },
-                set: (val) => {
-                    // Setting the singular property updates the plural internal state
-                    this.dataReferences = [val];
-                },
-                enumerable: true
-            });
-
-            // 3. Smart dataReferences (Plural - Future Proof)
-            Object.defineProperty(this, 'dataReferences', {
-                get: () => {
                     const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
-                    const indices = [];
-                    let allValid = true;
-
-                    for (const val of this._rawValues) {
-                        const idx = currentGlobalData.indexOf(val);
-                        if (idx !== -1) {
-                            indices.push(idx);
-                        } else {
-                            allValid = false;
-                            break;
-                        }
-                    }
-
-                    // Returns indices only if ALL values exist in global data
-                    if (allValid && indices.length === this._rawValues.length && indices.length > 0) {
-                        return indices;
-                    }
-
-                    return this._rawValues;
+                    const idx = currentGlobalData.indexOf(this._rawValue);
+                    // If the raw value lives in the data array, expose its index
+                    return idx !== -1 ? idx : this._rawValue;
                 },
                 set: (val) => {
                     const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
-                    const incoming = Array.isArray(val) ? val : [val];
-                    this._rawValues = incoming.map(v => typeof v === 'number' ? currentGlobalData[v] : v);
+                    if (typeof val === 'number') {
+                        this._rawValue = currentGlobalData[val];
+                    } else {
+                        this._rawValue = val;
+                    }
                 },
                 enumerable: true
             });
@@ -219,33 +209,36 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             function fixRef(ref) {
                 if (typeof ref === "string") {
                     const pref = Number.parseInt(ref, 10);
-                    if (typeof pref === "number" && String(pref) === ref) {
+                    if (!Number.isNaN(pref) && String(pref) === ref) {
                         return pref;
                     }
                 }
                 return ref;
             }
 
-            // Standardize input keys
-            if (Array.isArray(config['dataReferences'])) {
-                config['dataReferences'] = config['dataReferences'].map(fixRef);
-            } else if (config['dataReference'] !== undefined) {
-                config['dataReference'] = fixRef(config['dataReference']);
+            if (config.dataReference !== undefined) {
+                config.dataReference = fixRef(config.dataReference);
+            } else {
+                console.error("BackgroundConfig.from: dataReference is required!");
             }
 
             config.id = BackgroundConfig.processId(config.id, config);
             const exists = _CONF_REGISTRY.has(config.id);
             const instance = exists ? _CONF_REGISTRY.get(config.id) : new BackgroundConfig(config, _CONF_GUARD);
 
+            // If this background uses a literal DataID (StandaloneBackgroundItem),
+            // push it into the global data list so it can be reused.
             if (registerAsSource) {
-                const refs = instance.dataReferences;
-                if (refs.length > 0 && typeof refs[0] !== 'number') {
-                    const globalData = APPLICATION_CONTEXT._dangerouslyAccessConfig().data;
-                    instance._rawValues.forEach(val => {
-                        if (val !== null && !globalData.includes(val)) {
-                            globalData.push(val);
-                        }
-                    });
+                const cfg = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+                cfg.data = cfg.data || [];
+                const globalData = cfg.data;
+                const ref = instance.dataReference;
+
+                // dataReference is index OR DataID
+                if (typeof ref !== 'number' && ref !== null && ref !== undefined) {
+                    if (!globalData.includes(instance._rawValue)) {
+                        globalData.push(instance._rawValue);
+                    }
                 }
             }
 
@@ -254,46 +247,78 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
 
         /**
-         * Get data reference IDs from the configuration.
-         * @param item
+         * Get data reference ID from the configuration.
+         * @param {BackgroundItem} item
+         * @returns {DataID|undefined}
          */
         static data(item) {
-            // we don't really check if it is mixed, we expect correct dataReferences format
-            if (typeof item.dataReferences[0] === "number") {
+            return this.dataFromSpec(this.dataSpecification(item));
+        }
+
+        /**
+         * Get data reference ID from the configuration.
+         * @param {BackgroundItem} item
+         * @returns {DataSpecification|undefined}
+         */
+        static dataSpecification(item) {
+            return this.dataFromDataId(item.dataReference);
+        }
+
+        /**
+         * todo: consider this exposing elsewhere, it works for viz objects too
+         * @param {DataSpecification} spec
+         * @return {DataID|undefined}
+         */
+        static dataFromSpec(spec) {
+            if (spec == null) return undefined;
+            return spec && typeof spec === "object" && spec.dataID ? spec.dataID : spec;
+        }
+
+        /**
+         * Get data reference from a field that can carry both the data item or the index to data array
+         * @param {DataID|number} dataId
+         * @return {*|string}
+         */
+        static dataFromDataId(dataId) {
+            if (typeof dataId === "number") {
                 const data = APPLICATION_CONTEXT.config.data;
-                return item.dataReferences.map(ref => data[ref]);
+                return data[dataId];
             }
-            return item.dataReferences;
+            return dataId;
         }
 
         static processId(id, context) {
             if (id) return UTILITIES.sanitizeID(id);
 
-            const ref = (Array.isArray(context.dataReferences) ? context.dataReferences[0] : null)
-                || context.dataReference;
+            const ref = context.dataReference;
 
-            if (typeof ref === 'string') return UTILITIES.sanitizeID(ref);
+            if (typeof ref === 'string') {
+                return UTILITIES.sanitizeID(ref);
+            }
             if (typeof ref === 'number') {
                 const path = APPLICATION_CONTEXT.config.data[ref];
                 if (path && typeof path !== "object") return UTILITIES.sanitizeID(String(path));
                 if (path) return UTILITIES.generateID(JSON.stringify(path));
             }
-
-            if (ref && typeof ref === 'object') return UTILITIES.generateID(JSON.stringify(ref));
+            if (ref && typeof ref === 'object') {
+                return UTILITIES.generateID(JSON.stringify(ref));
+            }
 
             return UTILITIES.generateID("bg-" + Math.random());
         }
 
         toJSON() {
             const out = { ...this };
-            // Serialization includes both for compatibility
-            delete out.dataReferences; // todo clean this duality
-            out.dataReference = Array.isArray(out.dataReferences) ? out.dataReferences[0] : out.dataReferences;
-            delete out._rawValues;
+
+            // serialize a single dataReference, index-or-value exactly as getter exposes
+            out.dataReference = this.dataReference;
+
             delete out._raw;
+            delete out._rawValue;
+
             return out;
         }
-    }
+    };
 
     //Perform initialization based on provided data
     const defaultSetup = Object.freeze(ENV.setup);
@@ -490,15 +515,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             let value = this.config.params[name] !== undefined ? this.config.params[name] :
                 (defaultValue === undefined ? this.config.defaultParams[name] : defaultValue);
+            if (value === "false") return false;
+            if (value === "true") return true;
             if (typeof value === "string") {
                 try {
                     return JSON.parse(value);
                 } catch (e) {
-                    console.warn("Failed to parse option value", value);
+                    // todo: how to better recognize we should try not to parse real strings?
+                    //pass, just a string
                 }
             }
-            if (value === "false") value = false;
-            else if (value === "true") value = true;
             return value;
         },
         /**
@@ -648,21 +674,11 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     /**
-     * Slide Metadata
-     * @typedef {Object} SlideMetadata
-     * @property {object} [info=undefined] - info object that is used to store all information about the slide a user should see, if not provided, the whole return value is treated also as user info.
-     * @property {string} [error=undefined] - error, if present, the slide is treated as errorenous with the cause taken as the value
-     * @property {number} [microns=undefined] - The microns in average.
-     * @property {number} [micronsX=undefined] - The pixel size in X direction, can be used instead of microns.
-     * @property {number} [micronsY=undefined] - The pixel size in Y direction, can be used instead of microns.
-     */
-
-    /**
      * Extension of OpenSeadragon: Retrieve slide metadata. Can be arbitrary key-value list, even nested.
      * Some properties, hovewer, have a special meaning. These are documented in the return function.
      * @memberOf OpenSeadragon.TileSource
      * @function getMetadata
-     * @return {SlideMetadata|undefined}
+     * @return {TileSourceMetadata|undefined}
      */
     OpenSeadragon.TileSource.prototype.getMetadata = function () { };
 
@@ -1090,7 +1106,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                      */
                     event.item.getConfig = type => undefined;
                     viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t('error.invalidDataHtml') : undefined);
-                    handleSyntheticEventFinishWithValidData(viewer, 0, 1);
+                    handleSyntheticEventFinishWithValidData(viewer, 0);
                 }
             });
             return;
@@ -1123,10 +1139,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         // }
 
         // todo check args, do we need to search for at least one valid reference image? test stacked mode + X bg overlays
-        handleSyntheticEventFinishWithValidData(viewer, 0, 1);
+        handleSyntheticEventFinishWithValidData(viewer, 0);
     }
 
-    function handleSyntheticEventFinishWithValidData(viewer, referenceImage, layerPosition) {
+    function handleSyntheticEventFinishWithValidData(viewer, referenceImage) {
         const eventOpts = {};
 
         try {
@@ -1135,57 +1151,57 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             //the viewer scales differently-sized layers sich that the biggest rules the visualization
             //this is the largest image layer, or possibly the rendering layers layer
             const tiledImage = viewer.world.getItemAt(referenceImage);
-            const imageData = tiledImage?.getConfig();
+            const dataConfig = tiledImage?.getConfig();
 
             let name;
-            if (Number.isInteger(Number.parseInt(imageData?.dataReference))) {
-                name = imageData.name || UTILITIES.fileNameFromPath(
-                    APPLICATION_CONTEXT.config.data[imageData.dataReference]
+            if (Number.isInteger(Number.parseInt(dataConfig?.dataReference))) {
+                name = dataConfig.name || UTILITIES.fileNameFromPath(
+                    APPLICATION_CONTEXT.config.data[dataConfig.dataReference]
                 );
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
-            } else if (!imageData && APPLICATION_CONTEXT.config.background.length > 0) {
+            } else if (!dataConfig && APPLICATION_CONTEXT.config.background.length > 0) {
                 const active = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)?.[0];
                 name = UTILITIES.fileNameFromPath(APPLICATION_CONTEXT.config.data[active] || 'unknown');
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyTissue', { slide: name }), true);
-            } else if (!imageData) {
+            } else if (!dataConfig) {
                 viewer.getMenu().getNavigatorTab().setTitle($.t('main.navigator.faultyViz'), true);
             } else {
-                name = imageData.name || $.t('common.Image');
+                name = dataConfig.name || $.t('common.Image');
                 viewer.getMenu().getNavigatorTab().setTitle(name, false);
             }
 
-            if (imageData) {
+            let microns, micronsX, micronsY;
+
+            if (dataConfig) {
+                const data = BackgroundConfig.data(dataConfig);
+                // access via dataConfig is deprecated, but we need to keep it for now
+                microns = data.microns || dataConfig.microns;
+                micronsX = data.micronsX || dataConfig.micronsX;
+                micronsY = data.micronsY || dataConfig.micronsY;
+
                 // microns can come both from the background config and the tileSource api
-                const hasMicrons = !!imageData.microns, hasDimMicrons = !!(imageData.micronsX && imageData.micronsY);
+                const hasMicrons = !!microns, hasDimMicrons = !!(micronsX && micronsY);
                 if (!hasMicrons || !hasDimMicrons) {
                     const sourceMeta = typeof tiledImage?.source?.getMetadata === "function" && tiledImage.source.getMetadata();
                     if (sourceMeta) {
-                        if (!hasMicrons) imageData.microns = sourceMeta.microns;
+                        if (!hasMicrons) microns = sourceMeta.microns;
                         if (!hasDimMicrons) {
-                            imageData.micronsX = sourceMeta.micronsX;
-                            imageData.micronsY = sourceMeta.micronsY;
+                            micronsX = sourceMeta.micronsX;
+                            micronsY = sourceMeta.micronsY;
                         }
                     }
                 }
             }
 
-            UTILITIES.setImageMeasurements(viewer, imageData?.microns, imageData?.micronsX, imageData?.micronsY, name);
+            UTILITIES.setImageMeasurements(viewer, microns, micronsX, micronsY, name);
             viewer.scalebar.linkReferenceTileSourceIndex(referenceImage);
 
             if (APPLICATION_CONTEXT.config.visualizations.length > 0) {
-                let layerWorldItem = viewer.world.getItemAt(layerPosition);
-                const activeVis = APPLICATION_CONTEXT.activeVisualizationConfig();
-                if (layerWorldItem) {
-                    viewer.getMenu().getShadersTab().updateVisualizationList(
-                        APPLICATION_CONTEXT.config.visualizations,
-                        // todo is this accurate?
-                        APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)?.[0]
-                    );
-                } else {
-                    //todo action page reload
-                    Dialogs.show($.t('messages.visualizationDisabled', { name: activeVis.name }), 20000, Dialogs.MSG_ERR);
-                    eventOpts.error = $.t('messages.overlaysDisabled');
-                }
+                viewer.getMenu().getShadersTab().updateVisualizationList(
+                    APPLICATION_CONTEXT.config.visualizations,
+                    // todo is this accurate?
+                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)?.[0]
+                );
             }
         } catch (e) {
             console.error(e);
@@ -1551,14 +1567,22 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         // todo duplicated in OSD tools when creating tiled image, make this usable elsewhere
         // Helper: build a tileSource URL for a background entry
-        const bgUrlFromEntry = (bgEntry) => {
-            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
-                return bgEntry.tileSource;
+        const bgUrlFromEntry = (bgEntry, dataSpec = undefined) => {
+            // Resolve DataSpecification & DataID from background
+            const spec = dataSpec === undefined ? BackgroundConfig.dataSpecification(bgEntry) : dataSpec;
+            const isObjectSpec = spec && typeof spec === "object";
+
+            if (isObjectSpec && spec.tileSource instanceof OpenSeadragon.TileSource) {
+                return spec.tileSource;
             }
-            const proto = !isSecureMode && bgEntry.protocol ? bgEntry.protocol : env.client.image_group_protocol;
+
+            // todo remove protocol from bgEntry once deprecation is complete
+            const customProto = isObjectSpec && spec.protocol ? spec.protocol : (bgEntry.protocol ? bgEntry.protocol : null);
+            const proto = customProto && !isSecureMode ? customProto : env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
-            const d = cfg.data[bgEntry.dataReference];
-            return make(env.client.image_group_server, d);
+
+            // todo support multiple data references -> payload as array
+            return make(env.client.image_group_server, BackgroundConfig.dataFromSpec(spec));
         };
 
         const openPlaceholder = (viewer, errorMessage, index, originalSource, onOpen) => {
@@ -1609,7 +1633,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
 
             await viewer.raiseEventAwaiting(
-                'tile-source-created', { viewer, originalSource, kind, index, tileSource, error: null }
+                'tile-source-created',
+                { viewer, originalSource, kind, index, tileSource, error: null }
             ).catch(e => console.warn("Exception in 'tile-source-created' event handler: ", e));
             console.log("Opening tile", kind, index, ctx);
 
@@ -1619,6 +1644,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                     index,
                     success: event => {
                         event.item.__targetIndex = index;
+
+                        // DataSpecification used to construct this tile (if any),
+                        // passed from openIntoViewer via ctx.dataForItem.
+                        const dataSpec = ctx && typeof ctx.dataForItem === "function"
+                            ? ctx.dataForItem(index)
+                            : undefined;
+
                         // Attach contextual config getters for this item
                         if (kind === "background") {
                             const bgIdx = ctx.bgIndexForItem(index);
@@ -1636,9 +1668,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                             event.item.getConfig = type =>
                                 !type || type === "visualization" ? cfg.visualizations[vIdx] : undefined;
                         } else {
-                            event.item.getConfig = type => undefined;
+                            event.item.getConfig = () => undefined;
                         }
-                        const options = event.item.getConfig()?.options;
+
+                        // Options resolution:
+                        //   base: DataOverride.options (if any)
+                        //   override/extend: config-level options (bg/viz)
+                        const cfgForItem = event.item.getConfig();
+                        let options = cfgForItem && cfgForItem.options;
+
+                        if (dataSpec && typeof dataSpec === "object" && dataSpec.options) {
+                            options = { ...(dataSpec.options || {}), ...(options || {}) };
+                        }
+
                         if (options !== undefined) {
                             event.item.source.setSourceOptions(options);
                         }
@@ -1657,7 +1699,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         // Helper: configure shaders/rendering for a viewer + open its images
         const openIntoViewer = async (entry, viewerIndex) => {
             const viewer = VM.viewers[viewerIndex];
-            const isSurgical = isBgSame && viewer.isOpen() && viewer.world.getItemCount() > 0; //
+            const isSurgical = isBgSame && viewer.isOpen() && viewer.world.getItemCount() > 0;
 
             // (A) Identify Backgrounds
             const openedBase = [];
@@ -1674,65 +1716,147 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // (B) Decide Visualization Index
             let visIndexForThis = undefined;
             if (stacked) {
-                visIndexForThis = Number.isInteger(activeViz) ? activeViz : (Array.isArray(activeViz) ? activeViz[0] : undefined);
+                visIndexForThis = Number.isInteger(activeViz)
+                    ? activeViz
+                    : (Array.isArray(activeViz) ? activeViz[0] : undefined);
             } else {
-                visIndexForThis = Array.isArray(activeViz) ? activeViz[viewerIndex] : (Number.isInteger(activeViz) ? activeViz : undefined);
+                visIndexForThis = Array.isArray(activeViz)
+                    ? activeViz[viewerIndex]
+                    : (Number.isInteger(activeViz) ? activeViz : undefined);
             }
 
             const renderingWithWebGL = Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
+            const activeV = renderingWithWebGL ? vis[visIndexForThis] : undefined;
 
-            // (C) Prepare Render Plan
+            // (C) Build base tileSource list and data mapping
+            const toOpen = [];
+            const uniqueOsdWorldIndexes = {};
+            const openedSpecOrder = [];
             const renderOutput = {};
-            openedBase.forEach((bgRef, i) => {
-                renderOutput[bgRef.id] = { id: bgRef.id, type: "identity", tiledImages: [i], name: bgRef.name || cfg.data[bgRef.dataReference] };
-            });
 
+            // Helper: build URL for a visualization data index using DataSpecification + protocols
             const vizUrlFromEntries = (dataIndex) => {
-                const proto = !isSecureMode && activeV.protocol ? activeV.protocol : env.client.data_group_protocol;
+                const spec = cfg.data[dataIndex]; // DataSpecification
+                const isObjectSpec = spec && typeof spec === "object";
+
+                if (isObjectSpec && spec.tileSource instanceof OpenSeadragon.TileSource) {
+                    return spec.tileSource;
+                }
+
+                // Preferred protocol: DataOverride.protocol, then deprecated activeV.protocol, then default
+                const customProto = isObjectSpec && spec.protocol ? spec.protocol
+                    : (activeV && activeV.protocol ? activeV.protocol : null);
+
+                const proto = (!isSecureMode && customProto) || env.client.data_group_protocol;
                 const make = new Function("path,data", "return " + proto);
-                return make(env.client.image_group_server, [cfg.data[dataIndex]]);
+
+                // dataId is a single DataID; for viz protocols we keep passing [dataId] to keep backward compat
+                return make(env.client.image_group_server, [BackgroundConfig.dataFromSpec(spec)]);
             };
 
-            let shaderConfigMap = {};
-            const toOpen = openedBase.map(bg => bgUrlFromEntry(bg)); // Initial list is backgrounds
-            const lastBgIndex = toOpen.length;
+            openedBase.forEach(bg => {
+                const index = bg.dataReference;
+                if (uniqueOsdWorldIndexes[index] === undefined) {
+                    uniqueOsdWorldIndexes[index] = toOpen.length;
+                    toOpen.push(bgUrlFromEntry(bg));
+                    openedSpecOrder.push(BackgroundConfig.dataSpecification(bg));
+                }
+            });
 
-            if (renderingWithWebGL) {
+            // (C1) Background shaders, including possible extra dataReferences
+            openedBase.forEach((bgRef, bgIndex) => {
+                let bgShaders = bgRef.shaders;
+                if (!bgShaders) {
+                    // Default identity shader on the base background tile
+                    bgShaders = [{ type: "identity" }];
+                } else if (!Array.isArray(bgShaders)) {
+                    console.warn("Invalid shaders for background: array required.", bgIndex, bgRef, bgShaders);
+                    bgShaders = [bgShaders];
+                }
+
+                let count = 0;
+                // todo bg shaders are not syntactically validated, add checks at the open top level
+                for (const shaderCfg of bgShaders) {
+                    // todo better name fallback
+                    shaderCfg.id = count < 1 ? bgRef.id : `${bgRef.id}-${count}`;
+
+                    const hasExplicitRefs = Array.isArray(shaderCfg.dataReferences) && shaderCfg.dataReferences.length > 0;
+
+                    if (!hasExplicitRefs) {
+                        // DEFAULT:
+                        //  - No dataReferences specified on shader
+                        //  - Use the base background pyramid as the only tiled image
+                        //  - And expose the numeric reference if available
+                        const dataIndex = bgRef.dataReference;
+                        shaderCfg.tiledImages = [uniqueOsdWorldIndexes[dataIndex]];
+                        shaderCfg.name = shaderCfg.name || bgRef.name || BackgroundConfig.data(bgRef);
+
+                    } else {
+                        // ADVANCED:
+                        //  - Background shader has its own dataReferences
+                        //  - Each dataReference is opened exactly once (shared with other shaders)
+                        shaderCfg.tiledImages = [];
+                        shaderCfg.name = shaderCfg.name || BackgroundConfig.dataFromDataId(shaderCfg.dataReferences[0]);
+
+                        for (const dataIndex of shaderCfg.dataReferences) {
+                            if (uniqueOsdWorldIndexes[dataIndex] === undefined) {
+                                uniqueOsdWorldIndexes[dataIndex] = toOpen.length;
+                                // todo multi support?
+                                toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex]));
+                                openedSpecOrder.push(cfg.data[dataIndex]);
+                            }
+                            shaderCfg.tiledImages.push(uniqueOsdWorldIndexes[dataIndex]);
+                        }
+                    }
+                    renderOutput[shaderCfg.id] = shaderCfg;
+                    count++;
+                }
+            });
+
+            const firstVizIndex = toOpen.length;
+
+            // (C2) Visualization shaders and their dataReferences
+            let shaderConfigMap = {};
+
+            if (renderingWithWebGL && activeV) {
                 APPLICATION_CONTEXT.prepareRendering();
-                const activeV = vis[visIndexForThis];
                 shaderConfigMap = activeV.shaders || {};
-                const sourcesToOpen = {};
-                let counter = lastBgIndex;
 
                 for (const shaderId in shaderConfigMap) {
                     const shaderCfg = shaderConfigMap[shaderId];
                     shaderCfg.tiledImages = [];
-                    const refs = (shaderCfg.dataReferences || []).map(vizUrlFromEntries);
-                    shaderCfg.name = shaderCfg.name || cfg.data[shaderCfg.dataReferences?.[0]] || shaderId;
 
-                    for (const src of refs) {
-                        let idx = sourcesToOpen[src];
-                        if (idx === undefined) {
-                            sourcesToOpen[src] = idx = counter++;
-                            toOpen.push(src);
+                    const dataRefs = shaderCfg.dataReferences || [];
+                    const firstSpec = dataRefs.length ? cfg.data[dataRefs[0]] : undefined;
+                    const firstId = BackgroundConfig.dataFromSpec(firstSpec);
+                    shaderCfg.name = shaderCfg.name || firstId || shaderId;
+
+                    for (const dataIndex of dataRefs) {
+                        if (uniqueOsdWorldIndexes[dataIndex] === undefined) {
+                            uniqueOsdWorldIndexes[dataIndex] = toOpen.length;
+                            // todo return multi support? or leave as-is? maybe explicit option that plays nice with osd batch queries?
+                            toOpen.push(vizUrlFromEntries(dataIndex));
+                            // todo apify this
+                            openedSpecOrder.push(cfg.data[dataIndex]);
                         }
-                        shaderCfg.tiledImages.push(idx);
+                        shaderCfg.tiledImages.push(uniqueOsdWorldIndexes[dataIndex]);
                     }
                 }
+
                 Object.assign(renderOutput, shaderConfigMap);
             }
 
             // (D) Execution: Full Reset vs Surgical Update
             if (!isSurgical) {
-                VM.resetViewer(viewerIndex); //
+                VM.resetViewer(viewerIndex);
             } else {
                 // Remove only visualization layers that don't match the new 'toOpen' list
                 const currentCount = viewer.world.getItemCount();
-                for (let i = currentCount - 1; i >= lastBgIndex; i--) {
+                for (let i = currentCount - 1; i >= firstVizIndex; i--) {
                     const item = viewer.world.getItemAt(i);
                     const sourceUrl = item.source.url || item.source;
                     // If the existing source isn't in our new visualization list, pull it
-                    if (!toOpen.slice(lastBgIndex).some(newSrc => (newSrc.url || newSrc) === sourceUrl)) {
+                    if (!toOpen.slice(firstVizIndex).some(newSrc => (newSrc.url || newSrc) === sourceUrl)) {
                         viewer.world.removeItem(item);
                     }
                 }
@@ -1741,18 +1865,19 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             // Configure the drawer
             UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
             if (viewer.drawer?.overrideConfigureAll) {
-                viewer.drawer.overrideConfigureAll(renderOutput); //
+                viewer.drawer.overrideConfigureAll(renderOutput);
             }
 
-            // (E) Layer Synchronization
+            // (E) Layer Synchronization + data mapping for openTile
             const ctx = {
                 bgIndexForItem: (i) => entry.type === "stacked" ? entry.bgIndices[i] : entry.bgIndices[0],
-                vizIndexForItem: () => visIndexForThis
+                vizIndexForItem: () => visIndexForThis,
+                dataForItem: (i) => openedSpecOrder[i]
             };
 
             let successOpened = 0;
             for (let i = 0; i < toOpen.length; i++) {
-                const isBg = i < lastBgIndex;
+                const isBg = i < firstVizIndex;
                 const existingItem = isSurgical ? viewer.world.getItemAt(i) : null;
 
                 // Skip if surgically updating and item already exists with same source
@@ -1810,6 +1935,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
             });
         }).then(e => {
+            UTILITIES.syncSessionToUrl(false);
             console.log("Open done:", e);
             if (USER_INTERFACE.Errors.active) {
                 $("#viewer-container").addClass("disabled"); //preventive

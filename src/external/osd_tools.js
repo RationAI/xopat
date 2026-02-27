@@ -175,11 +175,12 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
+        // TODO FIXME this needs to use the method from core
         const bgUrlFromEntry = (bgEntry) => {
             if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
                 return bgEntry.tileSource;
             }
-            const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
             return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
         };
@@ -337,11 +338,12 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
+        // TODO FIXME this needs to use the method from core
         const bgUrlFromEntry = (bgEntry) => {
             if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
                 return bgEntry.tileSource;
             }
-            const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
             return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
         };
@@ -382,7 +384,6 @@ OpenSeadragon.Tools = class {
 
         const eventArgs = {
             server: APPLICATION_CONTEXT.env.client.image_group_server,
-            usesCustomProtocol: !!bgSpec.protocolPreview,
             image: dataRef,
             imagePreview: null,
         };
@@ -575,50 +576,109 @@ OpenSeadragon.Tools = class {
     /**
      * Link the viewer to context-sharing navigation link: all viewers of the same context
      * will follow the same navigation path.
-     * @param context
+     * @param {any} context sync context - in which sync session you operate
+     * @param {function(OpenSeadragon.Viewer, OpenSeadragon.Viewer)} mapper - custom sync logics instead of the default one, usually
+     *   you want to call applyViewportState(...) method with your computed viewport state values
      */
-    link(context=0) {
-        this.constructor.link(this.viewer, context);
+    link(context=0, mapper=undefined) {
+        this.constructor.link(this.viewer, context, mapper);
     }
 
     /**
      * Link the viewer to context-sharing navigation link: all viewers of the same context
      * will follow the same navigation path.
      * @param {OpenSeadragon.Viewer} self
-     * @param context
+     * @param {any} context sync context - in which sync session you operate
+     * @param {function(OpenSeadragon.Viewer, OpenSeadragon.Viewer)} mapper - custom sync logics instead of the default one
      */
-    static link(self, context=0) {
-        let contextData = this._linkContexts[context];
-        if (!contextData) {
-            contextData = this._linkContexts[context] = { name: context, leading: null, subscribed: [] };
+    static link(self, context = 0, mapper = undefined) {
+        let ctx = this._linkContexts[context];
+        if (!ctx) {
+            ctx = this._linkContexts[context] = {
+                subscribed: [],
+                activeLeader: null
+            };
         }
 
-        const handler = function() {
-            const leading = contextData.leading;
-            if (leading !== null) {
-                return;
-            }
-            contextData.leading = self;
-            const leadViewport = self.viewport;
+        if (ctx.subscribed.includes(self)) {
+            self.__sync_mapper = mapper;
+            return;
+        }
 
-            for (let v of contextData.subscribed) {
-                const vp = v.viewport;
-                // todo consider viewport update event and setting only: (might not respect rotation / flip)
-                //  otherViewport.fitBoundsWithConstraints(viewport.getBounds(), true);
-                vp.zoomTo(leadViewport.getZoom());
-                vp.panTo(leadViewport.getCenter());
-                vp.rotateTo(leadViewport.getRotation());
-                vp.setFlip(leadViewport.flipped);
+        self.__sync_mapper = mapper;
+
+        const handler = function () {
+
+            if (ctx.activeLeader && ctx.activeLeader !== self) return;
+
+            ctx.activeLeader = self;
+
+            const leaderState = self.tools.readViewportState();
+
+            for (let v of ctx.subscribed) {
+                if (!v || v === self) continue;
+
+                let state = leaderState;
+
+                // If calibrated mapper exists, transform leader state
+                if (typeof v.__sync_mapper === "function") {
+                    state = v.__sync_mapper(self, leaderState);
+                    if (!state) continue;
+                }
+
+                v.tools.applyViewportState(state);
             }
-            contextData.leading = null;
+
+            ctx.activeLeader = null;
         };
 
         self.__sync_handler = handler;
-        contextData.subscribed.push(self);
+        ctx.subscribed.push(self);
+
         self.addHandler('zoom', handler);
         self.addHandler('pan', handler);
         self.addHandler('rotate', handler);
         self.addHandler('flip', handler);
+    }
+
+    applyViewportState(state) {
+        this.constructor.applyViewportState(this.viewer, state);
+    }
+    static applyViewportState(viewer, state) {
+        const vp = viewer.viewport;
+
+        if (!state) return;
+
+        const c = new OpenSeadragon.Point(state.center.x, state.center.y);
+
+        // Clamp zoom
+        const zMin = vp.getMinZoom?.() ?? -Infinity;
+        const zMax = vp.getMaxZoom?.() ?? +Infinity;
+        const z = Math.max(zMin, Math.min(zMax, state.zoom));
+
+        vp.rotateTo(state.rotation, true);
+        vp.zoomTo(z, c, true);
+        vp.panTo(c, true);
+
+        if (typeof vp.getFlip === "function") {
+            if (vp.getFlip() !== state.flip)
+                vp.setFlip(state.flip);
+        }
+
+        vp.applyConstraints?.();
+    }
+
+    readViewportState() {
+        return this.constructor.readViewportState(this.viewer);
+    }
+    static readViewportState(viewer) {
+        const vp = viewer.viewport;
+        return {
+            zoom: vp.getZoom(false),
+            center: vp.getCenter(false),
+            rotation: vp.getRotation(false),
+            flip: vp.getFlip()
+        };
     }
 
     isLinked() {
@@ -648,6 +708,7 @@ OpenSeadragon.Tools = class {
         self.removeHandler('rotate', self.__sync_handler);
         self.removeHandler('flip', self.__sync_handler);
         delete self.__sync_handler;
+        delete self.__sync_mapper;
         contextData.subscribed.splice(index, 1);
     }
 

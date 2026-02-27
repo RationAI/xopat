@@ -413,17 +413,17 @@ class Dropdown extends BaseSelectableComponent {
         // Determine style for this specific submenu
         const submenuStyle = parentItem.childSelectionStyle || this.selectionStyle;
 
-        const listEl = ul({ class: "menu bg-transparent p-0", role: "none" },
+        const listEl = ul(
+            { class: "menu bg-transparent p-0", role: "none" },
             ...parentItem.children.map(child => this._renderItem(child, submenuStyle))
         );
         submenuEl.appendChild(listEl);
 
-        // ... rest of the positioning and event logic (unchanged) ...
+        // --- NEW: append to body and hide while measuring ---
+        document.body.appendChild(submenuEl);
+        submenuEl.style.visibility = "hidden";
 
-        // Append to container
-        if (this._contentEl) this._contentEl.appendChild(submenuEl);
-        else document.body.appendChild(submenuEl);
-        // Events
+        // Hover events
         submenuEl.addEventListener("mouseenter", () => {
             this._isHoveringSubmenu = true;
             this._scheduleSubmenuCheck();
@@ -434,8 +434,6 @@ class Dropdown extends BaseSelectableComponent {
         });
 
         // Positioning: place submenu adjacent to the parent row, prefer to the right.
-        // If it would overflow the viewport, flip to the left; otherwise clamp to viewport edges.
-        // Placement using viewport coordinates (anchorRect is already viewport-based)
         const anchorRect = anchorEl.getBoundingClientRect();
         const margin = 6;
         const vw = document.documentElement.clientWidth || window.innerWidth;
@@ -458,7 +456,7 @@ class Dropdown extends BaseSelectableComponent {
         // Clamp left to viewport
         if (left < margin) left = margin;
 
-        // Vertical: ensure submenu fits; prefer aligned to anchor top, else align bottom to anchor bottom
+        // Vertical: ensure submenu fits; prefer aligned to anchor top, else align bottom
         if (top + submenuHeight > vh - margin) {
             const altTop = Math.round(anchorRect.bottom - submenuHeight);
             if (altTop >= margin) top = altTop;
@@ -466,9 +464,10 @@ class Dropdown extends BaseSelectableComponent {
         }
         if (top < margin) top = margin;
 
-        // Apply fixed-position coordinates
+        // Apply coordinates and show
         submenuEl.style.left = `${left}px`;
         submenuEl.style.top = `${top}px`;
+        submenuEl.style.visibility = "visible";
 
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,
@@ -478,9 +477,9 @@ class Dropdown extends BaseSelectableComponent {
 
         this._activeSubmenu = {
             el: submenuEl,
-            token: token,
+            token,
             parentId: parentItem.id,
-            anchorEl: anchorEl
+            anchorEl
         };
     }
 
