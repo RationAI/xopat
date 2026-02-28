@@ -1431,9 +1431,10 @@ ${UIComponents.Elements.select({
 					"click #annotations-panel-pin": "Open additional configuration options."
 				}, {
 					"next #preset-list-button-mp": "Existing annotation classes are here."
-				}, {
+				},
+				...(this.enablePresetModify ? [{
 					"next #preset-list-mp-edit": "You can edit them using this button."
-				}, {
+				}] : []), {
 					"next #annotation-list-button-mp": "Existing annotations list can be opened here. <br> It can open both in the menu and in a new window."
 				}, {
 					"next #annotations-panel": "This was the main panel menu. Now let's move to the toolbar."
@@ -1445,9 +1446,10 @@ ${UIComponents.Elements.select({
 					"click #annotations-right-click": "To open <b>Annotation Class dialog window</b>, click on the button."
 				}, {
 					"next .preset-option:first": "This is an example of an annotation class <b>preset</b>."
-				}, {
+				},
+				...(this.enablePresetModify ? [{
 					"next #preset-add-new": "Here you create a new class."
-				}, {
+				}] : []), {
 					"click .preset-option:first": "Click anywhere on the preset. This will select it for the right mouse button."
 				}, {
 					"click #select-annotation-preset-right": "Click <b>Set for right click</b> to assign it to the right mouse button."
@@ -1876,7 +1878,7 @@ class="d-inline-block position-relative mt-1 mx-2 border-md rounded-3" style="cu
 		const groups = this.getGroupedVisiblePresets();
 
 		for (let group of groups) {
-			html.push(`<p class="mb-1 mt-2">${group.name}</p>`);
+			html.push(`<p class="mb-1 mt-2">${this._escapeHtml(group.name)}</p>`);
 
 			for (let preset of group.presets) {
 				const icon = preset.objectFactory.getIcon();
@@ -1886,7 +1888,7 @@ onclick="return ${this.THIS}._clickPresetSelect(true, '${preset.presetID}');"
 oncontextmenu="return ${this.THIS}._clickPresetSelect(false, '${preset.presetID}');"
 class="d-inline-block pointer">
 <span class="material-icons pr-1" style="color: ${preset.color};">${icon}</span>
-<span class="d-inline-block pt-2">${preset.meta['category']?.value || 'unknown'}</span>
+<span class="d-inline-block pt-2">${this._escapeHtml(preset.meta['category']?.value || 'unknown')}</span>
 </span>
 			`);
 				pushed = true;
@@ -2272,7 +2274,7 @@ class="btn m-2">Set for left click </button></div>`
 					presets: visible
 				});
 
-				visible.forEach(p => recorded.add(p.presetID));
+				visible.forEach(p => {recorded.add(p.presetID);});
 			}
 		}
 
@@ -2309,7 +2311,11 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {Array<PresetCollection>} collections
 	 */
 	setPresetCollections(collections) {
-		this._presetCollections = collections || [];
+        const safeCollections = Array.isArray(collections)
+            ? collections.filter(c => c?.collection?.id && Array.isArray(c.presets))
+            : [];
+
+		this._presetCollections = safeCollections || [];
 		this._presetCollectionIDs = new Set(this._presetCollections.map(c => c.collection.id));
 
         // update, unless the collection is set before presets are even imported
@@ -2323,7 +2329,9 @@ class="btn m-2">Set for left click </button></div>`
 	 * @param {PresetCollection} collection
 	 */
 	addPresetCollection(collection) {
+		if (!collection?.collection?.id || !Array.isArray(collection.presets)) return;
 		if (this._presetCollectionIDs.has(collection.collection.id)) return;
+
 		this._presetCollectionIDs.add(collection.collection.id);
 		this._presetCollections.push(collection);
 
@@ -2332,6 +2340,7 @@ class="btn m-2">Set for left click </button></div>`
             this._updateMainMenuPresetList();
         }
     }
+
 
 	/**
 	 * Set preferred preset IDs for the GUI
@@ -2363,8 +2372,7 @@ class="btn m-2">Set for left click </button></div>`
 	 * @returns {boolean} true if the preset is not preferred
 	 */
 	isUnpreferredPreset(presetID) {
-		// return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
-		return !this._preferredPresets.has(presetID);
+		return this._preferredPresets.size > 0 && !this._preferredPresets.has(presetID);
 	}
 
     showMeasurementsWindow() {
