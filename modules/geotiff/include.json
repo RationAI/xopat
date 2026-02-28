@@ -1,0 +1,12 @@
+{
+  "id": "geotiff",
+  "name": "GeoTiff Tiff Format Support",
+  "author": "Aiosa",
+  "description": "Supports TIFF files through GeoTIFF library. Adds a TileSource support, and defines new tiff-related OpenSeadragon data types.",
+  "version": "0.1.0",
+  "includes": [
+    //"geotiff-tilesource.min.js",
+    "index.mjs"
+  ],
+  "requires": []
+}
