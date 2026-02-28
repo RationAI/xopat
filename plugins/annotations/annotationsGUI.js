@@ -2256,7 +2256,7 @@ class="btn m-2">Set for left click </button></div>`
 
 	getGroupedVisiblePresets() {
 		const presetManager = this.context.presets;
-		const allPresets = Object.values(presetManager._presets);
+		const allPresets = presetManager.getExistingIds();
 		const recorded = new Set();
 		const groups = [];
 
@@ -2276,9 +2276,9 @@ class="btn m-2">Set for left click </button></div>`
 			}
 		}
 
-		const unknown = allPresets.filter(p =>
-			!recorded.has(p.presetID) &&
-			!this.isUnpreferredPreset(p.presetID)
+		const unknown = allPresets.filter(pId =>
+			!recorded.has(pId) &&
+			!this.isUnpreferredPreset(pId)
 		);
 
 		if (unknown.length) {
@@ -2290,28 +2290,52 @@ class="btn m-2">Set for left click </button></div>`
 		return groups;
 	}
 
-	/**
-	 * Set available preset collections for the GUI
-	 * @param {collection[]} collections array of presetIDs
+    /**
+     * @typedef {Object} PresetCollection
+     * @property {object} collection
+     * @property {string} collection.id
+     * @property {string} collection.name
+     * @property {CollectionPreset[]} presets
+     */
+
+    /**
+     * @typedef {Object} CollectionPreset
+     * @property {string} presetID
+     */
+
+    /**
+	 * Set available preset collections for the GUI. This enables the GUI to sort
+     * presets into collections.
+	 * @param {Array<PresetCollection>} collections
 	 */
 	setPresetCollections(collections) {
 		this._presetCollections = collections || [];
 		this._presetCollectionIDs = new Set(this._presetCollections.map(c => c.collection.id));
+
+        // update, unless the collection is set before presets are even imported
+        if (this._presetCollections.some(c => c.presets.length && this.context.presets.exists(c.presets[0].presetID))) {
+            this._updateMainMenuPresetList();
+        }
 	}
 
 	/**
 	 * Add a single collection to the GUI
-	 * @param {collection} collection
+	 * @param {PresetCollection} collection
 	 */
 	addPresetCollection(collection) {
 		if (this._presetCollectionIDs.has(collection.collection.id)) return;
 		this._presetCollectionIDs.add(collection.collection.id);
 		this._presetCollections.push(collection);
-	}
+
+        // update, unless the collection is set before presets are even imported
+        if (collection.presets.length && this.context.presets.exists(collection.presets[0].presetID)) {
+            this._updateMainMenuPresetList();
+        }
+    }
 
 	/**
 	 * Set preferred preset IDs for the GUI
-	 * @param {string[]} presets array of presetIDs
+	 * @param {string[]} presetIDs array of presetIDs
 	 */
 	setPreferredPresets(presetIDs) {
 		this._preferredPresets = new Set(presetIDs);
