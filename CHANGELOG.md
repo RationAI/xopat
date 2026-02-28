@@ -4,7 +4,8 @@ The changelog file describes changes made since v2.0.0, which made significant c
 to the versions 1.x.x.
 
 ### 2.3.1
-**Features**: author annotation distinction.
+**Features**: author annotation distinction. Annotation GUI now supports virtual preset collections - 
+not reflected in the underlying module, system for the users.
 
 **Bugfixes**: php image includes UI folder.
 
