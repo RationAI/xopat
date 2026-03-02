@@ -1,7 +1,7 @@
 {
   "name": "xopat",
   "version": "2.3.1",
-  "description": "A flexible multipurose browser-based WSI viewer.",
+  "description": "A flexible multipurpose WSI viewer.",
   "main": "index.php",
   "scripts": {
     "env": "grunt env",
@@ -61,7 +61,7 @@
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
     "cssnano": "^7.1.1",
-    "cypress": "^15.3.0",
+    "cypress": "^15.11.0",
     "cypress-real-events": "^1.7.1",
     "cypress-wait-until": "^1.7.2",
     "daisyui": "^4.10.2",
@@ -73,7 +73,7 @@
     "grunt-contrib-connect": "^3.0.0",
     "grunt-contrib-uglify": "^5.2.2",
     "grunt-contrib-watch": "^1.1.0",
-    "grunt-git-describe": "^2.3.0",
+    "grunt-git-describe": "^1.0.2",
     "highlight.js": "^11.7.0",
     "i18n": "^0.15.1",
     "inquirer": "^12.1.0",

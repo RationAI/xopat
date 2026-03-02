@@ -95,7 +95,12 @@ module.exports = function(grunt) {
     grunt.registerTask('workspaceBuild', 'Compile all workspaces', async function() {
         const done = this.async();
         const build = async (acc, data) => {
-            const pkg = grunt.file.readJSON(`${data.directory}/package.json`);
+            const pkgPath = `${data.directory}/package.json`;
+            // Check if it's actually a workspace element
+            if (!grunt.file.exists(pkgPath)) {
+                return;
+            }
+            const pkg = grunt.file.readJSON(pkgPath);
             await grunt.util.buildWorkspaceItem(data.directory, pkg);
         };
         await grunt.util.reduceModules(build, []);
@@ -146,7 +151,13 @@ module.exports = function(grunt) {
     grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {
         const done = this.async();
         const cleanItem = async (acc, data) => {
-            const pkg = grunt.file.readJSON(`${data.directory}/package.json`);
+            const pkgPath = `${data.directory}/package.json`;
+
+            if (!grunt.file.exists(pkgPath)) {
+                return; // not a workspace
+            }
+
+            const pkg = grunt.file.readJSON(pkgPath);
             await grunt.util.cleanWorkspaceItem(data.directory, pkg);
         };
         await grunt.util.reduceModules(cleanItem, []);

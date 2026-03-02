@@ -265,7 +265,7 @@ OpenSeadragon.MyCustomTileSource = class extends OpenSeadragon.TileSource {
     constructor(options) {
         super(options);
         // Example support for authentication within tileSource
-        // FIXME: make this tile-source-wide support no matter the implementation
+        // FIXME: use HTTP client instead
         if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
             const user = XOpatUser.instance();
             user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);

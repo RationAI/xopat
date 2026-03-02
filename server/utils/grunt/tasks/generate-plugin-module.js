@@ -281,7 +281,7 @@ class ${className} extends XOpatModuleSingleton {
       console.log("Will be using id", id);
 
       const message = isPlugin ?
-          "Do you want to create a global class for your plugin?" :
+          "Do you want to create a globally-visible (window object) class for your plugin?" :
           "Do you want to inherit xOpat module interface?"
 
       let createClass = await askYesNo(message);

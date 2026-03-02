@@ -7,9 +7,30 @@ const glob = require("glob");
 
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-        const options = { stdio: "inherit", shell: process.platform === "win32", ...opts };
-        const child = spawn(cmd, args, options);
-        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
+        const isWin = process.platform === "win32";
+
+        // On Windows, we must use shell: true for npx/npm,
+        // but we should pass the command and args as a single string
+        // to avoid the "Invalid build flag" concatenation error.
+        const fullCommand = isWin
+            ? `${cmd} ${args.map(a => `"${a}"`).join(" ")}`
+            : cmd;
+
+        const spawnArgs = isWin ? [] : args;
+        const options = {
+            stdio: "inherit",
+            shell: isWin,
+            ...opts
+        };
+
+        const child = spawn(fullCommand, spawnArgs, options);
+
+        child.on("exit", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`${cmd} exited ${code}`));
+        });
+
+        child.on("error", (err) => reject(err));
     });
 }
 
