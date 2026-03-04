@@ -1,0 +1,21 @@
+{
+  "id": "chat-cerit-io",
+  "name": "Cerit IO AI Chat Models",
+  "author": "Aiosa",
+  "version": "1.0.0",
+  "description": "Cerit-IO Hosted Model provider integration.",
+  "includes": ["cerit-host.js"],
+  "modules": ["chat"],
+  // alias key to use in server proxy
+  "proxyAlias": "cerit-io",
+  "chatApiUrl": "/v1/chat/completions",
+  "modelsDiscoveryPath": "/v1/models",
+  // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model
+  "authMode": "jwt",
+  // for jwt, specify OIDC conf
+  "oidc": {
+    "authority": "https://your-auth-server.com",
+    "client_id": "openai-plugin-client",
+    "scope": "openid profile chat_api"
+  }
+}

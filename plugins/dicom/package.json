@@ -9,7 +9,6 @@
     "build": "echo 'Done'."
   },
   "dependencies": {
-    "@cornerstonejs/dicom-image-loader": "4.3.10",
     "cornerstone-wado-image-loader": "^4.13.2"
   },
   "copy": {

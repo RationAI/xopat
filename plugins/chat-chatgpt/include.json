@@ -1,0 +1,20 @@
+{
+  "id": "chat-chatgpt",
+  "name": "ChatGPT AI Chat",
+  "author": "Aiosa",
+  "version": "1.0.0",
+  "description": "ChatGPT Model provider integration.",
+  "includes": ["chatgpt.js"],
+  "modules": ["chat"],
+  "proxyAlias": "openai",
+  "chatApiUrl": "/v1/chat/completions",
+  "modelsDiscoveryPath": "/v1/models",
+  // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model
+  "authMode": "jwt",
+  // for jwt, specify OIDC conf
+  "oidc": {
+    "authority": "https://your-auth-server.com",
+    "client_id": "openai-plugin-client",
+    "scope": "openid profile chat_api"
+  }
+}

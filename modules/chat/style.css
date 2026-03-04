@@ -1,0 +1,18 @@
+#pathology-chat-panel pre {
+    max-width: 100%;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+}
+#pathology-chat-panel pre code {
+    white-space: pre;
+}
+
+#pathology-chat-panel table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+#pathology-chat-panel img, #pathology-chat-panel iframe, #pathology-chat-panel video {
+    max-width: 100%;
+}

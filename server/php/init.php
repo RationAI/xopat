@@ -73,8 +73,8 @@ foreach ($_POST as $key=>&$value) {
 //ensureDefined($_POST, "background", []);
 //ensureDefined($_POST, "plugins", {});
 
-$CORE["serverStatus"]["name"] = "php";
-$CORE["serverStatus"]["supportsPost"] = true;
+$CORE["server"]["name"] = "php";
+$CORE["server"]["supportsPost"] = true;
 
 $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();

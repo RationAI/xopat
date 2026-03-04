@@ -1,0 +1,9 @@
+{
+  "name": "@xopat-module/npm-marked",
+  "private": true,
+  "version": "0.1.0",
+  "main": "entry.js",
+  "dependencies": {
+    "marked": "latest"
+  }
+}

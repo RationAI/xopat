@@ -1,0 +1,19 @@
+{
+  "id": "chat",
+  "name": "AI Chat Module",
+  "author": "Aiosa",
+  "version": "1.0.0",
+  "description": "Integration hub for AI chat models",
+  "includes": [
+    "chat.mjs"
+  ],
+  "requires": ["oidc-client-ts", "marked", "sanitize-html"],
+  "defaultPersonalityId": "pathology-assistant",
+  "personalities": [
+    {
+      "id": "pathology-assistant",
+      "label": "Pathology Assistant",
+      "systemPrompt": "You are a pathology slide-review assistant. Be concise. Prefer structured answers. When unsure, ask targeted questions."
+    }
+  ]
+}
