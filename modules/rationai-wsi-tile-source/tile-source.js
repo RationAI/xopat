@@ -17,6 +17,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
         if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
             const user = XOpatUser.instance();
+            // fixme: login called multiple times, go to the http client api
             user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
             user.addHandler('secret-updated', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = e.secret));
             user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));

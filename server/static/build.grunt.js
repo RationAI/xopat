@@ -34,8 +34,8 @@ module.exports = function (grunt, message) {
         });
         throwIfError(core, "Failed to parse the CORE inicialization!");
 
-        core.CORE.serverStatus.name = "static";
-        core.CORE.serverStatus.supportsPost = false;
+        core.CORE.server.name = "static";
+        core.CORE.server.supportsPost = false;
 
         //todo o18n and locale
         //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");

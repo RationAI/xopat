@@ -104,19 +104,19 @@ For HTTPS:
 ````
 
 ## The Image Server
-Based on your image server abilities the integration of xOpat can happen
-in several ways. xOpat protmotes synchronous tile fetching, i.e.
-server sends all tiles for given position (level / x / y) at once.
+The first step in using the viewer is to set up an image server. 
+We provide a [WSI-Service](https://github.com/RationAI/wsi-service)
+implementation that can be used easily, however, any server can be configured:
 
-We provide a IIPImage modification able to serve images synchronously.
-Setting up an image server is out of scope of this document, still, there
+ - OpenSeadragon supports many protocols out of box - check the [documentation](https://openseadragon.github.io/)
+ - We support additionally several services (EMPAIA-like image API, DICOM-web or WSI-Service).
+ - You can add support for your own protocols similar to existing modules that add support described before.
+
+Setting up an image server is out of scope of this document (check OpenSeadragon documentation), still, there
 are requirements and gotchas you can do on the viewer to adjust for image
 server needs.
 
-### Asynchronous Protocols as Fallback
-Most image servers support only single tile fetching per request. To enable easy integration
-with such servers, you can configure the viewer for asynchronous fetching. This is an ENV file 
-example for ``DeepZoom`` protocol configuration:
+Example for ``DeepZoom`` protocol configuration:
 ````json
 {
   "core": {
@@ -124,36 +124,49 @@ example for ``DeepZoom`` protocol configuration:
     "client": {
       "prod": {
         "image_group_server": "https://my.custom.viewer.url",
+        "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
+        
         "data_group_server": "https://my.custom.viewer.url",
-        "data_group_protocol": "`${path}?Deepzoom=${data}.dzi`"
+        // the [0] syntax is due to legacy reasons, do not think about it much
+        "data_group_protocol": "`${path}?Deepzoom=${data[0]}.dzi`"
+      }
+    },
+    "server": {
+      "secure": {
+        // possibly secure data that will never reach the client logics
       }
     },
     "setup": {
-
+      // other viewer configuration
     }
   }
+  // plugins, modules configuration...
 }
 ````
-This will simply adjust existing protocol in the system to work with for multi-tile
-requests. Note that the image metadata is not checked for consistency by default, the
-data you are viewing should have compatible metadata. Manual consistency checking can be
-implemented for the desired protocol, please follow the log directions in browser console.
->Note: auto multiplexing works only for protocols that send response data as ``Image`` objects.
+This will leverage build-in OpenSeadragon protocol support.
 
 ### Custom Authentication
-For authentication through headers, please set-up headers in the viewer configuration (
-either parameters or ENV file - run `grunt build` to create example ENV file). Cookies for headers
-and other things can be globally configured using ``osdOptions`` options - refer to OpenSeadragon.Options.
-This allows you to only set global headers when fetching resources, but does not allow you to update them
-or create them dynamically.
+TODO add support for HTTP-Client usage
 
-For advanced authentication methods, please adjust existing protocol or use a custom one - see below.
+### Security Considerations
+The viewer can turn on ``secure`` mode, which will disable all
+non-secure features in the viewer, like respecting dynamic `protocol` overrides.
+Unless in secure environment, the viewer should be run with ``secure`` mode on.
+
+Moreover, all configurations are visible on the client side, so it might be problematic.
+This can be solved by using a proxy that will hide the configuration from the client.
+For more details, see the [client documentation](./src/HTTP_CLIENT.md).
+
+> As of now, there is no support for ``server-side`` logics execution.
+> You can either use the generic proxy, or implement an independent service
+> you connect the viewer to. In such cases, you should keep a session
+> alive that checks that only your own module/plugin can access the service.
 
 ### Custom Image Protocols
 You do not have to use our protocol and image server, 
 use any other protocol that can either handle tile fetching transfer through ``Images``
 or even (better option but harder to implement) handle image arrays and correctly parse its metadata.
-See the [documentation of OpenSeadragon](https://openseadragon.github.io/examples/tilesource-custom/) on how to add new, custom protocols.
+See the [documentation of OpenSeadragon](https://openseadragon.github.io/examples/tilesource-custom-advanced/) on how to add new, custom protocols.
 It is also possible to add script that injects code to and modifies existing tile sources.
 
 > Note that instead of inline configuration, you have to create a new protocol class and register it
@@ -161,18 +174,11 @@ so that auto-detection routine recognizes the protocol (`supports()` returns `tr
 the default protocols (through parameters or ENV) to conform to the protocol configuration phase. 
 
 A great example on implementing the protocol interface are existing implementations in the OpenSeadragon library.
-Also, for multi-tile fethching see ``src/external/dziexttilesource.js`` Extended DZI protocol implementation.
-
-> The internal renderer can natively work with concatenated image or image arrays.
-> Missing images must be present as black tiles - either in array or concatenated at the right position.
-> The tile position is given by the URL position. This data is given to the protocol constructor
->  (see ``data_group_protocol``), which is used to fetch image metadata and this metadata is sent to
-> the ``TileSource::configure()`` function, where you can parse the URL or metadata to build your own tile
-> urls. Just remember to keep the order of URLs given as ``data`` param to ``data_group_protocol``.
 
 ### Extending TiledImage
 
-TiledImage can be extended to add custom functionality. The api supports:
+OpenSeadragon's ``TiledImage`` API is somewhat generic, but here we are dealing with digital pathology. Therefore,
+the API is extended and supports the following methods to integrate the full pathology workflow:
 
 ````js
 /**
@@ -188,7 +194,7 @@ setSourceOptions(options) {
 /**
  * Retrieve slide metadata. Can be arbitrary key-value list, even nested.
  * Some properties, hovewer, have a special meagning. These are documented in the 
- * return function.
+ * return function. The values are then displayed in the viewer UI for the particular image.
  * @return {TileSourceMetadata|undefined}
  */
 getMetadata() {

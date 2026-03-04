@@ -54,6 +54,7 @@ import { FloatingManager } from "./services/floatingManager.mjs";
 
 // MIXINS
 import { VisibilityManager } from "./classes/mixins/visibilityManager.mjs";
+import * as utils from "./classes/mixins/utils.mjs";
 
 class ServiceContainer {
     _globalTooltip = null;
@@ -110,7 +111,8 @@ const UI = {
     Services: new ServiceContainer(),
     // Other
     Mixins: {
-        VisibilityManager
+        VisibilityManager,
+        Utilities: utils
     }
 };
 

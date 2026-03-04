@@ -159,25 +159,57 @@
         "historySize": 50
     },
     /**
-     * The Server status. This object is here just for the reference and
+     * The Server configuration. This object is here just for the reference and
      * to provide default values; the server shall set up these properties accordingly.
-     * DO NOT modify these
      * @typedef {{
      *   name: string,
      *   supportsPost: boolean
-     * }} xoServerState
+     * }} xoServerConfig
      */
-    "serverStatus": {
+    "server": {
         "name": null,
         // Disable for servers that do not support POST parsing: will not support direct data sharing
-        "supportsPost": true
+        "supportsPost": true,
+        // EVERYTHING in the config.js (env.json, XO_ENV) is AVAILABLE AND READABLE at client-server.
+        // The only thing that is not readable is this part - this stays on the server.
+        // If you have some secret you MUST NOT expose at any cost, do your logics
+        // via proxying and use your secrets in the 'secure' part of the server configuration.
+        "secure": {
+          // The server supports url+header configuration for custom proxies. You can
+          // - configure module/plugin to use local proxy endpoint
+          // - configure the proxy here
+          "proxies": {
+            // My proxy service will proxy a resource using token that is NOT exposed on the client.
+            //"my-service": {
+            //    "baseUrl": "https://api.example.com",
+            //    "headers": {
+            //        "Authorization": "Bearer <% MY_SERVICE_TOKEN %>"
+            //    },
+            //    // The proxy service can explicitly VERIFY the user has necessary rights to call the endpoint
+            //    // Supported verifiers are: 'jwt'
+            //    "auth": {
+            //        "enabled": true,
+            //        "verifiers": ["jwt"], // what verification to use (see HttpClient)
+            //        "mode": "all"         // "all" (default) or "any"
+            //        // From now on, other configuration depends on the actual verifier used
+            //        "jwt": {
+            //            "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
+            //            "issuer": "https://login.example.com/",
+            //            "audience": "xopat-viewer",
+            //            "forward": false,
+            //            "userClaimHeader": "x-user-sub"
+            //        }
+            //    }
+            //}
+          }
+        }
     },
 
     /**
      * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.
      */
     "monaco": "src/libs/monaco/",
-    "openSeadragonPrefix": "openseadragon/build/openseadragon/",
+    "openSeadragonPrefix": "src/libs/",
     "openSeadragon": "openseadragon.js",
     "openSeadragonConfiguration": {
       "showNavigator": true,
@@ -202,7 +234,7 @@
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js",
-            "render": "flex-renderer.js",
+            "render": "flex-renderer.js"
             //"geotiff": "geotiff-tilesource.min.js"
         },
         // src/external  key: source / [sources,list]

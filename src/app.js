@@ -128,7 +128,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             localizeDom();
         });
     }
-    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.serverStatus.supportsPost);
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost);
     let CONFIG = POST_DATA.visualization;
     if (!CONFIG) {
         CONFIG = {
@@ -629,6 +629,16 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         }
     };
 
+    /**
+     * Core HTTP Client.
+     * * @memberof APPLICATION_CONTEXT
+     * @type {import('./path/to/http-client').HttpClient}
+     */
+    APPLICATION_CONTEXT.httpClient = new HttpClient({
+        baseURL: APPLICATION_CONTEXT.url,
+        auth: { contextId: undefined }
+    });
+
     // todo maybe dont support this, just call directly the static method
     window.APPLICATION_CONTEXT.registerConfig = function registerConfig(bg) {
         return window.BackgroundConfig.from(bg);
@@ -707,6 +717,65 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
      */
     OpenSeadragon.TileSource.prototype.getLabel = function () { };
+
+    // override tile fetching to use the core http client
+    OpenSeadragon.TileSource.prototype.downloadTileStart = function(context) {
+        const controller = new AbortController();
+        context.userData.abortController = controller;
+
+        const url = context.src;
+        const method = context.postData ? "POST" : "GET";
+
+        (async () => {
+            if (controller.signal.aborted) return;
+
+            const authHeaders = await APPLICATION_CONTEXT.httpClient._authHeaders(url, method);
+            const headers = {
+                ...authHeaders,
+                ...(context.ajaxHeaders || {})
+            };
+
+            const init = {
+                method,
+                headers,
+                signal: controller.signal,
+                body: context.postData || undefined
+            };
+
+            // 2. Perform a single Request
+            // TODO: here we do manual fetch -> we should use the client, but then we would not
+            //  use the osd headers correctly. Once we update openseadragon to better support
+            //  this, we will configure OSD to use the client and throw away this poatch.
+            const response = await fetch(url, init);
+
+            // 3. Fail immediately if not successful
+            if (!response.ok) {
+                context.fail(`HTTP ${method} ${url} failed: ${response.status}`, null);
+                return;
+            }
+
+            // 4. Process Successful Response into a Blob
+            const blob = await response.blob();
+            if (controller.signal.aborted) return;
+
+            if (blob.size === 0) {
+                context.fail("[downloadTileStart] Empty image response.", null);
+            } else {
+                context.finish(blob, null, "rasterBlob");
+            }
+        })();
+    };
+
+    /**
+     * Patch: OpenSeadragon Tile Download Abort
+     * Intercepts the request abortion and delegates it to the Fetch AbortController.
+     */
+    OpenSeadragon.TileSource.prototype.downloadTileAbort = function(context) {
+        if (context.userData && context.userData.abortController) {
+            context.userData.abortController.abort();
+            context.userData.abortController = null;
+        }
+    };
 
     /**
      * Viewer manager for multi-view support

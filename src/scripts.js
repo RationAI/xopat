@@ -275,7 +275,7 @@ function initXopatScripts() {
     window.UTILITIES.getForm = async function(customAttributes="", includedPluginsList=undefined, withCookies=false) {
         const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
 
-        if (! APPLICATION_CONTEXT.env.serverStatus.supportsPost) {
+        if (! APPLICATION_CONTEXT.env.server.supportsPost) {
             return `
     <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies, true))}">
         <input type="hidden" id="visualization" name="visualization">

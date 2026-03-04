@@ -1,48 +1,118 @@
 const http = require("node:http");
-const url = require('url');
+const {URL} = require('url');
 const fs = require("node:fs");
 const path = require("node:path");
 const querystring = require('querystring');
+const crypto = require('node:crypto');
 const i18n = require('../../src/libs/i18next.min');
 
-const PROJECT_PATH = "";
 
+const utils = require('./utils');
 const { getCore } = require("../templates/javascript/core");
 const { loadPlugins } = require("../templates/javascript/plugins");
 const { throwFatalErrorIf } = require("./error");
-const constants = require("./constants");
 
+
+const constants = require("./constants");
+const {rawReqToString} = require("./utils");
+const {verifyProxyAuth} = require("./auth");
+
+
+const PROJECT_PATH = "";
 const language = constants.SERVER.LANGUAGE;
 const languageServerConf = getI18NData(language);
 languageServerConf.fallbackLng = 'en';
 i18n.init(languageServerConf);
 
-const rawReqToString = async (req) => {
-    const buffers = [];
-    for await (const chunk of req) {
-        buffers.push(chunk);
+
+const sessions = new Map();
+
+function parseCookies(cookieHeader) {
+    const cookies = {};
+    if (!cookieHeader) return cookies;
+    cookieHeader.split(';').forEach(pair => {
+        const [name, ...rest] = pair.split('=');
+        cookies[name.trim()] = decodeURIComponent(rest.join('=') || '');
+    });
+    return cookies;
+}
+
+function getSession(req) {
+    const cookies = parseCookies(req.headers.cookie);
+    const id = cookies['xopat_session'];
+    if (!id) return null;
+    const session = sessions.get(id);
+    if (!session) return null;
+    return session;
+}
+
+function createSession(res) {
+    const id = crypto.randomUUID();
+    const csrfToken = crypto.randomBytes(16).toString('hex');
+
+    const session = {
+        id,
+        csrfToken,
+        createdAt: Date.now(),
+        // you can attach extra flags here, e.g. which proxies are allowed
+        allowedProxies: 'ALL'
+    };
+
+    sessions.set(id, session);
+
+    // Set an HttpOnly cookie so front-end JS can’t steal it
+    // (but browser will send it automatically with requests)
+    const cookieParts = [
+        `xopat_session=${encodeURIComponent(id)}`,
+        'Path=/',
+        'HttpOnly',
+        'SameSite=Lax'
+    ];
+    if (process.env.NODE_ENV === 'production') {
+        cookieParts.push('Secure');
     }
-    return Buffer.concat(buffers).toString();
-};
+    const cookie = cookieParts.join('; ');
 
-const initViewerCoreAndPlugins = (req, res) => {
+    // Preserve other Set-Cookie headers if any
+    const existing = res.getHeader('Set-Cookie');
+    if (existing) {
+        res.setHeader('Set-Cookie', Array.isArray(existing) ? existing.concat(cookie) : [existing, cookie]);
+    } else {
+        res.setHeader('Set-Cookie', cookie);
+    }
 
+    return session;
+}
+
+
+const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
     const core = getCore(constants.ABSPATH, PROJECT_PATH,
         fs.existsSync,
         path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }),
-        key => process.env[key]);
+        key => process.env[key],
+        !serverOnly // secure only when not on server
+    );
 
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
-    core.CORE.serverStatus.name = "node";
-    core.CORE.serverStatus.supportsPost = true;
+    core.CORE.server.name = "node";
+    core.CORE.server.supportsPost = true;
+
+    if (serverOnly) {
+        return core;
+    }
 
     //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
-    const requestUrl = url.parse(req.url, true);
-    const language = requestUrl.query.lang;
+    let raw = req.url || "/";
+    if (raw.startsWith("//")) raw = "/" + raw.replace(/^\/+/, ""); // prevent accidental issues with double slashes
+    // use 'http', we don't care about the protocol
+    const url = new URL(raw, `http://${req.headers.host}`);
+    // TODO: support req.headers['accept-language'] - somma separated list, setup.locale should support multiple fallbacks
+    const language = url.searchParams.get('lang');
     if (language) core.CORE.setup.locale = language;
 
     loadPlugins(core, fs.existsSync, path => fs.readFileSync(path, { encoding: 'utf8', flag: 'r' }), i18n);
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
+
     return core;
 }
 
@@ -61,31 +131,9 @@ function getI18NData(language) {
     }
 }
 
-function _mimeOf(p) {
-    const ext = path.extname(p).toLowerCase();
-    return  {
-        '.html': 'text/html',
-        '.js': 'text/javascript',
-        '.mjs': 'application/javascript',
-        '.css': 'text/css',
-        '.json': 'application/json',
-        '.png': 'image/png',
-        '.jpg': 'image/jpg',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.wav': 'audio/wav',
-        '.mp4': 'video/mp4',
-        '.woff': 'application/font-woff',
-        '.ttf': 'application/font-ttf',
-        '.eot': 'application/vnd.ms-fontobject',
-        '.otf': 'application/font-otf',
-        '.wasm': 'application/wasm',
-    }[ext] || 'application/octet-stream';
-}
-
 async function responseStaticFile(req, res, targetPath) {
     //taken from https://stackoverflow.com/questions/28061080/node-itself-can-serve-static-files-without-express-or-any-other-module
-    const contentType = _mimeOf(targetPath);
+    const contentType = utils.mimeOf(targetPath);
     fs.readFile(targetPath, (err, content) => {
         if (err) {
             res.writeHead(500);
@@ -101,7 +149,79 @@ async function responseStaticFile(req, res, targetPath) {
     });
 }
 
-async function responseViewer(req, res) {
+async function responseProxy(req, res, requestUrl) {
+    // 1. todo parse just core for now, no need to load plugins
+    const core = initViewerCoreAndPlugins(req, res, true);
+    if (!core) return;
+
+    // 2. Extract alias from /proxy/alias/v1/...
+    const parts = requestUrl.pathname.split('/').filter(Boolean);
+    const alias = parts[1];
+    const targetPath = '/' + parts.slice(2).join('/') + (requestUrl.search || '');
+
+    // 3. Match against the "secure.proxies" definition
+    const serverConf = core.CORE.server || core.CORE.serverStatus || {};
+    const proxyConfig = serverConf.secure?.proxies?.[alias];
+
+    console.log(serverConf);
+
+    if (!proxyConfig) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        return res.end(`Proxy target alias '${alias}' is not allowed or not configured.`);
+    }
+
+    const targetUrl = proxyConfig.baseUrl.replace(/\/$/, '') + targetPath;
+
+    // 4. Read body
+    let bodyContent = undefined;
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+        bodyContent = await rawReqToString(req);
+    }
+
+    // 5. Build headers to forward upstream (start from incoming)
+    const headers = { ...req.headers };
+    delete headers['host'];
+    delete headers['connection'];
+    delete headers['origin'];
+    delete headers['referer'];
+
+    // 5b. Let auth verifiers inspect/validate the request and *mutate* upstream headers
+    const upstreamState = { headers, targetPath };
+    const authOk = await verifyProxyAuth(req, res, core, alias, proxyConfig, upstreamState);
+    if (!authOk) {
+        // verifyProxyAuth already wrote the error response
+        return;
+    }
+
+    // 5c. Safely merge the expanded secure headers (e.g. API keys)
+    if (proxyConfig.headers) {
+        Object.assign(headers, proxyConfig.headers);
+    }
+
+    // 6. Forward the request
+    try {
+        const fetchRes = await fetch(targetUrl, {
+            method: req.method,
+            headers: headers,
+            body: bodyContent
+        });
+
+        const resHeaders = Object.fromEntries(fetchRes.headers.entries());
+        delete resHeaders['content-encoding'];
+
+        res.writeHead(fetchRes.status, resHeaders);
+        const arrayBuffer = await fetchRes.arrayBuffer();
+        res.end(Buffer.from(arrayBuffer));
+        console.log(`Proxy: ${req.method} ${targetUrl} -> ${fetchRes.status}`);
+
+    } catch (e) {
+        console.error(`Proxy error routing to ${alias}:`, e);
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        res.end("Bad Gateway: Error communicating with the proxied service.");
+    }
+}
+
+async function responseViewer(req, res, session) {
     // Parse the request url
     let rawData = req.method === 'POST' ? await rawReqToString(req) : undefined;
     let postData;
@@ -170,7 +290,11 @@ ${core.requireUI()}
 ${core.requireCore("loader")}
 ${core.requireCore("deps")}
 ${core.requireCore("app")}
-${core.requireCore("env")}`;
+${core.requireCore("env")}
+<script>
+window.XOPAT_CSRF_TOKEN = '${session ? session.csrfToken : ''}';
+</script>
+`;
 
             case "app":
                 return `
@@ -256,17 +380,36 @@ ${core.requireCore("deps")}`;
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = req.headers['x-forwarded-proto'] || 'http';
-        const url = new URL(`${protocol}://${req.headers.host}${req.url}`);
+        const urlObj = new URL(`${protocol}://${req.headers.host}${req.url}`);
 
-        if (url.pathname.startsWith("/health")) {
+        if (urlObj.pathname.startsWith("/health")) {
             res.writeHead(200);
             res.end();
             return;
         }
 
+        // --- New: proxy endpoint with session check ---
+        if (urlObj.pathname.startsWith("/proxy/")) {
+            const session = getSession(req);
+            if (!session) {
+                res.writeHead(401, { 'Content-Type': 'text/plain' });
+                return res.end('Unauthorized: missing or invalid session');
+            }
+
+            // optional: CSRF header check
+            const clientToken = req.headers['x-xopat-csrf'];
+            if (!clientToken || clientToken !== session.csrfToken) {
+                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                return res.end('Forbidden: invalid CSRF token');
+            }
+
+            return responseProxy(req, res, urlObj, session);
+        }
+        // --- end new proxy route ---
+
         // Treat suffix paths as attempt to access existing files
-        if (url.pathname.match(/.+\..{2,5}$/g)) {
-            const possibleFilePath = constants._ABSPATH_NO_SLASH + url.pathname;
+        if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
+            const possibleFilePath = constants._ABSPATH_NO_SLASH + urlObj.pathname;
             if (fs.existsSync(possibleFilePath)) {
                 return responseStaticFile(req, res, possibleFilePath);
             }
@@ -275,15 +418,19 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (url.pathname.startsWith("/dev_setup")) {
+        if (urlObj.pathname.startsWith("/dev_setup")) {
             return responseDeveloperSetup(req, res);
         }
 
-        return responseViewer(req, res);
+        let session = getSession(req);
+        if (!session) {
+            session = createSession(res);
+        }
+
+        return responseViewer(req, res, session);
     } catch (e) {
         console.error(e);
         res.statusCode = 500;
-        //todo consider JSON structured response similar to fastapi
         res.write(String(e));
         res.end();
     }
@@ -303,11 +450,11 @@ server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     const port = constants.SERVER.PORT;
     const scheme = port === 443 ? "https" : "http";
     const host = constants.SERVER.HOST === "0.0.0.0" ? "localhost" : constants.SERVER.HOST;
-    const URL = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
-    console.log(`The server is listening on ${URL} ...`);
-    console.log(`  To manually create and run a session, open ${URL}/dev_setup`);
-    console.log(`  To open using GET, provide ${URL}?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide ${URL}#urlEncodedSessionJSONHere`);
+    const url = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+    console.log(`The server is listening on ${url} ...`);
+    console.log(`  To manually create and run a session, open ${url}/dev_setup`);
+    console.log(`  To open using GET, provide ${url}?slides=slide,list&masks=mask,list`);
+    console.log(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
     console.log(`                                      or sent the data using HTTP POST`);
     console.log(`  The session description is available in src/README.md`);
 });

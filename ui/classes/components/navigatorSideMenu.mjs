@@ -50,10 +50,13 @@ export class NavigatorSideMenu extends BaseComponent {
     create() {
         this.title = new Div({
             id: this.id + "-title",
-            class: "",
-            extraClasses: {btn: "btn btn-neutral btn-sm"},
-            extraProperties: {style: "flex-grow: 1; box-sizing: border-box; vertical-align: center", title: "Copy"},
+            class: "truncate text-sm cursor-pointer",
+            extraProperties: {
+                title: $.t("main.bar.copy"), // tooltip
+                style: "flex-grow:1; box-sizing:border-box; vertical-align:middle;"
+            },
             onClick: function () {
+                // inside this handler, `this` is the DOM node for the title
                 UTILITIES.copyToClipboard(this.textContent);
             }
         });
@@ -70,20 +73,35 @@ export class NavigatorSideMenu extends BaseComponent {
         this.copy = new Button({
             id: this.id + "-copy",
             size: Button.SIZE.SMALL,
-            onClick: function () {
-                UTILITIES.copyToClipboard(text.textContent);
+            onClick: () => {
+                const el = document.getElementById(this.id + "-title");
+                if (el) UTILITIES.copyToClipboard(el.textContent);
             },
-            extraProperties: {title: $.t('main.bar.copy'), style: "width: 30px"},
-        }, new FAIcon({name: "fa-copy"}),);
+            extraProperties: {
+                title: $.t("main.bar.copy"),
+                style: "width:30px;"
+            },
+        }, new FAIcon({ name: "fa-copy" }));
 
+
+        const header = new Join({
+            style: Join.STYLE.HORIZONTAL,
+            extraClasses: {
+                width: "w-full",
+                padding: "px-2 py-1",
+                bg: "bg-base-200/90",
+                border: "border-b border-base-300",
+                items: "items-center",
+                gap: "gap-2"
+            }
+        }, this.visibility, this.title, this.copy);
 
         return div(
-            new Join({
-                style: Join.STYLE.HORIZONTAL,
-                extraClasses: {width: "w-full", position: "absolute", index: "z-50"}
-            }, this.visibility, this.title, this.copy).create(),
-            div({class: "flex flex-col", style: "width: 360px;"},
-                div({id: this.navigatorId, style: " height: 300px; width: 360px;"})
+            { class: "flex flex-col w-[360px]" },
+            header.create(),
+            div(
+                { class: "flex flex-col", style: "width:360px;" },
+                div({ id: this.navigatorId, style: "height:300px; width:360px;" })
             )
         );
     }

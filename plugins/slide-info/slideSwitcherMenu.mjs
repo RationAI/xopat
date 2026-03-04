@@ -72,7 +72,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }, body);
 
             const el = this._dock.create();
-            document.body.appendChild(el);
+            USER_INTERFACE.addHtml(el, 'slide-info');
         }
 
         // Sync state with currently opened viewer slides

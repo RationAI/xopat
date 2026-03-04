@@ -52,7 +52,9 @@ window.HTTPError = class extends Error {
 window.HttpClient = class {
     /**
      * @param {Object} options
-     * @param {string} options.baseURL - e.g. "https://mlflow.myhost.com/api/2.0/mlflow"
+     * @param {string} [options.baseURL] - e.g. "https://mlflow.myhost.com/api/2.0/mlflow", must be defined if proxy is not defined
+     * @param {string} [options.proxy] - Optional alias for server-side proxy (e.g. "openai"). Routes via `/proxy/{alias}`,
+     *   must be defined if baseURL is not defined. If base url defined with proxy, the resulting base url is mounted atop the proxy.
      * @param {number} [options.timeoutMs=30000]
      * @param {number} [options.maxRetries=3]
      * @param {Object} [options.auth]
@@ -61,19 +63,56 @@ window.HttpClient = class {
      * @param {Object} [options.auth.handlers] - map of type=>handler override for this instance
      * @param {boolean} [options.auth.refreshOn401=true] - if true, attempts a one-shot secret refresh via user interface
      */
-    constructor({ baseURL, timeoutMs = 30000, maxRetries = 3, auth = {} } = {}) {
-        if (!baseURL) throw new Error("HttpClient: baseURL is required");
-        this.baseURL = baseURL.replace(/\/$/, "");
+    constructor({ baseURL, proxy, timeoutMs = 30000, maxRetries = 3, auth = {} } = {}) {
+        let base = "";
+        if (proxy && typeof proxy === "string") {
+            const domain = APPLICATION_CONTEXT.url;
+            if (domain.endsWith("/")) {
+                base = `${APPLICATION_CONTEXT.url}proxy/${proxy}`;
+            } else {
+                base = `${APPLICATION_CONTEXT.url}/proxy/${proxy}`;
+            }
+        }
+
+        if (baseURL) {
+            if (base) {
+                if (baseURL.startsWith("http")) {
+                    console.warn("HttpClient: baseURL is an a...bsolute URL, which is wrong with proxy usage!", baseURL, proxy);
+                }
+                if (!base.endsWith("/")) {
+                    base = `${base}/`;
+                }
+                base = base + baseURL.replace(/^\//, "");
+            } else {
+                base = baseURL;
+            }
+        }
+
+        if (!base) {
+            throw new Error("HttpClient: baseURL or proxy alias is required");
+        }
+
+        this.baseURL = base.replace(/\/$/, "");
         this.timeoutMs = timeoutMs;
         this.maxRetries = Math.max(0, maxRetries);
         this.secretStore = XOpatUser.instance();
 
-        const { contextId = undefined, types = ["jwt"], handlers = {}, refreshOn401 = true } = auth || {};
+        this.usingProxy = !!proxy;
+
+        const {
+            contextId = undefined,
+            types = ["jwt"],
+            handlers = {},
+            refreshOn401 = true,
+            required = false,              // NEW: auth.required flag
+        } = auth || {};
+
         this.auth = {
             contextId,
             types,
             handlers: { ...HttpClient._globalAuthHandlers, ...handlers },
             refreshOn401,
+            required,
         };
     }
 
@@ -93,16 +132,32 @@ window.HttpClient = class {
     }
 
     async _authHeaders(url, method) {
-        const { types, handlers, contextId } = this.auth;
+        const { types, handlers, contextId, required } = this.auth;
         const headers = {};
+        let hasAnySecret = false;
+
         for (const type of types || []) {
             const handler = handlers[type];
             if (!handler) continue;
+
             const secret = this.secretStore.getSecret(type, contextId);
             if (!secret) continue;
+
+            hasAnySecret = true;
             const addition = await handler({ secret, type, contextId, url, method });
             if (addition && typeof addition === "object") Object.assign(headers, addition);
         }
+
+        // If auth is required for this client, we're using a proxy,
+        // but we found no secrets, warn loudly (and let the request fail/401).
+        if (!hasAnySecret && required && this.usingProxy) {
+            console.warn(
+                `HttpClient: auth.required=true for proxy request but no secrets found` +
+                (contextId ? ` for context '${contextId}'` : "") +
+                `. Request will be sent without auth headers and will likely result in 401.`
+            );
+        }
+
         return headers;
     }
 
@@ -149,6 +204,14 @@ window.HttpClient = class {
             ...headers,
         };
 
+        if (this.usingProxy) {
+            if (typeof window !== "undefined" && window.XOPAT_CSRF_TOKEN) {
+                baseHeaders["X-XOPAT-CSRF"] = window.XOPAT_CSRF_TOKEN;
+            } else {
+                console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
+            }
+        }
+
         const controller = new AbortController();
         const to = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -156,12 +219,14 @@ window.HttpClient = class {
             method,
             headers: baseHeaders,
             signal: controller.signal,
+            ...(this.usingProxy ? { credentials: "same-origin" } : {}),
             ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
         };
 
         let attempt = 0;
         let refreshed = false;
 
+        // todo support retry-after header
         while (true) {
             try {
                 const res = await fetch(url, init);
@@ -171,12 +236,19 @@ window.HttpClient = class {
                     if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
                         refreshed = await this._maybeRefreshSecrets();
                         if (refreshed) {
-                            // rebuild auth headers after refresh
+                            // rebuild auth + CSRF headers after refresh
                             init.headers = {
                                 ...(hasBody ? { "Content-Type": "application/json" } : {}),
                                 ...(await this._authHeaders(url, method)),
                                 ...headers,
                             };
+                            if (this.usingProxy) {
+                                if (typeof window !== "undefined" && window.XOPAT_CSRF_TOKEN) {
+                                    init.headers["X-XOPAT-CSRF"] = window.XOPAT_CSRF_TOKEN;
+                                } else {
+                                    console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
+                                }
+                            }
                             continue;
                         }
                     }

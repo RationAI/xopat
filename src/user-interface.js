@@ -13,13 +13,12 @@ function initXopatUI() {
         _scheduler: null,
         _modals: {},
 
-
         /**
-         * Show notification (same API)
-         * @param {string} text HTML allowed
+         * Show notification
+         * @param {string} text HTML allowed, but be cautious about security. Use actions in props for activity.
          * @param {number} delayMS >= 1000 autohides, <1000 sticks until closed
          * @param importance one of Dialogs.MSG_*
-         * @param {object} props {queued?, onShow?, onHide?, buttons?}
+         * @param {object} props {queued?, onShow?, onHide?, buttons?, actions?}
          */
         show(text, delayMS = 5000, importance = this.MSG_INFO, props = {}) {
             this._scheduler.show(text, delayMS, importance, props);
@@ -34,7 +33,7 @@ function initXopatUI() {
         },
 
         /**
-         * Await dialogs are hidden and no messsages are shown
+         * Await dialogs are hidden and no messages are shown
          * @return {Promise}
          */
         async awaitHidden() {
@@ -42,11 +41,10 @@ function initXopatUI() {
         },
 
         init() {
-            if (this._scheduler) return; // already initialized
+            if (this._scheduler) return;
             const view = new UI.Toast();
             this._scheduler = new UI.Toast.Scheduler(view);
 
-            // attach using your component system (works even if BaseComponent has helpers)
             (document.body || document.documentElement).appendChild(view.create());
 
             view.setHoverHandlers?.(
@@ -54,7 +52,6 @@ function initXopatUI() {
                 () => this._scheduler.resume()
             );
 
-            // Close all child modals if parent dies (kept from your original)
             window.addEventListener("unload", () => {
                 if (this._modals) {
                     for (const key in this._modals) {

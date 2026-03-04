@@ -2,6 +2,7 @@ import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import {Alert} from "../elements/alert.mjs";
 import {ShaderLayer} from "./shaderLayer.mjs";
+import {draggable} from "../mixins/utils.mjs";
 
 const { div, span, select, option, br, ul, li, a } = van.tags;
 
@@ -249,7 +250,7 @@ export class ShaderSideMenu extends BaseComponent {
      * Modified by Jiří
      */
     _enableDragSort(viewer) {
-        UIComponents.Actions.draggable(this.layerContainer, item => {
+        draggable(this.layerContainer, item => {
             const id = item.dataset.id;
             window.DropDown.bind(item, () => {
                 const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;

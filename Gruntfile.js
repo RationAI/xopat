@@ -19,6 +19,10 @@ module.exports = function(grunt) {
         "Generate a plugin or module",
         require('./server/utils/grunt/tasks/generate-plugin-module')(grunt)
     );
+    grunt.registerTask("npm-install",
+        "Install a module from npm",
+        require('./server/utils/grunt/tasks/generate-npm-module')(grunt)
+    );
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
         require('./server/utils/grunt/tasks/realtime-compile')(grunt)

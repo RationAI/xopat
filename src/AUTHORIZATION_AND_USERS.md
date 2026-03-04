@@ -7,6 +7,7 @@ This README consolidates and corrects our authentication docs to match the curre
 - Bind secrets to a **type** (e.g., `"jwt"`, `"basic"`) and optionally to a **contextId** (e.g., `"mlflow"`).
 - `HttpClient` automatically applies auth headers from `XOpatUser` and can refresh secrets once on `401` by firing a `secret-needs-update` event that your UI/module should handle.
 - Built-in auth header handlers for `jwt` and `basic`; you can register your own.
+- Differentiate between **contextual** and **core** secrets.
 
 ---
 
@@ -21,13 +22,24 @@ const user = XOpatUser.instance();
 // Login (must be logged out before calling)
 user.login(userId, userName, optionalIconHtml);
 
-// Logout (clears id, name, and ALL secrets)
+// Logout (clears id, name, and ALL secrets from all contexts when used like this)
 user.logout();
+```
+This is core flow - it should executed present only once in your app. More plugins can, for example, 
+queue on event and test whether the user is logged in (supporting fallback logins), but they can never log-in twice.
+
+Each of these methods accepts additional optional parameter ``contextId``, which means we can log-in for third party services:
+
+```js
+// Login for custom third-party service
+user.login(userId, userName, optionalIconHtml, 'my-service');
+
+// Logout (clears only my-service context secrets)
+user.logout('my-service');
 ```
 
 ### Secret storage
-Secrets are stored by **type** and optional **contextId**. If a context-specific secret is not found, `getSecret` falls back to the generic secret of the same type.
-
+Secrets are stored by **type** and optional **contextId**. 
 ```js
 // Set a secret (fires `secret-updated` if value is truthy, `secret-removed` if cleared)
 user.setSecret(secretValue, /* type = */ "jwt", /* contextId? = */ "mlflow");
@@ -40,24 +52,28 @@ const token = user.getSecret("jwt", "mlflow");
 
 ### Secret lifecycle events
 
-| Event                 | When it fires                                        | Payload                                    |
-|-----------------------|-------------------------------------------------------|--------------------------------------------|
-| `secret-updated`      | After `setSecret(secret, type, contextId)` with truthy secret | `{ secret, type, contextId }`              |
-| `secret-removed`      | After `setSecret(null, type, contextId)`              | `{ type, contextId }`                      |
-| `secret-needs-update` | When a client requests a refresh (e.g., after 401)   | `{ type, contextId }`                      |
-| `login` / `logout`    | On login/logout                                       | `login: { userId, userName }` / `null`     |
+| Event                 | When it fires                                        |
+|-----------------------|-------------------------------------------------------|
+| `secret-updated`      | After `setSecret(secret, type, contextId)` with truthy secret |
+| `secret-removed`      | After `setSecret(null, type, contextId)`              |
+| `secret-needs-update` | When a client requests a refresh (e.g., after 401)   |
+| `login` / `logout`    | On login/logout                                       |
 
-**Important:** `logout()` clears all secrets; that should be considered a separate flow from `secret-removed` for a single secret.
+> Note that events with ``*`` asterisk are namespaced. If you have a `custom-context` context,
+> the event name fired is ``login:custom-context``. For details, see [EVENTS.md](EVENTS.md) description.
+> You can use ``XOpatUser.instance().getEventName(eventName, 'custom-context')`` to get the event name with namespace.
 
-### Requesting a secret refresh (UI contract)
+### Writing a secret provider (UI contract)
+Based on the above, you can write a module that provides secrets for your app - either a specific third-party service or a generic viewer-wide login.
 Some components (notably `HttpClient`) may ask the app to re-acquire a secret. Your authentication module should listen for `secret-needs-update`, perform the refresh (e.g., silent token refresh, interactive login), and then call `user.setSecret(...)`.
 
 ```js
 // Somewhere in your auth module/plugin:
-VIEWER.addHandler("secret-needs-update", async ({ type, contextId }) => {
+XOpatUser.instance().addHandler("secret-needs-update", async ({ type, contextId }) => {
   const user = XOpatUser.instance();
   const newSecret = await fetchNewTokenSomehow(type, contextId); // your logic
-  if (newSecret) user.setSecret(newSecret, type, contextId);
+  // Throwing an exception is OK, but if you fail to call setSecret, the client will wait until timeout.  
+  user.setSecret(newSecret, type, contextId);
 });
 ```
 
@@ -161,17 +177,17 @@ try {
 
 ```js
 // 1) Startup: make sure the user is logged in and set a JWT for the "mlflow" context
+const user = XOpatUser.instance();
 VIEWER_MANAGER.addHandler('before-first-open', async () => {
-  const user = XOpatUser.instance();
   if (!user.isLogged) await ensureUserLoggedIn();
 
   const jwt = await acquireJwtFor("mlflow");
   user.setSecret(jwt, "jwt", "mlflow");
 });
 
-// 2) Auth module listens for refresh requests
-VIEWER.addHandler('secret-needs-update', async ({ type, contextId }) => {
-  if (type === 'jwt' && contextId === 'mlflow') {
+// 2) Auth module listens for refresh requests (or just use 'secret-needs-update:mlflow' event name directly)
+user.addHandler(user.getEventName('secret-needs-update', 'mlflow'), async ({ type }) => {
+  if (type === 'jwt') {
     const refreshed = await refreshJwtSilently();
     if (refreshed) XOpatUser.instance().setSecret(refreshed, type, contextId);
   }
@@ -187,7 +203,7 @@ const data = await client.request('/experiments/list');
 ## 5) Notes & Best Practices
 - Prefer **context-bound** secrets for services with different lifecycles or issuers (e.g., `mlflow`, `analytics`).
 - Keep `types` ordered by preference (e.g., try `jwt` first, then fall back to `basic`).
-- Treat `logout()` as a destructive operation that clears **all** secrets; handle session UI accordingly.
+- Treat `logout()` as a destructive operation that clears **all** secrets unless context ID is specified; handle session UI accordingly.
 - If you introduce a new secret type, **register a handler** early during app startup.
 - In multi-auth setups, assign **event priorities** (e.g., on `before-first-open`) so only the first successful login path wins.
 

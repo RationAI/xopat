@@ -409,6 +409,26 @@ the functionality appropriately. Also, **do not store reference** to any tiled i
 Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
 all measures should be done.
 
+For authentication, ``HttpClient`` is avaiable and strongly recommended. It integrates with
+the viewer auth flows directly, and you can use custom contexts for authentication too.
+Moreover, you can use proxies to hide API keys: the proxy can be used only trusted services: you should use ``HttpClient`` to talk to the proxy, and not ``fetch``
+````javascript
+// here is some login that logs within contextId
+const authClient = new OIDCAuthClient(oidcConfig, {
+    userContextId: "my-service",
+    serviceName,
+    authMethod: "popup",
+});
+
+const client = new HttpClient({
+    proxy: "proxy-key",           // the config key in server.secure.proxies
+    baseURL: "/v1",               // optional base path inside the proxy
+    auth: {                       // optional authentication, if configured, directly integrates with xOpatUser API
+        contextId: "my-service",
+        types: ["jwt"],
+    },
+});
+````
  
 ## Hints
 If you have a panel registered under your ID, you can use `loading` class to show a loading spinner

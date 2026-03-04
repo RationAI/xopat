@@ -188,5 +188,33 @@ enriched by (private) properties of the rendering module.
 Native OpenSeadragon event called when the canvas gets reloaded or destroyed.
 
 
+### User Events
+Called on ``xOpatUser.instance()`` object, these events support contextualized logging.
+By default, contextId undefined (or `core`) is the main viewer auth context. Other contexts
+are for arbitrary log-ins against third party services. 
+
+> Note that events with ``*`` asterisk are namespaced. If you have a `custom-context` context,
+> the event name fired is ``login:custom-context``.
+> You can use ``XOpatUser.instance().getEventName(eventName, 'custom-context')`` to get the event name with namespace.
+
+#### `login`* | e: `{userId: string, userName: string, contextId: string}`
+Fired when a user successfully logs in, either as the primary user or within a specific service context.
+
+#### `logout`* | e: `null`
+Fired when the user session is terminated, erasing all secrets and resetting the UI to an anonymous state.
+
+#### `secret-updated`* | e: `{secret: any, type: string, contextId: string}`
+Fired when a new authentication token (e.g., JWT) is stored for a specific context, allowing the HttpClient to resume pending requests.
+
+#### `secret-removed`* | e: `{type: string, contextId: string}`
+Fired when a specific authentication secret is deleted from the user instance.
+
+#### `secret-needs-update`* | e: `{type: string, contextId: string}`
+Fired when a component (like HttpClient) encounters an authentication failure and requests the OIDCAuthClient to perform a background or interactive refresh.
+
+#### `user-select` | e: `{userId: string, userName: string}`
+Fired when the user interacts with the user panel/icon in the application interface.
+
+
 
 

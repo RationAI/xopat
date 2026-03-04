@@ -5,42 +5,76 @@
  */
 class XOpatUser extends OpenSeadragon.EventSource {
 
-    login(id, name, icon="") {
-        if (this.isLogged) throw "User needs to be first logged out!";
+    /**
+     * Login user, if already logged out, logout first. This should be used only
+     * for the first login, after that, use setSecret() and getSecret() methods.
+     * The state reflects the default core contextId state.
+     * @param id
+     * @param name
+     * @param icon
+     * @param contextId
+     */
+    login(id, name, icon="", contextId = undefined) {
+        const ctx = this._sanitizeContextId(contextId);
 
-        if (!id) {
-            throw "XOpatUser.login user ID not supplied!";
+        // Only treat as a global login if context is 'core'
+        if (ctx === 'core') {
+            if (this.isLogged) throw "User needs to be first logged out!";
+            this._id = id;
+            this._name = name;
+            this.icon = icon;
+            try {
+                USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(name);
+            } catch (e) { /* ignore UI errors */ }
+        } else {
+            this._identities[ctx] = { id, name, icon };
         }
-        this._id = id;
-        this._name = name;
-        this._secret = {};
-        this.icon = icon;
-
-        try {
-            USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(name);
-
-            this.raiseEvent('login', {
-                userId: id,
-                userName: name
-            });
-        } catch (e) {
-            console.warn("XOpatUser - error logging user in!", e);
-        }
+        this.raiseEvent(`login:${ctx}`, {
+            userId: id,
+            userName: name,
+            contextId: ctx
+        });
     }
 
-    logout() {
-        if (!this.isLogged) return;
-        this._id = null;
-        this._name = $.t('user.anonymous');
-        this._secret = {};
-        USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this.name);
-        this.icon = null;
-        this.secret = null;
-        this.raiseEvent('logout', null);
+    /**
+     * Logging out erases __ALL__ secrets, including the default core contextId secret.
+     */
+    logout(contextId = undefined) {
+        if (!this.getIsLogged(contextId)) return;
+        const ctx = this._sanitizeContextId(contextId);
+
+        // Only treat as a global login if context is 'core'
+        if (ctx === 'core') {
+            this._id = null;
+            this._name = $.t('user.anonymous');
+            this._secret = {};
+            USER_INTERFACE.AppBar.rightMenu.getTab('user').setTitle(this.name);
+            this.icon = null;
+            this.secret = null;
+        } else {
+            this._identities[ctx] = undefined;
+        }
+        this.raiseEvent(this.getEventName('logout', ctx), {contextId: ctx});
     }
 
+    /**
+     * Check if user logged in for the default core contextId
+     * @return {boolean}
+     */
     get isLogged() {
         return !!this._id;
+    }
+
+    /**
+     * Check if user logged in for given contextId. If contextId is not set, returns the default core contextId state.
+     * @param contextId
+     * @return {boolean}
+     */
+    getIsLogged(contextId = undefined) {
+        if (contextId === undefined) {
+            return this.isLogged;
+        }
+        return this._identities[this._sanitizeContextId(contextId)] !== undefined;
     }
 
     /**
@@ -51,8 +85,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
      * @return {*} secret
      */
     getSecret(type="jwt", contextId = undefined) {
-        const keyWithCtx = contextId ? `${type}:${contextId}` : type;
-        return this._secret && (this._secret[keyWithCtx] || this._secret[type]);
+        return this._secret && this._secret[this._getContextUniqueKey(type, contextId)];
     }
 
     /**
@@ -63,18 +96,17 @@ class XOpatUser extends OpenSeadragon.EventSource {
      * @raise secret-updated, secret-removed
      */
     setSecret(secret, type="jwt", contextId = undefined) {
-        if (!this.isLogged) throw "User needs to be first logged in to set a secret!";
-        this._secret = this._secret || {};
-        const keyWithCtx = contextId ? `${type}:${contextId}` : type;
+        const keyWithCtx = this._getContextUniqueKey(type, contextId);
         if (!HttpClient.knowsSecretType(type)) {
             console.warn(`XOpatUser.setSecret: unknown secret type '${type}'! You should register a handler for this type in HTTPClient.`);
         }
+
         if (secret) {
             this._secret[keyWithCtx] = secret;
-            this.raiseEvent('secret-updated', {secret, type, contextId});
+            this.raiseEvent(this.getEventName('secret-updated', contextId), {secret, type, contextId});
         } else if (this._secret[keyWithCtx]) {
             delete this._secret[keyWithCtx];
-            this.raiseEvent('secret-removed', {type, contextId});
+            this.raiseEvent(this.getEventName('secret-removed', contextId), {type, contextId});
         }
     }
 
@@ -85,23 +117,38 @@ class XOpatUser extends OpenSeadragon.EventSource {
      * @raise secret-needs-update
      */
     async requestSecretUpdate(type="jwt", contextId = undefined) {
-        const awaitToken = new Promise((resolve, reject) => {
-            let timeout = setTimeout(() => reject('Timeout waiting for secret update'), 20000);
-            this.addOnceHandler('secret-updated', e => {
-                if (e.type === type) {
+        const key = this._getContextUniqueKey(type, contextId);
+
+        // 1. Deduplication: If a refresh is already in flight for this key, return that promise
+        if (this._refreshing[key]) return this._refreshing[key];
+
+        this._refreshing[key] = new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                delete this._refreshing[key];
+                reject('Timeout waiting for secret update');
+            }, 20000);
+
+            const onUpdate = e => {
+                if (e.type === type && this._sanitizeContextId(e.contextId) === this._sanitizeContextId(contextId)) {
+                    this.removeHandler(this.getEventName('secret-updated', contextId), onUpdate);
                     clearTimeout(timeout);
+                    delete this._refreshing[key];
                     resolve();
                 }
-            });
-            this.addOnceHandler('secret-removed', e => {
-                if (e.type === type) {
-                    clearTimeout(timeout);
-                    reject('Secret removed.');
-                }
-            });
+            };
+
+            // Attach handler BEFORE raising the event to prevent the race condition
+            this.addHandler(this.getEventName('secret-updated', contextId), onUpdate);
+
+            this.raiseEventAwaiting(this.getEventName('secret-needs-update', contextId), {type, contextId})
+                .catch(err => {
+                    this.removeHandler(this.getEventName('secret-updated', contextId), onUpdate);
+                    delete this._refreshing[key];
+                    reject(err);
+                });
         });
-        await VIEWER.raiseEventAwaiting('secret-needs-update', {type, contextId});
-        return awaitToken;
+
+        return this._refreshing[key];
     }
 
     get id() {
@@ -117,10 +164,25 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     onUserSelect() {
-        this.raiseEvent('user-select', {
-            userId: id,
-            userName: name
+        this.raiseEvent(this.getEventName('user-select'), {
+            userId: this._id,
+            userName: this._name
         });
+    }
+
+    getEventName(name, contextId=undefined) {
+        const ctx = this._sanitizeContextId(contextId);
+        return ctx === 'core' ? name : `${name}:${ctx}`;
+    }
+    
+    // map context ID to 'core' -> default if undefined
+    _sanitizeContextId(contextId=undefined) {
+        return contextId || 'core';
+    }
+    
+    // get storage key for secrets
+    _getContextUniqueKey(type, contextId=undefined) {
+        return `${this._sanitizeContextId(contextId)}:${type}`;
     }
 
     /**
@@ -140,7 +202,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
      * @return {boolean}
      */
     static instantiated() {
-        return this.__self && true; //retype
+        return !!this.__self;
     }
 
     static __self = undefined;
@@ -150,9 +212,12 @@ class XOpatUser extends OpenSeadragon.EventSource {
         if (staticContext.__self) {
             throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
         }
+        this._secret = {};
+        this._identities = {};
+        this._refreshing = {};
         staticContext.__self = this;
         $("#user-panel").on('click', this.onUserSelect.bind(this));
-        this.addHandler('logout', () => {
+        this.addHandler(this.getEventName('logout'), () => {
             Dialogs.show('You have been logged out. Please, <a onclick="UTILITIES.refreshPage()">log-in</a> again.',
                 50000, Dialogs.MSG_ERR);
         });

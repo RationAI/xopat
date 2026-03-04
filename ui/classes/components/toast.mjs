@@ -48,15 +48,16 @@ export class Toast extends BaseComponent {
 
     /**
      * @param {{
-     *  html:string,
-     *  importance?:{key:string,icon?:string},
-     *  durationMs?:number,
-     *  buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>,
-     *  count?:number,
-     *  pending?:number
+     * html:string,
+     * importance?:{key:string,icon?:string},
+     * durationMs?:number,
+     * buttons?:Record<string,Function>|Array<{label:string,onClick?:Function,class?:string}>,
+     * actions?:Record<string,Function>, // <-- NEW: JS references for inline text
+     * count?:number,
+     * pending?:number
      * }} p
      */
-    setContent({ html, importance, durationMs, buttons, count = 1, pending = 0 }) {
+    setContent({ html, importance, durationMs, buttons, actions, count = 1, pending = 0 }) {
         if (typeof durationMs === "number") this._durationMs = durationMs;
 
         if (importance) {
@@ -95,6 +96,27 @@ export class Toast extends BaseComponent {
 
         iconEl.innerHTML = this._importance.icon || ICONS.info;
         msgEl.innerHTML = html ?? "";
+
+        if (actions && typeof actions === 'object') {
+            const actionEls = msgEl.querySelectorAll('[data-action]');
+            actionEls.forEach(el => {
+                const actionKey = el.getAttribute('data-action');
+                const actionFn = actions[actionKey];
+
+                if (typeof actionFn === 'function') {
+                    // UX sugar: if it's an anchor without an href, make it look clickable
+                    if (el.tagName === 'A' && !el.hasAttribute('href')) {
+                        el.style.cursor = 'pointer';
+                        el.style.textDecoration = 'underline';
+                    }
+
+                    el.addEventListener('click', (ev) => {
+                        ev.preventDefault();
+                        actionFn(ev, window.Dialogs);
+                    });
+                }
+            });
+        }
 
         // count badge for duplicates
         if (countEl) {
@@ -422,13 +444,29 @@ Toast.Scheduler = class {
         const msg = String(text ?? "").trim().replace(/\s+/g, " ");
         const imp = importance?.key || "info";
 
-        // include buttons in the signature so “same text but different actions” doesn't merge incorrectly
+        // include buttons in the signature
         const btnSig = JSON.stringify(normalizeButtons(props?.buttons || []).map(b => ({
             label: b.label,
             class: b.class || ""
         })));
 
-        return `${imp}::${msg}::${btnSig}`;
+        // NEW: include actions keys in the signature so different actions don't merge
+        const actionSig = props?.actions ? Object.keys(props.actions).sort().join(',') : "";
+
+        return `${imp}::${msg}::${btnSig}::${actionSig}`;
+    }
+
+    _renderCurrent() {
+        if (!this._view || !this._current) return;
+        this._view.setContent({
+            html: this._current.text,
+            importance: this._current.importance,
+            durationMs: this._current.delayMS,
+            buttons: this._current.props?.buttons,
+            actions: this._current.props?.actions, // <-- NEW
+            count: this._current.count || 1,
+            pending: this._queue.length
+        });
     }
 
     _removeFromQueue(job) {
@@ -441,18 +479,6 @@ Toast.Scheduler = class {
         this._remaining = delayMS;
         this._deadline = Date.now() + delayMS;
         this._timer = setTimeout(() => this._hideImpl(true), delayMS);
-    }
-
-    _renderCurrent() {
-        if (!this._view || !this._current) return;
-        this._view.setContent({
-            html: this._current.text,
-            importance: this._current.importance,
-            durationMs: this._current.delayMS,
-            buttons: this._current.props?.buttons,
-            count: this._current.count || 1,
-            pending: this._queue.length
-        });
     }
 
     _showJob(job) {
