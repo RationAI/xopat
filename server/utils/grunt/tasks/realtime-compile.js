@@ -115,14 +115,11 @@ module.exports = function (grunt) {
         async function detectAndRebuildWorkspaceElements(files) {
             const processedDirs = new Set();
             for (const f of files) {
-                console.log(f);
                 let itemPath = path.dirname(f);
                 while (itemPath && itemPath.length > 4) {
-                    console.log(itemPath);
                     if (pathsEqual(itemPath, root)) break;
                     const pkgPath = path.join(itemPath, "package.json");
                     if (fs.existsSync(pkgPath) && !processedDirs.has(itemPath)) {
-                        console.log("found", pkgPath);
                         processedDirs.add(itemPath);
                         const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
                         // Shared logic handles overrides and copying
@@ -258,7 +255,6 @@ module.exports = function (grunt) {
             }
 
             async function runBuildCycle(retry = true) {
-                console.log("runBuildCycle");
                 if (isBuilding && retry) return;               // don't drop; the pending flags/sets remain queued
                 isBuilding = true;
 

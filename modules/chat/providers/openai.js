@@ -2,7 +2,7 @@ export async function registerOpenAIChatProviders({
                                                       proxyAlias = "openai",
                                                       apiUrl = "/v1/chat/completions",
                                                       oidcConfig = {},
-                                                      userContextId = "openai",
+                                                      userContextId = null,
                                                       serviceName = "OpenAI Chat",
                                                       models = [],             // optional static models
                                                       discovery = null,        // optional discovery config
@@ -15,6 +15,9 @@ export async function registerOpenAIChatProviders({
     }
 
     const useViewerAuth = authMode !== "none";
+    if (!userContextId) {
+        userContextId = undefined;
+    }
 
     // ---------- shared OIDC + HTTP clients ----------
 
@@ -65,6 +68,7 @@ export async function registerOpenAIChatProviders({
         try {
             // If the discovery endpoint requires the same auth context, log in first
             if (authRequired && useViewerAuth) {
+                // todo: discovery MUST NOT auto-fire auth by default!!!
                 await ensureLogin();
             }
 

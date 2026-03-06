@@ -8,8 +8,7 @@ addPlugin("chat-chatgpt", class extends XOpatPlugin {
         const proxyAlias = this.getStaticMeta("proxyAlias", "openai");
         const chatApiUrl = this.getStaticMeta("chatApiUrl", "/v1/chat/completions");
         const modelsDiscoveryPath = this.getStaticMeta("modelsDiscoveryPath", "/v1/models");
-
-        // NEW: configurable auth mode: "jwt" or "none"
+        const authContext = this.getStaticMeta("authContext", "jwt");
         const authMode = this.getStaticMeta("authMode", "jwt");
 
         // OIDC config is only relevant when we actually want viewer auth
@@ -21,7 +20,7 @@ addPlugin("chat-chatgpt", class extends XOpatPlugin {
             proxyAlias,
             apiUrl: chatApiUrl,
             oidcConfig,
-            userContextId: "openai",
+            userContextId: authContext,
             serviceName: "ChatGPT",
 
             models: [],

@@ -75,7 +75,6 @@ export class FloatingManager {
         this._byToken.set(token, entry);
         if (this._finalize) this._finalize.register(el, token);
 
-        // NEW: initialize position from cache if provided
         if (entry.clamp?.cache) {
             const { leftKey, topKey } = entry.clamp.cache;
             const l = leftKey ? parseInt(APPLICATION_CONTEXT.AppCache.get(leftKey), 10) : NaN;

@@ -1,5 +1,5 @@
 const { BaseComponent, Button, FAIcon, Div, Checkbox } = globalThis.UI;
-const { div, span, select, option, textarea, ul, li, strong } = globalThis.van.tags;
+const { div, span, select, option, textarea, fieldset, legend } = globalThis.van.tags;
 
 /**
  * Simple chat panel with provider selection, login, consent and message list.
@@ -24,9 +24,9 @@ export class ChatPanel extends BaseComponent {
         }
 
         this._providerId = options.defaultProviderId || null;
+        this._personalityId = options.defaultPersonalityId || null;
         this._messages = [];
         this._consentGranted = false;
-        this._consent = { allowScreenshots: false, allowAnnotations: false, allowPHI: false };
 
         this._root = null;
         this._messageListEl = null;
@@ -36,6 +36,7 @@ export class ChatPanel extends BaseComponent {
         this._loginBtn = null;
         this._consentOverlay = null;
         this._providerSelectEl = null; // New ref for dynamic updates
+        this._personalitySelectEl = null; // Personality dropdown
 
         this.classMap["base"] = "flex flex-col h-full border-l border-base-300 bg-base-100 text-sm";
         this._applyOptions(options);
@@ -94,8 +95,83 @@ export class ChatPanel extends BaseComponent {
         this._updateLoginButtonState();
     }
 
+
+    /**
+     * Rebuilds the personality select dropdown when personalities are registered/changed.
+     */
+    refreshPersonalities() {
+        if (!this._personalitySelectEl || !this.chatService) return;
+
+        const personalities = (typeof this.chatService.getPersonalities === "function")
+            ? this.chatService.getPersonalities()
+            : [];
+
+        // Hide if not supported / none configured
+        if (!personalities || !personalities.length) {
+            this._personalitySelectEl.classList.add("hidden");
+            return;
+        }
+        this._personalitySelectEl.classList.remove("hidden");
+
+        this._personalitySelectEl.innerHTML = "";
+        personalities.forEach((p) => {
+            const opt = option({ value: p.id }, p.label || p.id);
+            this._personalitySelectEl.appendChild(opt);
+        });
+
+        // Determine active personality: panel override -> service -> first entry
+        const serviceCurrent = (typeof this.chatService.getCurrentPersonalityId === "function")
+            ? this.chatService.getCurrentPersonalityId()
+            : null;
+
+        const preferred = this._personalityId || serviceCurrent || personalities[0]?.id || null;
+        if (preferred && personalities.find((p) => p.id === preferred)) {
+            this._personalityId = preferred;
+            this._personalitySelectEl.value = preferred;
+            // Keep service in sync
+            try { this.chatService.setPersonality(preferred); } catch (_) {}
+        } else {
+            this._personalityId = personalities[0]?.id || null;
+            if (this._personalityId) {
+                this._personalitySelectEl.value = this._personalityId;
+                try { this.chatService.setPersonality(this._personalityId); } catch (_) {}
+            }
+        }
+    }
+
+    _onPersonalityChange(personalityId) {
+        if (!this.chatService) return;
+
+        this._personalityId = personalityId || null;
+
+        try {
+            if (typeof this.chatService.setPersonality === "function") {
+                this.chatService.setPersonality(this._personalityId);
+            }
+        } catch (e) {
+            console.warn("Failed to set personality:", e);
+        }
+
+        // Start a fresh "session" in the UI; ChatService will inject the personality as system prompt.
+        this.clearMessages();
+
+        if (this._personalityId) {
+            const p = (typeof this.chatService.getPersonality === "function")
+                ? this.chatService.getPersonality(this._personalityId)
+                : null;
+            const label = p?.label || this._personalityId;
+            this.addMessage({ role: "system", content: `Personality set to: ${label}` });
+        }
+    }
+
     create() {
         // Build the bare select element. We will populate it via refreshProviders.
+
+        this._personalitySelectEl = select({
+            class: "select select-xs select-bordered max-w-xs mr-2",
+            onchange: (e) => this._onPersonalityChange(e.target.value),
+        });
+
         this._providerSelectEl = select({
             class: "select select-xs select-bordered max-w-xs mr-2",
             onchange: (e) => this._onProviderChange(e.target.value),
@@ -128,7 +204,8 @@ export class ChatPanel extends BaseComponent {
         );
 
         this._statusEl = span({ class: "text-[11px] text-base-content/70" });
-        const statusBar = div({ class: "px-2 py-1 border-b border-base-200 bg-base-100 text-[11px]" }, this._statusEl);
+        const statusBar = div({ class: "flex px-2 py-1 border-b border-base-200 bg-base-100 text-[11px] content-between" },
+            this._statusEl, fieldset(legend({class: "fieldset-legend"}, "Personality"), this._personalitySelectEl));
 
         this._messageListEl = div({ class: "flex-1 overflow-auto px-2 py-2 bg-base-100", id: this.id + "-messages" });
 
@@ -140,6 +217,9 @@ export class ChatPanel extends BaseComponent {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this._handleSend(e);
             },
         });
+
+        const settingsIcon = new FAIcon({ name: "fa-cogs" }).create();
+        settingsIcon.onclick = () => this._openConsentDialog();
 
         this._sendBtnEl = new Button(
             {
@@ -157,7 +237,7 @@ export class ChatPanel extends BaseComponent {
             { class: "border-t border-base-300 bg-base-100 px-2 py-2 flex flex-col gap-1" },
             this._inputEl,
             div({ class: "flex items-center justify-between text-[10px]" },
-                span("Press Ctrl+Enter to send"),
+                span(settingsIcon, span("Press Ctrl+Enter to send")),
                 this._sendBtnEl
             )
         );
@@ -175,8 +255,9 @@ export class ChatPanel extends BaseComponent {
 
         this._root = root;
 
-        // Populate providers immediately after root is built
+        // Populate providers + personalities immediately after root is built
         this.refreshProviders();
+        this.refreshPersonalities();
         this._setStatus("Select a model to start.");
         this._updateInputState();
 
@@ -381,8 +462,8 @@ export class ChatPanel extends BaseComponent {
 
         const isUser = msg.role === "user";
         const bubbleCls = isUser
-            ? "bg-primary text-primary-content"
-            : "bg-base-200 text-base-content";
+            ? "bg-base-200 text-primary-content border border-base-300 shadow-sm"
+            : "";
 
         const message = span();
         this._renderMessageContent(message, msg);
@@ -391,7 +472,7 @@ export class ChatPanel extends BaseComponent {
             div(
                 {
                     class:
-                        "max-w-[100%] rounded-md px-2 py-1 text-xs whitespace-pre-wrap " +
+                        "w-[88%] max-w-[100%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap " +
                         bubbleCls,
                 },
                 message
@@ -636,52 +717,6 @@ export class ChatPanel extends BaseComponent {
      * @private
      */
     _buildConsentOverlay() {
-        const overlay = div({
-            class:
-                "hidden fixed inset-0 z-50 flex items-center justify-center bg-base-300/70",
-        });
-
-        const box = div(
-            {
-                class:
-                    "bg-base-100 rounded-lg shadow-xl border border-base-300 w-full max-w-md p-4 flex flex-col gap-3",
-            },
-            div(
-                { class: "flex items-center justify-between mb-1" },
-                span({ class: "font-semibold text-sm" }, "Data access for model"),
-                new FAIcon({ name: "fa-shield-halved" }).create()
-            ),
-            span(
-                { class: "text-[11px] text-base-content/80" },
-                "Choose what the assistant is allowed to access from the viewer. You can change this later by reopening the dialog."
-            )
-        );
-
-        // Use Checkbox components
-        const cbScreenshots = new Checkbox({
-            label: "Allow sending viewport screenshots to the model.",
-            checked: this._consent.allowScreenshots,
-            onchange: (e) => {
-                this._consent.allowScreenshots = !!e.target.checked;
-            },
-        }).create();
-
-        const cbAnnotations = new Checkbox({
-            label: "Allow the model to see and propose annotations.",
-            checked: this._consent.allowAnnotations,
-            onchange: (e) => {
-                this._consent.allowAnnotations = !!e.target.checked;
-            },
-        }).create();
-
-        const cbPHI = new Checkbox({
-            label: "Allow content that may contain patient identifiers (PHI).",
-            checked: this._consent.allowPHI,
-            onchange: (e) => {
-                this._consent.allowPHI = !!e.target.checked;
-            },
-        }).create();
-
         const actions = div(
             {
                 class: "mt-2 flex justify-between gap-2",
@@ -709,12 +744,32 @@ export class ChatPanel extends BaseComponent {
             ).create()
         );
 
-        box.appendChild(cbScreenshots);
-        box.appendChild(cbAnnotations);
-        box.appendChild(cbPHI);
-        box.appendChild(actions);
+        const box = div(
+            {
+                class:
+                    "bg-base-100 rounded-lg shadow-xl border border-base-300 w-full max-w-md p-4 flex flex-col gap-3",
+            },
+            div(
+                { class: "flex items-center justify-between mb-1" },
+                span({ class: "font-semibold text-sm" }, "Data access for model"),
+                new FAIcon({ name: "fa-shield-halved" }).create()
+            ),
+            span(
+                { class: "text-[11px] text-base-content/80" },
+                "Choose what the assistant is allowed to access from the viewer. You can change this later by reopening the dialog."
+            ),
+            ...this.chatService._consent.entries().map(([key, value]) => new Checkbox({
+                label: value.title,
+                checked: value.granted,
+                onchange: (e) => value.granted = !!e.target.checked
+            }).create()),
+            actions
+        );
 
-        overlay.appendChild(box);
-        return overlay;
+        // todo generic overlay component
+        return div({
+            class:
+                "hidden fixed inset-0 z-50 flex items-center justify-center bg-base-300/70",
+        }, box);
     }
 }

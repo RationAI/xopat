@@ -114,7 +114,7 @@ static ROOT;
 Modules that inherit from `XOpatModuleSingleton` should instantiate the module as `ModuleClass.instance()`.
 ````js
 /**
- * Get instance of the annotations manger, a singleton
+ * Get instance of the singleton
  * (only one instance can run since it captures mouse events)
  * @static
  * @return {XOpatModuleSingleton} manager instance

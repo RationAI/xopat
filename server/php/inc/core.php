@@ -159,6 +159,13 @@ if ($C["domain"] == null) {
     $CORE["client"]["baseURL"]  = $protocol . $host . $basePath;
 }
 
+if (isset($CORE["server"]["secure"])) {
+    // Keep a copy for internal server use, but clear it for the global instance
+    // that gets json_encoded into the HTML template.
+    $GLOBALS['CORE_SECURE'] = $CORE["server"]["secure"];
+    unset($CORE["server"]["secure"]);
+}
+
 /*
  * Printing Functions - dependencies from the config
  */

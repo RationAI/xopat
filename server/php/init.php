@@ -89,6 +89,7 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
             require_core("deps");
             require_core("app");
             require_core("env");
+            echo "<script>window.XOPAT_CSRF_TOKEN = '{$_SESSION['csrf_token']}';</script>";
             break;
 
         case "app":

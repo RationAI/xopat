@@ -1,5 +1,6 @@
-TODO: describe the server usage
+TODO: describe the server usage and configuration
 
+````php
 define('PHP_INCLUDES', ABSPATH . 'server/php/inc/');
 define('VIEWER_SOURCES_ABS_ROOT', ABSPATH . 'src/');
 define('ABS_MODULES', ABSPATH . 'modules/');
@@ -18,3 +19,4 @@ define('PLUGINS_FOLDER', PROJECT_ROOT . 'plugins/');
 if (!defined('DISABLE_PERMA_LOAD')) {
 define('ENABLE_PERMA_LOAD', true);
 }
+````

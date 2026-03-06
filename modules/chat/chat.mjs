@@ -192,21 +192,74 @@ window.ChatModule = class ChatModule extends XOpatModuleSingleton {
         // loader.js passes undefined when calling static instance(), so we enforce the ID here.
         super('chat');
 
+        const cfg = this._getChatConfig();
+
         this.chatService = new ChatService({
             getViewerContext: () => {
                 // TODO: integrate with pathology viewer (viewport, annotations...)
                 return {
                     viewport: "not implemented",
                 };
-            }
+            },
+            personalities: cfg.personalities,
+            defaultPersonalityId: cfg.defaultPersonalityId,
         });
+
+        this._consent = {
+            allowScreenshots: {
+                title: "Allow sending viewport screenshots to the model.",
+                granted: false
+            }, allowAnnotations: {
+                title: "Allow the model to see and propose annotations.",
+                granted: false
+            }, allowPHI: {
+                title: "Allow sending PHI (Personal Health Information) to the model.",
+                granted: false
+            }
+        };
 
         this.chatPanel = new ChatPanel({
             id: "pathology-chat-panel",
             chatService: this.chatService,
+            defaultPersonalityId: cfg.defaultPersonalityId,
         });
-
         this._attachToLayout();
+    }
+
+    setConsent(providerId, title, consent) {
+        this._consent[providerId] = {
+            title,
+            granted: !!consent
+        };
+    }
+
+    // Get the consent for a provider
+    getConsent(providerId) {
+        return this._consent?.[providerId]?.granted;
+    }
+
+    _getChatConfig() {
+        // include.json convention: allow either INCLUDE.chat or INCLUDE.modules.chat
+        const inc = globalThis.INCLUDE || globalThis.include || {};
+        const chatCfg = inc.chat || (inc.modules && inc.modules.chat) || {};
+
+        /** @type {ChatPersonality[]} */
+        const personalities = Array.isArray(chatCfg.personalities) ? chatCfg.personalities : [];
+
+        // Provide a safe built-in default so chat always works.
+        if (!personalities.length) {
+            personalities.push({
+                id: "default",
+                label: "Default",
+                systemPrompt:
+                    "Be helpful and accurate. When viewer context is available, use it. " +
+                    "When it isn't, ask what you need. Keep answers practical and action-oriented."
+            });
+        }
+
+        const defaultPersonalityId = chatCfg.defaultPersonalityId || personalities[0]?.id || "default";
+
+        return { personalities, defaultPersonalityId };
     }
 
     _attachToLayout() {
@@ -230,6 +283,30 @@ window.ChatModule = class ChatModule extends XOpatModuleSingleton {
      *   Provider configuration object implementing the generic provider
      *   interface (see ChatProviderConfig typedef).
      */
+
+    /**
+     * Register a personality that can be selected in the UI.
+     * Plugins may call this during startup.
+     * @param {ChatPersonality} personality
+     */
+    registerPersonality(personality) {
+        this.chatService.registerPersonality(personality);
+        if (this.chatPanel && typeof this.chatPanel.refreshPersonalities === "function") {
+            this.chatPanel.refreshPersonalities();
+        }
+    }
+
+    /**
+     * Set the active personality for subsequent requests.
+     * @param {string} personalityId
+     */
+    setPersonality(personalityId) {
+        this.chatService.setPersonality(personalityId);
+        if (this.chatPanel && typeof this.chatPanel.refreshPersonalities === "function") {
+            this.chatPanel.refreshPersonalities();
+        }
+    }
+
     registerModel(config) {
         this.chatService.registerProvider(config);
         if (this.chatPanel) {

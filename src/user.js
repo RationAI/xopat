@@ -186,7 +186,7 @@ class XOpatUser extends OpenSeadragon.EventSource {
     }
 
     /**
-     * Get instance of the annotations manger, a singleton
+     * Get instance of the singleton
      * (only one instance can run since it captures mouse events)
      * @static
      * @return {XOpatUser} manager instance

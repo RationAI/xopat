@@ -12,6 +12,8 @@
   "modelsDiscoveryPath": "/v1/models",
   // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model
   "authMode": "jwt",
+  // if set to null, it inherits the core auth context (same as viewer login)
+  "authContext": "cerit-io",
   // for jwt, specify OIDC conf
   "oidc": {
     "authority": "https://your-auth-server.com",

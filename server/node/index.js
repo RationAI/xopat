@@ -163,8 +163,6 @@ async function responseProxy(req, res, requestUrl) {
     const serverConf = core.CORE.server || core.CORE.serverStatus || {};
     const proxyConfig = serverConf.secure?.proxies?.[alias];
 
-    console.log(serverConf);
-
     if (!proxyConfig) {
         res.writeHead(403, { 'Content-Type': 'text/plain' });
         return res.end(`Proxy target alias '${alias}' is not allowed or not configured.`);
@@ -212,7 +210,6 @@ async function responseProxy(req, res, requestUrl) {
         res.writeHead(fetchRes.status, resHeaders);
         const arrayBuffer = await fetchRes.arrayBuffer();
         res.end(Buffer.from(arrayBuffer));
-        console.log(`Proxy: ${req.method} ${targetUrl} -> ${fetchRes.status}`);
 
     } catch (e) {
         console.error(`Proxy error routing to ${alias}:`, e);

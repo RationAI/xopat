@@ -203,7 +203,7 @@ Behavior in proxy mode:
 
 - All requests are made to:
 
-  /proxy/<alias>/<baseURL>/<path>?...
+  /proxy/&lt;alias>/&lt;baseURL>/&lt;path>?...
 
   For example:
 

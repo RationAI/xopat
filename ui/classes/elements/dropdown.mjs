@@ -108,13 +108,7 @@ class Dropdown extends BaseSelectableComponent {
 
     /** Helper to schedule closing. */
     _scheduleSubmenuCheck() {
-        if (this._submenuTimeout) clearTimeout(this._submenuTimeout);
-
-        this._submenuTimeout = setTimeout(() => {
-            if (!this._isHoveringParent && !this._isHoveringSubmenu) {
-                this._closeSubmenu();
-            }
-        }, 200);
+        return;
     }
 
     _closeSubmenu() {
@@ -419,8 +413,7 @@ class Dropdown extends BaseSelectableComponent {
         );
         submenuEl.appendChild(listEl);
 
-        // --- NEW: append to body and hide while measuring ---
-        document.body.appendChild(submenuEl);
+        this._contentEl.appendChild(submenuEl);
         submenuEl.style.visibility = "hidden";
 
         // Hover events
@@ -435,7 +428,7 @@ class Dropdown extends BaseSelectableComponent {
 
         // Positioning: place submenu adjacent to the parent row, prefer to the right.
         const anchorRect = anchorEl.getBoundingClientRect();
-        const margin = 6;
+        const margin = 0;
         const vw = document.documentElement.clientWidth || window.innerWidth;
         const vh = document.documentElement.clientHeight || window.innerHeight;
 
@@ -443,12 +436,12 @@ class Dropdown extends BaseSelectableComponent {
         const submenuHeight = submenuEl.offsetHeight || 0;
 
         // Prefer to place to the right of the anchor
-        let left = Math.round(anchorRect.right + 6);
-        let top = Math.round(anchorRect.top);
+        let left = Math.round(anchorRect.right) - 6;
+        let top = Math.round(anchorRect.top) - anchorRect.height - 6; // minus height of the self-row to align
 
         // If overflowing right, try flipping to left of anchor
         if (left + submenuWidth > vw - margin) {
-            const altLeft = Math.round(anchorRect.left - submenuWidth - 6);
+            const altLeft = Math.round(anchorRect.left - submenuWidth);
             if (altLeft >= margin) left = altLeft;
             else left = Math.max(margin, vw - margin - submenuWidth);
         }
