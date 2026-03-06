@@ -1025,7 +1025,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      */
     window.XOpatModuleSingleton = class extends XOpatModule {
         /**
-         * Get instance of the annotations manger, a singleton
+         * Get instance of the singleton
          * (only one instance can run since it captures mouse events).
          * @static
          * @return {XOpatModuleSingleton} manager instance
@@ -1121,7 +1121,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Get instance of the annotations manger, a singleton
+         * Get instance of the singleton
          * (only one instance can run since it captures mouse events).
          * @param {ViewerLikeItem} viewerOrUniqueId
          * @static
