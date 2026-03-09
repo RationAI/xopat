@@ -2,7 +2,8 @@
   "name": "xopat",
   "version": "2.3.1",
   "description": "A flexible multipurpose WSI viewer.",
-  "main": "index.php",
+  "main": "index.js",
+  "bin": "index.js",
   "scripts": {
     "env": "grunt env",
     "build": "grunt build",
@@ -86,5 +87,15 @@
     "taffydb": "^2.6.2",
     "tailwindcss": "^3.4.14",
     "terser": "^5.44.0"
+  },
+  "pkg": {
+    "assets": [
+      "server/templates/**/*",
+      "plugins/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "modules/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "src/**/*",
+      "ui/**/*",
+      "env/env.default.json"
+    ]
   }
 }
