@@ -24,7 +24,7 @@ function handleProxyRequest($pathInfo) {
     // Find where 'proxy' is in the array
     $proxyIndex = array_search('proxy', $parts);
     $alias = ($proxyIndex !== false && isset($parts[$proxyIndex + 1])) ? $parts[$proxyIndex + 1] : null;
-    $proxyConfig = $CORE['server']['secure']['proxies'][$alias] ?? null;
+    $proxyConfig = $GLOBALS['CORE_SECURE']['proxies'][$alias] ?? null;
 
     if (!$proxyConfig) {
         header("HTTP/1.1 403 Forbidden");
