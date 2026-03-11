@@ -31,7 +31,7 @@ jobs:
     - name: Build
       run: |
         npm install
-        grunt docs --force
+        grunt jsdoc --force
     - name: Setup Pages
       uses: actions/configure-pages@v5
     - name: Upload artifact
