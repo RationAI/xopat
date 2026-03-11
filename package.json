@@ -7,6 +7,7 @@
   "scripts": {
     "env": "grunt env",
     "build": "grunt build",
+    "postinstall": "grunt build",
     "minify": "grunt minify",
     "test": "npx cypress run --browser chrome --e2e",
     "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
