@@ -95,7 +95,7 @@
       "modules/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
       "src/**/*",
       "ui/**/*",
-      "env/env.default.json"
+      "env/env.json"
     ]
   }
 }
