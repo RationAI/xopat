@@ -30,7 +30,6 @@ jobs:
 
     - name: Build
       run: |
-        npm install taffydb
         npm install
         grunt docs --force
     - name: Setup Pages

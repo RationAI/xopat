@@ -22,10 +22,11 @@ module.exports = function(grunt) {
     /**
      * Get absolute path from relative wrt repository root
      * @param relativePath
+     * @param {boolean} escape
      * @return {string}
      */
-    grunt.util.getPath = function (relativePath) {
-        return path.resolve(root, relativePath);
+    grunt.util.getPath = function (relativePath, escape=false) {
+        return escape ? `"${path.resolve(root, relativePath)}"` : path.resolve(root, relativePath);
     };
 
     /**
@@ -36,7 +37,7 @@ module.exports = function(grunt) {
      * @return {string}
      */
     grunt.util.execAtPath = function (binPath, cmd, options=undefined) {
-        return exec(`${grunt.util.getPath(binPath)} ${cmd}`, options);
+        return exec(`${grunt.util.getPath(binPath, true)} ${cmd}`, options);
     };
 
     /**
