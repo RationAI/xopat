@@ -1,10 +1,32 @@
 import type {ScriptApiObject} from "../scripting-manager";
 
+export type ViewerPlaneInfo = {
+    z?: number;
+    t?: number;
+};
+
+export type ViewerPoint = {
+    x: number;
+    y: number;
+};
+
+export type ViewerRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
 
 export type ViewerViewportInfo = {
     x: number;
     y: number;
     zoom: number;
+    rotation?: number;
+    width: number;
+    height: number;
+    bounds: ViewerRect;
+    containerSize: { width: number; height: number };
+    plane?: ViewerPlaneInfo;
 };
 
 export type ViewerChannelInfo = {
@@ -19,6 +41,25 @@ export type ViewerMetadata = {
     micronsPerPixelY?: number | null;
     zSpacing?: number | null;
     channels?: ViewerChannelInfo[];
+};
+
+export type ViewerTiledImageInfo = {
+    index: number;
+    width: number;
+    height: number;
+    opacity?: number;
+    clip?: ViewerRect | null;
+    contentBounds?: ViewerRect | null;
+    viewportBounds?: ViewerRect | null;
+};
+
+export type ViewerScreenshotOptions = {
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+    regionWidth?: number;
+    regionHeight?: number;
 };
 
 export interface ViewerScriptApi extends ScriptApiObject {
@@ -42,20 +83,25 @@ export interface ViewerScriptApi extends ScriptApiObject {
      */
     getMetadata(): ViewerMetadata;
 
-    /**
-     * Manually overrides the pixel calibration for the current image.
-     */
-    setPixelSize(
-        width?: number | null,
-        height?: number | null,
-        zSpacing?: number | null
-    ): void;
+    getTiledImages(): ViewerTiledImageInfo[];
 
     /**
-     * Updates the names and ARGB colors for image channels.
+     * These methods convert between coord systems in OpenSeadragon.
+     * Window: the screen coordinates of the monitor, usually hundreds to thousands.
+     * Viewport: the unit coordinates of the viewport, internal use.
+     * Image: the pixel coords of the target tiled image, usually thousands to millions.
      */
-    setChannelInfo(
-        names?: Array<string | null>,
-        colors?: Array<string | number | null>
-    ): void;
+    windowToViewport(x: number, y: number): ViewerPoint;
+    viewportToWindow(x: number, y: number): ViewerPoint;
+    viewportToImage(x: number, y: number, tiledImageIndex?: number): ViewerPoint;
+    imageToViewport(x: number, y: number, tiledImageIndex?: number): ViewerPoint;
+    windowToImage(x: number, y: number, tiledImageIndex?: number): ViewerPoint;
+    imageToWindow(x: number, y: number, tiledImageIndex?: number): ViewerPoint;
+
+    getViewportBoundsInImage(tiledImageIndex?: number): ViewerRect;
+
+    /**
+     * Takes a screenshot of the current viewport.
+     */
+    getViewportScreenshot(options?: ViewerScreenshotOptions): string;
 }

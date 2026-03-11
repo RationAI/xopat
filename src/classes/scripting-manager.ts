@@ -323,7 +323,8 @@ export class ScriptingManager<
 
         for (const [namespace, schema] of Object.entries(this.namespaces || {})) {
             result[namespace] = {
-                title: schema.name || `Allow the assistant to use '${namespace}'.`,
+                title: schema.name,
+                description: schema.description,
                 granted: false
             };
         }

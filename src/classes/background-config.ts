@@ -9,7 +9,7 @@ const _CONF_REGISTRY = new Map();
  */
 export class BackgroundConfig implements BackgroundItem {
     _raw: any;
-    _rawValue: DataID | null;
+    _rawValue: DataID | undefined;
     // TS Fails to infer from BackgroundItem and the Object.assign(...) call below.
     declare dataReference: number | DataID;
     declare id: string;
@@ -26,16 +26,16 @@ export class BackgroundConfig implements BackgroundItem {
         }
 
         this._raw = { ...data };
-        this._rawValue = null;
+        this._rawValue = undefined;
 
         const ref = data.dataReference;
 
         const globalData = APPLICATION_CONTEXT.config.data || [];
 
         if (typeof ref === "number") {
-            this._rawValue = globalData[ref] ?? null;
+            this._rawValue = globalData[ref] ?? undefined;
         } else {
-            this._rawValue = ref !== undefined ? (ref as DataID) : null;
+            this._rawValue = ref !== undefined ? (ref as DataID) : undefined;
         }
 
         delete this._raw.dataReference;
@@ -47,7 +47,7 @@ export class BackgroundConfig implements BackgroundItem {
         Object.defineProperty(this, 'dataReference', {
             get: () => {
                 const currentGlobalData = APPLICATION_CONTEXT.config.data || [];
-                const idx = currentGlobalData.indexOf(this._rawValue);
+                const idx = this._rawValue ? currentGlobalData.indexOf(this._rawValue) : -1;
                 // If the raw value lives in the data array, expose its index
                 return idx !== -1 ? idx : this._rawValue;
             },
@@ -56,7 +56,7 @@ export class BackgroundConfig implements BackgroundItem {
                 if (typeof val === 'number') {
                     this._rawValue = currentGlobalData[val];
                 } else {
-                    this._rawValue = val ?? null;
+                    this._rawValue = val ?? undefined;
                 }
             },
             enumerable: true
@@ -179,4 +179,4 @@ export class BackgroundConfig implements BackgroundItem {
         return out;
     }
 }
-window.BackgroundConfig = BackgroundConfig;
+(window as any).BackgroundConfig = BackgroundConfig;

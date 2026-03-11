@@ -19,30 +19,47 @@
 
 .chat-md :is(h1,h2,h3,h4,h5,h6){
     font-size: 12px !important;
-    margin: 6px 0 4px;
+    margin: 4px 0 3px;
     font-weight: 700;
+    line-height: 1.25;
 }
-.chat-md p{ margin: 6px 0; }
-.chat-md ul, .chat-md ol{ margin: 6px 0 6px 18px; }
-.chat-md li{ margin: 2px 0; }
+
+.chat-md p{
+    margin: 3px 0;
+}
+
+.chat-md ul,
+.chat-md ol{
+    margin: 3px 0 3px 14px;
+    padding-left: 0;
+}
+
+.chat-md li{
+    margin: 1px 0;
+}
+
+.chat-md li > p{
+    margin: 0;
+}
+
 .chat-md pre{
-    margin: 8px 0;
-    padding: 8px;
-    border-radius: 10px;
+    margin: 6px 0;
+    padding: 6px 8px;
+    border-radius: 8px;
     overflow: auto;
     border: 1px solid rgba(0,0,0,.08);
 }
-.chat-md code{
-    font-size: 11px;
-}
+
 .chat-md table{
     width: 100%;
     border-collapse: collapse;
-    margin: 8px 0;
+    margin: 6px 0;
     font-size: 11px;
 }
-.chat-md th, .chat-md td{
+
+.chat-md th,
+.chat-md td{
     border: 1px solid rgba(0,0,0,.08);
-    padding: 6px;
+    padding: 5px 6px;
     vertical-align: top;
 }

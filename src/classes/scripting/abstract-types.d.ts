@@ -142,6 +142,7 @@ export interface ScriptManagerStatic<TNamespaces extends ScriptApiNamespaces = S
 
 export type ScriptNamespaceConsentEntry = {
     title: string;
+    description?: string;
     granted: boolean;
 };
 

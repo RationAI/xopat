@@ -653,7 +653,7 @@ export class ChatPanel extends BaseComponent {
             div(
                 {
                     class:
-                        "w-[88%] max-w-[100%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap chat-md" +
+                        "w-[88%] max-w-[100%] rounded-xl px-3 py-1.5 text-[12px] leading-snug whitespace-pre-wrap chat-md " +
                         bubbleCls,
                 },
                 message

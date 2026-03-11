@@ -8,7 +8,11 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
     static ScriptApiMetadata: ScriptApiMetadata<XOpatApplicationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
-            value: async () => (await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts").then(x => x.ok ? x.text() : ""))
+            value: async () => {
+                const res = await fetch(APPLICATION_CONTEXT.url + "src/classes/scripting/app-api.scripts.d.ts");
+                if (!res.ok) throw new Error("Failed to load viewer-api.scripts.d.ts");
+                return await res.text();
+            }
         }
     };
 

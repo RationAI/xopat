@@ -17,44 +17,6 @@ OpenSeadragon.Tools = class {
     }
 
     /**
-     * EventSource - compatible event raising with support for async function waiting
-     * @param context EventSource instance
-     * @param eventName name of the event to invoke
-     * @param eventArgs event args object
-     * @deprecated
-     * @return {Promise<void>} promise resolved once event finishes
-     */
-    async raiseAwaitEvent(context, eventName, eventArgs = undefined) {
-        console.warn("This event is deprecated.");
-        let events = context.events[ eventName ];
-        if ( !events || !events.length ) {
-            return null;
-        }
-        events = events.length === 1 ?
-            [ events[ 0 ] ] :
-            Array.apply( null, events );
-        eventArgs = eventArgs || {};
-
-        const length = events.length;
-        async function loop(index) {
-            if ( index >= length || !events[ index ] ) {
-                return;
-            }
-            eventArgs.stopPropagation = function () {
-                index = length;
-            };
-            eventArgs.eventSource = context;
-            eventArgs.userData = events[ index ].userData;
-            let result = events[ index ].handler( eventArgs );
-            if (result && OpenSeadragon.type(result) === "promise") {
-                await result;
-            }
-            await loop(index + 1);
-        }
-        return await loop(0);
-    }
-
-    /**
      * @param params Object that defines the focus
      * @param params.bounds OpenSeadragon.Rect, in viewport coordinates;
      *   both elements below must be defined if bounds are undefined
