@@ -13,9 +13,32 @@ by your module
 ### 1. The Build Priority
 The build utility (`build-logic.js`) determines how to compile your workspace based on the following priority:
 1. **Override Script**: If `scripts.dev` or `scripts.build` is present, the system runs `npm run <script>`.
-2. **Default Bundle**: If no scripts are found, the system uses a default `esbuild` configuration to bundle the file specified in the `"main"` field into `index.workspace.js`.
+2. **Default Bundle**: If no scripts are found and `buildEntry` is defined, the system uses a default `esbuild` configuration to bundle the file specified in the `"main"` field into `index.workspace.js`.
+3. **No Bundle**: If no `buildEntry` field is present, the system assumes that the file is already bundled and does not need to be bundled again.
 
-> **You MUST have ``index.workspace.js`` in your plugin or module, otherwise the system will not load anything**
+> **You MUST have ``index.workspace.(m)js`` in your plugin or module, or define `main` entrypoint in the package, otherwise the system will not load anything.**
+
+Default bundling takes care of window exposure. **System elements are flexible and you cannot import other scripts of independen
+modules and plugins.**
+ - they can use typescript, vanilla javascript or other languages interpreted in JS or whatever
+ - they can be ES6 modules or CommonJS modules
+ - they might not be loaded by the browser until required
+ - there is no strict structure, and you don't know what files to include
+
+You should therefore expose global `window` api. Default bundling does this automatically if `default export` or `export` directives are available at the `buildEntry` file:
+- if you publish a npm module via viewer modules (i.e. `npm run publish-npm`), it is exposed as a global variable `window.xnpm.<sanitized_module_name>`
+- if you program a normal module, the default bundling exposes the global variable `window.xmodule.<sanitized_module_name>`
+- if you program a plugin, the default bundling exposes the global variable `window.xplugin.<sanitized_plugin_name>`
+
+In all cases, respect the correct file extensions so the server delivers your assets properly:
+- ``mjs`` for ES6 modules
+- ``cjs`` for CommonJS modules
+- ``js`` for vanilla javascript
+- ``ts`` for typescript
+- ``worker.js`` for web workers
+- ``worker.mjs`` for web workers ES6 modules
+- ``wasm`` for webassembly
+
 
 ### 2. Copy Directives
 You can automate the movement of assets (icons, locales, templates) by adding a `"copy"` object to your `package.json`. The system performs these copies recursively.

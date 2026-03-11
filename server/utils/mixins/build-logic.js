@@ -103,29 +103,48 @@ const BuildLogic = {
      */
     async buildWorkspaceItem(itemDirectory, packageData, logger) {
         const logPrefix = `[build] ${packageData.name || itemDirectory}:`;
-        // The server expects this exact filename
-        const outFile = path.join(itemDirectory, "index.workspace.js");
 
-        /**
-         * TODO: we should be more flexible in build and minidication:
-         *  - if index.workspace.js in not defined but index.workspace.min.js or index.min.js exists, use it
-         *  - letting users specify the output file name
-         *
-         *  Places that need update: npm+php server load + asset printing logics, these utilities and dev task
-         */
+        // todo flexibility in minification...
+
+        // 1. Check for explicit scripts first
         if (packageData.scripts && (packageData.scripts.dev || packageData.scripts.build)) {
             const script = packageData.scripts.dev ? "dev" : "build";
             logger.log(`${logPrefix} using script "npm run ${script}"`);
             await spawnAsync("npm", ["run", script], { cwd: itemDirectory });
-        } else if (packageData.main) {
-            // Source is flexible (packageData.main), output is standardized
-            logger.log(`${logPrefix} compiling ${packageData.main} -> index.workspace.js`);
+        }
+        // 2. Default fallback: Use esbuild if a buildEntry entry point is defined
+        else if (packageData.buildEntry) {
+            const outFile = path.join(itemDirectory, "index.workspace.js");
+
+            const rawId = packageData.name || itemDirectory;
+            const cleanId = rawId.replace('@xopat-npm-module/', '').replace(/[^a-zA-Z0-9]/g, '');
+            // Determine Namespace
+            let namespace = "xmodules";
+            if (rawId.startsWith('@xopat-npm-module/')) namespace = "xnpm";
+            else if (itemDirectory.includes(`${path.sep}plugins${path.sep}`)) namespace = "xplugins";
+
+            const entryPoint = path.resolve(itemDirectory, packageData.buildEntry);
+            logger.log(`[build] ${cleanId}: bundling into XOpat.${namespace}.${cleanId}`);
+
             await spawnAsync("npx", [
-                "esbuild", "--bundle", "--sourcemap", "--format=esm",
-                `--outfile=${outFile}`, path.resolve(itemDirectory, packageData.main)
+                "esbuild",
+                entryPoint,
+                "--bundle",
+                "--format=iife",
+                `--outfile=${outFile}`,
+                "--sourcemap",
+                "--minify", // Optional, but recommended for production
+                `--global-name=window.${namespace}.${cleanId}`,
+                `--banner:js=window.${namespace} = window.${namespace} || {};`,
+                `--footer:js=window.${namespace}.${cleanId} = window.${namespace}.${cleanId} || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
+                // // Map the internal variable to your specific namespace location
+                // `--footer:js=window.${namespace}.${cleanId} = globalThis.__temp_bundle_export || exports?.default || exports; delete globalThis.__temp_bundle_export;`
             ]);
+        } else {
+            logger.warn(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
 
+        // 3. Handle asset copying if defined
         if (packageData.copy) {
             executeCopy(itemDirectory, packageData.copy, logger, logPrefix);
         }
@@ -154,6 +173,31 @@ const BuildLogic = {
                 }
             });
         }
+    },
+
+    async buildUI(logger) {
+        logger.log("[build] Compiling UI (ESM)...");
+        return spawnAsync("npx", [
+            "esbuild",
+            "--bundle",
+            "--sourcemap",
+            "--format=esm",
+            "--outfile=ui/index.js",
+            "ui/index.mjs"
+        ]);
+    },
+
+    async buildCore(logger) {
+        logger.log("[build] Compiling Core (TypeScript)...");
+        return spawnAsync("npx", [
+            "esbuild",
+            "src/**/*.ts",
+            "--bundle",
+            "--format=iife",
+            "--target=es2019",
+            "--outdir=src/dist",
+            "--sourcemap"
+        ]);
     },
 
     spawnAsync,

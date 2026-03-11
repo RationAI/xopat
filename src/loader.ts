@@ -1,31 +1,14 @@
-/**
- * @typedef {Object} XOpatElementRecord
- * @property {string} id
- * @property {string} [name]
- * @property {string} [directory]
- * @property {Array<string>} [includes]
- * @property {boolean} [permaLoad]
- * @property {*} [instance]
- * @property {boolean} [loaded]
- * @property {*} [error]
- */
+import type { XOpatCoreConfig, XOpatElementRecord } from "./types/config";
+import { type StorageLike, type AsyncStorageLike, XOpatStorage } from "./store";
+import type { OpenEvent } from "openseadragon";
 
-/**
- * @typedef {string} UniqueViewerId
- * Unique ID per viewer session. Accessed as `viewer.uniqueId`. Related to any data-like
- * function and logics. Do not mix with `ViewerId` type (`viewer.id`).
- */
+import { HTTPError } from "./classes/http-client";
+import { BackgroundConfig } from "./classes/background-config";
+import type {ImageLike} from "./types/misc";
 
-/**
- * @typedef {string} ViewerId
- * ID per viewer instance. Accessed as `viewer.id`. Related to any UI-like
- * function and logics when we don't care about the particular viewer instance, but position.
- */
-
-/**
- * @typedef {OpenSeadragon.Viewer|UniqueViewerId} ViewerLikeItem
- * Viewer or unique viewer ID. Syntax sugar for methods that usually accept both parameters.
- */
+/** Token symbols for internal element storage */
+const STORE_TOKEN = Symbol("XOpatElementDataStore");
+const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
 
 /**
  * Initialize the xOpat loading system. This sets up the runtime environment for
@@ -37,40 +20,24 @@
  * - Example usage:
  * const initPlugins = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION, true);
  * await initPlugins();
- *
- * @param ENV
- * @param {Object<string, XOpatElementRecord>} PLUGINS
- * Registry object of plugins keyed by plugin id (from include.json).
- * @param {Object<string, XOpatElementRecord>} MODULES
- * Registry object of modules keyed by module id (from include.json).
- * @param {string} PLUGINS_FOLDER - Base URL or path where plugin folders reside (trailing slash optional).
- * @param {string} MODULES_FOLDER - Base URL or path where module folders reside (trailing slash optional).
- * @param {Object<string, any>} POST_DATA - Payload forwarded to API calls; can be an empty object if no data is required.
- * @param {string} version - Version string of the running build.
- * @returns {function(): Promise<void>} A function to be called once the host app is ready. You can await the handler if you like.
  */
-function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, version) {
+export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XOpatElementRecord>, MODULES: Record<string, XOpatElementRecord>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, POST_DATA: Record<string, any>, version: string): () => Promise<void> {
     if (window.XOpatPlugin) throw "XOpatLoader already initialized!";
 
     //dummy translation function in case of no translation available
-    $.t = $.t || (x => String(x).split(".").findLast(Boolean));
+    $.t = $.t || ((x: any) => String(x).split(".").findLast(Boolean));
 
-    /**
-     * @type {XOpatElement[]}
-     */
-    let REGISTERED_ELEMENTS = [];
-    /**
-     * @type {XOpatPlugin[]}
-     */
-    let REGISTERED_PLUGINS = [];
+
+    let REGISTERED_ELEMENTS: IXOpatElement[] = [];
+    let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
     let LOADING_PLUGIN = false;
-    const REQUIRED_SINGLETONS = new Set();
+    const REQUIRED_SINGLETONS = new Set<any>();
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
     }
 
-    window.showPluginError = function (id, e, loaded=undefined) {
+    const showPluginError = (window as any).showPluginError = function (id: string, e: any, loaded: any = undefined) {
         // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
@@ -81,12 +48,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         $(`#load-plugin-${id}`).html(`<button disabled class="btn">${$.t('common.Failed')}</button>`);
     }
 
-    function cleanUpScripts(id) {
+    function cleanUpScripts(id: string) {
         $(`#script-section-${id}`).remove();
         LOADING_PLUGIN = false;
     }
 
-    function cleanUpPlugin(id, e=$.t('error.unknown')) {
+    function cleanUpPlugin(id: string, e: any = $.t('error.unknown')) {
         if (PLUGINS[id]) {
             delete PLUGINS[id].instance;
             PLUGINS[id].loaded = false;
@@ -98,7 +65,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         cleanUpScripts(id);
     }
 
-    function instantiatePlugin(id, PluginClass) {
+    function instantiatePlugin(id: string, PluginClass: XOpatPluginClass) {
         if (!id) {
             console.error("Plugin registered with no id defined!", id);
             return;
@@ -124,27 +91,27 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: id,
-                message: $.t('messages.pluginLoadFailedNamed', {plugin: id}),
-            });
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: id }),
+            } as PluginFailedEvent);
             cleanUpPlugin(id, e);
             return;
         }
 
-        plugin.id = id; //silently set
+        plugin.__id = id; //silently set even if user did not properly set it
 
         let possiblyExisting = PLUGINS[id].instance;
         if (possiblyExisting) {
             console.warn(`Plugin ${PluginClass} ID collides with existing instance!`, id, possiblyExisting);
             /**
-             * @property {string} id plugin id
-             * @property {string} message
+             * @property id plugin id
+             * @property message
              * @memberof VIEWER_MANAGER
              * @event plugin-failed
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', {plugin: plugin.name}),
-            });
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[id].name }),
+            } as PluginFailedEvent);
             cleanUpPlugin(plugin.id);
             return;
         }
@@ -156,7 +123,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         return plugin;
     }
 
-    async function initializePlugin(plugin) {
+    async function initializePlugin(plugin: any) {
         if (!plugin) {
             console.warn("Attempt to initialize undefined plugin.");
             return false;
@@ -166,16 +133,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             if (typeof plugin.pluginReady === "function") {
                 await plugin.pluginReady();
             }
-            PLUGINS[plugin.id].__ready = true;
+            PLUGINS[plugin.id]!.__ready = true;
+
             /**
              * Plugin was loaded dynamically at runtime.
-             * @property {string} id plugin id
-             * @property {XOpatPlugin} plugin
-             * @property {boolean} isInitialLoad
              * @memberof VIEWER_MANAGER
              * @event plugin-loaded
              */
-            VIEWER_MANAGER.raiseEvent('plugin-loaded', {id: plugin.id, plugin: plugin, isInitialLoad: REGISTERED_PLUGINS !== undefined});
+            VIEWER_MANAGER.raiseEvent('plugin-loaded', { id: plugin.id, plugin: plugin, isInitialLoad: REGISTERED_PLUGINS !== undefined });
             return true;
         } catch (e) {
             /**
@@ -186,37 +151,47 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              */
             VIEWER_MANAGER.raiseEvent('plugin-failed', {
                 id: plugin.id,
-                message: $.t('messages.pluginLoadFailedNamed', {plugin: PLUGINS[plugin.id].name}),
-            });
+                message: $.t('messages.pluginLoadFailedNamed', { plugin: PLUGINS[plugin.id]?.name }),
+            } as PluginFailedEvent);
             console.warn(`Failed to initialize plugin ${plugin.id}.`, e);
             cleanUpPlugin(plugin.id, e);
             return false;
         }
     }
 
+    interface ScriptProperties extends Record<string, any> {
+        src: string;
+        async?: boolean;
+        type?: string;
+        defer?: boolean;
+        crossOrigin?: string;
+        integrity?: string;
+        referrerPolicy?: string;
+    }
+
     /**
      * Load a script at runtime. Plugin is REMOVED from the viewer
      * if the script is faulty
-     *
-     * Enhancement: use Premise API instead
-     * @param pluginId plugin that uses particular script
-     * @param properties script attributes to set
-     * @param onload function to call on success
      * @global
      */
-    window.attachScript = function(pluginId, properties, onload) {
-        let errHandler = function(e) {
+    const attachScript = (window as any).attachScript = function (
+        pluginId: string,
+        properties: ScriptProperties,
+        onload: () => void
+    ): boolean {
+        let errHandler = function (e: any) {
             window.onerror = null;
-            if (LOADING_PLUGIN) {
-                cleanUpPlugin(pluginId, e);
+            // LOADING_PLUGIN is captured from the loader closure
+            if ((window as any).LOADING_PLUGIN) {
+                (window as any).cleanUpPlugin(pluginId, e);
             } else {
-                cleanUpScripts(pluginId);
+                (window as any).cleanUpScripts(pluginId);
             }
         };
 
         if (!properties.hasOwnProperty('src')) {
             errHandler($.t('messages.pluginScriptSrcMissing'));
-            return;
+            return false; // Return false to match original logical flow on failure
         }
 
         let container = document.getElementById(`script-section-${pluginId}`);
@@ -225,48 +200,48 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             container.id = "script-section-" + pluginId;
             document.body.append(container);
         }
-        let script = document.createElement("script");
+
+        let script = document.createElement("script") as any;
         for (let key in properties) {
             if (key === 'src') continue;
             script[key] = properties[key];
         }
+
         script.async = false;
-        script.onload = function() {
+        script.onload = function () {
             window.onerror = null;
-            onload();
+            onload && onload();
         };
+
         script.onerror = errHandler;
         window.onerror = errHandler;
         script.src = properties.src;
+
         container.append(script);
         return true;
     };
 
     /**
      * Get plugin.
-     * @param id plugin id, should be unique in the system and match the id value in includes.json
      * @global
      */
-    window.plugin = function(id) {
+    const plugin = (window as any).plugin = function (id: string) {
         return PLUGINS[id]?.instance;
     };
 
     /**
      * Get one of allowed plugin meta keys
-     * @param id
-     * @param {string} metaKey one of "name", "description", "author", "version", "icon"
      */
-    window.pluginMeta = function(id, metaKey) {
+    const pluginMeta = (window as any).pluginMeta = function (id: string, metaKey: string) {
         return ["name", "description", "author", "version", "icon"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
     }
 
     /**
      * Get a module singleton reference if instantiated.
      * @param id module id
-     * @param {ViewerLikeItem} [viewer] if provided, viewer-context-dependent instance (XOpatViewerSingleton) is fetched
-     * @return {XOpatModuleSingleton|XOpatViewerSingletonModule|undefined} module if it is a singleton and already instantiated
+     * @param viewer if provided, viewer-context-dependent instance (XOpatViewerSingleton) is fetched
      */
-    window.singletonModule = function (id, viewer = undefined) {
+    const singletonModule = (window as any).singletonModule = function (id: string, viewer?: ViewerLikeItem) {
         if (viewer !== undefined) {
             return VIEWER_MANAGER._getSingleton(id, viewer);
         }
@@ -277,11 +252,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * Register plugin. Plugin can be instantiated and embedded into the viewer.
      * @param id plugin id, should be unique in the system and match the id value in includes.json
      * @param PluginClass class/class-like-function to register (not an instance!)
-     * @global
      */
-    window.addPlugin = function(id, PluginClass) {
+    const addPlugin = (window as any).addPlugin = function (id: string, PluginClass: XOpatPluginClass) {
         let plugin = instantiatePlugin(id, PluginClass);
-
         if (!plugin) return;
 
         if (REGISTERED_PLUGINS !== undefined) {
@@ -293,9 +266,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
     /**
      * Force the SingletonClass class definition to be instantiated automatically per active viewer.
-     * @param {XOpatViewerSingleton} SingletonClass
      */
-    window.requireViewerSingletonPresence = function (SingletonClass) {
+    const requireViewerSingletonPresence = (window as any).requireViewerSingletonPresence = function (SingletonClass: XOpatViewerSingletonClass) {
         if (!(SingletonClass.prototype instanceof XOpatViewerSingleton)) {
             console.error("Invalid singleton class", SingletonClass);
             return;
@@ -303,25 +275,25 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         REQUIRED_SINGLETONS.add(SingletonClass);
         if (window.VIEWER_MANAGER) {
             for (let v of VIEWER_MANAGER.viewers) {
-                if (v.isOpen() && !this._getSingleton(SingletonClass.IDD, v)) {
+                if (v.isOpen() && !this._getSingleton(SingletonClass.IID, v)) {
                     SingletonClass.instance(v);
                 }
             }
         }
     }
 
-    function extendWith(target, source, ...properties) {
+    function extendWith(target: Record<string, any>, source: Record<string, any>, ...properties: string[]) {
         for (let property of properties) {
             if (source.hasOwnProperty(property)) target[property] = source[property];
         }
     }
 
-    function chainLoad(id, sources, index, onSuccess, folder=PLUGINS_FOLDER) {
+    function chainLoad(id: string, sources: XOpatElementRecord, index: number, onSuccess: () => void, folder: string = PLUGINS_FOLDER) {
         if (index >= sources.includes.length) {
             onSuccess();
         } else {
             let toLoad = sources.includes[index],
-                properties = {};
+                properties: Partial<ScriptProperties> = {};
             if (typeof toLoad === "string") {
                 properties.src = `${folder}${sources.directory}/${toLoad}?v=${version}`;
                 if (toLoad.endsWith(".mjs")) {
@@ -335,39 +307,38 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 throw "Invalid dependency: invalid type " + (typeof toLoad);
             }
 
-            attachScript(id, properties,
-                _ => chainLoad(id, sources, index+1, onSuccess, folder));
+            attachScript(id, properties as ScriptProperties, () => chainLoad(id, sources, index + 1, onSuccess, folder));
         }
     }
 
-    function chainLoadModules(moduleList, index, onSuccess) {
+    function chainLoadModules(moduleList: string[], index: number, onSuccess: () => void) {
         if (index >= moduleList.length) {
             onSuccess();
             return;
         }
-        let module = MODULES[moduleList[index]];
+        let module = MODULES[moduleList[index] ?? ""];
         if (!module || module.loaded) {
-            chainLoadModules(moduleList, index+1, onSuccess);
+            chainLoadModules(moduleList, index + 1, onSuccess);
             return;
         }
 
         function loadSelf() {
             //load self files and continue loading from modulelist
-            chainLoad(module.id + "-module", module, 0,
-                function() {
-                    if (module.styleSheet) {  //load css if necessary
-                        $('head').append(`<link rel='stylesheet' href='${module.styleSheet}' type='text/css'/>`);
+            chainLoad(module!.id + "-module", module!, 0,
+                function () {
+                    if (module!.styleSheet) {  //load css if necessary
+                        $('head').append(`<link rel='stylesheet' href='${module!.styleSheet}' type='text/css'/>`);
                     }
-                    module.loaded = true;
-                    chainLoadModules(moduleList, index+1, onSuccess);
+                    module!.loaded = true;
+                    chainLoadModules(moduleList, index + 1, onSuccess);
                 }, MODULES_FOLDER);
         }
 
         //first dependencies, then self
-        chainLoadModules(module.requires || [], 0, loadSelf);
+        chainLoadModules(module!.requires || [], 0, loadSelf);
     }
 
-    async function _getLocale(id, path, directory, data, locale) {
+    async function _getLocale(id: string, path: string, directory: string | undefined, data: any, locale: string | undefined) {
         if (!$.i18n) return;
         if (!locale) locale = $.i18n.language;
 
@@ -387,15 +358,19 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
     }
 
-    // ability to inherit from mutliple classes https://github.com/rse/aggregation/blob/master/src/aggregation-es6.js
-    const All = (base, ...mixins) => {
-        // Build a linearized, duplicate-free list of mixin classes,
-        // ordered from closest-to-base -> most-derived
-        const linearize = (base, mixins) => {
-            const seen = new Set();
-            const out = [];
+    /**
+     * Ability to inherit from multiple classes.
+     * Build a linearized, duplicate-free list of mixin classes, ordered from closest-to-base -> most-derived.
+     * @param base The base class to extend
+     * @param mixins Additional classes to aggregate into the base
+     */
+    const All = (base: new (...args: any[]) => any, ...mixins: (new (...args: any[]) => any)[]) => {
 
-            const visit = (K) => {
+        const linearize = (base: any, mixins: any[]) => {
+            const seen = new Set();
+            const out: any[] = [];
+
+            const visit = (K: any) => {
                 if (!K || K === base || K === Object) return;
                 const superK = Object.getPrototypeOf(K);
                 visit(superK);                 // ensure superclasses come first
@@ -411,22 +386,26 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         const linear = linearize(base, mixins);
 
-        // Copy property helpers (skip problematic keys)
-        const copyProps = (target, source) => {
+        /**
+         * Copy property helpers (skip problematic keys)
+         * @param target Destination object
+         * @param source Source object to copy properties from
+         */
+        const copyProps = (target: any, source: any) => {
             if (!source) return;
             for (const key of Object.getOwnPropertyNames(source)) {
                 if (/^(?:initializer|constructor|prototype|arguments|caller|name|bind|call|apply|toString|length)$/.test(key))
                     continue;
-                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key)!);
             }
 
             for (const key of Object.getOwnPropertySymbols(source)) {
-                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+                Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key)!);
             }
         };
 
-        class Aggregate extends base {
-            constructor (...args) {
+        class Aggregate extends (base as any) {
+            constructor(...args: any[]) {
                 super(...args);                 // call base constructor once
 
                 // Call each initializer once, in base->derived order
@@ -443,7 +422,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             copyProps(Aggregate, K);
         }
 
-        return Aggregate;
+        return Aggregate as any;
     };
 
     // POST DATA STORAGE - Always implemented via POST, support static IO.
@@ -452,17 +431,29 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @type {PostDataStore}
      */
     class PostDataStore extends XOpatStorage.Data {
+        /** Internal context type (plugin or module) */
+        contextType!: XOpatExecutionContext;
+
         /**
          * @param options the options used in super class XOpatStorage.Data
          * @param options.xoType type of the owner
          */
-        constructor(options) {
-            super({...options,
-                id: (options.id || "").split(".").filter((v, i) => i > 0).join(".")});
-            if (options.xoType !== "plugin" && options.xoType !== "module") throw "Invalid xoType for PostDataStore!";
+        constructor(options: PostDataStoreOptions) {
+            // IDs are split by '.' and the first segment is removed to match original logic
+            super({
+                ...options,
+                id: (options.id || "").split(".").filter((_, i) => i > 0).join(".")
+            });
+
+            if (options.xoType !== "plugin" && options.xoType !== "module") {
+                throw "Invalid xoType for PostDataStore!";
+            }
+
             this.contextType = options.xoType;
-            //write target
-            this.__storage._withReference(this.contextType);
+
+            // Accessing the internal storage reference
+            // Cast to any to access internal _withReference if it's not in the public interface
+            (this.getStore() as any)._withReference(this.contextType);
         }
 
         /**
@@ -471,11 +462,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @return {Promise<string>} serialized data
          */
         async export() {
-            const exports = {};
+            const exports: Record<string, any> = {};
+            const storage = this.__storage as any;
             //bit dirty, but we rely on keys implementation as we hardcode storage driver
-            for (let key of this.__storage._keys()) {
+            for (let key of storage._keys() as string[]) {
                 if (key.startsWith(this.id)) {
-                    exports[key] = await this.__storage.get(key);
+                    exports[key] = await storage.get(key);
                 }
             }
             try {
@@ -487,23 +479,24 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * @param Class ignored argument, this class hardcodes POST DATA 'driver'
+         * Class argument is unused — this class hardcodes POST DATA 'driver'.
          */
-        static register(Class) {
+        static register(Class: new () => StorageLike | AsyncStorageLike) {
             super.registerClass(class extends XOpatStorage.AsyncStorage {
-                async getItem(key) {
+                ref!: string;
+                async getItem(key: string) {
                     let storage = POST_DATA[this.ref];
                     // backward non-namespaced compatibility
                     return POST_DATA[key] || (storage && storage[key]);
                 }
-                async setItem(key, value) {
+                async setItem(key: string, value: any) {
                     let storage = POST_DATA[this.ref];
                     if (!storage) {
                         storage = POST_DATA[this.ref] = {};
                     }
                     storage[key] = value;
                 }
-                async removeItem(key) {
+                async removeItem(key: string) {
                     delete POST_DATA[key];
                     let storage = POST_DATA[this.ref];
                     if (storage) {
@@ -515,32 +508,26 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         POST_DATA[this.ref] = {};
                     }
                 }
-                get length() {
+                get length(): Promise<number> {
                     let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {}).length;
+                    return Promise.resolve(Object.keys(storage || {}).length);
                 }
-                async key(index) {
+                async key(index: number): Promise<string> {
                     let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {})[index];
+                    return Object.keys(storage || {})[index] ?? "";
                 }
-                _keys() { //internal loader use
+                _keys(): string[] { //internal loader use
                     let storage = POST_DATA[this.ref];
                     return Object.keys(storage || {});
                 }
-                _withReference(ref) {  //internal loader use
+                _withReference(ref: string) {  //internal loader use
                     this.ref = ref;
                 }
-            });
+            } as any);
         }
     }
-    PostDataStore.register(null);
-    const STORE_TOKEN = Symbol("XOpatElementDataStore");
-    const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
-
-    /**
-     * @typedef {string} XOpatElementID
-     * Element ID unique to instance, either plugin or module id.
-     */
+    // We hardcode internal storage driver for PostDataStore
+    PostDataStore.register(null as any);
 
     /**
      * Implements common interface for plugins and modules. Cannot
@@ -549,13 +536,18 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @extends OpenSeadragon.EventSource
      * @abstract
      */
-    class XOpatElement extends OpenSeadragon.EventSource {
+    class XOpatElement extends OpenSeadragon.EventSource implements IXOpatElement {
+        __id: string;
+        __uid: string;
+        __xoContext: XOpatExecutionContext;
+        // Allow symbol-keyed storage (STORE_TOKEN, CACHE_TOKEN)
+        [key: symbol]: any;
 
         /**
          * @param {XOpatElementID} id
          * @param {('plugin'|'module')} executionContextName
          */
-        constructor(id, executionContextName) {
+        constructor(id: XOpatElementID, executionContextName: XOpatExecutionContext) {
             super();
 
             if (!id) throw `Trying to instantiate an element '${this.constructor.name || this.constructor}' - no id given.`;
@@ -563,13 +555,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.__uid = `${executionContextName}.${id}`;
             this.__xoContext = executionContextName;
 
-            /**
-             * @type {string} id element identifier
-             * @memberof XOpatElement
-             */
-            this.constructor.id = id;
-
-            this[CACHE_TOKEN] = new XOpatStorage.Cache({id: this.__uid});
+            this[CACHE_TOKEN] = new XOpatStorage.Cache({ id: this.__uid });
             REGISTERED_ELEMENTS.push(this);
         }
 
@@ -602,6 +588,34 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
+         * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
+         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
+         * @param {string} optionKey
+         * @param {*} defaultValue
+         * @param {boolean} cache
+         * @memberof XOpatModule
+         * @return {*}
+         */
+        getOption(optionKey: string, defaultValue: any, cache = true) {
+            //options are stored only for plugins, so we store them at the lowest level
+            let value = cache ? this.cache.get(optionKey, null) : null;
+            if (value === "false") value = false;
+            else if (value === "true") value = true;
+            return value;
+        }
+
+        /**
+         * Store the module online configuration parameters/options - but note that unlike
+         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
+         * @param {string} key
+         * @param {*} value
+         * @param {boolean} cache
+         */
+        setOption(key: string, value: any, cache = true) {
+            if (cache) this.cache.set(key, value);
+        }
+
+        /**
          * @return {PostDataStore}
          */
         get POSTStore() {
@@ -614,7 +628,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param locale
          * @return {string} relative file path
          */
-        getLocaleFile(locale) {
+        getLocaleFile(locale: string): string {
             return `locales/${locale}.json`;
         }
 
@@ -624,7 +638,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param options
          * @return {*}
          */
-        t(key, options={}) {
+        t(key: string, options: Record<string, any> = {}) {
             options.ns = this.id;
             return $.t(key, options);
         }
@@ -641,7 +655,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param e.error
          * @param {boolean} notifyUser fires error-user if true, error-system otherwise.
          */
-        error(e, notifyUser=true) {
+        error(e: XOpatErrorEvent, notifyUser = true) {
             /**
              * Raise event from instance. Instances that register as event source fire on themselves.
              * @property {string} originType `"module"`, `"plugin"` or other type of the source
@@ -659,8 +673,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * @event error-system
              * @memberof XOpatElement
              */
-            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'error-user' : 'error-system',
-                $.extend(e, {originType: this.xoContext, originId: this.id}));
+            this.raiseEvent(notifyUser ? 'error-user' : 'error-system',
+                $.extend(e, { originType: this.xoContext, originId: this.id }));
         }
 
         /**
@@ -675,7 +689,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param e.error
          * @param {boolean} notifyUser fires error-user if true, error-system otherwise.
          */
-        warn(e, notifyUser) {
+        warn(e: XOpatErrorEvent, notifyUser: boolean) {
             /**
              * Raise event from instance. Instances that register as event source fire on themselves.
              * @property {string} originType `"module"`, `"plugin"` or other type of the source
@@ -693,9 +707,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * @event warn-system
              * @memberof XOpatElement
              */
-            (this.__errorBindingOnViewer ? VIEWER : this).raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
+            this.raiseEvent(notifyUser ? 'warn-user' : 'warn-system',
                 $.extend(e,
-                    {originType: this.xoContext, originId: this.id}));
+                    { originType: this.xoContext, originId: this.id }));
         }
 
         /**
@@ -707,25 +721,25 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * runs IO wrt. viewer lifecycle
          * @return {PostDataStore} data store reference, or false if import failed
          */
-        async initPostIO(options = {}) {
+        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
             if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
                 return;
             }
 
             options.id = this.uid;
-            options.xoType = this.__xoContext;
+            options.xoType = this.__xoContext as XOpatExecutionContext;
             if (options.inViewerContext === undefined) {
                 options.inViewerContext = true;
             }
             let store = this[STORE_TOKEN];
             if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options);
+                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
             }
 
             const vanillaExportKey = (options.exportKey || "").replace("::", "");
 
             try {
-                VIEWER_MANAGER.addHandler('export-data', async (e) => {
+                VIEWER_MANAGER.addHandler('export-data', async () => {
                     const data = await this.exportData(vanillaExportKey);
                     if (data) {
                         await store.set(vanillaExportKey, data);
@@ -734,7 +748,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     if (options.inViewerContext) {
                         const exportKey = vanillaExportKey + "::";
                         for (let v of VIEWER_MANAGER.viewers) {
-                            const contextID = findViewerUniqueId(v);
+                            const contextID = findViewerUniqueId(v) ?? "__unknown_viewer_ref__";
                             const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
                             if (data) {
                                 await store.set(exportKey + contextID, viewerData);
@@ -751,7 +765,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 this.error({
                     error: e, code: "W_IO_INIT_ERROR",
                     message: $.t('error.pluginImportFail',
-                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
                 });
             }
             return store;
@@ -766,7 +780,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param key {string} the data contextual ID it was exported with, default empty string
          * @return {Promise<any>}
          */
-        async exportData(key) {}
+        async exportData(key: string): Promise<any> { }
         /**
          * Works the same way as @exportData, but for the viewer context.
          * @param viewer {OpenSeadragon.Viewer} the target viewer
@@ -774,7 +788,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
          * @return {Promise<any>}
          */
-        async exportViewerData(viewer, key, viewerTargetID) {
+        async exportViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string): Promise<any> {
             return {};
         }
         /**
@@ -783,7 +797,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param key {string} the data contextual ID it was exported with, default empty string
          * @param data {any} data
          */
-        async importData(key, data) {}
+        async importData(key: string, data: any): Promise<void> { }
         /**
          * Works the same way as @importData, but for the viewer context.
          * @param viewer {OpenSeadragon.Viewer} the target viewer
@@ -791,14 +805,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
          * @param data {any} data
          */
-        async importViewerData(viewer, key, viewerTargetID, data) {}
+        async importViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string, data: any): Promise<void> { }
 
         /**
          * Get context of viewer that is suitable for storing viewer-related data.
          * @param id
          * @return {{}|undefined}
          */
-        getViewerContext(id) {
+        getViewerContext(id: UniqueViewerId) {
             const viewer = VIEWER_MANAGER.getViewer(id);
             if (!viewer) {
                 console.warn("No viewer with id " + id);
@@ -824,13 +838,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @return {boolean} true if finished immediatelly, false if registered handler for the
          * future possibility of the module being loaded
          */
-        integrateWithSingletonModule(moduleId, callback, viewer = undefined) {
+        integrateWithSingletonModule(moduleId: string, callback: (module: any) => void, viewer: ViewerLikeItem | undefined = undefined) {
             const targetModule = singletonModule(moduleId);
             if (targetModule) {
                 callback(targetModule);
                 return true;
             }
-            VIEWER_MANAGER.addHandler('module-singleton-created', e => {
+            VIEWER_MANAGER.addHandler('module-singleton-created', (e: ModuleSingletonCreatedEvent) => {
                 if (viewer) {
                     viewer = VIEWER_MANAGER.ensureViewer(viewer);
                     // call also if viewer event arg undefined -> user might missed the usage
@@ -852,8 +866,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {UINamedItemGetter} getter receives the viewer instance as a single instance, supports
          *   async functions too
          */
-        registerViewerMenu(getter) {
-            const insert = (content, menuComponent) => {
+        registerViewerMenu(getter: UINamedItemGetter) {
+            const insert = (content: any, menuComponent: any) => {
                 if (!content) {
                     return;
                 }
@@ -877,7 +891,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 }
             };
 
-            const updateMenu = (viewer) => {
+            const updateMenu = (viewer: OpenSeadragon.Viewer) => {
                 const menuComponent = VIEWER_MANAGER.getMenu(viewer);
                 // If menu not available (e.g. headless or destroyed), skip
                 if (!menuComponent || !menuComponent.menu) return;
@@ -899,16 +913,22 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             };
 
             // 1. Hook into all future 'open' events (covers content changes) 'open' is an OSD event broadcasted to all viewers
-            VIEWER_MANAGER.broadcastHandler('open', (e) => updateMenu(e.eventSource));
+            VIEWER_MANAGER.broadcastHandler('open', (e: OpenEvent) => updateMenu(e.eventSource));
             // 2. Hook into viewer reset (clearing data) to potentially remove the menu 'viewer-reset' is a ViewerManager event
-            VIEWER_MANAGER.addHandler('viewer-reset', (e) => updateMenu(e.viewer));
+            VIEWER_MANAGER.addHandler('viewer-reset', (e: ViewerResetEvent) => updateMenu(e.viewer));
 
-            VIEWER_MANAGER.viewers.forEach(v => {
+            VIEWER_MANAGER.viewers.forEach((v: OpenSeadragon.Viewer) => {
                 // Update regardless of state, logic inside handles null/removal
                 updateMenu(v);
             });
         }
+
+        setCacheOption() {
+            console.warn("XOpatModule.setCacheOption() is deprecated. Use XOpatModule.cache.set() instead.");
+            this.cache.set(...arguments);
+        }
     }
+
 
     /**
      * Basic Module API. Modules do not have to inherit from XOpatModule, but
@@ -917,11 +937,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @extends XOpatElement
      * @inheritDoc
      */
-    window.XOpatModule = class extends XOpatElement {
+    const XOpatModule = (window as any).XOpatModule = class extends XOpatElement implements IXOpatModule {
 
-        constructor(id) {
+        constructor(id: string) {
             super(id, "module");
-            this.__o = {};
         }
 
         /**
@@ -930,7 +949,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param data possibly custom locale data if not fetched from a file
          * @return {Promise}
          */
-        async loadLocale(locale=undefined, data=undefined) {
+        async loadLocale(locale = undefined, data = undefined) {
             return await _getLocale(this.id, MODULES_FOLDER, MODULES[this.id]?.directory,
                 data || this.getLocaleFile(locale || $.i18n.language), locale);
         }
@@ -941,55 +960,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param defaultValue
          * @return {undefined|*}
          */
-        getStaticMeta(metaKey, defaultValue) {
+        getStaticMeta(metaKey: string, defaultValue?: any) {
             if (metaKey === "instance") return undefined;
             const value = MODULES[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
             return value;
-        }
-
-        /**
-         * Unlike plugins, options for modules are limited to an internal option map. Note that unlike
-         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
-         * @param {string} optionKey
-         * @param {*} defaultValue
-         * @param {boolean} cache
-         * @memberof XOpatModule
-         * @return {*}
-         */
-        getOption(optionKey, defaultValue, cache=true) {
-            //options are stored only for plugins, so we store them at the lowest level
-            let value = cache ? this.cache.get(optionKey, null) : null;
-            if (value === null) {
-                value = this.__o[optionKey];
-            }
-            if (value === "false") value = false;
-            else if (value === "true") value = true;
-            return value;
-        }
-
-        /**
-         * Store the module online configuration parameters/options - but note that unlike
-         * plugin, these values are not exported nor shared between sessions (unless cache takes action)!
-         * @param {string} key
-         * @param {*} value
-         * @param {boolean} cache
-         */
-        setOption(key, value, cache=true) {
-            if (cache) this.setCacheOption(key, value);
-            if (value === "false") value = false;
-            else if (value === "true") value = true;
-            APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
-        }
-
-        /**
-         * Ability to cache a value locally into the browser,
-         * the value can be retrieved using this.getOption(...)
-         * @param {string} key
-         * @param value
-         */
-        setCacheOption(key, value) {
-            this.cache.set(key, value);
         }
 
         /**
@@ -998,7 +973,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @type {string}
          * @public
          */
-        static ROOT = MODULES_FOLDER;
+        static ROOT: string = MODULES_FOLDER;
 
         /**
          * Absolute root path/URL of this module's directory.
@@ -1023,7 +998,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @extends XOpatModule
      * @inheritDoc
      */
-    window.XOpatModuleSingleton = class extends XOpatModule {
+    const XOpatModuleSingleton = (window as any).XOpatModuleSingleton = class extends XOpatModule implements IXOpatModuleSingleton {
         /**
          * Get instance of the singleton
          * (only one instance can run since it captures mouse events).
@@ -1032,8 +1007,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          */
         static instance() {
             //this calls sub-class constructor, no args required
-            this.__self = this.__self || new this();
-            return this.__self;
+            const Ctor = this as any;
+            Ctor.__self = Ctor.__self || new Ctor();
+            return Ctor.__self;
         }
 
         /**
@@ -1049,23 +1025,25 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Create singleton with ID of the module.
-         * @param {string} id  The ID must be the module id defined in configuration.
+         * The ID must be the module id defined in configuration.
          */
-        constructor(id) {
+        constructor(id: string) {
             super(id);
-            const staticContext = this.constructor;
+            const staticContext = (this.constructor as any);
             if (staticContext.__self) {
                 throw `Trying to instantiate a singleton. Instead, use ${staticContext.name}::instance().`;
             }
             staticContext.__self = this;
 
-            MODULES[id].instance = this;
+            const modRef = MODULES[id];
+            if (!modRef) {
+                throw `Trying to instantiate a module that is not registered!`;
+            }
+            modRef.instance = this;
 
             // Await event necessary to fire after instantiation, do in async context
             /**
              * Module singleton was instantiated
-             * @property {string} id module id
-             * @property {XOpatModuleSingleton|XOpatViewerSingletonModule} module
              * @memberof VIEWER_MANAGER
              * @event module-singleton-created
              */
@@ -1097,16 +1075,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * is that this component has full lifecycle including destruction - it lives
      * as long as a particular viewer sub-window is alive, and it should handle its
      * destruction using destroy() method.
-     * @class XOpatViewerSingleton
-     * @extends OpenSeadragon.EventSource
      * @inheritDoc
      */
-    window.XOpatViewerSingleton = class extends OpenSeadragon.EventSource {
+    const XOpatViewerSingleton = (window as any).XOpatViewerSingleton = class extends window.OpenSeadragon.EventSource implements IXOpatViewerSingleton {
         /**
          * Destroy. This method must be called if overridden.
          */
         destroy() {
-            const state = this.constructor.__getBroadcastState?.();
+            const state = (this.constructor as any).__getBroadcastState?.();
             if (state) {
                 for (const [eventName, perHandler] of state.entries()) {
                     for (const [, record] of perHandler.entries()) {
@@ -1123,11 +1099,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Get instance of the singleton
          * (only one instance can run since it captures mouse events).
-         * @param {ViewerLikeItem} viewerOrUniqueId
          * @static
          * @return {XOpatModuleSingleton} manager instance
          */
-        static instance(viewerOrUniqueId) {
+        static instance(viewerOrUniqueId: ViewerLikeItem) {
             if (viewerOrUniqueId === undefined) {
                 console.error("The viewer instance needs a viewer argument to obtain the instance, unlike the global singleton.");
                 return undefined;
@@ -1142,7 +1117,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {ViewerLikeItem} viewerOrUniqueId
          * @return {boolean}
          */
-        static instantiated(viewerOrUniqueId) {
+        static instantiated(viewerOrUniqueId: ViewerLikeItem) {
             // not passing this as a third option avoids instantiation
             return !!VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
         }
@@ -1160,15 +1135,17 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * Create singleton.
          * @param {OpenSeadragon.Viewer} viewer
          */
-        constructor(viewer) {
+        constructor(viewer: OpenSeadragon.Viewer) {
             // id ignored, only to be compatible with XOpatElement
             if (viewer === undefined) {
                 throw new Error("Viewer must be provided to create a viewer-singleton!");
             }
             super();
 
+            const Self = this.constructor as XOpatViewerSingletonClass;
+
             // throws if exists
-            VIEWER_MANAGER._attachSingleton(this.constructor.IID, this, viewer);
+            VIEWER_MANAGER._attachSingleton(Self.IID, this, viewer);
 
             /**
              * @type {OpenSeadragon.Viewer}
@@ -1179,7 +1156,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 get: () => viewer,
             });
 
-            this.constructor.__attachAllHandlersToInstance(this);
+            (this.constructor as any).__attachAllHandlersToInstance(this);
 
             // Await event necessary to fire after instantiation, do in async context
             /**
@@ -1190,10 +1167,19 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * @event viewer-singleton-created
              */
             setTimeout(() => VIEWER_MANAGER.raiseEventAwaiting('viewer-singleton-created', {
-                id: this.constructor.IID,
+                id: Self.IID,
                 module: this,
                 viewer: viewer
             }).catch(/*no-op*/));
+        }
+
+        /**
+         * Get the viewer this singleton is attached to.
+         * @type {OpenSeadragon.Viewer}
+         */
+        get viewer(): OpenSeadragon.Viewer {
+            // viewer is set via Object.defineProperty in constructor
+            return (this as any).__viewer;
         }
 
         /**
@@ -1201,7 +1187,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @type {string}
          */
         get THIS() {
-            const id = this.constructor.IID;
+            const id = (this.constructor as any).IID;
             //memoize
             Object.defineProperty(this, "THIS", {
                 value: `singletonModule('${id}', '${this.viewer.uniqueId}')`,
@@ -1215,30 +1201,31 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @return {XOpatViewerSingletonModule[]}
          */
         get instances() {
-            return VIEWER_MANAGER._getSingletons(this.constructor.IID);
+            return VIEWER_MANAGER._getSingletons((this.constructor as any).IID);
         }
 
         static instances() {
-            return VIEWER_MANAGER._getSingletons(this.IID);
+            return VIEWER_MANAGER._getSingletons((this as any).IID);
         }
 
         /**
          * Attach a class-wide handler to all current and future instances of this subclass.
          * Handler is called as handler.call(emittingInst, emittingInst, event, ...args)
          */
-        static broadcastHandler(eventName, handler, ...args) {
+        static broadcastHandler(eventName: string, handler: Function, ...args: any[]) {
             const state = this.__getBroadcastState();
             if (!state.has(eventName)) state.set(eventName, new Map());
             const perHandler = state.get(eventName);
 
+            if (!perHandler) return;
             if (perHandler.has(handler)) return; // idempotent
 
             const record = { args, wrappers: new Map() };
-            perHandler.set(handler, record);
+            perHandler!.set(handler, record);
 
             // Attach immediately to instances that are already event sources
             for (const inst of this.instances()) {
-                const wrapper = (e) => handler.call(inst, inst, e, ...args);
+                const wrapper = (e: any) => handler.call(inst, inst, e, ...args);
                 record.wrappers.set(inst, wrapper);
                 inst.addHandler(eventName, wrapper);
             }
@@ -1247,7 +1234,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Remove a previously added class-wide handler from all instances of this subclass.
          */
-        static cancelBroadcast(eventName, handler) {
+        static cancelBroadcast(eventName: string, handler: Function) {
             const state = this.__getBroadcastState();
             const perHandler = state.get(eventName);
             if (!perHandler) return;
@@ -1267,13 +1254,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * Called after the instance becomes an event source.
          * @private
          */
-        static __attachAllHandlersToInstance(inst) {
+        static __attachAllHandlersToInstance(inst: OpenSeadragon.EventSource) {
             const state = this.__getBroadcastState();
 
             for (const [eventName, perHandler] of state.entries()) {
                 for (const [origHandler, record] of perHandler.entries()) {
                     if (record.wrappers.has(inst)) continue;
-                    const wrapper = (e) => origHandler.call(inst, inst, e, ...record.args);
+                    const wrapper = (e: any) => origHandler.call(inst, inst, e, ...record.args);
                     record.wrappers.set(inst, wrapper);
                     inst.addHandler(eventName, wrapper);
                 }
@@ -1284,14 +1271,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * Per-subclass state: { Map<eventName, Map<fn, {args:any[], wrappers: Map<inst, fn> }> }
          * (Own property on the subclass, so subclasses don't share.)
          */
-        static __getBroadcastState() {
+        static __getBroadcastState(): Map<string, Map<Function, { args: any[]; wrappers: Map<any, Function> }>> {
             if (!Object.prototype.hasOwnProperty.call(this, "__broadcastState")) {
                 Object.defineProperty(this, "__broadcastState", {
                     value: new Map(),
                     writable: false, enumerable: false, configurable: false
                 });
             }
-            return this.__broadcastState;
+            return (this as any).__broadcastState as Map<string, Map<Function, { args: any[]; wrappers: Map<any, Function> }>>;
         }
     }
 
@@ -1308,9 +1295,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @extends XOpatModuleSingleton
      * @inheritDoc
      */
-    window.XOpatViewerSingletonModule = class extends All(XOpatModule, XOpatViewerSingleton) {
+    const XOpatViewerSingletonModule = (window as any).XOpatViewerSingletonModule = class extends All(XOpatModule, XOpatViewerSingleton) {
 
-        constructor(id, viewer) {
+        constructor(id: string, viewer: OpenSeadragon.Viewer) {
             super(id, viewer);
 
             /**
@@ -1341,23 +1328,23 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
          * @return {PostDataStore} data store reference, or false if import failed
          */
-        async initPostIO(options = {}) {
+        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
             if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
                 return;
             }
 
             options.id = this.uid;
-            options.xoType = this.__xoContext;
+            options.xoType = this.__xoContext as XOpatExecutionContext;
             let store = this[STORE_TOKEN];
             if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options);
+                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
             }
 
             const vanillaExportKey = (options.exportKey || "").replace("::", "");
 
             try {
-                const exportKey =  vanillaExportKey + "::";
-                VIEWER_MANAGER.addHandler('export-data', async (e) => {
+                const exportKey = vanillaExportKey + "::";
+                VIEWER_MANAGER.addHandler('export-data', async () => {
                     const data = await this.exportData(vanillaExportKey);
                     if (data) {
                         console.warn("Xopat Module Viewer Singleton should not export to a global context, instead, it should export to a viewer context!");
@@ -1380,12 +1367,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                 this.error({
                     error: e, code: "W_IO_INIT_ERROR",
                     message: $.t('error.pluginImportFail',
-                        {plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
                 });
             }
             return store;
         }
-    }
+    } as unknown as XOpatViewerSingletonModuleClass;
 
     /**
      * xOpat Plugin API. Plugins must have a parent class that
@@ -1395,9 +1382,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @extends XOpatElement
      * @inheritDoc
      */
-    window.XOpatPlugin = class extends XOpatElement {
+    const XOpatPlugin = (window as any).XOpatPlugin = class XOpatPlugin extends XOpatElement implements IXOpatPlugin {
 
-        constructor(id) {
+        constructor(id: string) {
             super(id, "plugin");
         }
 
@@ -1414,7 +1401,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param locale the current locale if undefined
          * @param data possibly custom locale data if not fetched from a file
          */
-        async loadLocale(locale=undefined, data=undefined) {
+        async loadLocale(locale = undefined, data = undefined) {
             return await _getLocale(this.id, PLUGINS_FOLDER, PLUGINS[this.id]?.directory,
                 data || this.getLocaleFile(locale || $.i18n.language), locale)
         }
@@ -1425,7 +1412,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param defaultValue
          * @return {undefined|*}
          */
-        getStaticMeta(metaKey, defaultValue) {
+        getStaticMeta(metaKey: string, defaultValue?: any) {
             if (metaKey === "instance") return undefined;
             const value = PLUGINS[this.id]?.[metaKey];
             if (value === undefined) return defaultValue;
@@ -1440,8 +1427,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {boolean} cache
          * @memberof XOpatPlugin
          */
-        setOption(key, value, cache=true) {
-            if (cache) this.setCacheOption(key, value);
+        setOption(key: string, value: any, cache = true) {
+            if (cache) this.cache.set(key, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
             APPLICATION_CONTEXT.config.plugins[this.id][key] = value;
@@ -1451,13 +1438,9 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * Read the plugin online configuration parameters/options.
          * The defaultValue is read from a static configuration if not provided.
          * Note that this behavior will read static values such as 'permaLoad', 'includes' etc..
-         * @param {string} key
-         * @param {*} defaultValue
-         * @param {boolean} cache
          * @memberof XOpatPlugin
-         * @return {*}
          */
-        getOption(key, defaultValue=undefined, cache=true) {
+        getOption(key: string, defaultValue: any = undefined, cache = true) {
             //todo allow APPLICATION_CONTEXT.getOption(...cache...) to disable cache globally
 
             //options are stored only for plugins, so we store them at the lowest level
@@ -1477,16 +1460,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         /**
-         * Ability to cache a value locally into the browser,
-         * the value can be retrieved using this.getOption(...)
-         * @param {string} key
-         * @param value
-         */
-        setCacheOption(key, value) {
-            this.cache.set(key, value);
-        }
-
-        /**
          * Read plugin configuration value - either from a static configuration or dynamic one.
          * More generic function that reads any option available (configurable via dynamic JSON or include.json)
          * @param {string} optKey dynamic param key, overrides anything
@@ -1494,7 +1467,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {any} defaultValue
          * @param {boolean} cache
          */
-        getOptionOrConfiguration(optKey, staticKey, defaultValue=undefined, cache=true) {
+        getOptionOrConfiguration(optKey: string, staticKey: string, defaultValue: any = undefined, cache = true) {
             const value = this.getOption(optKey, undefined, cache);
             return value === undefined ? this.getStaticMeta(staticKey, defaultValue) : value;
         }
@@ -1521,14 +1494,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @return {boolean} true if finished immediatelly, false if registered handler for the
          * future possibility of plugin being loaded
          */
-        integrateWithPlugin(pluginId, callback) {
+        integrateWithPlugin(pluginId: string, callback: (plugin: XOpatPlugin) => void) {
             const targetPlugin = plugin(pluginId);
-            if (targetPlugin &&  PLUGINS[pluginId].__ready) {
+            if (targetPlugin && PLUGINS[pluginId]?.__ready) {
                 callback(targetPlugin);
                 return true;
             }
             // TODO: consider async event that awaits loading handlers -> this could help e.g. delaying slide opening
-            VIEWER_MANAGER.addHandler('plugin-loaded', e => {
+            VIEWER_MANAGER.addHandler('plugin-loaded', (e: PluginLoadedEvent) => {
                 if (e.id === pluginId) callback(e.plugin);
             });
             return false;
@@ -1555,17 +1528,20 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             }
             return PLUGINS_FOLDER + PLUGINS[this.id]?.directory
         }
-    }
+    };
+
+    const _alphabet = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
+    const _alphaset = new Set(_alphabet.split(''));
 
     /**
      * @namespace UTILITIES
      */
-    window.UTILITIES = /** @lends UTILITIES */ {
+    const UTILITIES = (window as any).UTILITIES = /** @lends UTILITIES */ {
         /**
          * @param imageFilePath image path
          * @param stripSuffix
          */
-        fileNameFromPath: function(imageFilePath, stripSuffix=true) {
+        fileNameFromPath: function (imageFilePath: string, stripSuffix = true) {
             if (typeof imageFilePath !== 'string') {
                 console.error("fileNameFromPath: invalid argument type. This often happens when configuration" +
                     "specifies non-string data item, but fails to set the 'name' attribute.");
@@ -1584,25 +1560,20 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Parse BG Item Name Safely
-         * @param {BackgroundItem|number|StandaloneBackgroundItem} indexOrItem
-         * @param {boolean} [stripSuffix=true]
          */
-        nameFromBGOrIndex: function (indexOrItem, stripSuffix = true) {
+        nameFromBGOrIndex: function (indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix = true) {
             // todo some error if not a string, that name must be provided etc...
-            const item = typeof indexOrItem === "number" ? APPLICATION_CONTEXT.config.background[indexOrItem] : indexOrItem;
+            const isIndex = typeof indexOrItem === 'number';
+            const item = BackgroundConfig.dataFromDataId(isIndex ? indexOrItem : indexOrItem.dataReference) as DataID;
             if (!item) return "unknown";
-            if (item.name) return name;
-            let path = APPLICATION_CONTEXT.config.data[item.dataReference];
-            if (!path && typeof item.dataReference !== "number") {
-                path = item.dataReference;
-            }
+            if (!isIndex && indexOrItem.name) return indexOrItem.name;
 
-            if (typeof path === "string") {
-                return this.fileNameFromPath(path, stripSuffix);
+            if (typeof item === "string") {
+                return this.fileNameFromPath(item, stripSuffix);
             }
-            if (typeof path === "object") {
+            if (typeof item === "object") {
                 // todo some stragtegy?
-                return path.name || path.label || path.title || path[Object.keys(path)[0]];
+                return item.name || item.label || item.title || item[String(Object.keys(item)[0])];
             }
             console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
             return "undefined";
@@ -1613,7 +1584,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string} path
          * @return {string}
          */
-        stripSuffix: function (path) {
+        stripSuffix: function (path: string) {
             let end = path.lastIndexOf('.');
             if (end >= 0) return path.substr(0, end);
             return path;
@@ -1625,7 +1596,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param onload function to call on successful finish
          * @param ids all modules id to be loaded (rest parameter syntax)
          */
-        loadModules: function(onload=_=>{}, ...ids) {
+        loadModules: function (onload?: (() => void), ...ids: string[]) {
             LOADING_PLUGIN = false;
             chainLoadModules(ids, 0, () => {
                 /**
@@ -1634,7 +1605,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                  * @memberof VIEWER_MANAGER
                  * @event module-loaded
                  */
-                ids.forEach(id => VIEWER_MANAGER.raiseEvent('module-loaded', {id: id}));
+                ids.forEach(id => VIEWER_MANAGER.raiseEvent('module-loaded', { id: id }));
                 onload && onload();
             });
         },
@@ -1645,10 +1616,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param id plugin to load
          * @param onload function to call on successful finish
          */
-        loadPlugin: function(id, onload=_=>{}, force) {
+        loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean) {
             let meta = PLUGINS[id];
             if (!meta || (meta.loaded && meta.instance)) return;
-            if (!Array.isArray(meta.includes)) {
+            if (meta && !Array.isArray(meta.includes)) {
                 meta.includes = [];
             }
 
@@ -1659,40 +1630,40 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                  * @memberof VIEWER_MANAGER
                  * @event before-plugin-load
                  */
-                VIEWER_MANAGER.raiseEvent('before-plugin-load', {id: id});
+                VIEWER_MANAGER.raiseEvent('before-plugin-load', { id: id });
             }
 
-            let successLoaded = function() {
+            let successLoaded = function () {
                 LOADING_PLUGIN = false;
 
                 function finishPluginLoad() {
-                    if (meta.styleSheet) {  //load css if necessary
+                    if (meta?.styleSheet) {  //load css if necessary
                         $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
                     }
-                    meta.loaded = true;
+                    if (meta) meta.loaded = true;
                     if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
                         let plugins = [];
                         for (let p in PLUGINS) {
-                            if (PLUGINS[p].loaded) plugins.push(p);
+                            if (PLUGINS[p]?.loaded) plugins.push(p);
                         }
                         APPLICATION_CONTEXT.AppCookies.set('_plugins', plugins.join(","));
                     }
                 }
 
                 if (pluginsWereInitialized()) {
-                    initializePlugin(PLUGINS[id].instance).then(success => {
+                    initializePlugin(PLUGINS[id]?.instance).then(success => {
                         if (success) {
                             finishPluginLoad();
                         }
-                        onload();
+                        onload && onload();
                     });
                     return;
                 }
                 finishPluginLoad();
-                onload();
+                onload && onload();
             };
             LOADING_PLUGIN = true;
-            chainLoadModules(meta.modules || [], 0, _ => chainLoad(id, meta, 0, successLoaded));
+            chainLoadModules(meta!.modules || [], 0, () => chainLoad(id, meta!, 0, successLoaded));
         },
 
         /**
@@ -1700,12 +1671,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string} id component id
          * @param {boolean} isPlugin true if check for plugins
          */
-        isLoaded: function (id, isPlugin=false) {
+        isLoaded: function (id: string, isPlugin = false) {
             if (isPlugin) {
-                let plugin = PLUGINS[id];
-                return plugin.loaded && plugin.instance;
+                let p = PLUGINS[id];
+                return p?.loaded && p?.instance;
             }
-            return MODULES[id].loaded;
+            return MODULES[id]?.loaded;
         },
 
         /**
@@ -1715,12 +1686,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param staticPreview Whether to mark the serialized app as static or not
          * @return {Promise<{app: string, data: {}}>}
          */
-        serializeApp: async function(includedPluginsList=undefined, withCookies=false, staticPreview=false) {
+        serializeApp: async function (includedPluginsList: string[] | undefined = undefined, withCookies = false, staticPreview = false): Promise<{ app: string, data: Record<string, any> }> {
             //reconstruct active plugins
             let pluginsData = APPLICATION_CONTEXT.config.plugins;
             let includeEvaluator = includedPluginsList ?
-                (p, o) => includedPluginsList.includes(p) :
-                (p, o) => o.loaded || o.permaLoad;
+                (p: string, o: any) => includedPluginsList.includes(p) :
+                (p: string, o: any) => o.loaded || o.permaLoad;
 
             for (let pid of APPLICATION_CONTEXT.pluginIds()) {
                 const plugin = APPLICATION_CONTEXT._dangerouslyAccessPlugin(pid);
@@ -1736,38 +1707,518 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * Event to export your data within the viewer lifecycle
              * Event handler can by <i>asynchronous</i>, the event can wait.
              *
-             * @property {function} setSerializedData callback to call,
-             * accepts 'key' (unique) and 'data' (string) to call with your data when ready
              * @memberof VIEWER_MANAGER
              * @event export-data
              */
             await VIEWER_MANAGER.raiseEventAwaiting('export-data');
-            return {app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA};
+            return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
+        },
+
+        generateID: function(input: any, size= 12) {
+            if (!Number.isFinite(size) || size <= 0) return '';
+            input = String(input);
+            const alphLen = _alphabet.length;
+            const mask = (2 << (31 - Math.clz32((alphLen - 1) | 1))) - 1;
+            let h = 0x811c9dc5;
+            for (let i = 0; i < input.length; i++) {
+                h ^= input.charCodeAt(i);
+                h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+            }
+            function rand32() {
+                h ^= h << 13; h >>>= 0;
+                h ^= h >>> 17; h >>>= 0;
+                h ^= h << 5;  h >>>= 0;
+                return h >>> 0;
+            }
+            let id = '';
+            while (id.length < size) {
+                let r = rand32();
+                // consume 4 bytes per iteration
+                for (let k = 0; k < 4 && id.length < size; k++) {
+                    const b = r & 0xff; r >>>= 8;
+                    const idx = b & mask;
+                    if (idx < alphLen) id += _alphabet[idx];
+                }
+            }
+            if (id.startsWith("osd-")) {
+                while (id.length < size + 4) {
+                    let r = rand32();
+                    for (let k = 0; k < 4 && id.length < size; k++) {
+                        const b = r & 0xff; r >>>= 8;
+                        const idx = b & mask;
+                        if (idx < alphLen) id += _alphabet[idx];
+                    }
+                }
+                return id.slice(4, size + 4);
+            }
+            return id.slice(0, size);
+        },
+
+        sanitizeID: function (input: any) {
+            if (input == null) return '';
+            const s = String(input);
+            let out = [];
+            for (const ch of s) {
+                out.push(_alphaset.has(ch) ? ch : '-');
+            }
+            // ensure ID does not have reserved 'osd-' prefix
+            if (out.length > 3 && out[0] === 'o' && out[1] === 's' && out[2] === 'd' && out[3] === '-') {
+                out[3] = "_";
+            }
+            return out.join('');
+        },
+
+        /**
+         * Copy content to the user clipboard.
+         */
+        copyToClipboard: function(content: string, alert: boolean = true) {
+            // todo try         navigator.clipboard?.writeText(content).catch(() => {}); on catch go this old way
+            let $temp = $("<input>");
+            $("body").append($temp);
+            $temp.val(content).select();
+            document.execCommand("copy");
+            $temp.remove();
+            if (alert) Dialogs.show($.t('messages.valueCopied'), 3000, Dialogs.MSG_INFO);
+        },
+
+        /**
+         * Export only the viewer direct link (without data) to the clipboard.
+         */
+        copyUrlToClipboard: function() {
+            const data = UTILITIES.serializeAppConfig();
+            UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
+        },
+
+        /**
+         * Update the viewer URL with the current session data. Returns true if the URL was updated.
+         */
+        syncSessionToUrl: function syncSessionToUrl(withCookies: boolean = false) {
+            try {
+                const data = UTILITIES.serializeAppConfig();
+                history.replaceState(history.state, "", APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
+                return true;
+            } catch (e) {
+                console.warn("syncSessionToUrl failed:", e);
+                return false;
+            }
+        },
+
+        /**
+         * Create a screenshot of the current viewer viewport and open it in a new tab.
+         * @returns {void}
+         */
+        makeScreenshot: function() {
+            // todo OSD v5.0 ensure we can copy the canvas among drawers
+            const canvas = document.createElement("canvas"),
+                viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext("2d") as CanvasRenderingContext2D;
+            context.drawImage(viewportCanvas, 0, 0);
+            //todo make this awaiting in OSD v5.0
+            VIEWER.raiseEvent('screenshot', {
+                context2D: context,
+                width: width,
+                height: height
+            });
+            //show result in a new window
+            canvas.toBlob((blob: Blob | null) => {
+                const url = blob && URL.createObjectURL(blob);
+                if (url === null) return;
+                window.open(url, '_blank');
+                URL.revokeObjectURL(url);
+            });
+        },
+
+        /**
+         * UUID4 Generator, Copied from cornerstone.js
+         */
+        uuid4: function () {
+            if (typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
+            // Fallback for environments where crypto.randomUUID is not available
+            return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) =>
+                (
+                    c ^
+                    (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))
+                ).toString(16)
+            );
+        },
+
+        /**
+         * Export the current viewer session as a self-contained HTML file.
+         * When opened, it automatically loads the saved session.
+         */
+        export: async function() {
+
+            let doc = `<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head><meta charset="utf-8"><title>Visualization export</title></head>
+<body><!--Todo errors might fail to be stringified - cyclic structures!-->
+<div>Errors (if any): <pre>${(console as any).appTrace.join("")}</pre></div>
+${await UTILITIES.getForm()}
+</body></html>`;
+
+            UTILITIES.downloadAsFile("export.html", doc);
+            APPLICATION_CONTEXT.__cache.dirty = false;
+        },
+
+        /**
+         * Clone the viewer to a new window, only two windows can be shown at the time.
+         */
+        clone: async function() {
+            if (window.opener) {
+                return;
+            }
+
+            let ctx = Dialogs.getModalContext('synchronized-view');
+            if (ctx) {
+                ctx.window.focus();
+                return;
+            }
+            let x = window.innerWidth / 2, y = window.innerHeight;
+            window.resizeTo(x, y);
+            Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
+                await UTILITIES.getForm(), `width=${x},height=${y}`);
+        },
+
+        setDirty: () => APPLICATION_CONTEXT.__cache.dirty = true,
+
+        /**
+         * Refresh the page and reload the viewer, optionally limiting which plugins are included.
+         * @param {string[]|undefined} [includedPluginsList] - IDs of plugins to include; current active if omitted.
+         * @returns {Promise<void>}
+         */
+        refreshPage: async function(includedPluginsList: string[] | undefined = undefined) {
+            if (APPLICATION_CONTEXT.__cache.dirty) {
+                Dialogs.show($.t('messages.warnPageReload', {
+                    onExport: "UTILITIES.export();",
+                    onRefresh: "APPLICATION_CONTEXT.__cache.dirty = false; UTILITIES.refreshPage();"
+                }), 15000, Dialogs.MSG_WARN);
+                return;
+            }
+
+            if (!UTILITIES.storePageState(includedPluginsList)) {
+                Dialogs.show($.t('messages.warnPageReloadFailed'), 4000, Dialogs.MSG_WARN);
+                USER_INTERFACE.Loading.show(true);
+                await UTILITIES.sleep(3800);
+            }
+            window.location.replace(APPLICATION_CONTEXT.url);
+        },
+
+        /**
+         * Download a string as a file via a temporary link element.
+         */
+        downloadAsFile: function(filename: string, content: string) {
+            let data = new Blob([content], { type: 'text/plain' });
+            let downloadURL = window.URL.createObjectURL(data);
+            let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
+            elem.href = downloadURL;
+            elem.setAttribute('download', filename);
+            elem.click();
+            URL.revokeObjectURL(downloadURL);
+        },
+
+        /**
+         * Open a file picker and read the selected file, then call the provided callback with the result.
+         * @param onUploaded - Callback invoked with file contents.
+         * @param accept - Accept attribute (e.g., "image/png, image/jpeg").
+         *   See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
+         * @param mode - Read as text or as ArrayBuffer.
+         */
+        uploadFile: async function(onUploaded: (arg0: (string | ArrayBuffer)) => void, accept=".json", mode="text") {
+            const uploader = $("#file-upload-helper");
+            uploader.attr('accept', accept);
+            uploader.on('change', (e: JQuery.ChangeEvent) => {
+                UTILITIES.readFileUploadEvent(e, mode).then(onUploaded as any).catch(onUploaded);
+                uploader.val('');
+                uploader.off('change');
+            });
+            uploader.trigger("click");
+        },
+
+        /**
+         * Handle an input[type=file] change event and read the selected file.
+         * @param {Event} e - Change event from a file input.
+         * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
+         * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
+         */
+        readFileUploadEvent: function(e: Event, mode="text") {
+            return new Promise((resolve, reject) => {
+                let file = e.currentTarget.files?.[0];
+                if (!file) return reject("Invalid input file: no file.");
+                const fileReader = new FileReader();
+                fileReader.onload = ev => resolve(ev.target?.result as string | ArrayBuffer);
+
+                if (mode === "text") fileReader.readAsText(file);
+                else if (mode === "bytes") fileReader.readAsArrayBuffer(file);
+                else throw "Invalid read file mode " + mode;
+            });
+        },
+
+        //TODO: make this a normal standard UI api (open / focus / inline)
+        /**
+         * Open or focus a simple debugging window rendered via Dialogs.
+         * @param {string} [html=""] - Optional HTML content to insert.
+         * @returns {Window|null} Window object of the debugging modal, or null if failed.
+         */
+        openDebuggingWindow: function (html: string = '') {
+            let ctx = Dialogs.getModalContext('__xopat__debug__window__');
+            if (ctx) {
+                ctx.window.focus();
+                return ctx.window;
+            }
+
+            Dialogs.showCustomModal('__xopat__debug__window__', 'Debugging Window', 'Debugging Window', html);
+            const window = Dialogs.getModalContext('__xopat__debug__window__')?.window;
+            if (!window) {
+                return null;
+            }
+
+            return window;
+        },
+
+        /**
+         * Convert image-like object to an HTMLImageElement or HTMLCanvasElement for DOM rendering.
+         */
+        imageLikeToImage: async function(imageLike: ImageLike) {
+            if (imageLike instanceof HTMLImageElement) return Promise.resolve(imageLike);
+            if (imageLike instanceof HTMLCanvasElement) return Promise.resolve(imageLike);
+            if (imageLike instanceof CanvasRenderingContext2D) return Promise.resolve(imageLike.canvas);
+            let type;
+            if (imageLike instanceof Blob) {
+                type = "rasterBlob";
+            } else if (typeof imageLike === 'string') {
+                //todo
+                throw "TODO: neds to implement image src loading";
+            } else {
+                throw "Invalid imageLike type";
+            }
+            return OpenSeadragon.converter.convert({}, imageLike, type, "image");
+        },
+
+        /**
+         * Get the date as ISO string (DD/MM/YYYY by default).
+         */
+        todayISO: function(separator: string = "/") {
+            return new Date().toJSON().slice(0,10).split('-').reverse().join(separator);
+        },
+
+        /**
+         * Get the current date in ISO order (YYYY/MM/DD by default).
+         */
+        todayISOReversed: function(separator: string = "/") {
+            return new Date().toJSON().slice(0,10).split('-').join(separator);
+        },
+
+        /**
+         * Safely coerce various JSON-like values into a boolean.
+         * Treats strings as true unless they equal "false" (case-insensitive) or are empty.
+         * Numbers are coerced by JavaScript truthiness, undefined falls back to defaultValue.
+         */
+        isJSONBoolean: function(value: any, defaultValue: boolean) {
+            return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
+        },
+
+        /**
+         * Convert a function into a throttled version that executes at most once per delay ms.
+         * Usage:
+         *   const throttled = UTILITIES.makeThrottled(fn, 60);
+         *   throttled.finish(); // flush pending call immediately
+         * @returns Throttled function with an extra method finish():void to flush the last pending call.
+         */
+        makeThrottled: function (callback: Function, delay: number) {
+            let lastCallTime = 0;
+            let timeoutId: null | number = null;
+            let pendingArgs: null | any[] = null;
+
+            const invoke = () => {
+                timeoutId = null;
+                lastCallTime = Date.now();
+                if (pendingArgs) {
+                    callback(...pendingArgs);
+                    pendingArgs = null;
+                }
+            };
+
+            const wrapper = (...args: any[]) => {
+                const now = Date.now();
+
+                if (!lastCallTime || now - lastCallTime >= delay) {
+                    // Execute immediately if outside the throttling window
+                    lastCallTime = now;
+                    callback(...args);
+                } else {
+                    // Skip this call but store arguments for the next possible execution
+                    pendingArgs = args;
+
+                    if (!timeoutId) {
+                        timeoutId = setTimeout(invoke, delay - (now - lastCallTime));
+                    }
+                }
+            };
+
+            wrapper.finish = () => {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    invoke();
+                }
+            };
+
+            return wrapper;
+        },
+
+        /**
+         * Sleep for a given number of milliseconds.
+         */
+        sleep: async function(ms: number | undefined = undefined) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        },
+
+        /**
+         * Set the App theme
+         * @param {?string} theme primer_css theme
+         */
+        updateTheme: USER_INTERFACE.Tools.changeTheme,
+
+        /**
+         * Create a serialized viewer configuration JSON string for export or sharing.
+         * @param {boolean} [withCookies=false] - Include cookies in the params.
+         * @param {boolean} [staticPreview=false] - Produce a static preview configuration.
+         * @returns {string} JSON string representing the current application configuration.
+         */
+        serializeAppConfig: function(withCookies=false, staticPreview = false) {
+            //TODO consider bypassCache etc...
+
+            //delete unnecessary data, copy params so that overrides do not affect current session
+            const data = {...APPLICATION_CONTEXT.config} as any;
+            data.params = {...APPLICATION_CONTEXT.config.params};
+            delete data.defaultParams;
+
+            if (staticPreview) data.params.isStaticPreview = true;
+            if (!withCookies) data.params.bypassCookies = true;
+            data.params.bypassCacheLoadTime = true;
+
+            const snapshotViewport = (viewer: OpenSeadragon.Viewer) => ({
+                zoomLevel: viewer.viewport.getZoom(),
+                point: viewer.viewport.getCenter(),
+                rotation: viewer.viewport.getRotation(),
+            });
+            const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
+            if (viewers.length <= 1) {
+                const v = viewers[0] || VIEWER;
+                data.params.viewport = snapshotViewport(v);
+            } else {
+                data.params.viewport = viewers.map(snapshotViewport);
+            }
+
+            for (const [k, v] of Object.entries(data.params)) {
+                if (typeof v === "string") {
+                    const s = v.trim();
+                    // cheap + safe: only try objects/arrays
+                    if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
+                        try { data.params[k] = JSON.parse(s); } catch (_) {}
+                    }
+                }
+            }
+
+            //by default omit underscore or any rendering entities using the replacer below
+            return JSON.stringify(data, OpenSeadragon.FlexRenderer.jsonReplacer);
+        },
+
+        /**
+         * Get an auto-submitting HTML form+script that redirects to the viewer with current session data.
+         * @param customAttributes - Extra raw HTML attributes or inputs to include in the form.
+         * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
+         * @param withCookies - Include cookies in export payload.
+         */
+        getForm: async function(customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false) {
+            const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
+
+            if (! APPLICATION_CONTEXT.env.server.supportsPost) {
+                return `
+    <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies, true))}">
+        <input type="hidden" id="visualization" name="visualization">
+        ${customAttributes}
+        <input type="submit" value="">
+        </form>
+    <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
+            }
+
+            const {app, data} = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            data.visualization = app;
+
+            let form = `
+    <form method="POST" id="redirect" action="${url}">
+        ${customAttributes}
+        <input type="submit" value="">
+    </form>
+    <script type="text/javascript">
+        const form = document.getElementById("redirect");
+        let node;`;
+
+            function addExport(key: string, data: any) {
+                form += `node = document.createElement("input");
+node.setAttribute("type", "hidden");
+node.setAttribute("name", "${key}");
+node.setAttribute("value", JSON.stringify(${JSON.stringify(data)}));
+form.appendChild(node);`;
+            }
+
+            for (let id in data) {
+                // dots seem to be reserved names therefore use IDs differently
+                const sets = id.split('.'), dataItem = data[id];
+                // namespaced export within "modules" and "plugins"
+                if (sets.length === 1) {
+                    //handpicked allowed namespaces
+                    if (id === "visualization") {
+                        addExport(id, dataItem);
+                    } else if (id === "module" || id === "plugin") {
+                        if (typeof dataItem === "object") {  //nested object
+                            for (let nId in dataItem) addExport(`${id}[${nId}]`, dataItem[nId]);
+                        } else {  //plain
+                            addExport(id, dataItem);
+                        }
+                    } else {
+                        console.error("Only 'visualization', 'module' and 'plugin' is allowed top-level object. Not included in export. Used:", id);
+                    }
+                } else if (sets.length > 1) {
+                    //namespaced in id, backward compatibility
+                    addExport(`${sets.shift()}[${sets.join('.')}]`, dataItem);
+                }
+            }
+
+            return `${form}
+form.submit();
+<\/script>`;
+        },
+
+        /**
+         * Allows changing focus state artificially
+         */
+        setIsCanvasFocused: function (focused: boolean) {
+            focusOnViewer = focused;
         }
     };
 
     /**
-     * Focusing all key press events and forwarding to OSD
+     * Focuses all key press events and forwarding to OSD,
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
      */
-    let focusOnViewer = true;
+    let focusOnViewer: boolean | OpenSeadragon.Viewer | null = true;
     function getIsViewerFocused() {
         // TODO TEST!!!
-        const focusedElement = document.activeElement;
+        const focusedElement = document.activeElement as HTMLElement | null;
+        if (!focusedElement) return focusOnViewer;
         const focusTyping = focusedElement.tagName === 'INPUT' ||
             focusedElement.tagName === 'TEXTAREA' ||
-            focusedElement.isContentEditable;
+            (focusedElement as HTMLElement).isContentEditable;
         return focusTyping ? null : focusOnViewer;
     }
-    /**
-     * Allows changing focus state artificially
-     * @param {boolean} focused
-     */
-    UTILITIES.setIsCanvasFocused = function(focused) {
-        focusOnViewer = focused;
-    };
-    document.addEventListener('keydown', function(e) {
-        e.focusCanvas = getIsViewerFocused();
+
+    document.addEventListener('keydown', function (e) {
+        (e as any).focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {Viewer} e.focusCanvas the viewer this event belongs to
@@ -1776,8 +2227,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          */
         VIEWER_MANAGER.raiseEvent('key-down', e);
     });
-    document.addEventListener('keyup', function(e) {
-        e.focusCanvas = getIsViewerFocused();
+    document.addEventListener('keyup', function (e) {
+        (e as any).focusCanvas = getIsViewerFocused();
         /**
          * @property {KeyboardEvent} e
          * @property {Viewer} e.focusCanvas the viewer this event belongs to
@@ -1793,16 +2244,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
 
-    /**
-     * @param {OpenSeadragon.Viewer} viewer
-     * @return {UniqueViewerId}
-     */
-    function findViewerUniqueId(viewer) {
+    function findViewerUniqueId(viewer: OpenSeadragon.Viewer): UniqueViewerId | undefined {
         let result = viewer.__cachedUUID;
         if (result) return result;
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
-            const item = viewer.world.getItemAt(itemIndex);
+            const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
             const config = item?.getConfig("background");
             if (config) {
                 viewer.__cachedUUID = config.id;
@@ -1814,7 +2261,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         }
 
         // Valid state - nothing opened
-        if (viewer.world.getItemCount() === 1 && firstItem.source instanceof OpenSeadragon.EmptyTileSource) {
+        if (viewer.world.getItemCount() === 1 && firstItem && firstItem.source instanceof OpenSeadragon.EmptyTileSource) {
             return '__empty__';
         }
 
@@ -1830,7 +2277,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @memberof OpenSeadragon.Viewer
      */
     Object.defineProperty(OpenSeadragon.Viewer.prototype, "uniqueId", {
-        get: function() {
+        get: function () {
             return findViewerUniqueId(this);
         }
     });
@@ -1841,7 +2288,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      * @memberof OpenSeadragon.Viewer
      * @return {RightSideViewerMenu|undefined}
      */
-    OpenSeadragon.Viewer.prototype.getMenu = function() {
+    OpenSeadragon.Viewer.prototype.getMenu = function () {
         return VIEWER_MANAGER.getMenu(this);
     };
 
@@ -1859,18 +2306,27 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
      *
      * @class ViewerManager
      * @extends OpenSeadragon.EventSource
-     * @property {object} CONFIG - Application configuration.
-     * @property {OpenSeadragon.Viewer[]} viewers - Ordered list of instantiated viewer instances.
-     * @property {Record<string, Record<Function, any[]>>} broadcastEvents - Map of eventName to handlers+args registered for broadcasting.
-     * @property {OpenSeadragon.Viewer|null} active - Currently active viewer or null if none.
-     * @property {UI.StretchGrid} layout - Grid layout where viewers are mounted.
+     * @property CONFIG - Application configuration - the input config from the viewer session initialization.
+     * @property viewers - Ordered list of instantiated viewer instances.
+     * @property broadcastEvents - Map of eventName to handlers+args registered for broadcasting.
+     * @property active - Currently active viewer or null if none.
+     * @property layout - Grid layout where viewers are mounted.
      */
-    window.ViewerManager = class extends OpenSeadragon.EventSource {
+    const ViewerManager = (window as any).ViewerManager = class extends OpenSeadragon.EventSource {
+        CONFIG: APPLICATION_CONTEXT.config;
+        menu: any;
+        viewers: OpenSeadragon.Viewer[];
+        viewerMenus: Record<string, any>;
+        broadcastEvents: Record<string, Map<Function, any>>;
+        active: OpenSeadragon.Viewer | null;
+        layout: any;
+        _singletonsKey: symbol;
+
         /**
          * Create a ViewerManager.
          * @param {object} CONFIG - Configuration bag; must contain params.headers etc. used to configure viewers.
          */
-        constructor(CONFIG) {
+        constructor(CONFIG: OpenSeadragon.Options) {
             super();
             this.CONFIG = CONFIG;
             this.menu = null;
@@ -1889,8 +2345,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.setActive(0);
         }
 
-        /** @private */
-        _wire(v) {
+        _wire(v: OpenSeadragon.Viewer) {
             const el = v.container;
             el.tabIndex = 0;
 
@@ -1913,23 +2368,22 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Set the active viewer.
-         * @param {number|string|OpenSeadragon.Viewer} v - Index into the viewers array, unique ID, or a viewer instance.
+         * @param v - Index into the viewers array, unique ID, or a viewer instance.
          * @returns {void}
          */
-        setActive(v) {
+        setActive(v: number | string | OpenSeadragon.Viewer | undefined) {
             if (typeof v === "number") v = this.viewers[v];
             if (typeof v === "string") v = this.getViewer(v);
-            if (this.active === v) return;
-            this.active = v;
+            if (!v || this.active === v) return;
+            this.active = v as OpenSeadragon.Viewer;
             // optional: add a CSS class to highlight active container
-            this.viewers.forEach((vw) =>
+            this.viewers.forEach((vw: OpenSeadragon.Viewer) =>
                 vw.container.classList.toggle("active", vw === this.active)
             );
         }
 
         /**
          * Get the currently active viewer instance.
-         * @returns {OpenSeadragon.Viewer|null} Active viewer or null if none.
          */
         get() {
             return this.active;
@@ -1937,16 +2391,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
-         * @param {UniqueViewerId} uniqueId
-         * @param _warn private arg
-         * @return OpenSeadragon.Viewer
          */
-        getViewer(uniqueId, _warn=true) {
-            let viewer;
+        getViewer(uniqueId: string, _warn = true): OpenSeadragon.Viewer | undefined {
+            let viewer: OpenSeadragon.Viewer | undefined;
             if (uniqueId.startsWith("osd-")) {
                 viewer = this.viewers.find(v => v.id === uniqueId);
                 if (_warn && !viewer) {
-                    console.warn(`Viewer with id ${uniqueId} not found, provided id is not UniqueViewerId: using ${viewer.id} for ${viewer.uniqueId} viewer detection. This might result in unexpected behavior.`);
+                    console.warn(`Viewer with id ${uniqueId} not found, provided id is not UniqueViewerId. This might result in unexpected behavior.`);
                 }
             } else {
                 viewer = this.viewers.find(v => v.uniqueId === uniqueId);
@@ -1956,7 +2407,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Get viewer reference for the configuration object
-         * @param {BackgroundItem|StandaloneBackgroundItem|VisualizationItem} config
          */
         getViewerForConfig(config) {
             if (!config) return undefined;
@@ -1973,7 +2423,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             if (!receivedData) return undefined;
 
             // Robust comparator for objects (UIDs) vs strings (Paths)
-            let comparator = (a, b) => {
+            let comparator = (a: any, b: any) => {
                 if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
                     // Check if all keys in A match B (e.g. studyUID and seriesUID)
                     const keysA = Object.keys(a);
@@ -2004,18 +2454,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             return undefined;
         }
 
-        /**
-         *
-         * @param {UniqueViewerId} uniqueId
-         * @param _warn private arg
-         * @return number
-         */
-        getViewerIndex(uniqueId, _warn=true) {
+        getViewerIndex(uniqueId: string, _warn = true): number {
             let index = this.viewers.findIndex(v => v.uniqueId === uniqueId);
             if (index < 0) {
                 index = this.viewers.findIndex(v => v.id === uniqueId);
-                if (index && _warn) {
-                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${index.id} for ${index.uniqueId}`);
+                const fallback = this.viewers[index];
+                if (fallback && _warn) {
+                    console.warn(`Viewer with id ${uniqueId} not found, using fallback ${fallback.id} for ${fallback.uniqueId}`);
                 }
             }
             return index;
@@ -2023,13 +2468,11 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
         /**
          * Helper method to get viewer instance from viewer-like argument.
-         * @param {OpenSeadragon.Viewer|UniqueViewerId} viewerOrUniqueId
-         * @return {*|OpenSeadragon.Viewer}
          */
-        ensureViewer(viewerOrUniqueId) {
+        ensureViewer(viewerOrUniqueId: ViewerLikeItem): OpenSeadragon.Viewer {
             if (!viewerOrUniqueId) throw new Error("No viewer or viewer id provided!");
             if (typeof viewerOrUniqueId === "string") {
-                return this.getViewer(viewerOrUniqueId);
+                return this.getViewer(viewerOrUniqueId)!;
             }
             return viewerOrUniqueId;
         }
@@ -2037,10 +2480,8 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
-         * @param {number} index - Zero-based viewer slot index.
-         * @returns {void}
          */
-        add(index) {
+        add(index: number) {
             if (this.viewers[index]) this.delete(index);
 
             // make a unique cell inside the grid
@@ -2050,10 +2491,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             this.menu = new UI.RightSideViewerMenu(cellId, navigatorId);
             // todo think of a better way of hosting menu within the viewer
             cell.append(this.menu.create());
-            this.menu.onLayoutChange({width: window.innerWidth});
+            this.menu.onLayoutChange({ width: window.innerWidth });
             this.viewerMenus[cellId] = this.menu;
 
-            const viewer = OpenSeadragon($.extend(
+            const viewer = window.OpenSeadragon($.extend(
                 true,
                 ENV.openSeadragonConfiguration,
                 ENV.client.osdOptions,
@@ -2067,7 +2508,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         'flex-renderer': {
                             webGlPreferredVersion: APPLICATION_CONTEXT.getOption("webGlPreferredVersion"),
                             backgroundColor: APPLICATION_CONTEXT.getOption("background"),
-                            debug: !!window.APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                            debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                             interactive: true,
                             htmlHandler: (shaderLayer, shaderConfig) => {
                                 viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
@@ -2078,22 +2519,22 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     splitHashDataForPost: true,
                     subPixelRoundingForTransparency:
                         navigator.userAgent.includes("Chrome") && navigator.vendor.includes("Google Inc") ?
-                            OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
-                            OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
+                            window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER :
+                            window.OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.ONLY_AT_REST,
                     debugMode: APPLICATION_CONTEXT.getOption("debugMode", false, false),
                     maxImageCacheCount: APPLICATION_CONTEXT.getOption("maxImageCacheCount", undefined, false)
                 }
             ));
 
-            $(viewer.element).on('contextmenu', function(event) {
+            $(viewer.element).on('contextmenu', function (event: Event) {
                 event.preventDefault();
             });
 
             for (let event in this.broadcastEvents) {
                 const eventList = this.broadcastEvents[event];
-                for (let handler in eventList) {
-                    const hData = eventList[handler];
-                    viewer.addHandler(event, hData[0], ...hData[1]);
+                for (let handler of eventList!.keys()) {
+                    const hData = eventList!.get(handler);
+                    viewer.addHandler(event as any, (e: any) => (hData as any)[0](e), ...(hData as any)[1]);
                 }
             }
 
@@ -2125,16 +2566,16 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             //     _lastScroll = _currentScroll;
             // });
 
-            viewer.addHandler('navigator-scroll', function(e) {
+            viewer.addHandler('navigator-scroll', function (e) {
                 viewer.viewport.zoomBy(e.scroll / 2 + 1); //accelerated zoom
                 viewer.viewport.applyConstraints();
             });
 
             // todo move the initialization elsewhere... or restructure code a bit.... make this research config
-            viewer.addHandler('open', e => {
+            viewer.addHandler('open', (e: any) => {
                 for (let SingletonClass of REQUIRED_SINGLETONS) {
                     try {
-                        if (!this._getSingleton(SingletonClass.IDD, viewer)) {
+                        if (!this._getSingleton(SingletonClass.IID, viewer)) {
                             SingletonClass.instance(viewer);
                         }
                     } catch (e) {
@@ -2146,7 +2587,6 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     const DELAY = 90;
                     let last = 0;
                     new OpenSeadragon.MouseTracker({
-                        userData: 'pixelTracker',
                         element: "viewer-container",
                         moveHandler: function (e) {
                             // if we are the main active viewer
@@ -2156,7 +2596,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                                 last = now;
                                 const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
                                 if (!image) return;
-                                const screen = new OpenSeadragon.Point(e.originalEvent.x, e.originalEvent.y);
+                                const screen = new OpenSeadragon.Point((e.originalEvent as MouseEvent).x, (e.originalEvent as MouseEvent).y);
                                 const position = image.windowToImageCoordinates(screen);
 
                                 let result = [`${Math.round(position.x)}, ${Math.round(position.y)} px`];
@@ -2193,7 +2633,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                      * @param viewportPosition
                      * @param {number|OpenSeadragon.TiledImage} tiledImage
                      */
-                    function getPixelData(screen, viewportPosition, tiledImage) {
+                    function getPixelData(screen: any, viewportPosition: any, tiledImage: any) {
                         // todo fix this
                         return;
                         function changeTile() {
@@ -2239,12 +2679,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                          * @event viewer-create
                          * @memberof VIEWER_MANAGER
                          */
-                        this.raiseEvent('viewer-create', {viewer, uniqueId: viewer.uniqueId, index });
+                        this.raiseEvent('viewer-create', { viewer, uniqueId: viewer.uniqueId, index });
                     }
                 }
 
                 // Every load event, update data
-                (async function() {
+                (async function () {
                     // Find all imports that fit to the target viewer and import to the plugin
                     const contextID = findViewerUniqueId(viewer);
 
@@ -2253,7 +2693,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                             return;
                         }
 
-                        const store = element[STORE_TOKEN];
+                        const store = (element as any)[STORE_TOKEN];
                         if (!store) continue;
 
                         for (let key of await store.keys()) {
@@ -2261,13 +2701,13 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                             if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
                             const data = await store?.get(key);
                             try {
-                                if (data !== undefined) await element.importViewerData(viewer, key, contextID, data);
+                                if (data !== undefined) await element.importViewerData(viewer, key, contextID!, data);
                             } catch (e) {
                                 console.error('IO Failure:', element.constructor.name, e);
                                 element.error({
                                     error: e, code: "W_IO_INIT_ERROR",
                                     message: $.t('error.pluginImportFail',
-                                        {plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');"})
+                                        { plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
                                 });
                             }
                         }
@@ -2291,7 +2731,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             viewer.addHandler('canvas-exit', function (e) {
                 focusOnViewer = null;
             });
-            viewer.addHandler('canvas-key', function(e) {
+            viewer.addHandler('canvas-key', function (e) {
                 focusOnViewer = e.eventSource;
                 e.preventDefaultAction = true;
             });
@@ -2306,22 +2746,22 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * @param enable
              * @param [explainErrorHtml=undefined]
              */
-            viewer.toggleDemoPage = (enable, explainErrorHtml = undefined) => {
+            viewer.toggleDemoPage = (enable: boolean, explainErrorHtml: string | undefined = undefined) => {
                 const id = "demo-ad-" + viewer.id;
 
                 if (enable) {
-                    const {h1, br, img, p, div} = van.tags;
+                    const { h1, br, img, p, div } = van.tags;
                     // todo ensure the outer div always has ID, even when someone added ID from outside
                     let toSet = div({ id: id },
                         h1("xOpat - The WSI Viewer"),
                         p("The viewer is missing the target data to view; this might happen, if"),
-                        div({innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml')}),
+                        div({ innerHTML: explainErrorHtml || $.t('error.defaultDemoHtml') }),
                         br(), br(),
-                        p({ class:"text-small mx-6 text-center" },
+                        p({ class: "text-small mx-6 text-center" },
                             "xOpat: a web based, NO-API oriented WSI Viewer with enhanced rendering of high resolution images overlaid, fully modular and customizable."),
-                        img({ src:"docs/assets/xopat-banner.png", style:"width:80%;display:block;margin:0 auto;" })
+                        img({ src: "docs/assets/xopat-banner.png", style: "width:80%;display:block;margin:0 auto;" })
                     );
-                    const doOverlay = (overlay) => {
+                    const doOverlay = (overlay?: Element | null) => {
                         if (!toSet) return;
                         viewer.addOverlay(overlay || toSet, new OpenSeadragon.Rect(0, 0, 1, 1));
                         toSet = null;
@@ -2336,7 +2776,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                         show: doOverlay,
                     });
 
-                    doOverlay();
+                    doOverlay(undefined);
                 } else {
                     const overlay = document.getElementById(id);
                     if (overlay) viewer.removeOverlay(overlay);
@@ -2357,12 +2797,12 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {...any} args - Optional extra arguments passed to OpenSeadragon.addHandler.
          * @returns {void}
          */
-        broadcastHandler(eventName, handler, ...args) {
+        broadcastHandler(eventName: string, handler: Function, ...args: any[]) {
             let eventList = this.broadcastEvents[eventName];
             if (!eventList) {
-                eventList = this.broadcastEvents[eventName] = {};
+                eventList = this.broadcastEvents[eventName] = new Map();
             }
-            eventList[handler] = [handler, args];
+            eventList.set(handler, args);
             for (let v of this.viewers) {
                 v.addHandler(eventName, handler, ...args);
             }
@@ -2375,10 +2815,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {Function} handler - The same handler function reference used in broadcastHandler.
          * @returns {void}
          */
-        cancelBroadcast(eventName, handler) {
+        cancelBroadcast(eventName: string, handler: Function) {
             let eventList = this.broadcastEvents[eventName];
             if (eventList) {
-                delete eventList[handler];
+                eventList.delete(handler);
             }
             for (let v of this.viewers) {
                 v.removeHandler(eventName, handler);
@@ -2390,14 +2830,14 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {string|OpenSeadragon.Viewer} viewerOrId any viewer ID or viewer instance itself
          * @return {RightSideViewerMenu|undefined} menu instance or undefined if not found
          */
-        getMenu(viewerOrId) {
+        getMenu(viewerOrId: ViewerLikeItem) {
             let viewer = null;
             if (typeof viewerOrId === "string") {
                 viewer = this.getViewer(viewerOrId, false);
             } else {
                 viewer = viewerOrId;
             }
-            return this.viewerMenus[viewer?.id];
+            return viewer?.id ? this.viewerMenus[viewer.id] : undefined;
         }
 
         /**
@@ -2407,7 +2847,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @return {XOpatViewerSingleton|undefined} menu instance or undefined if not found and SingletonClass not specified
          * @private
          */
-        _getSingleton(singletonId, viewerOrUniqueId) {
+        _getSingleton(singletonId: string, viewerOrUniqueId: ViewerLikeItem) {
             let viewer = this.ensureViewer(viewerOrUniqueId);
             return singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
         }
@@ -2415,7 +2855,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * @private
          */
-        _attachSingleton(singletonId, singletonModule, viewerOrUniqueId) {
+        _attachSingleton(singletonId: string, singletonModule: InstanceType<typeof XOpatViewerSingleton>, viewerOrUniqueId: ViewerLikeItem) {
             let viewer = this.ensureViewer(viewerOrUniqueId);
             let singletons = viewer[this._singletonsKey];
             if (!singletons) {
@@ -2434,7 +2874,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
         /**
          * @private
          */
-        _getSingletons(singletonId) {
+        _getSingletons(singletonId: string) {
             return this.viewers.map(v => v[this._singletonsKey]?.[singletonId]).filter(Boolean);
         }
 
@@ -2444,7 +2884,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
          * @param {number} index - Zero-based viewer slot index.
          * @returns {void}
          */
-        delete(index) {
+        delete(index: number) {
             const viewer = this.viewers[index];
             if (!viewer) return;
 
@@ -2457,7 +2897,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
              * @event viewer-destroy
              * @memberof VIEWER_MANAGER
              */
-            this.raiseEvent('viewer-destroy', {viewer, uniqueId: viewer.uniqueId, index });
+            this.raiseEvent('viewer-destroy', { viewer, uniqueId: viewer.uniqueId, index });
 
             try {
                 const menu = this.viewerMenus[viewer.id];
@@ -2473,21 +2913,21 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
 
                 //todo check if viewer has data and if yes prompt user and export if possible
                 // explicitly clean store
-                for (let key in viewer[STORE_TOKEN]) {
-                    const store = viewer[STORE_TOKEN][key];
+                for (let key in (viewer as any)[STORE_TOKEN]) {
+                    const store = (viewer as any)[STORE_TOKEN][key];
                     for (let pKey in store) {
                         delete store[pKey];
                     }
                     delete viewer[STORE_TOKEN][key];
                 }
-            } catch (_) {}
+            } catch (_) { }
         }
 
         /**
          * Reset viewer at index to be able to accept new data.
          * @param index
          */
-        resetViewer(index) {
+        resetViewer(index: number) {
             const viewer = this.viewers[index];
             if (!viewer) return;
 
@@ -2506,13 +2946,10 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                     /**
                      * Raised when an existing viewer is removed from the grid layout. Called before the viewer
                      * is actually removed along with all its data.
-                     * @param {OpenSeadragon.Viewer} viewer
-                     * @param {string} uniqueId
-                     * @param {Number} index
                      * @event viewer-reset
                      * @memberof VIEWER_MANAGER
                      */
-                    this.raiseEvent('viewer-reset', {viewer: v, uniqueId: v.uniqueId, index });
+                    this.raiseEvent('viewer-reset', { viewer: viewer, uniqueId: viewer.uniqueId, index });
                 } // else no need to call reset, not opened
             } catch (e) {
                 console.warn("Viewer reset failed - will recreate. Cause:", e);
@@ -2533,12 +2970,16 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
                  * @event viewer-create
                  * @memberof VIEWER_MANAGER
                  */
-                VIEWER_MANAGER.raiseEvent('viewer-create', {viewer: v, uniqueId: v.uniqueId, index: i });
+                VIEWER_MANAGER.raiseEvent('viewer-create', { viewer: v, uniqueId: v.uniqueId, index: i });
             }
         }
     }
 
-    return function() {
+    return function () {
+        $("body")
+            .append("<a id='link-download-helper' class='hidden'></a>")
+            .parent().append("<input id='file-upload-helper' type='file' style='visibility: hidden !important; width: 1px; height: 1px'/>");
+
         for (let pid of APPLICATION_CONTEXT.pluginIds()) {
             let plugin = PLUGINS[pid];
             if (plugin) {
@@ -2546,7 +2987,7 @@ function initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, 
             }
         }
 
-        return Promise.all(REGISTERED_PLUGINS.map(plugin => initializePlugin(plugin))).then(() => {
+        return Promise.all(REGISTERED_PLUGINS!.map(plugin => initializePlugin(plugin))).then(() => {
             REGISTERED_PLUGINS = undefined;
         }).then(callDeployedViewerInitialized);
     };

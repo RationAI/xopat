@@ -256,7 +256,7 @@
         },
         /**
          * Unlike other keys, keys inside 'src' are pre-determined and must be kept:
-         * "env" sets up the browser environment - styles, todo: icons, coding libraries (jQuery)
+         * "env" sets up the browser environment - styles
          * "loader" is the core component module functionality, loaded as soon as possible.
          * "deps" are UI dependencies, loaded before JS index code.
          * "app" contains the core files, loaded after JS index code.
@@ -265,9 +265,16 @@
          */
         "src": {
             //"env": "",
-            "loader": ["store.js", "loader.js"],
+            "loader": ["dist/store.js", "dist/loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
-            "app": ["http-client.js" ,"parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js", "tile-source.js"]
+            "app": [
+              "dist/classes/user.js",
+              "parse-input.js",
+              "dist/app.js",
+              "user-interface.js",
+              "layers.js",
+              "dist/tile-source.js"
+            ]
         },
         "ui": {
             "van": ["index.js"]

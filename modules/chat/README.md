@@ -17,9 +17,9 @@ Look at existing chat providers in plugins for inspiration.
 
 ```text
 chat/
-  chat.mjs          # ChatModule singleton – entry point
-  chatPanel.mjs     # UI component (chat panel)
-  chatService.mjs   # Provider registry + routing
+  chat.ts          # ChatModule singleton – entry point
+  chatPanel.ts     # UI component (chat panel)
+  chatService.ts   # Provider registry + routing
   providers/
     openai.mjs      # (optional) shared OpenAI-style provider helper
   include.json      # Module manifest for the chat module

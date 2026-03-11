@@ -223,8 +223,7 @@ Some OpenSeadragon extensions and custom TileSources are placed within ``externa
 Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their (**You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
 **)
 enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
-the engine setup. ``scripts.js`` contain various utility functions - we encourange browsing
-the documentation API page.
+the engine setup. We encourange browsing the documentation API page.
 
 Outside, ``../index.php`` file takes care of the main UI layout and basic functionality around parameter and metadata
 handling, plugin and module loading and the viewport and events management.

@@ -30,7 +30,7 @@ The index page layout is common to all servers, and defines four different templ
 you can init dynamically using javascript (except template `head`) or replace with initialization (e.g., compile):
  - `head`: where header scripts and other tags are rendered, here we should add the core
 source files, this is also the only template that do not work if added at runtime
- - `app`: where application initialization happens, this should initialize using `initXopat(...)`.
+ - `app`: where application initialization happens, this should initialize using `initXOpat(...)`.
  - `modules`: where module sources should go
  - `plugins`: where plugin sources should go
 
@@ -42,7 +42,7 @@ core implementation. The only thing that needs initialization is the xOpat app. 
 all the details it needs for running:
 
 ````js
-initXopat(
+initXOpat(
     <PLUGINS: json object describing available plugins and their meta>,
     <MODULES: json object describing available modules and their meta>,
     <CORE: json object describing static xOpat configuration, see the existing core config parsing implementations>,

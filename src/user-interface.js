@@ -1,4 +1,4 @@
-function initXopatUI() {
+function initXOpatUI() {
 
     /**
      * Window Dialogs: System Dialogs and Window Manager

@@ -1,5 +1,5 @@
-const {execSync: exec} = require("child_process");
-const esbuildArgs = require("./server/utils/esbuild-args");
+const BuildLogic = require("./server/utils/mixins/build-logic");
+
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
@@ -47,19 +47,6 @@ module.exports = function(grunt) {
                 }
             }
         },
-        watch: {
-            options: {
-                livereload: true
-            },
-            CSS: {
-                files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js", "src/assets/custom.css"],
-                tasks: "css"
-            },
-            buildUI: {
-                files: ["ui/*.mjs", "ui/components/*.mjs"],
-                task: "buildUI"
-            }
-        },
         uglify: {
             options: {
                 sourceMap: true,
@@ -76,10 +63,10 @@ module.exports = function(grunt) {
             outFile:    './src/libs/tailwind.min.css',   // single output
             cacheDir:   './.dev-cache',
             watch: [
-                'ui/**/*.{html,js,mjs}',
-                'modules/**/*.{html,js,mjs}',
-                'plugins/**/*.{html,js,mjs}',
-                'src/**/*.{html,js}'
+                'ui/**/*.{html,js,mjs,ts}',
+                'modules/**/*.{html,js,mjs,ts}',
+                'plugins/**/*.{html,js,mjs,ts}',
+                'src/**/*.{html,js,mjs,ts}'
             ],
             ignore: [
                 'ui/index.js',
@@ -87,7 +74,10 @@ module.exports = function(grunt) {
                 '.dev-cache/**',
                 '**/*.min.js',
                 '**/*.workspace.js',
-                '**/*.workspace.js.map'
+                '**/*.workspace.js.map',
+                '**/*.workspace.mjs',
+                '**/*.workspace.mjs.map',
+                "src/dist/**",
             ],
             minify: true,
             debounceMs: 150,
@@ -139,17 +129,28 @@ module.exports = function(grunt) {
     grunt.registerTask('default', ['minify']);
     grunt.registerTask('all', ['minify']);
 
-    grunt.registerTask('build', ['workspaceBuild', 'buildUI']);
+    grunt.registerTask('build', ['workspaceBuild', 'buildUI', 'buildCore']);
     grunt.registerTask('buildUI', async function() {
         const done = this.async();
-        const { spawnAsync } = require("./server/utils/mixins/build-logic");
-        await spawnAsync("npx", ["esbuild", "--bundle", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"]);
-        done();
+        try {await BuildLogic.buildUI({
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg),
+        });done();
+        } catch (e) {grunt.fail.warn(e.message);}
+    });
+    grunt.registerTask('buildCore', async function() {
+        const done = this.async();
+        try {await BuildLogic.buildCore({
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg),
+        });done();
+        } catch (e) {grunt.fail.warn(e.message);}
     });
     grunt.registerTask('css', async function() {
         const done = this.async();
-        const { spawnAsync } = require("./server/utils/mixins/build-logic");
-        await spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
+        await BuildLogic.spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
         done();
     });
     grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {

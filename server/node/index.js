@@ -296,7 +296,7 @@ window.XOPAT_CSRF_TOKEN = '${session ? session.csrfToken : ''}';
             case "app":
                 return `
     <script type="text/javascript">
-    initXopat(
+    initXOpat(
         ${JSON.stringify(core.PLUGINS)},
         ${JSON.stringify(core.MODULES)},
         ${JSON.stringify(core.CORE)},

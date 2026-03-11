@@ -24,16 +24,26 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
             let workspace = fullPath + "package.json";
             if (fileExists(workspace)) {
-                const hasJs = fileExists(fullPath + "index.workspace.js");
-                const hasMjs = hasJs || fileExists(fullPath + "index.workspace.mjs");
-                if (!hasMjs) {
-                    console.warn(`Module ${fullPath} has package.json but no index.workspace.(m)js! The module needs to be compiled first!`);
+                let packageData = parse(readFile(workspace));
+
+                let workspaceEntry = "index.workspace.js";
+                let hasDefaultJs = fileExists(fullPath + "index.workspace.js");
+                let hasDefaultMjs = fileExists(fullPath + "index.workspace.mjs");
+
+                if (!hasDefaultJs && !hasDefaultMjs && packageData["main"]) {
+                    workspaceEntry = packageData["main"];
+                } else if (hasDefaultMjs && !hasDefaultJs) {
+                    workspaceEntry = "index.workspace.mjs";
                 }
 
-                let packageData = parse(readFile(workspace));
+                // 2. Validate that the file actually exists
+                if (!fileExists(fullPath + workspaceEntry)) {
+                    console.warn(`Module ${fullPath} defines workspace but ${workspaceEntry} is missing! Compile it first.`);
+                }
+
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift(hasJs ? "index.workspace.js" : "index.workspace.mjs");
+                data["includes"].unshift(workspaceEntry);
                 data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
 
                 data["id"] = data["id"] || packageData["name"];

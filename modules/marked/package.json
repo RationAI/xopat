@@ -1,8 +1,8 @@
 {
-  "name": "@xopat-module/npm-marked",
+  "name": "@xopat-npm-module/marked",
   "private": true,
   "version": "0.1.0",
-  "main": "entry.js",
+  "buildEntry": "entry.js",
   "dependencies": {
     "marked": "latest"
   }

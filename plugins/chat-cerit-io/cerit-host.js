@@ -16,7 +16,7 @@ addPlugin("chat-cerit-io", class extends XOpatPlugin {
             ? this.getStaticMeta("oidc", {})
             : {};
 
-        await ChatModule.Providers.registerOpenAIChatProviders({
+        await xmodules.chat.Providers.openAI({
             proxyAlias,
             apiUrl: chatApiUrl,
             oidcConfig,

@@ -1,0 +1,14 @@
+{
+  "name": "chat",
+  "version": "1.0.0",
+  "description": "AI Chat Module",
+  "keywords": [
+    "chat",
+    "llm"
+  ],
+  "buildEntry": "chat.ts",
+  "author": "Aiosa",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

@@ -1,4 +1,4 @@
-function initXopatLayers() {
+function initXOpatLayers() {
     function parseStore(key) {
         try {
             return JSON.parse(APPLICATION_CONTEXT.AppCache.get(key, "{}"));

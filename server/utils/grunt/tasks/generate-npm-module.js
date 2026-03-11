@@ -65,10 +65,10 @@ module.exports = function (grunt) {
 
         // package.json (workspace item)
         writeJson(path.join(moduleDir, "package.json"), {
-            name: `@xopat-module/${moduleId}`,
+            name: `@xopat-npm-module/${moduleId}`,
             private: true,
             version: "0.1.0",
-            main: "entry.js",
+            buildEntry: "entry.js",
             dependencies: {
                 [npmName]: npmDep
             }
@@ -85,10 +85,11 @@ module.exports = function (grunt) {
                 `globalThis["${moduleId}"] = pkg;\n`;
         } else {
             entry =
-`import * as pkg from "${npmName}"
-const root = (globalThis.npm = globalThis.npm || {});
-root.modules = root.modules || {};
-root.modules["${moduleId}"] = pkg;
+`import * as namespace from "${npmName}";
+const actualModule = (namespace.default !== undefined && Object.keys(namespace).length === 1) 
+    ? namespace.default 
+    : (namespace.default || namespace);
+globalThis.__temp_bundle_export = actualModule;
 `;
         }
         writeFile(path.join(moduleDir, "entry.js"), entry);

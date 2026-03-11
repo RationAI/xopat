@@ -11,7 +11,7 @@ function run(name, cmd, args) {
 if (process.env.WATCH_PATTERN) {
     run("WATCH", "grunt", ["twinc"])
 } else {
-    run("WATCH", "npm", ["run", "watch-ui"]);
+    run("WATCH", "npm", ["run", "watch-core"]);
 }
 
 run("SERVER", "node", ["index.js"]);

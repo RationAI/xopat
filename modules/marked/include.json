@@ -1,10 +1,6 @@
 {
-  "id": "marked",
   "name": "marked (NPM)",
   "author": "Auto-generated",
   "version": "0.1.0",
-  "includes": [
-    "index.workspace.js"
-  ],
   "requires": []
 }

@@ -123,6 +123,7 @@
 //preventive error message, that will be discarded after the full initialization, no translation
 window.onerror = function (message, file, line, col, error) {
     let ErrUI = USER_INTERFACE.Errors;
+    if (!ErrUI) console.error("Error UI not initialized! Attempt to show error message: ", message, " ", file, " ", line, " ", col, " ", error);
     if (ErrUI.active) return false;
     error = error || {};
     ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
@@ -136,49 +137,6 @@ window.onerror = function (message, file, line, col, error) {
 
     <!-- Template modules -->
     <template id="template-modules"></template>
-
-    <script type="text/javascript">
-
-(function (window) {
-
-    /*---------------------------------------------------------*/
-    /*------------ Basic Tutorial       -----------------------*/
-    /*---------------------------------------------------------*/
-
-    const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
-    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
-        {'next #viewer-container' : $.t('tutorials.basic.1')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.3')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.4'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
-        }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {
-            'next #__tisue_list' : $.t('tutorials.basic.6'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {
-            'click #images-pin' : $.t('tutorials.basic.7'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {'next #panel-images' : $.t('tutorials.basic.8'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
-        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
-        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
-        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
-        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
-        }, {'next #left-side-buttons-menu-b-share' : $.t('tutorials.basic.14')
-        }, {'next #left-side-buttons-menu-b-tutorial' : $.t('tutorials.basic.15')}], function() {
-        if (withLayers()) {
-            //prerequisite - pin in default state
-            let pin = $("#shaders-pin");
-            let container = pin.parents().eq(1).children().eq(1);
-            pin.removeClass('pressed');
-            container.removeClass('force-visible');
-        }
-    });
-
-})(window);
-    </script>
 
     <!-- Template plugins -->
     <template id="template-plugins"></template>

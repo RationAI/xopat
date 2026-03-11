@@ -26,19 +26,37 @@ UI elements can be furthermore tested and developed using the ``npm run dev-ui``
 Instead of coding in a live viewer session, you can use the viewer sandbox playground for
 developing the UI components in an isolated environment.
 
-### Using NPM for modules or plugins.
+### Using NPM and TypeScript for modules or plugins.
 The core uses no NPM, except for development purposes and documentation deployment.
-If you develop an external item and need to use NPM packages, there is a way to do this directly:
- - mount a plugin or module as you would do normally
- - create ``package.json`` file in the plugin or module directory
-   - define ``main`` file, the entrypoint that will be later compiled for browser
- - you can (but don't have to) crete ``include.json``, this file now only overrides values otherwise
- defined in ``package.json``, or allow you to provide custom static default properties - all fields are
- however from now on optional
- - run ``npm i`` to install your new dependencies
- - you now also need to run a watcher task on the plugin files as well, so that changes are re-compiled
- - for more information, see ``src/NPM_MODULES_PLUGINS.md``
+If you develop an external item and need to use NPM or TypeScript, there is high chance you need to
+build your element before using it in the browser. Note that in order to re-use code between plugins,
+you must expose your API to `window` object, since there is no compulsory structure and you never
+know what other elements expose, or where they store distribution files.
 
+> - mount a plugin or module as you would do normally
+> - create ``package.json`` file in the plugin or module directory, by defining this file you create a `Workspace`
+>   - **[Default build]**
+>     - define ``buildEntry`` file, the entrypoint that will be later compiled for browser
+>     - the browser exposes the workspace API as ``window[namespace][package.name]`` (e.g., ``window.xmodules.mymodule``)
+>   - **[Custom build]**
+>     - optionally, you can define ``build`` command in scripts `package.json`, this command will be executed to build the plugin or module
+>     - you _must_ define ``index.workspace.(m)js`` or override `main` field to point to your compiled file entrypoint
+>     - think about exposing your API to `window` object
+>   - **[No build]**
+>     - if you need the package file to install NPM dependencies, you can omit ``buildEntry`` and ``build``
+>     - you _must_ define ``index.workspace.(m)js`` file or override `main` field , which will be later imported (otherwise this file is compiled by above approaches)
+>     - think about exposing your API to `window` object
+>     - you might want to use `copy` directive on `package.json` which copies files, e.g., from npm modules
+> - you can (but don't have to) crete ``include.json``, this file now only overrides values otherwise
+> defined in ``package.json``, or allow you to provide custom static default properties - all fields are
+> however from now on optional
+> - run ``npm i`` to install your new dependencies
+> - you now also need to run a watcher task on the plugin files as well, so that changes are re-compiled
+> - for more information, see ``src/NPM_MODULES_PLUGINS.md``
+
+### Publishing NPM modules in the viewer
+If you want to publish a NPM module as a viewer module, you can run ``npm run publish-npm``
+and follow the instructions. The module will be automatically exposed as ``window.module[module_name]``.
 
 ### Bundling
 Only core UI components are automatically bundled into ``ui/index.js`` file. This is the viewer UI component

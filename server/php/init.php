@@ -96,7 +96,7 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
             //Todo think of secure way of sharing POST with the app
 ?>
     <script type="text/javascript">
-        initXopat(
+        initXOpat(
             <?php echo json_encode((object)$PLUGINS) ?>,
             <?php echo json_encode((object)$MODULES) ?>,
             <?php echo json_encode((object)$CORE) ?>,

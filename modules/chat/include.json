@@ -1,13 +1,6 @@
 {
-  "id": "chat",
-  "name": "AI Chat Module",
-  "author": "Aiosa",
-  "version": "1.0.0",
   "description": "Integration hub for AI chat models",
-  "includes": [
-    "chat.mjs"
-  ],
-  "requires": ["oidc-client-ts", "marked", "sanitize-html"],
+  "requires": ["oidc-client-ts", "@xopat-npm-module/marked", "sanitize-html"],
   "defaultPersonalityId": "pathology-assistant",
   "personalities": [
     {

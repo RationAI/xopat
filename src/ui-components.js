@@ -10,44 +10,12 @@
  */
 
 /**
- * Queue
- * @class xoQueue
- */
-window.xoQueue = class {
-    constructor(size) {
-        this.SIZE = size;
-        this._items = {};
-    }
-
-    /**
-     * Add to queue
-     * @param {*} item
-     */
-    add(item) {
-        this._items[this._incr()] = item;
-    }
-
-    /**
-     * Remove item that is present for the longest in queue
-     * @return {*}
-     */
-    pop() {
-        let item = this._items[this._i];
-        delete this._items[this._i];
-        this._decr();
-        return item;
-    }
-    _incr(){
-        return (this._i = this._i + 1) % this.SIZE;
-    }
-    _decr() {
-        return (this._i = this._i > 0 ? this._i - 1 : this.SIZE)
-    }
-}
-
-/**
  * UI Components: Available Components and UI Element Builder API
  * @namespace UIComponents
+ * @deprecated
+ *
+ * DO NOT USE, WILL BE REMOVED IN FUTURE VERSIONS
+ * INSTEAD, use UI. NAMESPACE WITH NEW VAN-JS components
  */
 var UIComponents = /** @lends UIComponents */ {
     /**
