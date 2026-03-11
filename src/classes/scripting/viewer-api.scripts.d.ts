@@ -1,16 +1,10 @@
 import type {ScriptApiObject} from "../scripting-manager";
 
 
-export type ViewerPlaneInfo = {
-    z?: number;
-    t?: number;
-};
-
 export type ViewerViewportInfo = {
     x: number;
     y: number;
     zoom: number;
-    plane?: ViewerPlaneInfo;
 };
 
 export type ViewerChannelInfo = {

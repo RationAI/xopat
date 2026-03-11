@@ -48,10 +48,6 @@ export class XOpatViewerScriptApi extends XOpatScriptingApi implements ViewerScr
             x: center.x,
             y: center.y,
             zoom,
-            plane: {
-                z: (viewer as any).bridge?.getZ?.(),
-                t: (viewer as any).bridge?.getT?.()
-            }
         };
     }
 
