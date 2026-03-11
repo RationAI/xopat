@@ -18,18 +18,22 @@ function handleProxyRequest($pathInfo) {
         exit("Forbidden: invalid CSRF token");
     }
 
-    // 2. Resolve Alias
+    // 2. Resolve Alias (Prefix-Aware)
     $parts = explode('/', trim($pathInfo, '/'));
-    $alias = $parts[1] ?? null; // /proxy/alias/...
+
+    // Find where 'proxy' is in the array
+    $proxyIndex = array_search('proxy', $parts);
+    $alias = ($proxyIndex !== false && isset($parts[$proxyIndex + 1])) ? $parts[$proxyIndex + 1] : null;
     $proxyConfig = $CORE['server']['secure']['proxies'][$alias] ?? null;
 
     if (!$proxyConfig) {
         header("HTTP/1.1 403 Forbidden");
-        exit("Proxy alias '$alias' not configured.");
+        exit("Path received: $pathInfo.");
     }
 
     // 3. Prepare Upstream
-    $targetPath = '/' . implode('/', array_slice($parts, 2));
+    // Target path starts AFTER the alias
+    $targetPath = '/' . implode('/', array_slice($parts, $proxyIndex + 2));
     $targetUrl = rtrim($proxyConfig['baseUrl'], '/') . $targetPath . ($_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : '');
 
     $headers = getallheaders();
@@ -70,3 +74,8 @@ function handleProxyRequest($pathInfo) {
     curl_close($ch);
     exit;
 }
+
+//            - name: XO_ROOT_PATH
+//                 value: /v3
+//               - name: XO_STRIP_PREFIX
+//                 value: 'true'
