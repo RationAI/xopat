@@ -440,7 +440,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     // todo make some cascading + registration strategy..
     USER_INTERFACE.AppBar.init();
     USER_INTERFACE.FullscreenMenu.init();
-    USER_INTERFACE.MobileNavBar.init();
+    USER_INTERFACE.MobileBottomBar.init();
     UTILITIES.updateTheme(null);
 
     /**

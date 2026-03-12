@@ -11,7 +11,6 @@ export class AppBar {
 
     init() {
         window.addEventListener('app:layout-change', (e) => {
-            // Každá komponenta se sama rozhodne, co udělá
             this.onLayoutChange?.(e.detail);
         });
         // Left part of the app bar: modifiable and customizable menu

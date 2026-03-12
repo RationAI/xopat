@@ -367,17 +367,15 @@ class Dropdown extends BaseSelectableComponent {
                 (window.matchMedia && window.matchMedia("(hover: none)").matches)
             );
             if (isTouchDevice) {
-                liEl.addEventListener("click", (e) => {
-                    // Prevent the anchor default navigation and stop propagation
+                const linkEl = liEl.querySelector("a");
+                linkEl?.addEventListener("click", (e) => {
                     e.preventDefault();
                     e.stopPropagation();
 
-                    // Toggle submenu when tapping the parent item
                     if (self._activeSubmenu?.parentId === item.id) {
                         self._closeSubmenu();
                         return;
                     }
-                    // mark hovering to keep submenu open while interacting
                     self._isHoveringParent = true;
                     self._openSubmenu(item, liEl);
                 });
@@ -457,10 +455,26 @@ class Dropdown extends BaseSelectableComponent {
         }
         if (top < margin) top = margin;
 
+        const submenuRect = submenuEl.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+
         // Apply coordinates and show
-        submenuEl.style.left = `${left}px`;
         submenuEl.style.top = `${top}px`;
         submenuEl.style.visibility = "visible";
+
+        if (left + submenuRect.width > viewportWidth - anchorRect.left - margin) {
+            console.log("overflowing right", left, submenuRect.width, viewportWidth - margin);
+            left = Math.round(anchorRect.left) - submenuRect.width - 6;
+            submenuEl.style.right = `${anchorRect.width}px`;
+
+        } else {
+            console.log("not overflowing right", left, submenuRect.width, viewportWidth - margin);
+            submenuEl.style.left = `${left}px`;
+
+        }
+
+
+
 
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,

@@ -141,6 +141,14 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    isOpened() {
+        const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
+        if (narrow) {
+            return !!this._isFullscreen;
+        }
+        return !this.collapsed;
+    }
+
     /** Toggle fullscreen overlay when in narrow viewport. */
     toggleFullscreen() {
         this._isFullscreen ? this._closeFullscreen() : this._openFullscreen();

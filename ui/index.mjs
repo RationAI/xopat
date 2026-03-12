@@ -50,6 +50,7 @@ import { StatusBar } from "./classes/components/statusBar.mjs";
 // SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
 import { AppBar } from "./services/appBar.mjs";
+import { MobileBottomBar } from "./services/mobileBottomBar.mjs";
 import { FloatingManager } from "./services/floatingManager.mjs";
 
 // MIXINS
@@ -59,6 +60,7 @@ import * as utils from "./classes/mixins/utils.mjs";
 class ServiceContainer {
     _globalTooltip = null;
     _appBar = null;
+    _MobileBottomBar = null;
     _floatingManager = null;
 
     /**
@@ -81,6 +83,17 @@ class ServiceContainer {
             this._appBar = new AppBar();
         }
         return this._appBar;
+    }
+
+    /**
+     * Gets the MobileBottomBar service.
+     * Instantiates it on the first call.
+     */
+    get MobileBottomBar() {
+        if (!this._MobileBottomBar) {
+            this._MobileBottomBar = new MobileBottomBar();
+        }
+        return this._MobileBottomBar;
     }
 
     /**
