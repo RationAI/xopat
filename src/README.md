@@ -23,46 +23,62 @@ Supported configuration for the visualization itself, can be passed both in `POS
 
 
 Example configuration:
+
 ````JSON
-{    
-    "params": {
-    }, 
-    "data": ["path/to/tissue/scan.tif", "path/to/annotation.tif", "path/to/probability.tif"],
-    "background": [
-        {
-            "dataReference": 0,
-            "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
+{
+  "params": {
+  },
+  "data": [
+    {
+      "dataID": "path/to/tissue/scan.tif",
+      "microns": 0.001,
+      "options": {
+        "customTileSrouceOption": "someValue"
+      }
+    },
+    "path/to/annotation.tif",
+    "path/to/probability.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "A visualization setup 1",
+      "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
+      "shaders": {
+        "shader_id_1": {
+          "name": "Advanced visualization layer",
+          "type": "new_type",
+          "fixed": false,
+          "visible": 1,
+          "dataReferences": [
+            2,
+            0
+          ],
+          "params": {}
+        },
+        "another_shader_id": {
+          "name": "Probability layer",
+          "type": "edge",
+          "visible": 1,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "color": "#fa0058",
+            "use_gamma": 1.0
+          }
         }
-    ],
-    "visualizations": [
-        {
-            "name": "A visualization setup 1",
-            "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
-            "shaders": {
-                "shader_id_1": { 
-                    "name": "Advanced visualization layer",
-                    "type": "new_type", 
-                    "fixed": false,
-                    "visible": 1, 
-                    "dataReferences": [2, 0],
-                    "params": { }
-                },
-                "another_shader_id": {
-                    "name": "Probability layer",
-                    "type": "edge", 
-                    "visible": 1, 
-                    "dataReferences": [1],
-                    "params": { 
-                        "color": "#fa0058",
-                        "use_gamma": 1.0
-                    }
-                }
-            }      
-        }
-    ],
-    "plugins": {
-        "recorder": {}
-    }    
+      }
+    }
+  ],
+  "plugins": {
+    "recorder": {}
+  }
 }
 ````
 **External parameters** &emsp;
@@ -95,7 +111,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`permaLoadPlugins` - remember loaded plugins, default `true`,
     - [O]`bypassCookies` - do not use cookies, default `false`, cookies are necessary for user setup memory
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
-    - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays
+    - [O]`stackedBackground` - removed, not supported anymore - use shaders config map on background item to render multiple overlays within single BG item
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
     - [O]`fetchAsync` - deprecated
@@ -116,7 +132,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`micronsY` - deprecated, moved to `DataOverride`
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
-    - [O]`goalIndex` - preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+    - [O]`goalIndex` - preferred visualization index for this background, overrides `activeVisualizationIndex`
 - [O]`visualization` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
 it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
     - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 

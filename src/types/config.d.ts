@@ -42,7 +42,6 @@ export type XOpatSetup = {
     bypassCache?: boolean | null;
     bypassCacheLoadTime?: boolean | null;
     theme?: string | null;
-    stackedBackground?: boolean | null;
     maxImageCacheCount?: number | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;

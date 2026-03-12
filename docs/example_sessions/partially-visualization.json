@@ -1,7 +1,6 @@
 {
   "params": {
     "customBlending": true,
-    "stackedBackground": true
   },
   "data": ["tiff/invalid1.tif","tiff/invalid2.tif", "tiff/data.tif"],
   "visualizations": [

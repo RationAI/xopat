@@ -339,7 +339,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             return result;
         },
         /**
-         * Get the current FILE name viewed (zero-index item in stacked mode).
+         * Get the current FILE name viewed.
          * @param {boolean} stripSuffix if true and the returned data is read from config.data
          *   field, an attempt to return only filename from the file ID.
          * @return {string}
@@ -355,7 +355,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             return undefined;
         },
         /**
-         * Get the current FILE ID viewed (zero-index item in stacked mode).
+         * Get the current FILE ID viewed.
          * @return {string}
          */
         referencedId() {
@@ -632,8 +632,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
      * @param {Number|Array<number>|undefined|null} [vizSpec=undefined]
      * @param {Object} [opts]
      * @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
-     *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex
-     *        (array in non-stacked; single number in stacked).
+     *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex.
      * @return {boolean} true if something needed change
      */
     window.UTILITIES.parseBackgroundAndGoal = function (
@@ -641,9 +640,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
         vizSpec = undefined,
         { deriveOverlayFromBackgroundGoals = false } = {}
     ) {
-        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false, false);
         const cfg = APPLICATION_CONTEXT.config;
-        const data = Array.isArray(cfg.data) ? cfg.data : [];
         let backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
         const vizCount = Array.isArray(cfg.visualizations) ? cfg.visualizations.length : 0;
 
@@ -694,8 +691,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             return norm;
         };
 
-        // Build visualization spec for NON-STACKED mode
-        const buildVisForNonStacked = (visArg: any, bgIndices: number | number[] | undefined) => {
+        // Build visualization spec
+        const buildVis = (visArg: any, bgIndices: number | number[] | undefined) => {
             if (bgIndices === undefined) return undefined;
 
             const toAlignedArray = (len: number, sourceArray: any[]) => {
@@ -741,12 +738,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
             if (bgIndices === undefined) return undefined;
 
-            if (stacked) {
-                // Stacked => a single overlay picked from the first selected background
-                const firstIdx = Array.isArray(bgIndices) ? bgIndices[0] : bgIndices;
-                return getGoal(firstIdx ?? 0);
-            }
-
             if (Array.isArray(bgIndices)) return bgIndices.map(getGoal);
             return getGoal(bgIndices as number);
         };
@@ -790,17 +781,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             if (deriveOverlayFromBackgroundGoals) {
                 desiredActiveVis = deriveVisFromGoals(bgIndicesForViz);
             } else if (vizSpec !== undefined) {
-                if (stacked) {
-                    // stacked => only a single overlay is allowed
-                    if (Array.isArray(vizSpec)) {
-                        const first = (vizSpec as number[]).find((v: number) => v != null && Number.isInteger(v));
-                        desiredActiveVis = first == null ? undefined : clampIndex(first, vizCount);
-                    } else {
-                        desiredActiveVis = clampIndex(vizSpec, vizCount);
-                    }
-                } else {
-                    desiredActiveVis = buildVisForNonStacked(vizSpec, bgIndicesForViz);
-                }
+                desiredActiveVis = buildVis(vizSpec, bgIndicesForViz);
             } // else: vizSpec === undefined and derive flag is false => keep existing option
 
             if (typeof desiredActiveVis !== "undefined") {
@@ -810,8 +791,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
                     updated = true;
                 }
 
-                // Persist per-background goalIndex in NON-STACKED mode when we have a concrete desiredActiveVis
-                if (!stacked && selectedBgArray.length > 0) {
+                // Persist per-background goalIndex when we have a concrete desiredActiveVis
+                if (selectedBgArray.length > 0) {
                     if (Array.isArray(desiredActiveVis)) {
                         selectedBgArray.forEach((bgIdx, i) => {
                             const ov = desiredActiveVis[i];
@@ -889,7 +870,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
         //     }
         // }
 
-        // todo check args, do we need to search for at least one valid reference image? test stacked mode + X bg overlays
+        // todo check args, do we need to search for at least one valid reference image?
         handleSyntheticEventFinishWithValidData(viewer, 0);
     }
 
@@ -1192,8 +1173,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
      *
      * Open desired configuration into one or more viewer instances (no VIEWER global access here).
      * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
-     * - In non-stacked mode with multiple backgrounds selected, creates multiple viewers (one per bg).
-     * - In stacked mode (or single bg) uses a single viewer.
+     * - With multiple backgrounds selected, creates multiple viewers (one per bg).
      *
      @param {Array|undefined} data
      @param {Array|undefined} background
@@ -1248,7 +1228,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
         });
 
-        const stacked = APPLICATION_CONTEXT.getOption("stackedBackground", false);
         let activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
         let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true);
 
@@ -1278,15 +1257,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
         }
 
         // Build per-viewer plan:
-        // - stacked => single viewer, backgrounds = all cfg.background (or empty if none)
-        // - non-stacked:
         //     - activeBg is number => single viewer with that bg
         //     - activeBg is array  => N viewers, each with one bg (in order)
         //     - activeBg undefined => single viewer, no bg (blank/error tile)
         const bgPlan = (() => {
-            if (stacked) {
-                return [{ type: "stacked", bgIndices: bgs.map((_: any, i: number) => i) }];
-            }
             if (Array.isArray(activeBg)) {
                 return activeBg.map(idx => ({ type: "single", bgIndices: [idx] }));
             }
@@ -1356,7 +1330,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
                 },
                 error: (e: any) => {
                     // event.item is not set, only event.source
-                    console.error(event);
+                    console.error(e);
                     onOpen(false);
                 }
             });
@@ -1451,27 +1425,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
             // (A) Identify Backgrounds
             const openedBase: BackgroundConfig[] = [];
-            if (entry.type === "stacked") {
-                for (const bgi of entry.bgIndices) {
-                    const bg = bgs[bgi];
-                    if (bg) openedBase.push(bg);
-                }
-            } else {
-                const bgi = entry.bgIndices[0];
-                if (Number.isInteger(bgi) && bgs[bgi]) openedBase.push(bgs[bgi]);
-            }
+            const bgi = entry.bgIndices[0];
+            if (Number.isInteger(bgi) && bgs[bgi]) openedBase.push(bgs[bgi]);
 
             // (B) Decide Visualization Index
-            let visIndexForThis: number | undefined = undefined;
-            if (stacked) {
-                visIndexForThis = Number.isInteger(activeViz)
-                    ? (activeViz as number)
-                    : (Array.isArray(activeViz) ? activeViz[0] : undefined);
-            } else {
-                visIndexForThis = Array.isArray(activeViz)
-                    ? activeViz[viewerIndex]
-                    : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
-            }
+            let visIndexForThis: number | undefined = Array.isArray(activeViz)
+                ? activeViz[viewerIndex]
+                : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
 
             const renderingWithWebGL = Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
             const activeV = renderingWithWebGL ? vis[visIndexForThis as number] : undefined;
@@ -1513,12 +1473,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
             // (C1) Background shaders, including possible extra dataReferences
             openedBase.forEach((bgRef: BackgroundConfig, bgIndex: number) => {
-                let bgShaders: VisualizationShaderLayer[] = [];
-                if (!bgRef.shaders) {
+                let bgShaders: VisualizationShaderLayer[] | undefined = bgRef.shaders;
+                if (!bgShaders) {
                     bgShaders = [{ type: "identity" }];
-                } else if (!Array.isArray(bgRef.shaders)) {
-                    console.warn("Invalid shaders for background: array required.", bgIndex, bgRef, bgRef.shaders);
-                    bgShaders = [bgRef.shaders as VisualizationShaderLayer];
+                } else if (!Array.isArray(bgShaders)) {
+                    console.warn("Invalid shaders for background: array required.", bgIndex, bgRef, bgShaders);
+                    bgShaders = [bgShaders as VisualizationShaderLayer];
                 }
 
                 let count = 0;
@@ -1620,7 +1580,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
             // (E) Layer Synchronization + data mapping for openTile
             const ctx = {
-                bgIndexForItem: (i: number) => entry.type === "stacked" ? entry.bgIndices[i] : entry.bgIndices[0],
+                bgIndexForItem: (i: number) => entry.bgIndices[0],
                 vizIndexForItem: (i: number) => visIndexForThis,
                 dataForItem: (i: number) => openedSpecOrder[i]
             };
@@ -2062,14 +2022,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
         }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
             runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {
-            'next #__tisue_list' : $.t('tutorials.basic.6'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {
-            'click #images-pin' : $.t('tutorials.basic.7'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {'next #panel-images' : $.t('tutorials.basic.8'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
         }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
         }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
         }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers

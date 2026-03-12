@@ -142,7 +142,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const activeRaw = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", null, true, true);
         const allBg = APPLICATION_CONTEXT.config.background;
 
-        // Normalize: active index can be a number (stacked off) or an array (stacked on)
+        // todo no array -> no stcked more anymore
+        // Normalize: active index can be a number or array
         const activeIndices =
             Array.isArray(activeRaw) ? activeRaw :
                 (typeof activeRaw === "number" ? [activeRaw] : []);
@@ -358,28 +359,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _renderToolbar() {
-        const toggleId = `${this.windowId}-stacked`;
         return div({ class: "flex items-center justify-between gap-2 px-2 py-1 border-b border-base-300 bg-base-100" },
             div({ class: "flex items-center gap-2 text-sm" },
                 new UI.FAIcon({ name: "fa-images" }).create(),
                 span({ class: "font-semibold" }, this.title),
             ),
             div({ class: "flex items-center gap-2" },
-                div({ class: "form-control" },
-                    label({ for: toggleId, class: "label cursor-pointer gap-2 py-0" },
-                        span({ class: "label-text text-xs" }, "Stacked"),
-                        input({
-                            id: toggleId, type: "checkbox",
-                            class: "toggle toggle-xs",
-                            checked: this.stacked,
-                            onchange: (e) => {
-                                this.stacked = !!e.target.checked;
-                                APPLICATION_CONTEXT.setOption?.("stackedBackground", this.stacked);
-                                this._openCurrentSelection();
-                            }
-                        })
-                    )
-                ),
                 button({
                     class: "btn btn-ghost btn-xs",
                     title: "Clear all selections",

@@ -30,6 +30,10 @@ You should therefore expose global `window` api. Default bundling does this auto
 - if you program a normal module, the default bundling exposes the global variable `window.xmodule.<sanitized_module_name>`
 - if you program a plugin, the default bundling exposes the global variable `window.xplugin.<sanitized_plugin_name>`
 
+> Importing classes between modules, plugins and core is not supported. If you need
+> to use a class, access it via its global exported variable. Note that you actually
+> **_can_ import types, as they are not bundled**.
+
 In all cases, respect the correct file extensions so the server delivers your assets properly:
 - ``mjs`` for ES6 modules
 - ``cjs`` for CommonJS modules

@@ -182,10 +182,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         let errHandler = function (e: any) {
             window.onerror = null;
             // LOADING_PLUGIN is captured from the loader closure
-            if ((window as any).LOADING_PLUGIN) {
-                (window as any).cleanUpPlugin(pluginId, e);
+            if (LOADING_PLUGIN) {
+                cleanUpPlugin(pluginId, e);
             } else {
-                (window as any).cleanUpScripts(pluginId);
+                cleanUpScripts(pluginId);
             }
         };
 
@@ -1561,7 +1561,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Parse BG Item Name Safely
          */
-        nameFromBGOrIndex: function (indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix = true) {
+        nameFromBGOrIndex: function (indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix = true): string {
             // todo some error if not a string, that name must be provided etc...
             const isIndex = typeof indexOrItem === 'number';
             const item = BackgroundConfig.dataFromDataId(isIndex ? indexOrItem : indexOrItem.dataReference) as DataID;
@@ -1572,8 +1572,16 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return this.fileNameFromPath(item, stripSuffix);
             }
             if (typeof item === "object") {
-                // todo some stragtegy?
-                return item.name || item.label || item.title || item[String(Object.keys(item)[0])];
+                // we have data item, try to find anything that resembles a name
+                const name = item.name || item.label || item.title;
+                if (typeof name === "string") return name;
+                if (typeof item.dataID === "string") {
+                    return this.fileNameFromPath(item, stripSuffix);
+                }
+                const object = item.dataID || item;
+                for (const key in object) {
+                    if (typeof object[key] === "string") return object[key];
+                }
             }
             console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
             return "undefined";

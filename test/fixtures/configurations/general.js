@@ -49,7 +49,6 @@ export default {
         permaLoadPlugins: false,
         bypassCookies: true, //by default tests do not work with cookies
         theme: "dark",
-        stackedBackground: false,
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
         headers: {},

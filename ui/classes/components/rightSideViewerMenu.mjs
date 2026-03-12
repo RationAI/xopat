@@ -107,15 +107,11 @@ export class RightSideViewerMenu extends BaseComponent {
             onShaderChange: (value) => {
                 // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
                 let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
-                if (APPLICATION_CONTEXT.getOption("stackedBackground", false, false)) {
+                if (Array.isArray(activeViz)) {
+                    const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
+                    activeViz[index] = value;
+                } else if (Number.isInteger(activeViz)) {
                     activeViz = value;
-                } else {
-                    if (Array.isArray(activeViz)) {
-                        const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
-                        activeViz[index] = value;
-                    } else if (Number.isInteger(activeViz)) {
-                        activeViz = value;
-                    }
                 }
                 APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
             },

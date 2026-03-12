@@ -64,7 +64,7 @@ interface TileSourceMetadata {
  * @property shaders array of optional rendering specification
  * @property protocol deprecated, use DataOverride instead
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+ * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
  * @property id unique ID for the background, created automatically from data path if not defined
  */
 interface BackgroundItem {
@@ -92,7 +92,7 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property shaders array of shader specifications
  * @property protocol deprecated, use DataOverride instead
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
+ * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
  */
 interface VisualizationItem {
     shaders?: Record<string, VisualizationShaderLayer>;

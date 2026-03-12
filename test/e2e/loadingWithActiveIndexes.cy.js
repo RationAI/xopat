@@ -5,13 +5,12 @@ import {config, shaders} from "../fixtures/configurations"
 import {testBasic, testElements} from "./routines"
 import {default as utils} from "../support/utilities"
 
-describe('Correct Active Indexes with stackedBackground:false', () => {
+describe('Correct Active Indexes', () => {
 
    it("Bindings of indices initial state", ()=>  {
        let visualization = {
            params: config.params({
                viewport: config.viewport('tissue', 0),
-               stackedBackground: false,
                activeBackgroundIndex: 1
            }),
            data: config.data('tissue'),

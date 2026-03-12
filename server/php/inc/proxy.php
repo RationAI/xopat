@@ -74,8 +74,3 @@ function handleProxyRequest($pathInfo) {
     curl_close($ch);
     exit;
 }
-
-//            - name: XO_ROOT_PATH
-//                 value: /v3
-//               - name: XO_STRIP_PREFIX
-//                 value: 'true'

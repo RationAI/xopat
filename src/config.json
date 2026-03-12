@@ -106,7 +106,6 @@
      *   preventNavigationShortcuts: ?boolean,
      *   permaLoadPlugins: ?boolean,
      *   theme: ?string,
-     *   stackedBackground: ?boolean,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
      *   bypassCache: ?boolean,
@@ -146,7 +145,6 @@
         "bypassCacheLoadTime": false,
         // can be dimmed, dark, light, auto
         "theme": "auto",
-        "stackedBackground": false,
         "maxImageCacheCount": 1200,
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
