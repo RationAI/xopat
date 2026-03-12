@@ -86,7 +86,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
     //Perform initialization based on provided data
     const defaultSetup = Object.freeze(ENV.setup);
-    const viewerSecureMode = ENV.client.secureMode && ENV.client.secureMode !== "false";
+    const viewerSecureMode = // For safety test string too
+        ENV.client.secureMode && (ENV.client.secureMode as unknown as string) !== "false";
     //default parameters not extended by CONFIG.params (would bloat link files)
     CONFIG.params = CONFIG.params || {};
     //optimization allways present
@@ -497,7 +498,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     VIEWER_MANAGER.broadcastHandler('warn-user', (e: ErrorUserEvent) => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
-    }, -Infinity);
+    }, null, -Infinity);
     /**
      * Event to fire if you want to avoid explicit error handling,
      * recommended in modules where module should give plugin chance hande it.
@@ -514,7 +515,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     VIEWER_MANAGER.broadcastHandler('error-user', (e: ErrorUserEvent) => {
         if (e.preventDefault || !e.message) return;
         Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
-    }, -Infinity);
+    }, null, -Infinity);
     VIEWER_MANAGER.broadcastHandler('plugin-failed', (e: PluginFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
 
     let notified = false;
@@ -1484,8 +1485,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
                 let count = 0;
                 // todo bg shaders are not syntactically validated, add checks at the open top level
                 for (const shaderCfg of bgShaders) {
-                    // todo better name fallback
-                    const shaderId = shaderCfg.id; // Capture shaderId
                     shaderCfg.id = count < 1 ? bgRef.id : `${bgRef.id}-${count}`;
 
                     const hasExplicitRefs = Array.isArray(shaderCfg.dataReferences) && shaderCfg.dataReferences.length > 0;

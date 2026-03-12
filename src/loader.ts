@@ -1198,13 +1198,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         /**
          * Get all instances of the singleton from all active viewers.
-         * @return {XOpatViewerSingletonModule[]}
          */
-        get instances() {
+        get instances(): IXOpatViewerSingleton[] {
             return VIEWER_MANAGER._getSingletons((this.constructor as any).IID);
         }
 
-        static instances() {
+        /**
+         * Get all instances of the singleton from all active viewers.
+         */
+        static instances(): IXOpatViewerSingleton[] {
             return VIEWER_MANAGER._getSingletons((this as any).IID);
         }
 
@@ -1212,7 +1214,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Attach a class-wide handler to all current and future instances of this subclass.
          * Handler is called as handler.call(emittingInst, emittingInst, event, ...args)
          */
-        static broadcastHandler(eventName: string, handler: Function, ...args: any[]) {
+        static broadcastHandler(eventName: string, handler: OpenSeadragon.EventHandler<any>, userData: any, priority: number) {
             const state = this.__getBroadcastState();
             if (!state.has(eventName)) state.set(eventName, new Map());
             const perHandler = state.get(eventName);
@@ -1220,21 +1222,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (!perHandler) return;
             if (perHandler.has(handler)) return; // idempotent
 
-            const record = { args, wrappers: new Map() };
+            const record = { userData, priority, instances: new Set<OpenSeadragon.Viewer>() };
             perHandler!.set(handler, record);
 
             // Attach immediately to instances that are already event sources
             for (const inst of this.instances()) {
-                const wrapper = (e: any) => handler.call(inst, inst, e, ...args);
-                record.wrappers.set(inst, wrapper);
-                inst.addHandler(eventName, wrapper);
+                record.instances.add(inst);
+                inst.addHandler(eventName, handler, userData, priority);
             }
         }
 
         /**
          * Remove a previously added class-wide handler from all instances of this subclass.
          */
-        static cancelBroadcast(eventName: string, handler: Function) {
+        static cancelBroadcast(eventName: string, handler: OpenSeadragon.EventHandler<any>) {
             const state = this.__getBroadcastState();
             const perHandler = state.get(eventName);
             if (!perHandler) return;
@@ -1242,8 +1243,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const record = perHandler.get(handler);
             if (!record) return;
 
-            for (const [inst, wrapper] of record.wrappers.entries()) {
-                try { inst.removeHandler(eventName, wrapper); } catch (_) { /* no-op */ }
+            for (const inst of record.instances) {
+                try { inst.removeHandler(eventName, handler); } catch (_) { /* no-op */ }
             }
             perHandler.delete(handler);
             if (perHandler.size === 0) state.delete(eventName);
@@ -1259,26 +1260,23 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             for (const [eventName, perHandler] of state.entries()) {
                 for (const [origHandler, record] of perHandler.entries()) {
-                    if (record.wrappers.has(inst)) continue;
-                    const wrapper = (e: any) => origHandler.call(inst, inst, e, ...record.args);
-                    record.wrappers.set(inst, wrapper);
-                    inst.addHandler(eventName, wrapper);
+                    inst.addHandler(eventName, origHandler, record.userData, record.priority);
                 }
             }
         }
 
         /**
-         * Per-subclass state: { Map<eventName, Map<fn, {args:any[], wrappers: Map<inst, fn> }> }
+         * Per-subclass state: 
          * (Own property on the subclass, so subclasses don't share.)
          */
-        static __getBroadcastState(): Map<string, Map<Function, { args: any[]; wrappers: Map<any, Function> }>> {
+        static __getBroadcastState(): Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<XOpatViewerSingleton> }>> {
             if (!Object.prototype.hasOwnProperty.call(this, "__broadcastState")) {
                 Object.defineProperty(this, "__broadcastState", {
                     value: new Map(),
                     writable: false, enumerable: false, configurable: false
                 });
             }
-            return (this as any).__broadcastState as Map<string, Map<Function, { args: any[]; wrappers: Map<any, Function> }>>;
+            return (this as any).__broadcastState as Map<string, Map<OpenSeadragon.EventHandler<any>, { priority: number, userData: any, instances: Set<XOpatViewerSingleton> }>>;
         }
     }
 
@@ -1576,7 +1574,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 const name = item.name || item.label || item.title;
                 if (typeof name === "string") return name;
                 if (typeof item.dataID === "string") {
-                    return this.fileNameFromPath(item, stripSuffix);
+                    return this.fileNameFromPath(item.dataID, stripSuffix);
                 }
                 const object = item.dataID || item;
                 for (const key in object) {
@@ -2325,7 +2323,7 @@ form.submit();
         menu: any;
         viewers: OpenSeadragon.Viewer[];
         viewerMenus: Record<string, any>;
-        broadcastEvents: Record<string, Map<Function, any>>;
+        broadcastEvents: Record<keyof OpenSeadragon.ViewerEventMap, Map<Function, any>>;
         active: OpenSeadragon.Viewer | null;
         layout: any;
         _singletonsKey: symbol;
@@ -2542,7 +2540,7 @@ form.submit();
                 const eventList = this.broadcastEvents[event];
                 for (let handler of eventList!.keys()) {
                     const hData = eventList!.get(handler);
-                    viewer.addHandler(event as any, (e: any) => (hData as any)[0](e), ...(hData as any)[1]);
+                    viewer.addHandler(event, handler, hData.userData, hData.priority);
                 }
             }
 
@@ -2800,19 +2798,15 @@ form.submit();
          * The handler is also remembered and applied to any viewer created later via add().
          *
          * TODO: Supports only viewer events, not events that bound to other instances. Make this design more generic.
-         * @param {string} eventName - The OpenSeadragon event name.
-         * @param {Function} handler - Event handler function.
-         * @param {...any} args - Optional extra arguments passed to OpenSeadragon.addHandler.
-         * @returns {void}
          */
-        broadcastHandler(eventName: string, handler: Function, ...args: any[]) {
+        broadcastHandler(eventName: keyof OpenSeadragon.ViewerEventMap, handler: OpenSeadragon.EventHandler<any>, userData: any, priority: number) {
             let eventList = this.broadcastEvents[eventName];
             if (!eventList) {
                 eventList = this.broadcastEvents[eventName] = new Map();
             }
-            eventList.set(handler, args);
+            eventList.set(handler, {userData, priority});
             for (let v of this.viewers) {
-                v.addHandler(eventName, handler, ...args);
+                v.addHandler(eventName, handler, userData, priority);
             }
         }
 
@@ -2882,8 +2876,8 @@ form.submit();
         /**
          * @private
          */
-        _getSingletons(singletonId: string) {
-            return this.viewers.map(v => v[this._singletonsKey]?.[singletonId]).filter(Boolean);
+        _getSingletons(singletonId: string): IXOpatViewerSingleton[] {
+            return this.viewers.map(v => v[this._singletonsKey]?.[singletonId]).filter(Boolean) as IXOpatViewerSingleton[];
         }
 
         /**

@@ -1,3 +1,5 @@
+import {Div} from "../classes/elements/div.mjs";
+
 export class MobileBottomBar {
     constructor() {
         this.context = null;
@@ -20,7 +22,9 @@ export class MobileBottomBar {
         }
 
         this.root = this._build();
-        this.context.innerHTML = "";
+
+        const toolbarsContainer = new Div({ id:"toolbars-container", class:"w-full", style:"pointer-events: none; position: absolute; top: 0; left: 0; z-index: 999999;" });
+        toolbarsContainer.attachTo(this.context);
         this.context.appendChild(this.root);
         this.context.style.height = "auto";
 
