@@ -10,6 +10,19 @@ import type {ImageLike} from "./types/misc";
 const STORE_TOKEN = Symbol("XOpatElementDataStore");
 const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
 
+export class XOpatServerCallError extends Error {
+    code?: string;
+    status?: number;
+    details?: any;
+    cause?: any;
+
+    constructor(message: string, init?: Partial<XOpatServerCallError>) {
+        super(message);
+        this.name = "XOpatServerCallError";
+        if (init) Object.assign(this, init);
+    }
+}
+
 /**
  * Initialize the xOpat loading system. This sets up the runtime environment for
  * loading modules and plugins and returns an initializer you call when the host
@@ -926,6 +939,130 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         setCacheOption() {
             console.warn("XOpatModule.setCacheOption() is deprecated. Use XOpatModule.cache.set() instead.");
             this.cache.set(...arguments);
+        }
+
+        /**
+         * Returns the low-level RPC scope for this plugin/module.
+         * Uses the element execution context and id automatically.
+         */
+        protected _serverScope() {
+            const root = (window as any).xserver;
+            if (!root) {
+                throw new Error("Server RPC runtime is not available.");
+            }
+
+            const scope = root?.[this.xoContext]?.[this.id];
+            if (!scope) {
+                throw new Error(`Server RPC scope '${this.xoContext}.${this.id}' is not available.`);
+            }
+            return scope;
+        }
+
+        /**
+         * Infer current viewer id if available.
+         * Uses viewer.id because the server RPC currently expects the transport viewer id.
+         */
+        protected _defaultServerViewerId(): string | undefined {
+            try {
+                return (window as any).VIEWER?.id || undefined;
+            } catch {
+                return undefined;
+            }
+        }
+
+        /**
+         * Normalize any RPC/client/network failure into a consistent error object.
+         */
+        protected _normalizeServerError(
+            method: string,
+            args: any[],
+            error: any
+        ): XOpatServerCallError {
+            if (error instanceof XOpatServerCallError) {
+                return error;
+            }
+
+            const normalized = new XOpatServerCallError(
+                error?.message || `Server call '${this.xoContext}.${this.id}.${method}()' failed.`,
+                {
+                    code: error?.code || "RPC_CALL_FAILED",
+                    status: error?.status,
+                    details: error?.details,
+                    cause: error,
+                }
+            );
+
+            const payload: XOpatServerErrorPayload = {
+                kind: this.xoContext as "plugin" | "module",
+                id: this.id,
+                method,
+                args,
+                error: normalized,
+            };
+
+            try {
+                this.raiseEvent("server-error", payload);
+            } catch (_) {
+                // ignore event dispatch failures
+            }
+
+            console.error(`[xOpat server] ${this.xoContext}.${this.id}.${method} failed`, payload);
+            return normalized;
+        }
+
+        /**
+         * Call a server method for this element with unified error handling.
+         */
+        async callServer<T = any>(
+            method: string,
+            payload?: any,
+            options: XOpatServerCallOptions = {}
+        ): Promise<T> {
+            const scope = this._serverScope();
+            const fn = scope?.[method];
+
+            if (typeof fn !== "function") {
+                throw new Error(`Server method '${this.xoContext}.${this.id}.${method}' is not available.`);
+            }
+
+            try {
+                return await fn(payload, {
+                    viewerId: options.viewerId,
+                    contextId: options.contextId,
+                    httpClient: options.httpClient || APPLICATION_CONTEXT.httpClient
+                });
+            } catch (error: any) {
+                this.raiseEvent?.("server-error", {
+                    kind: this.xoContext,
+                    id: this.id,
+                    method,
+                    payload,
+                    error
+                });
+                throw error;
+            }
+        }
+
+        /**
+         * Ergonomic proxy so callers can do:
+         *   await this.server().getChatMessages({...})
+         * or
+         *   await this.server({ contextId: "jwt" }).getChatMessages({...})
+         */
+        server(defaultOptions: XOpatServerCallOptions = {}) {
+            return new Proxy({}, {
+                get: (_, prop) => {
+                    if (typeof prop !== "string") return undefined;
+
+                    return async (payload?: any, callOptions: XOpatServerCallOptions = {}) => {
+                        return await this.callServer(prop, payload, {
+                            ...defaultOptions,
+                            ...callOptions,
+                            httpClient: callOptions.httpClient || defaultOptions.httpClient
+                        });
+                    };
+                }
+            }) as Record<string, (payload?: any, callOptions?: XOpatServerCallOptions) => Promise<any>>;
         }
     }
 
@@ -2927,9 +3064,9 @@ form.submit();
 
         /**
          * Reset viewer at index to be able to accept new data.
-         * @param index
+         * @private
          */
-        resetViewer(index: number) {
+        _resetViewer(index: number) {
             const viewer = this.viewers[index];
             if (!viewer) return;
 

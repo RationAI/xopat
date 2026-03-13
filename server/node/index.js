@@ -15,7 +15,8 @@ const { throwFatalErrorIf } = require("./error");
 
 const constants = require("./constants");
 const {rawReqToString} = require("./utils");
-const {verifyProxyAuth} = require("./auth");
+const {verifyProxyAuth, verifyRpcAuth} = require("./auth");
+const { XopatServerRuntime } = require("./server-runtime");
 
 
 const PROJECT_PATH = "";
@@ -26,6 +27,11 @@ i18n.init(languageServerConf);
 
 
 const sessions = new Map();
+const serverRuntime = new XopatServerRuntime({
+    root: constants._ABSPATH_NO_SLASH || constants.ABSPATH,
+    auth: { verifyRpcAuth },
+    logger: console,
+});
 
 function parseCookies(cookieHeader) {
     const cookies = {};
@@ -290,7 +296,7 @@ ${core.requireCore("app")}
 ${core.requireCore("env")}
 <script>
 window.XOPAT_CSRF_TOKEN = '${session ? session.csrfToken : ''}';
-</script>
+</script>${serverRuntime.getClientBootstrap()}
 `;
 
             case "app":
@@ -383,6 +389,19 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200);
             res.end();
             return;
+        }
+
+        if (urlObj.pathname === "/server/client-rpc.js") {
+            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+            res.end(serverRuntime.getClientRuntimeSource());
+            return;
+        }
+
+        if (urlObj.pathname.startsWith("/__rpc/")) {
+            const core = initViewerCoreAndPlugins(req, res, true);
+            if (!core) return;
+            const session = getSession(req);
+            return serverRuntime.handleRpc(req, res, core, session, urlObj);
         }
 
         // --- New: proxy endpoint with session check ---

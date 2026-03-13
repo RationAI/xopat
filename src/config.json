@@ -173,33 +173,54 @@
         // If you have some secret you MUST NOT expose at any cost, do your logics
         // via proxying and use your secrets in the 'secure' part of the server configuration.
         "secure": {
-          // The server supports url+header configuration for custom proxies. You can
-          // - configure module/plugin to use local proxy endpoint
-          // - configure the proxy here
-          "proxies": {
-            // My proxy service will proxy a resource using token that is NOT exposed on the client.
-            //"my-service": {
-            //    "baseUrl": "https://api.example.com",
-            //    "headers": {
-            //        "Authorization": "Bearer <% MY_SERVICE_TOKEN %>"
-            //    },
-            //    // The proxy service can explicitly VERIFY the user has necessary rights to call the endpoint
-            //    // Supported verifiers are: 'jwt'
-            //    "auth": {
-            //        "enabled": true,
-            //        "verifiers": ["jwt"], // what verification to use (see HttpClient)
-            //        "mode": "all"         // "all" (default) or "any"
-            //        // From now on, other configuration depends on the actual verifier used
-            //        "jwt": {
-            //            "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
-            //            "issuer": "https://login.example.com/",
-            //            "audience": "xopat-viewer",
-            //            "forward": false,
-            //            "userClaimHeader": "x-user-sub"
-            //        }
-            //    }
-            //}
-          }
+            // The server supports url+header configuration for custom proxies. You can
+            // - configure module/plugin to use local proxy endpoint
+            // - configure the proxy here
+            "proxies": {
+              // My proxy service will proxy a resource using token that is NOT exposed on the client.
+              //"my-service": {
+              //    "baseUrl": "https://api.example.com",
+              //    "headers": {
+              //        "Authorization": "Bearer <% MY_SERVICE_TOKEN %>"
+              //    },
+              //    // The proxy service can explicitly VERIFY the user has necessary rights to call the endpoint
+              //    // Supported verifiers are: 'jwt'
+              //    "auth": {
+              //        "enabled": true,
+              //        "mode": "all"         // "all" (default) or "any" - all or any verifier must pass
+              //        // From now on, other configuration depends on the actual verifier used, see HTTP Client
+              //        "verifiers": {
+              //            "jwt": {
+              //                "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
+              //                "issuer": "https://login.example.com/",
+              //                "audience": "xopat-viewer",
+              //                "forward": false,
+              //                "userClaimHeader": "x-user-sub"
+              //            }
+              //        }
+              //    }
+              //}
+            },
+            //The server supports direct server-side execuion, configure your optional auth here
+            "rpcAuth": {
+                //Default system login
+                "default": {
+                    //by default no auth
+                }
+                // //Custom HTTP Client context auth accepted by server, see above
+                //"my-service-context": {
+                //    "enabled": true,
+                //    "mode": "all",
+                //    "verifiers": {
+                //    "jwt": {
+                //        "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
+                //        "issuer": "https://login.example.com/",
+                //        "audience": "xopat-viewer",
+                //        "forward": false,
+                //        "userClaimHeader": "x-user-sub"
+                //    }
+                //}
+            }
         }
     },
 

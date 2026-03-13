@@ -94,6 +94,58 @@ function _smartCopy(src, dest, logger, prefix) {
     }
 }
 
+
+
+function findServerEntryFiles(itemDirectory) {
+    const found = [];
+    function walk(dir) {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".xopat-server") continue;
+                walk(full);
+            } else if (/\.server\.(ts|js|mjs)$/i.test(entry.name)) {
+                found.push(full);
+            }
+        }
+    }
+    if (fs.existsSync(itemDirectory)) walk(itemDirectory);
+    return found;
+}
+
+async function buildServerEntries(itemDirectory, logger, logPrefix) {
+    const serverEntries = findServerEntryFiles(itemDirectory);
+    if (!serverEntries.length) return;
+
+    const outDir = path.join(itemDirectory, ".xopat-server");
+    fs.mkdirSync(outDir, { recursive: true });
+
+    for (const serverEntry of serverEntries) {
+        const rel = path.relative(itemDirectory, serverEntry);
+        const ext = path.extname(serverEntry).toLowerCase();
+        const targetName = rel.replace(/[\/]/g, "__").replace(/\.ts$/i, ".mjs");
+        const outFile = path.join(outDir, targetName);
+
+        logger.log(`${logPrefix} building server entry ${rel}`);
+
+        if (ext === ".ts") {
+            await spawnAsync("npx", [
+                "esbuild",
+                serverEntry,
+                "--bundle",
+                "--platform=node",
+                "--format=esm",
+                `--outfile=${outFile}`,
+                "--sourcemap"
+            ]);
+        } else if (ext === ".mjs") {
+            _smartCopy(serverEntry, outFile, logger, logPrefix);
+        } else {
+            _smartCopy(serverEntry, outFile.replace(/\.js$/i, ".js"), logger, logPrefix);
+        }
+    }
+}
+
 /**
  * Portable logic to build, copy, or clean workspace items.
  */
@@ -144,6 +196,8 @@ const BuildLogic = {
             logger.warn(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
 
+        await buildServerEntries(itemDirectory, logger, logPrefix);
+
         // 3. Handle asset copying if defined
         if (packageData.copy) {
             executeCopy(itemDirectory, packageData.copy, logger, logPrefix);
@@ -161,6 +215,12 @@ const BuildLogic = {
         if (fs.existsSync(defaultBuild)) {
             logger.log(`${logPrefix} removing ${defaultBuild}`);
             fs.unlinkSync(defaultBuild);
+        }
+
+        const serverOutDir = path.join(itemDirectory, '.xopat-server');
+        if (fs.existsSync(serverOutDir)) {
+            logger.log(`${logPrefix} removing ${serverOutDir}`);
+            fs.rmSync(serverOutDir, { recursive: true, force: true });
         }
 
         // Remove copy directive targets

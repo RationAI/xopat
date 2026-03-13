@@ -72,6 +72,23 @@ type PostDataStoreOptions = {
 /** Getter that returns a named UI item for a viewer menu tab. */
 type UINamedItemGetter = (viewer: OpenSeadragon.Viewer) => any;
 
+
+type XOpatServerCallOptions = {
+    viewerId?: string;
+    contextId?: string;
+    httpClient?: any;
+    silent?: boolean;
+};
+
+type XOpatServerErrorPayload = {
+    kind: "plugin" | "module";
+    id: string;
+    method: string;
+    args: any[];
+    error: any;
+};
+
+
 // ── PostDataStore (async key-value store for plugin/module data) ──────────────
 
 /**
@@ -86,6 +103,7 @@ interface PostDataStore {
 }
 
 // ── Base element interfaces ───────────────────────────────────────────────────
+
 
 /**
  * Base interface for all xOpat elements (plugins and modules).
