@@ -230,14 +230,14 @@ export class HttpClient {
             ...(hasBody ? { "Content-Type": "application/json" } : {}),
             ...(await this._authHeaders(url, method)),
             ...headers,
-            ...(this.usingProxy && typeof window !== "undefined" && window.XOPAT_CSRF_TOKEN
+            ...(this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
                 ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }
                 : {})
         });
 
         let currentHeaders = await getBaseHeaders();
 
-        if (this.usingProxy && typeof window !== "undefined" && !window.XOPAT_CSRF_TOKEN) {
+        if (this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
         }
 

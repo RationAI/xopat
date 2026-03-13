@@ -1175,19 +1175,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
      * Open desired configuration into one or more viewer instances (no VIEWER global access here).
      * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
      * - With multiple backgrounds selected, creates multiple viewers (one per bg).
-     *
-     @param {Array|undefined} data
-     @param {Array|undefined} background
-     @param {Array|undefined} visualizations
-     @param {number|number[]|undefined|null} bgSpec
-     @param {number|number[]|undefined|null} vizSpec
-     @param {Object} [opts]
-     @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
+     * Setting argument to undefined will keep the current viewer argument option. Setting it to null will
+     * erase / unset the options, e.g. to remove all backgrounds.
      */
     APPLICATION_CONTEXT.openViewerWith = async function (
-        data = undefined,
-        background: BackgroundItem[] | undefined = undefined,
-        visualizations: VisualizationItem[] | undefined = undefined,
+        data: DataSpecification[] | undefined | null = undefined,
+        background: BackgroundItem[] | undefined | null = undefined,
+        visualizations: VisualizationItem[] | undefined | null = undefined,
         bgSpec: number | number[] | undefined | null = undefined,
         vizSpec: number | number[] | undefined | null = undefined,
         opts: { deriveOverlayFromBackgroundGoals?: boolean } = {}
@@ -1557,7 +1551,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
             // (D) Execution: Full Reset vs Surgical Update
             if (!isSurgical) {
-                VM.resetViewer(viewerIndex);
+                VM._resetViewer(viewerIndex);
             } else {
                 // Remove only visualization layers that don't match the new 'toOpen' list
                 const currentCount = viewer.world.getItemCount();

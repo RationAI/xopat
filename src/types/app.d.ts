@@ -2,7 +2,8 @@
 
 /**
  * Arbitrary Data identifier such that image server can understand it (most often UUID4 or file paths, but might be an object
- * if certain `TileSource` uses multiple values or needs more advanced configuration).
+ * if certain `TileSource` uses more complex syntax). The value is passed to TileSource::supports() check to select
+ * the target protocol handler. Provide a value for your tile source which talks to the server of your choice.
  */
 type DataID = string | Record<string, any>;
 
