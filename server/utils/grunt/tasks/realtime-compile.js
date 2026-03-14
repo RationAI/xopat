@@ -123,13 +123,19 @@ module.exports = function (grunt) {
                     const pkgPath = path.join(itemPath, "package.json");
                     if (fs.existsSync(pkgPath)) {
                         if (!processedDirs.has(itemPath)) {
-                            processedDirs.add(itemPath);
-                            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+                            try {
+                                processedDirs.add(itemPath);
+                                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 
-                            grunt.log.writeln(`[twinc-merge] Rebuilding workspace: ${pkg.name || itemPath}`);
+                                grunt.log.writeln(`[twinc-merge] Rebuilding workspace: ${pkg.name || itemPath}`);
 
-                            // Call the shared build logic
-                            await buildWorkspaceItem(itemPath, pkg, nodeLogger);
+                                // Call the shared build logic
+                                await buildWorkspaceItem(itemPath, pkg, nodeLogger);
+                            } catch (e) {
+                                grunt.log.error(`[twinc-merge] Error processing workspace: ${itemPath}`);
+                                grunt.log.error(e.message);
+                                grunt.log.error(e.stack);
+                            }
                         }
                         // Once we find the nearest package.json, we stop bubbling up for this file
                         break;
