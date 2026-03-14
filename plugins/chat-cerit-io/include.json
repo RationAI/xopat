@@ -1,20 +1,18 @@
 {
-  "id": "chat-cerit-io",
-  "name": "Cerit IO AI Chat Models",
-  "author": "Aiosa",
-  "version": "1.0.0",
   "description": "Cerit-IO Hosted Model provider integration.",
-  "includes": ["cerit-host.js"],
-  "modules": ["chat"],
+  "modules": ["vercel-ai-chat-sdk"],
+  "providerTypeId": "cerit-llm-ai",
   // alias key to use in server proxy
+  "chatApiBaseUrl": "https://llm.ai.e-infra.cz/",
   "proxyAlias": "cerit-io",
   "chatApiUrl": "/v1/chat/completions",
   "modelsDiscoveryPath": "/v1/models",
+  "defaultModelId": "",
   // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model
   "authMode": "jwt",
   // if set to null, it inherits the core auth context (same as viewer login)
   "authContext": "cerit-io",
-  // for jwt, specify OIDC conf
+  // TODO: plugins should be able to configure auth by a generic way (e.g. just pass it to some resolver)
   "oidc": {
     "authority": "https://your-auth-server.com",
     "client_id": "openai-plugin-client",
