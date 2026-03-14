@@ -169,7 +169,7 @@ const BuildLogic = {
             const outFile = path.join(itemDirectory, "index.workspace.js");
 
             const rawId = packageData.name || itemDirectory;
-            const cleanId = rawId.replace('@xopat-npm-module/', '').replace(/[^a-zA-Z0-9]/g, '');
+            const cleanId = rawId.replace('@xopat-npm-module/', '').replace(/[^a-zA-Z0-9_-]/g, '');
             // Determine Namespace
             let namespace = "xmodules";
             if (rawId.startsWith('@xopat-npm-module/')) namespace = "xnpm";
@@ -186,9 +186,9 @@ const BuildLogic = {
                 `--outfile=${outFile}`,
                 "--sourcemap",
                 "--minify", // Optional, but recommended for production
-                `--global-name=window.${namespace}.${cleanId}`,
+                `--global-name=window.${namespace}['${cleanId}']`,
                 `--banner:js=window.${namespace} = window.${namespace} || {};`,
-                `--footer:js=window.${namespace}.${cleanId} = window.${namespace}.${cleanId} || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
+                `--footer:js=window.${namespace}['${cleanId}'] = window.${namespace}['${cleanId}'] || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
                 // // Map the internal variable to your specific namespace location
                 // `--footer:js=window.${namespace}.${cleanId} = globalThis.__temp_bundle_export || exports?.default || exports; delete globalThis.__temp_bundle_export;`
             ]);

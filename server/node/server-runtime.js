@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { spawnSync } = require("node:child_process");
 const { parse } = require("comment-json");
+const {installGlobalServerHelpers} = require("./server-helpers");
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -248,10 +249,12 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
         const timeout = setTimeout(() => controller.abort(new Error(`RPC method timed out after ${timeoutMs}ms`)), timeoutMs);
 
         try {
+            installGlobalServerHelpers({ registry: this.registry, cacheDir: this.cacheDir, logger: this.logger });
             const ctx = {
                 req,
                 res,
                 core,
+                secure: core?.CORE?.server?.secure || {},
                 session,
                 user: authResult.user,
                 viewerId: body.viewerId,
@@ -344,6 +347,7 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
     }
 
     async #loadModuleFile(file) {
+        installGlobalServerHelpers({ registry: this.registry, cacheDir: this.cacheDir, logger: this.logger });
         const stat = fs.statSync(file);
         const ext = path.extname(file).toLowerCase();
         let loadPath = file;

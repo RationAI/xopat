@@ -220,6 +220,17 @@
                 //        "userClaimHeader": "x-user-sub"
                 //    }
                 //}
+            },
+            // Server side configurations for your elements are available here, these are not dynamically changeable,
+            // never exposed to client. Check README of your plugin or module to see the syntax.
+            "modules": {
+                ////custom values here
+                //"my-module-id": {
+                //
+                //}
+            },
+            "plugins": {
+                //similar to modules
             }
         }
     },

@@ -59,6 +59,7 @@
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
     "@frsource/cypress-plugin-visual-regression-diff": "^1.4.0",
+    "@types/node": "^25.5.0",
     "@types/openseadragon": "^5.0.2",
     "browserify": "^17.0.1",
     "chokidar": "^4.0.3",
