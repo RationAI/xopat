@@ -6,7 +6,6 @@
     "description": "Record the movement of navigator in the viewer.",
     "icon": null,
     "includes" : ["tracker.js"],
-    "modules": ["webgl"],
     "permaLoad": true,
     "hidden": true,
     "animate": true
