@@ -263,10 +263,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             if (cache && self.AppCache) {
                 let cached = self.AppCache.get(name);
                 if (parse && typeof cached === "string") {
+                    const trimmed = cached.trim();
+                    if (trimmed === "" || trimmed === "undefined") {
+                        self.AppCache.delete(name);
+                        return undefined;
+                    }
                     try {
-                        return JSON.parse(cached);
+                        return JSON.parse(trimmed);
                     } catch (e) {
-                        console.warn("Failed to parse option cached value", cached);
+                        console.warn("Failed to parse option cached value - erasing", cached);
+                        self.AppCache.delete(name);
+                        cached = undefined;
                     }
                 }
                 if (cached !== null && cached !== undefined) {
@@ -299,6 +306,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             const self = this as unknown as ApplicationContext;
             if (!self.config.defaultParams.hasOwnProperty(name)) {
                 console.warn(`Trying to set non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
+            }
+            if (value === undefined) {
+                self.AppCache.delete(name);
+                delete self.config.params[name];
+                return;
             }
             if (typeof value === "object") {
                 try {
@@ -1175,13 +1187,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
      * Open desired configuration into one or more viewer instances (no VIEWER global access here).
      * - Calls UTILITIES.parseBackgroundAndGoal to resolve background/overlay selections.
      * - With multiple backgrounds selected, creates multiple viewers (one per bg).
-     * Setting argument to undefined will keep the current viewer argument option. Setting it to null will
-     * erase / unset the options, e.g. to remove all backgrounds.
+     *
+     @param {Array|undefined} data
+     @param {Array|undefined} background
+     @param {Array|undefined} visualizations
+     @param {number|number[]|undefined|null} bgSpec
+     @param {number|number[]|undefined|null} vizSpec
+     @param {Object} [opts]
+     @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
      */
     APPLICATION_CONTEXT.openViewerWith = async function (
-        data: DataSpecification[] | undefined | null = undefined,
-        background: BackgroundItem[] | undefined | null = undefined,
-        visualizations: VisualizationItem[] | undefined | null = undefined,
+        data = undefined,
+        background: BackgroundItem[] | undefined = undefined,
+        visualizations: VisualizationItem[] | undefined = undefined,
         bgSpec: number | number[] | undefined | null = undefined,
         vizSpec: number | number[] | undefined | null = undefined,
         opts: { deriveOverlayFromBackgroundGoals?: boolean } = {}
@@ -1196,16 +1214,29 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
         await Dialogs.awaitHidden();
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-        const isBgSame = background === undefined || (
-            Array.isArray(background) &&
-            background.length === config.background.length &&
-            background.every((bg: BackgroundItem, i: number) => APPLICATION_CONTEXT.sameBackground(bg, config.background[i]))
+        const existingBackground = Array.isArray(config.background) ? config.background : [];
+        const existingVisualizations = Array.isArray(config.visualizations) ? config.visualizations : [];
+        const existingData = Array.isArray(config.data) ? config.data : [];
+        const normalizedBackground = background === null ? [] : background;
+        const normalizedVisualizations = visualizations === null ? [] : visualizations;
+        const normalizedData = data === null ? [] : data;
+        const isBgSame = normalizedBackground === undefined || (
+            Array.isArray(normalizedBackground) &&
+            normalizedBackground.length === existingBackground.length &&
+            normalizedBackground.every((bg: BackgroundItem, i: number) => APPLICATION_CONTEXT.sameBackground(bg, existingBackground[i]))
         );
 
-        // -- update CONFIG if new values are provided (undefined => keep ; null not expected here)
-        if (typeof data !== "undefined") config.data = data;
-        if (typeof background !== "undefined") config.background = background;
-        if (typeof visualizations !== "undefined") config.visualizations = visualizations;
+        // -- update CONFIG if new values are provided (undefined => keep ; null => erase)
+        if (typeof normalizedData !== "undefined") config.data = normalizedData;
+        else if (!Array.isArray(config.data)) config.data = existingData;
+        if (typeof normalizedBackground !== "undefined") config.background = normalizedBackground;
+        else if (!Array.isArray(config.background)) config.background = existingBackground;
+        if (typeof normalizedVisualizations !== "undefined") config.visualizations = normalizedVisualizations;
+        else if (!Array.isArray(config.visualizations)) config.visualizations = existingVisualizations;
+
+        if (!Array.isArray(config.data)) config.data = [];
+        if (!Array.isArray(config.background)) config.background = [];
+        if (!Array.isArray(config.visualizations)) config.visualizations = [];
 
         if (Array.isArray(config.background)) {
             // always call from(...) it will remap data references to indexes
