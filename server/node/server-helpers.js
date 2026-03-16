@@ -2,31 +2,17 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
+
+const {
+    findNearestItemRoot,
+    getServerBuildDir,
+} = require("./server-module-loader");
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
-function findNearestItemRoot(runtime, file) {
-  const abs = path.resolve(file);
-  for (const kind of ["plugin", "module"]) {
-    const items = runtime?.registry?.[kind] || {};
-    for (const item of Object.values(items)) {
-      const root = path.resolve(item.rootDir);
-      if (abs === root || abs.startsWith(root + path.sep)) {
-        return item;
-      }
-    }
-  }
-  return null;
-}
-
-function getServerCacheDir(runtime, file) {
-  const item = findNearestItemRoot(runtime, file);
-  if (item?.rootDir) {
-    return path.join(item.rootDir, '.xopat-server');
-  }
-  return runtime?.cacheDir || path.join(process.cwd(), 'server/.cache');
+function getItemServerBuildDir(runtime, file) {
+    return getServerBuildDir(runtime, file);
 }
 
 function getSecureRoot(ctx) {
@@ -155,7 +141,7 @@ function resolveServerFile(runtime, ctx, target) {
 
 async function compileTs(file, runtime) {
   const stat = fs.statSync(file);
-  const cacheDir = getServerCacheDir(runtime, file);
+  const cacheDir = getItemServerBuildDir(runtime, file);
   const item = findNearestItemRoot(runtime, file);
   const rel = item?.rootDir ? path.relative(item.rootDir, file) : path.basename(file);
   const safeRel = rel.replace(/\.ts$/i, '.mjs');
@@ -207,8 +193,8 @@ async function loadServerModuleFromFile(file, runtime) {
 }
 
 async function importServerModule(ctx, runtime, target) {
-  const resolved = resolveServerFile(runtime, ctx, target);
-  return loadServerModuleFromFile(resolved.file, runtime);
+    const resolved = resolveServerFile(runtime, ctx, target);
+    return loadServerModuleFromFile(resolved.file, runtime);
 }
 
 async function importServerExport(ctx, runtime, target, exportName = "default") {
@@ -224,7 +210,7 @@ function createServerHelpers(runtime) {
   return {
     getSecureRoot,
   findNearestItemRoot,
-  getServerCacheDir,
+      getItemServerBuildDir,
     getSecureModules,
     getSecurePlugins,
     getSecureModuleConfig,
@@ -249,7 +235,6 @@ function installGlobalServerHelpers(runtime) {
 module.exports = {
   getSecureRoot,
   findNearestItemRoot,
-  getServerCacheDir,
   getSecureModules,
   getSecurePlugins,
   getSecureModuleConfig,

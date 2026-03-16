@@ -4,9 +4,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { pathToFileURL } = require("node:url");
-const { spawnSync } = require("node:child_process");
 const { parse } = require("comment-json");
 const {installGlobalServerHelpers} = require("./server-helpers");
+
+const {
+    SERVER_BUILD_DIR,
+    loadServerModuleFromFile,
+} = require("./server-module-loader");
 
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -31,7 +35,11 @@ function walkForServerFiles(rootDir, found = []) {
     for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
         const full = path.join(rootDir, entry.name);
         if (entry.isDirectory()) {
-            if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".xopat-server") continue;
+            if (
+                entry.name === "node_modules" ||
+                entry.name === ".git" ||
+                entry.name === ".server-dist"
+            ) continue;
             walkForServerFiles(full, found);
         } else if (SERVER_FILE_RE.test(entry.name)) {
             found.push(full);
@@ -56,23 +64,28 @@ function inferWorkspaceMeta(itemDir) {
 function buildEntryMap(serverFiles) {
     const methods = Object.create(null);
     const duplicates = [];
+
     for (const entry of serverFiles) {
         const mod = entry.module;
         const policy = mod.policy && typeof mod.policy === "object" ? mod.policy : {};
-        for (const [name, value] of Object.entries(mod)) {
-            if (name === "policy" || name === "default") continue;
+
+        for (const name of Object.keys(policy)) {
+            const value = mod[name];
             if (typeof value !== "function") continue;
+
             if (methods[name]) {
                 duplicates.push(name);
                 continue;
             }
+
             methods[name] = {
                 file: entry.file,
                 fn: value,
-                methodPolicy: policy[name] && typeof policy[name] === "object" ? policy[name] : {},
+                methodPolicy: policy[name] || {},
             };
         }
     }
+
     return { methods, duplicates };
 }
 
@@ -82,6 +95,7 @@ class XopatServerRuntime {
         this.pluginsDir = options.pluginsDir || path.join(this.root, "plugins");
         this.modulesDir = options.modulesDir || path.join(this.root, "modules");
         this.cacheDir = options.cacheDir || path.join(this.root, "server/.cache");
+        this.serverBuildDirName = options.serverBuildDirName || SERVER_BUILD_DIR;
         this.logger = options.logger || console;
         this.auth = options.auth || {};
         fs.mkdirSync(this.cacheDir, { recursive: true });
@@ -214,42 +228,119 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
 
     async handleRpc(req, res, core, session, urlObj) {
         const parts = urlObj.pathname.split("/").filter(Boolean);
-        const [, kind, id, method] = parts;
-        if (!["plugin", "module"].includes(kind) || !id || !method) {
-            return this.#writeJson(res, 404, { error: "RPC target not found", code: "RPC_NOT_FOUND" });
+        const [, kindRaw, idRaw, methodRaw] = parts;
+
+        if (!["plugin", "module"].includes(kindRaw) || !idRaw || !methodRaw) {
+            return this.#writeJson(res, 404, {
+                error: "RPC target not found",
+                code: "RPC_NOT_FOUND"
+            });
         }
 
-        const item = this.registry[kind] && this.registry[kind][decodeURIComponent(id)];
+        const kind = kindRaw;
+        const id = decodeURIComponent(idRaw);
+        const method = decodeURIComponent(methodRaw);
+
+        let item = this.registry[kind] && this.registry[kind][id];
         if (!item) {
-            return this.#writeJson(res, 404, { error: `${kind} '${decodeURIComponent(id)}' not found`, code: "RPC_UNKNOWN_TARGET" });
+            this.scan();
+            item = this.registry[kind] && this.registry[kind][id];
+        }
+
+        if (!item) {
+            return this.#writeJson(res, 404, {
+                error: `${kind} '${id}' not found`,
+                code: "RPC_UNKNOWN_TARGET"
+            });
         }
 
         let body;
         try {
             body = await this.#readJsonBody(req);
         } catch (error) {
-            return this.#writeJson(res, 400, { error: error.message, code: "RPC_BAD_JSON" });
+            return this.#writeJson(res, 400, {
+                error: error.message,
+                code: "RPC_BAD_JSON"
+            });
         }
 
-        const loaded = await this.#loadItem(item);
+        let loaded = await this.#loadItem(item);
+
+
         if (loaded.duplicates.length) {
-            return this.#writeJson(res, 500, { error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`, code: "RPC_DUPLICATE_EXPORT" });
-        }
-        const target = loaded.methods[decodeURIComponent(method)];
-        if (!target) {
-            return this.#writeJson(res, 404, { error: `Method '${decodeURIComponent(method)}' not found`, code: "RPC_UNKNOWN_METHOD" });
+            return this.#writeJson(res, 500, {
+                error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
+                code: "RPC_DUPLICATE_EXPORT"
+            });
         }
 
-        const policy = Object.assign({ auth: { required: false }, timeoutMs: DEFAULT_TIMEOUT_MS }, target.methodPolicy);
-        const authResult = await this.#verifyRpcRequest(req, res, core, session, policy, { kind, item, method: decodeURIComponent(method), contextId: body.contextId });
+        let target = loaded.methods[method];
+
+// re-scan once in case a new .server.* file appeared after startup
+        if (!target) {
+            this.scan();
+            item = this.registry[kind] && this.registry[kind][id];
+
+            if (item) {
+                loaded = await this.#loadItem(item);
+
+                if (loaded.duplicates.length) {
+                    return this.#writeJson(res, 500, {
+                        error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
+                        code: "RPC_DUPLICATE_EXPORT"
+                    });
+                }
+
+                target = loaded.methods[method];
+            }
+        }
+
+        if (!target) {
+            return this.#writeJson(res, 404, {
+                error: `Method '${method}' not found`,
+                code: "RPC_UNKNOWN_METHOD"
+            });
+        }
+
+        const rawPolicy = target.methodPolicy || {};
+        const runtime = rawPolicy.runtime || {};
+
+        const policy = {
+            auth: rawPolicy.auth || { required: false },
+            timeoutMs: runtime.timeoutMs ?? rawPolicy.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            maxBodyBytes: runtime.maxBodyBytes ?? rawPolicy.maxBodyBytes,
+            maxConcurrency: runtime.maxConcurrency ?? rawPolicy.maxConcurrency,
+            queueLimit: runtime.queueLimit ?? rawPolicy.queueLimit,
+            circuitBreaker: runtime.circuitBreaker ?? rawPolicy.circuitBreaker,
+        };
+
+        const authResult = await this.#verifyRpcRequest(
+            req,
+            res,
+            core,
+            session,
+            policy,
+            { kind, item, method, contextId: body.contextId }
+        );
         if (!authResult.ok) return;
 
         const controller = new AbortController();
-        const timeoutMs = Number.isFinite(policy.timeoutMs) ? Math.max(1, policy.timeoutMs) : DEFAULT_TIMEOUT_MS;
-        const timeout = setTimeout(() => controller.abort(new Error(`RPC method timed out after ${timeoutMs}ms`)), timeoutMs);
+        const timeoutMs = Number.isFinite(policy.timeoutMs)
+            ? Math.max(1, policy.timeoutMs)
+            : DEFAULT_TIMEOUT_MS;
+
+        const timeout = setTimeout(
+            () => controller.abort(new Error(`RPC method timed out after ${timeoutMs}ms`)),
+            timeoutMs
+        );
 
         try {
-            installGlobalServerHelpers({ registry: this.registry, cacheDir: this.cacheDir, logger: this.logger });
+            installGlobalServerHelpers({
+                registry: this.registry,
+                cacheDir: this.cacheDir,
+                logger: this.logger
+            });
+
             const ctx = {
                 req,
                 res,
@@ -264,16 +355,24 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
                 signal: controller.signal,
                 requestId: crypto.randomUUID(),
             };
+
             const args = Array.isArray(body.args) ? body.args : [];
             const result = await target.fn(ctx, ...args);
+
             clearTimeout(timeout);
-            return this.#writeJson(res, 200, { ok: true, result: result === undefined ? null : result });
+            return this.#writeJson(res, 200, {
+                ok: true,
+                result: result === undefined ? null : result
+            });
         } catch (error) {
             clearTimeout(timeout);
             const aborted = controller.signal.aborted;
-            this.logger.error(`[rpc] ${kind}/${item.id}/${decodeURIComponent(method)} failed`, error);
+            this.logger.error(`[rpc] ${kind}/${item.id}/${method} failed`, error);
+
             return this.#writeJson(res, aborted ? 504 : 500, {
-                error: aborted ? `RPC timed out after ${timeoutMs}ms` : (error && error.message) || "RPC failed",
+                error: aborted
+                    ? `RPC timed out after ${timeoutMs}ms`
+                    : (error && error.message) || "RPC failed",
                 code: aborted ? "RPC_TIMEOUT" : "RPC_INTERNAL_ERROR",
             });
         }
@@ -340,78 +439,31 @@ window.xserver = window.xserver || XOpatServerRPC.createClient({
 
     async #loadItem(item) {
         const loadedFiles = [];
+
         for (const file of item.files) {
-            loadedFiles.push({ file, module: await this.#loadModuleFile(file) });
+            try {
+                const mod = await this.#loadModuleFile(file);
+                loadedFiles.push({ file, module: mod });
+            } catch (e) {
+                console.log("[rpc-file-fail]", file, {
+                    message: e?.message,
+                    stack: e?.stack,
+                });
+            }
         }
+
         return buildEntryMap(loadedFiles);
     }
 
     async #loadModuleFile(file) {
-        installGlobalServerHelpers({ registry: this.registry, cacheDir: this.cacheDir, logger: this.logger });
-        const stat = fs.statSync(file);
-        const ext = path.extname(file).toLowerCase();
-        let loadPath = file;
-        if (ext === ".ts") {
-            loadPath = await this.#compileTs(file, stat.mtimeMs);
-            return import(pathToFileURL(loadPath).href + `?v=${stat.mtimeMs}`);
-        }
-        if (ext === ".mjs") {
-            return import(pathToFileURL(file).href + `?v=${stat.mtimeMs}`);
-        }
-        delete require.cache[require.resolve(file)];
-        return require(file);
-    }
+        installGlobalServerHelpers({
+            registry: this.registry,
+            cacheDir: this.cacheDir,
+            logger: this.logger,
+            serverBuildDirName: this.serverBuildDirName,
+        });
 
-    async #compileTs(file, mtimeMs) {
-        const hash = crypto.createHash("sha1").update(file).digest("hex").slice(0, 12);
-        const outDir = path.join(this.cacheDir, hash);
-        const outFile = path.join(outDir, path.basename(file).replace(/\.ts$/i, ".mjs"));
-        const metaFile = path.join(outDir, ".meta.json");
-        fs.mkdirSync(outDir, { recursive: true });
-        let needsBuild = true;
-        if (fs.existsSync(outFile) && fs.existsSync(metaFile)) {
-            try {
-                const meta = JSON.parse(fs.readFileSync(metaFile, "utf8"));
-                needsBuild = meta.mtimeMs !== mtimeMs;
-            } catch {
-                needsBuild = true;
-            }
-        }
-        if (needsBuild) {
-            const esbuild = require("esbuild");
-
-            try {
-                await esbuild.build({
-                    entryPoints: [file],
-                    outfile: outFile,
-                    bundle: true,
-                    platform: "node",
-                    format: "esm",
-                    sourcemap: true,
-                    logLevel: "debug",
-                });
-            } catch (err) {
-                const details = [];
-
-                if (Array.isArray(err.errors)) {
-                    for (const e of err.errors) {
-                        const loc = e.location
-                            ? `${e.location.file}:${e.location.line}:${e.location.column}`
-                            : file;
-                        details.push(`${loc} - ${e.text}`);
-                    }
-                }
-
-                throw new Error(
-                    [
-                        `Failed to compile server TS file '${file}'`,
-                        err.message || "",
-                        details.length ? details.join("\n") : ""
-                    ].filter(Boolean).join("\n")
-                );
-            }
-        }
-        return outFile;
+        return loadServerModuleFromFile(file, this, { logLevel: "debug" });
     }
 
     async #readJsonBody(req) {

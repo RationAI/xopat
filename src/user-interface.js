@@ -949,6 +949,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
                 const title = document.getElementById("fullscreen-loader-title");
                 const description = document.getElementById("fullscreen-loader-description");
+                if (!title || !description) return;
                 titleText = titleText === true ? title.innerText || $.t('messages.loading') : titleText;
                 title.innerText = titleText || "";
                 description.innerText = descriptionText;

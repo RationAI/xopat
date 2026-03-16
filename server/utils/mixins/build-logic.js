@@ -102,7 +102,13 @@ function findServerEntryFiles(itemDirectory) {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".xopat-server") continue;
+                if (
+                    entry.name === "node_modules" ||
+                    entry.name === ".git" ||
+                    entry.name === ".xopat-server" ||
+                    entry.name === ".server-dist"
+                ) continue;
+
                 walk(full);
             } else if (/\.server\.(ts|js|mjs)$/i.test(entry.name)) {
                 found.push(full);
@@ -117,15 +123,15 @@ async function buildServerEntries(itemDirectory, logger, logPrefix) {
     const serverEntries = findServerEntryFiles(itemDirectory);
     if (!serverEntries.length) return;
 
-    const outDir = path.join(itemDirectory, ".xopat-server");
+    const outDir = path.join(itemDirectory, ".server-dist");
     fs.mkdirSync(outDir, { recursive: true });
 
     for (const serverEntry of serverEntries) {
         const rel = path.relative(itemDirectory, serverEntry);
         const ext = path.extname(serverEntry).toLowerCase();
-        const targetName = rel.replace(/[\/]/g, "__").replace(/\.ts$/i, ".mjs");
-        const outFile = path.join(outDir, targetName);
+        const outFile = path.join(outDir, rel).replace(/\.ts$/i, ".mjs");
 
+        fs.mkdirSync(path.dirname(outFile), { recursive: true });
         logger.log(`${logPrefix} building server entry ${rel}`);
 
         if (ext === ".ts") {
@@ -141,7 +147,7 @@ async function buildServerEntries(itemDirectory, logger, logPrefix) {
         } else if (ext === ".mjs") {
             _smartCopy(serverEntry, outFile, logger, logPrefix);
         } else {
-            _smartCopy(serverEntry, outFile.replace(/\.js$/i, ".js"), logger, logPrefix);
+            _smartCopy(serverEntry, outFile.replace(/\.mjs$/i, ".js"), logger, logPrefix);
         }
     }
 }
@@ -217,7 +223,7 @@ const BuildLogic = {
             fs.unlinkSync(defaultBuild);
         }
 
-        const serverOutDir = path.join(itemDirectory, '.xopat-server');
+        const serverOutDir = path.join(itemDirectory, ".server-dist");
         if (fs.existsSync(serverOutDir)) {
             logger.log(`${logPrefix} removing ${serverOutDir}`);
             fs.rmSync(serverOutDir, { recursive: true, force: true });
