@@ -46,6 +46,7 @@ import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
 import { DockableWindow } from "./classes/components/dockableWindow.mjs";
 import { StatusBar } from "./classes/components/statusBar.mjs";
+import { Modal } from "./classes/components/modal.mjs";
 
 // SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
@@ -118,7 +119,7 @@ const UI = {
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu, ShaderLayer,
     ShaderSideMenu, FloatingWindow, MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
     Explorer, Toolbar, ToolbarItem, ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton,
-    DockableWindow, StatusBar,
+    DockableWindow, StatusBar, Modal,
 
     // Services -> instantiated
     Services: new ServiceContainer(),

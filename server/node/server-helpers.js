@@ -132,7 +132,6 @@ function resolveServerFile(runtime, ctx, target) {
   }
 
   const found = tryServerFile(basePath);
-  console.log("found", found, basePath);
   if (!found) {
     throw new Error(`Unable to resolve server file '${relPath}' in ${item.kind} '${item.id}'.`);
   }

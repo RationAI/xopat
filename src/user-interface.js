@@ -62,30 +62,41 @@ function initXOpatUI() {
                 }
             });
         },
-        ////////////////////////////////////////
-        // TODO METHODS BELOW are deprecated //
-        // and should be replaced by core ui API
-        //////////////////////////////////////
 
         /**
          * Show custom/dialog window
+         * todo consider renaming
          * @param parentId unique ID of the dialog container, you can hide the window by removing this ID from DOM
          *  might not complete or remove existing ID if not unique
          * @param header HTML content to put in the header
          * @param content HTML content
          * @param footer HTML content to put to the footer
          * @param params
-         * @param params.defaultHeight custom height, can be a CSS value (string) or a number (pixels)
+         * @param params.width custom width, can be a CSS value (string) or a number (pixels), by default it
+         * @param params.isBlocking whether the dialog should block the user from interacting with the page, default true
          * @param params.allowClose whether to show 'close' button, default true
          * @param params.allowResize whether to allow user to change the window size, default false
-         * @deprecated
          */
-        showCustom: function(parentId, header, content, footer, params = { allowClose: true }) {
-            console.warn("Dialogs.showCustom() is deprecated.");
-            let result = this._buildComplexWindow(false, parentId, header, content, footer,
-                `class="position-fixed" style="z-index:999; left: 50%;top: 50%;transform: translate(-50%,-50%);"`, params);
-            if (result) $("body").append(result);
+        showCustom: function(parentId, header, content, footer, params = {}) {
+            let modal = new UI.Modal({
+                header: header,
+                body: content,
+                footer: footer,
+                width: params.width,
+                isBlocking: params.isBlocking ?? true,
+                allowClose: params.allowClose ?? true,
+                allowResize: params.allowResize ?? false,
+            });
+
+            document.body.appendChild(modal.create());
+            modal.open();
+            return modal;
         },
+
+        ////////////////////////////////////////
+        // TODO METHODS BELOW are deprecated //
+        // and should be replaced by core ui API
+        //////////////////////////////////////
 
         /**
          * Show custom/dialog in a separate browser window

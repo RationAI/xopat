@@ -244,6 +244,7 @@ interface ChatTurnResult {
     outputTokens?: number;
     totalTokens?: number;
   };
+  capabilities?: ModelCapabilities;
 }
 
 interface SessionListResult {

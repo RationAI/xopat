@@ -31,6 +31,8 @@ export class ChatPanel extends BaseComponent {
 
     _providerId: string | null;
     _personalityId: string | null;
+    _modelId: string | null;
+    _models: ChatProviderModelInfo[];
     _messages: ChatMessage[];
     _sessions: ChatSession[];
     _consentConfigured: boolean;
@@ -39,12 +41,21 @@ export class ChatPanel extends BaseComponent {
     _inputEl: HTMLTextAreaElement | null;
     _sendBtnEl: any;
     _statusEl: HTMLElement | null;
+    _sessionTitleEl: HTMLElement | null;
     _loginBtn: any;
-    _consentOverlay: HTMLElement | null;
+    _settingsModal: any;
+    _settingsContentEl: HTMLElement | null;
     _providerSelectEl: HTMLSelectElement | null;
     _personalitySelectEl: HTMLSelectElement | null;
+    _displayModeSelectEl: HTMLSelectElement | null;
+    _modelSelectEl: HTMLSelectElement | null;
+    _chatViewEl: HTMLElement | null;
+    _sessionsViewEl: HTMLElement | null;
+    _isRunning: boolean;
+    _stopRequested: boolean;
 
     _displayMode: "all" | "user-friendly";
+    _viewMode: "chat" | "sessions";
 
     _sessionPicker: ChatSessionPicker | null;
     _attachmentBar: ChatAttachmentBar | null;
@@ -68,20 +79,31 @@ export class ChatPanel extends BaseComponent {
 
         this._providerId = options.defaultProviderId || null;
         this._personalityId = options.defaultPersonalityId || null;
+        this._modelId = null;
+        this._models = [];
         this._messages = [];
         this._sessions = [];
         this._consentConfigured = false;
 
         this._displayMode = "user-friendly";
+        this._viewMode = "chat";
 
         this._root = null;
         this._inputEl = null;
         this._sendBtnEl = null;
         this._statusEl = null;
+        this._sessionTitleEl = null;
         this._loginBtn = null;
-        this._consentOverlay = null;
+        this._settingsModal = null;
+        this._settingsContentEl = null;
         this._providerSelectEl = null;
         this._personalitySelectEl = null;
+        this._displayModeSelectEl = null;
+        this._modelSelectEl = null;
+        this._chatViewEl = null;
+        this._sessionsViewEl = null;
+        this._isRunning = false;
+        this._stopRequested = false;
 
         this._sessionPicker = null;
         this._attachmentBar = null;
@@ -126,7 +148,7 @@ export class ChatPanel extends BaseComponent {
 
         const providers = this.chatService.getProviders();
         this._providerSelectEl.innerHTML = "";
-        this._providerSelectEl.appendChild(option({ value: "" }, "Select model…"));
+        this._providerSelectEl.appendChild(option({ value: "" }, "Select provider…"));
 
         providers.forEach((p: ChatProviderInstanceRecord) => {
             this._providerSelectEl!.appendChild(option({ value: p.id }, p.label));
@@ -138,7 +160,7 @@ export class ChatPanel extends BaseComponent {
         } else {
             this._providerId = null;
             this._providerSelectEl.value = "";
-            this._onProviderChange("");
+            void this._onProviderChange("");
         }
         this._updateLoginButtonState();
     }
@@ -195,9 +217,83 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
+    async _refreshModelsForCurrentProvider(preferredModelId?: string | null): Promise<void> {
+        if (!this._modelSelectEl || !this.chatService || !this._providerId) {
+            this._models = [];
+            this._modelId = null;
+            if (this._modelSelectEl) {
+                this._modelSelectEl.innerHTML = "";
+                this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+                this._modelSelectEl.value = "";
+                this._modelSelectEl.disabled = true;
+            }
+            return;
+        }
+
+        try {
+            const models = await this.chatService.listModels(this._providerId);
+            this._models = Array.isArray(models) ? models : [];
+            const nextPreferred = preferredModelId || this._modelId;
+            this._modelId = nextPreferred && this._models.some((m) => m.id === nextPreferred)
+                ? nextPreferred
+                : (this._models[0]?.id || null);
+
+            this._modelSelectEl.innerHTML = "";
+            if (!this._models.length) {
+                this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+                this._modelSelectEl.value = "";
+                this._modelSelectEl.disabled = true;
+                return;
+            }
+
+            this._models.forEach((m) => {
+                this._modelSelectEl!.appendChild(option({ value: m.id }, m.label || m.id));
+            });
+            this._modelSelectEl.value = this._modelId || "";
+            this._modelSelectEl.disabled = false;
+        } catch (error) {
+            console.error("Failed to refresh models:", error);
+            this._models = [];
+            this._modelId = null;
+            this._modelSelectEl.innerHTML = "";
+            this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+            this._modelSelectEl.value = "";
+            this._modelSelectEl.disabled = true;
+        }
+        this._updateAttachmentCapabilityState();
+    }
+
+    _onModelChange(modelId: string): void {
+        this._modelId = modelId || null;
+        this._updateAttachmentCapabilityState();
+        if (this.chatService.getActiveSessionId()) {
+            this._setStatus("Model changed. Start a new session to use it.");
+        }
+    }
+
+    _showChatView(): void {
+        this._viewMode = "chat";
+        this._chatViewEl?.classList.remove("hidden");
+        this._sessionsViewEl?.classList.add("hidden");
+    }
+
+    _showSessionsView(): void {
+        this._viewMode = "sessions";
+        this._chatViewEl?.classList.add("hidden");
+        this._sessionsViewEl?.classList.remove("hidden");
+    }
+
+    _updateSessionTitle(session?: ChatSession | null): void {
+        const activeId = session?.id || this.chatService.getActiveSessionId();
+        const resolved = session || this._sessions.find((s) => s.id === activeId) || null;
+        if (this._sessionTitleEl) {
+            this._sessionTitleEl.textContent = resolved?.title || "No active session";
+        }
+    }
+
     create(): HTMLElement {
-        const displayModeSelect = select({
-                class: "select select-xs select-bordered max-w-xs",
+        this._displayModeSelectEl = select({
+                class: "select select-sm select-bordered w-full",
                 onchange: (e: Event) => {
                     this._displayMode = ((e.target as HTMLSelectElement).value as any) || "user-friendly";
                     this._messageList?.setDisplayMode(this._displayMode);
@@ -206,17 +302,24 @@ export class ChatPanel extends BaseComponent {
             option({ value: "user-friendly" }, "User-friendly"),
             option({ value: "all" }, "All history")
         ) as HTMLSelectElement;
-        displayModeSelect.value = this._displayMode;
+        this._displayModeSelectEl.value = this._displayMode;
 
         this._personalitySelectEl = select({
-            class: "select select-xs select-bordered max-w-xs",
+            class: "select select-sm select-bordered w-full",
             onchange: (e: Event) => this._onPersonalityChange((e.target as HTMLSelectElement).value),
         }) as HTMLSelectElement;
 
         this._providerSelectEl = select({
-            class: "select select-xs select-bordered max-w-xs mr-2",
-            onchange: (e: Event) => this._onProviderChange((e.target as HTMLSelectElement).value),
+            class: "select select-sm select-bordered max-w-[12rem]",
+            onchange: (e: Event) => { void this._onProviderChange((e.target as HTMLSelectElement).value); },
         }) as HTMLSelectElement;
+
+        this._modelSelectEl = select({
+            class: "select select-sm select-bordered flex-1 min-w-0",
+            onchange: (e: Event) => this._onModelChange((e.target as HTMLSelectElement).value),
+        }) as HTMLSelectElement;
+        this._modelSelectEl.appendChild(option({ value: "" }, "No models"));
+        this._modelSelectEl.disabled = true;
 
         this._loginBtn = new Button(
             {
@@ -232,7 +335,6 @@ export class ChatPanel extends BaseComponent {
 
         this._sessionPicker = new ChatSessionPicker({
             onSelect: (sessionId) => { void this._handleSessionSelection(sessionId); },
-            onCreate: () => { void this._handleNewSession(); },
             onRename: (sessionId) => { void this._handleRenameSession(sessionId); },
             onDelete: (sessionId) => { void this._handleDeleteSession(sessionId); },
         });
@@ -251,49 +353,111 @@ export class ChatPanel extends BaseComponent {
         });
 
         const headerRow = div(
-            { class: "flex items-center justify-between px-2 py-1 border-b border-base-300 bg-base-200" },
+            { class: "flex items-center justify-between gap-2 px-2 py-1 border-b border-base-300 bg-base-200" },
             div(
-                { class: "flex items-center gap-2" },
+                { class: "flex items-center gap-2 min-w-0" },
                 new FAIcon({ name: "fa-comments" }).create(),
-                span({ class: "font-semibold text-xs" }, "Pathology Assistant")
+                span({ class: "font-semibold text-xs truncate" }, "Pathology Assistant")
             ),
             div(
-                { class: "flex items-center gap-2" },
+                { class: "flex items-center gap-2 shrink-0" },
                 this._providerSelectEl,
                 this._loginBtn.create()
             )
         );
 
         this._statusEl = span({ class: "text-[11px] text-base-content/70 truncate" }) as HTMLElement;
-        const toolbar = div(
-            { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex flex-col gap-1" },
-            div({ class: "flex items-center justify-between gap-2" },
-                this._statusEl,
-                div({ class: "flex items-center gap-2 shrink-0" },
-                    fieldset({ class: "fieldset" }, legend({ class: "fieldset-legend" }, "Personality"), this._personalitySelectEl),
-                    fieldset({ class: "fieldset" }, legend({ class: "fieldset-legend" }, "Display"), displayModeSelect)
-                )
-            ),
-            this._sessionPicker.create()
+        this._sessionTitleEl = span({ class: "truncate flex-1 text-[12px] font-medium" }, "No active session") as HTMLElement;
+
+        const sessionsBtn = new Button(
+            {
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.NONE,
+                extraClasses: { base: "btn btn-xs" },
+                extraProperties: { title: "Open session manager" },
+                onClick: () => this._showSessionsView(),
+            },
+            new FAIcon({ name: "fa-comments" }),
+            span("Sessions")
+        ).create();
+
+        const consentBtn = new Button(
+            {
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.NONE,
+                extraClasses: { base: "btn btn-xs btn-square" },
+                extraProperties: { title: "Consent and chat settings" },
+                onClick: () => this._openSettingsDialog(),
+            },
+            new FAIcon({ name: "fa-shield-halved" })
+        ).create();
+
+        const sessionBar = div(
+            { class: "px-2 py-1 border-b border-base-200 bg-base-100 flex items-center gap-2" },
+            sessionsBtn,
+            this._sessionTitleEl,
+            consentBtn,
         );
 
+        this._chatViewEl = div(
+            { class: "flex-1 min-h-0 flex flex-col" },
+            this._messageList.create(),
+        ) as HTMLElement;
+
+        const sessionsBackBtn = new Button(
+            {
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.NONE,
+                extraClasses: { base: "btn btn-xs" },
+                onClick: () => this._showChatView(),
+            },
+            new FAIcon({ name: "fa-arrow-left" }),
+            span("Back")
+        ).create();
+
+        const sessionsNewBtn = new Button(
+            {
+                size: Button.SIZE.TINY,
+                type: Button.TYPE.PRIMARY,
+                extraClasses: { base: "btn btn-xs" },
+                extraProperties: { title: "Start a new chat session" },
+                onClick: () => { void this._handleNewSession(); },
+            },
+            new FAIcon({ name: "fa-plus" }),
+            span("New")
+        ).create();
+
+        this._sessionsViewEl = div(
+            { class: "hidden flex-1 min-h-0 flex flex-col bg-base-100" },
+            div(
+                { class: "px-2 py-2 border-b border-base-200 flex items-center justify-between gap-2" },
+                div(
+                    { class: "flex items-center gap-2 min-w-0" },
+                    sessionsBackBtn,
+                    span({ class: "font-semibold text-sm truncate" }, "Sessions"),
+                ),
+                sessionsNewBtn,
+            ),
+            div(
+                { class: "p-2 overflow-auto w-full" },
+                this._sessionPicker.create(),
+            ),
+        ) as HTMLElement;
+
         this._inputEl = textarea({
-            class: "textarea textarea-bordered textarea-xs w-full resize-none mb-1",
-            rows: 3,
+            class: "textarea textarea-bordered textarea-sm w-full resize-none pr-12",
+            rows: 4,
             placeholder: "Ask something or request an automation…",
             onkeydown: (e: KeyboardEvent) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) this._handleSend(e);
             },
         }) as HTMLTextAreaElement;
 
-        const settingsIcon = new FAIcon({ name: "fa-shield-halved", extraClasses: { extra: "mr-2 text-sm" } }).create() as HTMLElement;
-        settingsIcon.onclick = () => this._openConsentDialog();
-
         this._sendBtnEl = new Button(
             {
                 size: Button.SIZE.SMALL,
                 type: Button.TYPE.PRIMARY,
-                extraClasses: { ml: "ml-3" },
+                extraClasses: { base: "btn btn-sm" },
                 extraProperties: { title: "Send message" },
                 onClick: (e: Event) => this._handleSend(e),
             },
@@ -301,34 +465,47 @@ export class ChatPanel extends BaseComponent {
             span("Send")
         ).create();
 
-        const composer = div(
-            { class: "border-t border-base-300 bg-base-100 px-2 py-2 flex flex-col gap-1" },
-            this._attachmentBar.create(),
+        const inputWrap = div(
+            { class: "relative" },
             this._inputEl,
-            div({ class: "flex items-center justify-between text-[10px]" },
-                span(settingsIcon, span("Press Ctrl+Enter to send")),
-                this._sendBtnEl
+            div({ class: "absolute top-2 right-2" }, this._attachmentBar.create()),
+        );
+
+        const composer = div(
+            { class: "border-t border-base-300 bg-base-100 px-2 py-2 flex flex-col gap-2" },
+            inputWrap,
+            div(
+                { class: "flex items-center gap-2" },
+                this._modelSelectEl,
+                this._sendBtnEl,
+            ),
+            div(
+                { class: "flex items-center justify-between text-[10px] gap-2" },
+                this._statusEl,
+                span({ class: "shrink-0 text-base-content/60" }, "Ctrl+Enter to send")
             )
         );
 
-        this._consentOverlay = this._buildConsentOverlay();
+        this._settingsContentEl = this._buildSettingsContent();
 
         const root = div(
             { ...this.commonProperties, ...this.extraProperties },
             headerRow,
-            toolbar,
-            this._messageList.create(),
+            sessionBar,
+            this._chatViewEl,
+            this._sessionsViewEl,
             composer,
-            this._consentOverlay
         ) as HTMLElement;
 
         this._root = root;
         this.refreshProviders();
         this.refreshPersonalities();
         this._messageList.setMessages(this._messages);
-        this._setStatus("Select a model to start.");
+        this._updateSessionTitle(null);
+        this._setStatus("Select a provider to start.");
         this._updateInputState();
         this.refreshScriptConsent();
+        this._updateSessionPickerState();
         return root;
     }
 
@@ -343,10 +520,18 @@ export class ChatPanel extends BaseComponent {
         this._messageList?.clear();
     }
 
-    refreshScriptConsent(): void {
-        if (!this._consentOverlay) return;
+    _updateSessionPickerState(): void {
+        this._sessionPicker?.setDisabled(!this._providerId);
+    }
 
-        const content = this._consentOverlay.querySelector("[data-script-consent-list]") as HTMLElement | null;
+    _getCurrentModelInfo(): ChatProviderModelInfo | null {
+        return this._models.find((m) => m.id === this._modelId) || null;
+    }
+
+    refreshScriptConsent(): void {
+        if (!this._settingsContentEl) return;
+
+        const content = this._settingsContentEl.querySelector("[data-script-consent-list]") as HTMLElement | null;
         if (!content) return;
 
         const chatModule = this.chat;
@@ -396,17 +581,26 @@ export class ChatPanel extends BaseComponent {
         if (this._inputEl) this._inputEl.disabled = !ready;
         if (this._sendBtnEl) this._sendBtnEl.disabled = !ready;
         this._attachmentBar?.setDisabled(!ready);
-        this._sessionPicker?.setDisabled(!ready && !this._providerId);
+        this._sessionPicker?.setDisabled(!this._providerId);
+        if (this._modelSelectEl) this._modelSelectEl.disabled = !this._providerId || !this._models.length;
 
         if (!keepStatus) {
-            if (!ready) {
-                this._setStatus("Login and scripting permission review are required before chatting.");
+            if (!this._providerId) {
+                this._setStatus("Select a provider to start.");
+            } else if (!ready) {
+                const provider = this.chatService.getProvider(this._providerId);
+                if (provider?.requiresLogin !== false && !this.chatService.isAuthenticated(this._providerId)) {
+                    this._setStatus("Login required before chatting.");
+                } else {
+                    this._setStatus("Review chat settings before chatting.");
+                }
             } else if (this.chatService.getActiveSessionId()) {
                 this._setStatus("Ready.");
             } else {
                 this._setStatus("Ready. Start a new chat or send a message to begin.");
             }
         }
+        this._updateAttachmentCapabilityState();
     }
 
     _updateLoginButtonState(): void {
@@ -436,67 +630,68 @@ export class ChatPanel extends BaseComponent {
         this._loginBtn.toggleClass("hidden", "hidden", authed);
     }
 
-    _buildConsentOverlay(): HTMLElement {
+    _buildSettingsContent(): HTMLElement {
         const scriptConsentList = div({ class: "flex flex-col gap-2", "data-script-consent-list": "" });
 
-        const actions = div(
-            { class: "mt-2 flex justify-between gap-2" },
-            new Button(
-                {
-                    size: Button.SIZE.SMALL,
-                    type: Button.TYPE.NONE,
-                    extraClasses: { base: "btn btn-sm" },
-                    extraProperties: { title: "Cancel" },
-                    onClick: () => this._closeConsentDialog(),
-                },
-                span("Cancel")
-            ).create(),
-            new Button(
-                {
-                    size: Button.SIZE.SMALL,
-                    type: Button.TYPE.PRIMARY,
-                    extraClasses: { base: "btn btn-sm" },
-                    extraProperties: { title: "Continue" },
-                    onClick: () => this._applyConsentAndContinue(),
-                },
-                new FAIcon({ name: "fa-check" }).create(),
-                span("Continue")
-            ).create()
-        );
+        const applyBtn = new Button(
+            {
+                size: Button.SIZE.SMALL,
+                type: Button.TYPE.PRIMARY,
+                extraClasses: { base: "btn btn-sm" },
+                extraProperties: { title: "Save settings" },
+                onClick: () => { void this._applySettingsAndContinue(); },
+            },
+            new FAIcon({ name: "fa-check" }).create(),
+            span("Save")
+        ).create();
 
-        const box = div(
-            { class: "bg-base-100 rounded-lg shadow-xl border border-base-300 w-full max-w-md p-4 flex flex-col gap-3" },
+        return div(
+            { class: "w-full max-w-lg p-4 flex flex-col gap-4" },
             div(
-                { class: "flex items-center justify-between mb-1" },
-                span({ class: "font-semibold text-lg" }, "Scripting access"),
-                new FAIcon({ name: "fa-shield-halved" }).create()
+                { class: "flex items-center justify-between gap-2" },
+                div(
+                    { class: "flex items-center gap-2" },
+                    new FAIcon({ name: "fa-shield-halved" }).create(),
+                    span({ class: "font-semibold text-lg" }, "Consent & settings")
+                )
             ),
             span(
                 { class: "text-[11px] text-base-content/80" },
-                "Choose which scripting namespaces the assistant may use. Without granted namespaces, the assistant only sees what you type in chat."
+                "Personality, display mode, and scripting consent are kept here so the main chat stays focused on conversation."
+            ),
+            fieldset(
+                { class: "fieldset" },
+                legend({ class: "fieldset-legend" }, "Personality"),
+                this._personalitySelectEl || div()
+            ),
+            fieldset(
+                { class: "fieldset" },
+                legend({ class: "fieldset-legend" }, "Display"),
+                this._displayModeSelectEl || div()
             ),
             fieldset(
                 { class: "fieldset" },
                 legend({ class: "fieldset-legend" }, "Allowed scripting namespaces"),
                 scriptConsentList
             ),
-            actions
+            div({ class: "flex items-center justify-end gap-2" }, applyBtn)
         ) as HTMLElement;
-
-        return div({ class: "hidden fixed inset-0 z-50 flex items-center justify-center bg-base-300/70" }, box) as HTMLElement;
     }
 
     async _onProviderChange(providerId: string): Promise<void> {
         this._providerId = providerId || null;
         this.chatService.setActiveSessionId(null);
         this._sessions = [];
+        this._modelId = null;
         this.clearMessages();
         this._sessionPicker?.setSessions([], null);
+        this._updateSessionTitle(null);
         this._updateLoginButtonState();
+        await this._refreshModelsForCurrentProvider();
 
         if (!providerId) {
             this._consentConfigured = false;
-            this._setStatus("Select a model to start.");
+            this._setStatus("Select a provider to start.");
             this._updateInputState();
             return;
         }
@@ -514,13 +709,13 @@ export class ChatPanel extends BaseComponent {
 
         if (requiresLogin && !authed) {
             this._consentConfigured = false;
-            this._setStatus("Model selected. Please log in first.");
+            this._setStatus("Provider selected. Please log in first.");
             this._updateInputState();
             return;
         }
 
         this._consentConfigured = false;
-        this._openConsentDialog();
+        this._openSettingsDialog();
     }
 
     async _handleLoginClick(): Promise<void> {
@@ -532,12 +727,12 @@ export class ChatPanel extends BaseComponent {
             this._setStatus("Logging in…");
             this._loginBtn?.toggleClass?.("loading", "loading", true);
             await this.chatService.login(this._providerId);
-            this._setStatus("Login successful. Please review scripting access.");
-            this._openConsentDialog();
+            this._setStatus("Login successful. Review chat settings to continue.");
+            this._openSettingsDialog();
         } catch (err) {
             console.error("ChatPanel login failed:", err);
             this._consentConfigured = false;
-            this._closeConsentDialog();
+            this._closeSettingsDialog();
             this._setStatus("Login failed. Please try again. See console for details.");
         } finally {
             this._loginBtn?.toggleClass?.("loading", "loading", false);
@@ -546,21 +741,42 @@ export class ChatPanel extends BaseComponent {
         }
     }
 
-    _openConsentDialog(): void {
+    _openSettingsDialog(): void {
         this.chat?.refreshScriptConsentFromManager?.();
         this.refreshScriptConsent();
-        if (!this._consentOverlay) return;
-        this._consentOverlay.classList.remove("hidden");
+
+        if (!this._settingsContentEl) return;
+
+        if (!this._settingsModal) {
+            this._settingsModal = new (globalThis as any).UI.Modal({
+                header: null,
+                body: this._settingsContentEl,
+                footer: null,
+                width: "min(560px, 92vw)",
+                isBlocking: true,
+                allowClose: true,
+                allowResize: false,
+                destroyOnClose: false,
+                onClose: () => {
+                    // keep instance/content for reuse
+                },
+            });
+
+            USER_INTERFACE.addHtml(this._settingsModal, "vercel-ai-chat-sdk");
+        } else if (!this._settingsModal.root?.parentNode) {
+            USER_INTERFACE.addHtml(this._settingsModal, "vercel-ai-chat-sdk");
+        }
+
+        this._settingsModal.open();
     }
 
-    _closeConsentDialog(): void {
-        if (!this._consentOverlay) return;
-        this._consentOverlay.classList.add("hidden");
+    _closeSettingsDialog(): void {
+        this._settingsModal?.close?.();
     }
 
-    async _applyConsentAndContinue(): Promise<void> {
+    async _applySettingsAndContinue(): Promise<void> {
         this._consentConfigured = true;
-        this._closeConsentDialog();
+        this._closeSettingsDialog();
         this._updateInputState();
         await this._refreshSessionsForCurrentProvider({ autoLoadLatest: true });
     }
@@ -569,8 +785,12 @@ export class ChatPanel extends BaseComponent {
         if (!this._providerId || !this.chatService) {
             this._sessions = [];
             this._sessionPicker?.setSessions([], null);
+            this._sessionPicker?.setDisabled(true);
+            this._updateSessionTitle(null);
             return;
         }
+
+        this._sessionPicker?.setDisabled(false);
 
         try {
             const sessions = await this.chatService.listSessions(this._providerId);
@@ -595,6 +815,7 @@ export class ChatPanel extends BaseComponent {
 
             this.chatService.setActiveSessionId(null);
             this._sessionPicker?.setActiveSession(null);
+            this._updateSessionTitle(null);
             this.clearMessages();
             this._setStatus("Ready. Start a new chat or choose an existing session.");
         } catch (error) {
@@ -609,6 +830,7 @@ export class ChatPanel extends BaseComponent {
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
             this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
+            this._updateSessionTitle(hydration.session);
 
             if (hydration.session.personalityId && this.chatService.getPersonality(hydration.session.personalityId)) {
                 this._personalityId = hydration.session.personalityId;
@@ -616,6 +838,11 @@ export class ChatPanel extends BaseComponent {
                 if (this._personalitySelectEl) this._personalitySelectEl.value = hydration.session.personalityId;
             }
 
+            if (hydration.session.modelId) {
+                await this._refreshModelsForCurrentProvider(hydration.session.modelId);
+            }
+
+            this._showChatView();
             this._setStatus(`Loaded session: ${hydration.session.title}`);
         } catch (error) {
             console.error("Failed to load session:", error);
@@ -627,19 +854,21 @@ export class ChatPanel extends BaseComponent {
         if (!sessionId) {
             this.chatService.setActiveSessionId(null);
             this.clearMessages();
+            this._updateSessionTitle(null);
             this._setStatus("Ready. Start a new chat or choose an existing session.");
             return;
         }
         await this._loadSession(sessionId);
     }
 
-    async _ensureActiveSession(): Promise<string> {
+    async _ensureActiveSession(options: { showChatView?: boolean } = {}): Promise<string> {
+        const { showChatView = true } = options;
+
         const current = this.chatService.getActiveSessionId();
         if (current) return current;
-        if (!this._providerId) throw new Error("Select a model first.");
+        if (!this._providerId) throw new Error("Select a provider first.");
 
-        const models = await this.chatService.listModels(this._providerId);
-        const modelId = models[0]?.id;
+        const modelId = this._modelId || this._models[0]?.id || (await this.chatService.listModels(this._providerId))[0]?.id;
         if (!modelId) throw new Error(`Provider '${this._providerId}' did not return any models.`);
 
         const session = await this.chatService.createSession({
@@ -649,9 +878,17 @@ export class ChatPanel extends BaseComponent {
             contextId: this.chatService.getProvider(this._providerId)?.contextId || null,
         });
 
+        this._modelId = session.modelId || modelId;
+        if (this._modelSelectEl) this._modelSelectEl.value = this._modelId || "";
         this._sessions = [session, ...this._sessions.filter((s) => s.id !== session.id)];
         this._sessionPicker?.setSessions(this._sessions, session.id);
+        this._updateSessionTitle(session);
         this.clearMessages();
+
+        if (showChatView) {
+            this._showChatView();
+        }
+
         this._setStatus("New chat ready.");
         return session.id;
     }
@@ -663,7 +900,10 @@ export class ChatPanel extends BaseComponent {
         }
 
         try {
-            await this._ensureActiveSession();
+            this.chatService.setActiveSessionId(null);
+            this.clearMessages();
+            await this._ensureActiveSession({ showChatView: true });
+            this._setStatus("New chat session created.");
         } catch (error) {
             console.error("Failed to create a new session:", error);
             this._setStatus("Failed to start a new chat session.");
@@ -680,6 +920,7 @@ export class ChatPanel extends BaseComponent {
             await this.chatService.renameSession(sessionId, nextTitle);
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
+            this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
             this._setStatus("Chat session renamed.");
         } catch (error) {
             console.error("Failed to rename session:", error);
@@ -697,6 +938,7 @@ export class ChatPanel extends BaseComponent {
             if (this.chatService.getActiveSessionId() === sessionId) {
                 this.chatService.setActiveSessionId(null);
                 this.clearMessages();
+                this._updateSessionTitle(null);
             }
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: true });
             this._setStatus("Chat session deleted.");
@@ -707,6 +949,23 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _handleFilesSelected(files: FileList | File[]): Promise<void> {
+        const model = this._getCurrentModelInfo();
+        const caps = model?.capabilities;
+
+        const onlyImages = Array.from(files as any as File[]).every((f: File) =>
+            String(f.type || '').startsWith('image/')
+        );
+
+        if (onlyImages && caps?.images === 'unsupported') {
+            this._setStatus("Screenshot/image upload unavailable for this model.");
+            return;
+        }
+
+        if (!onlyImages && caps?.files === 'unsupported') {
+            this._setStatus("File upload unavailable for this model.");
+            return;
+        }
+
         if (!this._isReady()) {
             this._updateInputState();
             return;
@@ -722,14 +981,22 @@ export class ChatPanel extends BaseComponent {
             }
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
+            this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
             this._setStatus("Attachment added to the current chat.");
         } catch (error) {
             console.error("Failed to upload attachment:", error);
-            this._setStatus("Failed to attach file.");
+            this._pushErrorBubble("The file could not be attached.", error);
+            this._setStatus("Attachment failed.");
         }
     }
 
     async _handleAttachScreenshot(): Promise<void> {
+        const caps = this._getCurrentModelInfo()?.capabilities;
+        if (caps?.images === 'unsupported') {
+            this._setStatus("Screenshot unavailable for this model.");
+            return;
+        }
+
         if (!this._isReady()) {
             this._updateInputState();
             return;
@@ -749,10 +1016,12 @@ export class ChatPanel extends BaseComponent {
             this.addMessage(this._messageFromAttachment(attachment));
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(sessionId);
+            this._updateSessionTitle(this._sessions.find((s) => s.id === sessionId) || null);
             this._setStatus("Screenshot attached to the current chat.");
         } catch (error) {
             console.error("Failed to attach screenshot:", error);
-            this._setStatus("Failed to attach screenshot.");
+            this._pushErrorBubble("The screenshot could not be attached.", error);
+            this._setStatus("Screenshot failed.");
         }
     }
 
@@ -785,6 +1054,33 @@ export class ChatPanel extends BaseComponent {
         };
     }
 
+    _updateAttachmentCapabilityState(): void {
+        const model = this._getCurrentModelInfo();
+        const caps = model?.capabilities;
+
+        const imagesUnsupported = caps?.images === 'unsupported';
+        const filesUnsupported = caps?.files === 'unsupported';
+
+        const screenshotAvailable = !imagesUnsupported;
+        const fileAvailable = !filesUnsupported;
+
+        this._attachmentBar?.setDisabled(!this._isReady());
+        this._attachmentBar?.setAvailability({
+            files: fileAvailable,
+            screenshot: screenshotAvailable,
+        });
+
+        if (!this._isReady()) return;
+
+        if (imagesUnsupported && filesUnsupported) {
+            this._setStatus("Screenshot unavailable. File upload unavailable for this model.");
+        } else if (imagesUnsupported) {
+            this._setStatus("Screenshot unavailable for this model.");
+        } else if (filesUnsupported) {
+            this._setStatus("File upload unavailable for this model.");
+        }
+    }
+
     async _captureViewerScreenshotBlob(): Promise<Blob> {
         const viewer = (globalThis as any).VIEWER_MANAGER?.activeViewer || (globalThis as any).VIEWER;
         const canvas: HTMLCanvasElement | undefined = viewer?.drawer?.canvas || viewer?.canvas;
@@ -801,6 +1097,11 @@ export class ChatPanel extends BaseComponent {
 
     async _handleSend(event?: Event): Promise<void> {
         event?.preventDefault?.();
+
+        if (this._isRunning) {
+            return;
+        }
+
         if (!this._isReady() || !this._inputEl || !this.chatService || !this._providerId) {
             this._updateInputState();
             return;
@@ -820,17 +1121,32 @@ export class ChatPanel extends BaseComponent {
         if (this._sendBtnEl) this._sendBtnEl.disabled = true;
 
         try {
+            this._isRunning = true;
+            this._stopRequested = false;
+
             await this._ensureActiveSession();
             await this._runAssistantLoop(userMsg, this.MAX_SCRIPT_STEPS);
             await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
             this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
+            this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
             this._setStatus("Ready.");
         } catch (err) {
             console.error("Chat loop failed:", err);
-            this._setStatus("Failed. See console for details.");
+            this._pushErrorBubble("The assistant could not complete this turn.", err);
+            this._setStatus("Turn failed.");
         } finally {
             this._updateInputState({ keepStatus: true });
+            this._isRunning = false;
+            this._stopRequested = false;
+            this._updateInputState({ keepStatus: true });
         }
+    }
+
+    _handleStop(): void {
+        if (!this._isRunning) return;
+        this._stopRequested = true;
+        this._setStatus("Stopping…");
+        this._messageList?.updateProgress("Stopping…");
     }
 
     async _runAssistantLoop(initialMessage: ChatMessage, maxSteps: number): Promise<void> {
@@ -841,13 +1157,23 @@ export class ChatPanel extends BaseComponent {
 
         try {
             for (let step = 0; step < maxSteps; step++) {
+                if (this._stopRequested) {
+                    this._messageList?.removeProgress();
+                    this._setStatus("Stopped.");
+                    return;
+                }
+
                 this._setStatus(step === 0 ? "Sending…" : "Thinking…");
 
                 const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice());
                 this._messages.push(reply);
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
-                this._messageList?.updateProgress(this._friendlyProgress(reply, null, step));
+
+                const rawProgress = this.chat?.extractAssistantTextWithoutScript?.(reply);
+                const assistantProgress = rawProgress?.split(/\n\s*\n/)[0]?.trim()
+                    .slice(0, 220) || this._friendlyProgress(reply, null, step);
+                this._messageList?.updateProgress(assistantProgress || this._friendlyProgress(reply, null, step));
 
                 if (!script) {
                     this._messageList?.removeProgress();
@@ -876,6 +1202,12 @@ export class ChatPanel extends BaseComponent {
                     };
                 }
 
+                if (this._stopRequested) {
+                    this._messageList?.removeProgress();
+                    this._setStatus("Stopped.");
+                    return;
+                }
+
                 this._messages.push(executionMessage);
                 this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
             }
@@ -894,12 +1226,41 @@ export class ChatPanel extends BaseComponent {
             this._messageList?.updateProgress("Preparing the final answer…");
 
             const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice());
+
+            if (this._stopRequested) {
+                this._messageList?.removeProgress();
+                this._setStatus("Stopped.");
+                return;
+            }
+
             this._messages.push(finalReply);
             this._messageList?.removeProgress();
             this._messageList?.addMessage(finalReply);
         } finally {
             this._messageList?.removeProgress();
         }
+    }
+
+    _toErrorText(error: unknown, fallback: string): string {
+        if (error instanceof Error && error.message) return error.message;
+        if (typeof error === "string" && error.trim()) return error;
+        return fallback;
+    }
+
+    _pushErrorBubble(summary: string, error?: unknown): void {
+        const detail = this._toErrorText(error, summary);
+        const message: ChatMessage = {
+            role: "assistant",
+            content: `${summary}\n\n${detail}`,
+            parts: [{
+                type: "text",
+                text: `${summary}\n\n${detail}`,
+            }],
+            metadata: { uiVariant: "error" },
+            createdAt: new Date(),
+        };
+        this._messages.push(message);
+        this._messageList?.addMessage(message);
     }
 
     _friendlyProgress(reply?: ChatMessage | null, executionMessage?: ChatMessage | null, step: number = 0): string {

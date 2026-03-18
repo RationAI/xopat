@@ -1,36 +1,31 @@
 const van = globalThis.van;
-const { div, input, label, img, span, button } = van.tags;
+const { div, img, span, button } = van.tags;
 
 /**
- * SlideSwitcherMenu (compact, instant selection; embedded FloatingWindow)
- * Refactored for multi-selection, folder persistence, and header preview.
+ * SlideSwitcherMenu
+ *
+ * Single public entrypoint for viewer changes:
+ *   APPLICATION_CONTEXT.openViewerWith(...)
  */
 export class SlideSwitcherMenu extends UI.BaseComponent {
     constructor(options = {}) {
         super(options);
 
-        // Map<ConfigID, { item: any, config: object }>
+        /** @type {Map<string, { item: any, config: any }>} */
         this.selectedItems = new Map();
-
-        // Cache for config generation to avoid re-computing/registering constantly
         this._configCache = new WeakMap();
-
-        this._suspendUpdates = false;
-        this._cachedPreviews = {}; // Cache for thumbnail DOM nodes
-        this._cachedLabels = {};   // Cache for label DOM nodes
+        this._cachedPreviews = {};
+        this._cachedLabels = {};
         this._levels = undefined;
         this._dock = undefined;
-
-        // UI Hosts
         this._headerHost = null;
     }
 
     // ---------- Public API ----------
 
     open() {
-        if (this._preventOpen) {
-            return;
-        }
+        if (this._preventOpen) return;
+
         if (!this._dock) {
             this.windowId = this.options.id ?? "slide-switcher";
             this.title = this.options.title ?? "Slide Switcher";
@@ -47,7 +42,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             });
             const toolbar = this._renderToolbar();
 
-            // 3. Explorer Content
             const contentHost = document.createElement("div");
             contentHost.className = "flex-1 min-h-0 relative w-full overflow-hidden";
 
@@ -75,21 +69,16 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             USER_INTERFACE.addHtml(el, 'slide-info');
         }
 
-        // Sync state with currently opened viewer slides
         this._syncWithViewer();
         this._renderSelectionHeader();
+        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
         this._dock.open();
     }
 
     close() {
-        this._dock && this._dock.close();
+        this._dock?.close();
     }
 
-    /**
-     *
-     * @param {object|null} newConfig object - custom hierarchy configuration, or null to disable custom hierarchy,
-     *   or empty object to set 'preload' mode - standalone is set to true, but open is disabled until refresh is re-called
-     */
     refresh(newConfig) {
         if (!newConfig) {
             this.orgConfig = null;
@@ -107,24 +96,21 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this._preventOpen = true;
             return;
         }
-        this._preventOpen = false;
-        this._levels = this._buildLevels();
-        this.selectedItems.clear();
-        this._syncWithViewer(); // todo check if this is not called too often
 
+        this._preventOpen = false;
         this._configCache = new WeakMap();
+        this._levels = this._buildLevels();
+        this._syncWithViewer();
         this._renderSelectionHeader();
 
         if (this.explorer) {
             this.explorer.reconfigure({ levels: this._levels });
+            this.explorer._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
         }
     }
 
-    // ---------- Logic: Selection & Sync ----------
+    // ---------- State helpers ----------
 
-    /**
-     * Resolves the config for an item and registers it with the core ID system.
-     */
     _getConfig(item) {
         if (!item) return null;
         if (this._configCache.has(item)) return this._configCache.get(item);
@@ -137,156 +123,184 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return conf;
     }
 
-    _syncWithViewer() {
-        // Always sync with viewer state (even if standalone/custom hierarchy)
-        const activeRaw = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", null, true, true);
-        const allBg = APPLICATION_CONTEXT.config.background;
-
-        // todo no array -> no stcked more anymore
-        // Normalize: active index can be a number or array
-        const activeIndices =
-            Array.isArray(activeRaw) ? activeRaw :
-                (typeof activeRaw === "number" ? [activeRaw] : []);
-
-        // Clear previous sync selections that came from viewer state
-        // (otherwise stale selections can linger when active slide changes)
-        this.selectedItems.clear();
-
-        activeIndices
-            .filter(idx => Number.isInteger(idx) && idx >= 0 && idx < allBg.length)
-            .forEach(idx => {
-                const bg = allBg[idx];
-                if (!bg) return;
-
-                // Ensure stable BackgroundConfig instance
-                const regBg = APPLICATION_CONTEXT.registerConfig ? APPLICATION_CONTEXT.registerConfig(bg) : bg;
-                if (!regBg?.id) return;
-
-                const item = this.bgToCustom(regBg);
-                this._configCache.set(item, regBg);
-
-                this.selectedItems.set(regBg.id, { item: item, config: regBg });
-            });
+    _getActiveViewerIndex() {
+        const current = VIEWER_MANAGER.get?.();
+        const idx = VIEWER_MANAGER.viewers.indexOf(current);
+        return idx >= 0 ? idx : 0;
     }
 
-    _toggleItem(item, forceState = null, exclusive = false) {
+    _getViewerBackground(viewer) {
+        if (!viewer) return null;
+
+        let bg = viewer?.scalebar?.getReferencedTiledImage?.()?.getConfig?.("background") || null;
+        if (!bg && viewer?.world?.getItemAt) {
+            try {
+                bg = viewer.world.getItemAt(0)?.getConfig?.("background") || null;
+            } catch (e) {
+                bg = null;
+            }
+        }
+        return bg ? APPLICATION_CONTEXT.registerConfig(bg) : null;
+    }
+
+    _collectOpenEntries() {
+        const out = [];
+        for (const viewer of (VIEWER_MANAGER.viewers || [])) {
+            const regBg = this._getViewerBackground(viewer);
+            if (!regBg?.id) continue;
+
+            let item = null;
+            try {
+                item = this.bgToCustom?.(regBg);
+            } catch (e) {
+                console.warn("SlideSwitcher: failed to map background to custom item", e);
+            }
+            if (!item) item = { originalItem: regBg };
+            this._configCache.set(item, regBg);
+            out.push({ item, config: regBg });
+        }
+        return out;
+    }
+
+    _syncWithViewer() {
+        this.selectedItems.clear();
+        for (const entry of this._collectOpenEntries()) {
+            this.selectedItems.set(entry.config.id, entry);
+        }
+    }
+
+    _dedupeEntries(entries) {
+        const out = [];
+        const seen = new Set();
+
+        for (const entry of (entries || [])) {
+            const conf = entry?.config || this._getConfig(entry?.item);
+            if (!conf?.id || seen.has(conf.id)) continue;
+            seen.add(conf.id);
+            out.push({ item: entry.item, config: conf });
+        }
+        return out;
+    }
+
+    _resolveDataEntry(conf) {
+        if (!conf) return undefined;
+
+        // Prefer the raw/original data specification when available. This keeps
+        // the slide reopenable even after the session data array was cleared.
+        if (conf._rawValue !== undefined && conf._rawValue !== null) {
+            return conf._rawValue;
+        }
+
+        const raw = typeof conf.toJSON === "function" ? conf.toJSON() : conf;
+        const ref = raw?.dataReference ?? conf.dataReference;
+        if (typeof ref === "number") {
+            const fromConfig = APPLICATION_CONTEXT.config.data?.[ref];
+            if (fromConfig !== undefined) return fromConfig;
+
+            const bgSpec = globalThis.BackgroundConfig?.dataSpecification?.(conf);
+            if (bgSpec !== undefined) return bgSpec;
+            return undefined;
+        }
+        return ref;
+    }
+
+    _buildViewerPayload(entries) {
+        const normalized = this._dedupeEntries(entries);
+        const data = [];
+        const background = [];
+
+        normalized.forEach((entry, idx) => {
+            const conf = entry.config || this._getConfig(entry.item);
+            if (!conf) return;
+
+            const raw = typeof conf.toJSON === "function" ? conf.toJSON() : { ...conf };
+            const dataEntry = this._resolveDataEntry(conf);
+            const bgCopy = { ...raw, dataReference: idx };
+
+            data.push(dataEntry);
+            background.push(bgCopy);
+        });
+
+        return {
+            entries: normalized,
+            data,
+            background,
+            bgSpec: background.length ? background.map((_, i) => i) : null,
+        };
+    }
+
+    async _openEntries(entries, activeViewerIndex = 0) {
+        const payload = this._buildViewerPayload(entries);
+
+        await APPLICATION_CONTEXT.openViewerWith(
+            payload.background.length ? payload.data : null,
+            payload.background.length ? payload.background : null,
+            undefined,
+            payload.bgSpec,
+            payload.background.length ? undefined : null,
+            { deriveOverlayFromBackgroundGoals: true },
+        );
+
+        this._syncWithViewer();
+        this._renderSelectionHeader();
+        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+
+        const clamped = Math.max(0, Math.min(activeViewerIndex, VIEWER_MANAGER.viewers.length - 1));
+        const viewer = VIEWER_MANAGER.viewers[clamped];
+        if (viewer) VIEWER_MANAGER.setActive(viewer);
+    }
+
+    async _openInViewer(item, spawnNew = false) {
         const conf = this._getConfig(item);
-        if (!conf || !conf.id) {
-            console.warn("Cannot select item: Config missing ID", item);
+        if (!conf?.id) return;
+
+        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        if (existingViewer) {
+            VIEWER_MANAGER.setActive(existingViewer);
+            this._syncWithViewer();
+            this._renderSelectionHeader();
+            this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
             return;
         }
-        const id = conf.id;
 
-        const isSelected = this.selectedItems.has(id);
-        const shouldSelect = forceState !== null ? forceState : !isSelected;
+        const entries = this._collectOpenEntries();
+        let targetIndex = this._getActiveViewerIndex();
 
-        this._suspendUpdates = true;
-
-        if (exclusive) {
-            this.selectedItems.clear();
-        }
-
-        if (shouldSelect) {
-            this.selectedItems.set(id, { item, config: conf });
+        if (spawnNew || entries.length === 0) {
+            entries.push({ item, config: conf });
+            targetIndex = entries.length - 1;
+        } else if (targetIndex >= entries.length) {
+            entries.push({ item, config: conf });
+            targetIndex = entries.length - 1;
         } else {
-            this.selectedItems.delete(id);
+            entries[targetIndex] = { item, config: conf };
         }
 
-        // Update UI
-        this._renderSelectionHeader();
-
-        // Update check visuals in the current view
-        if (exclusive) {
-            const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
-            checks.forEach(ch => {
-                const cId = ch.getAttribute("data-id");
-                if (cId !== id) {
-                    ch.checked = false;
-                    this._toggleCardRing(cId, false);
-                }
-            });
-        }
-        this._updateExplorerCardVisual(id, shouldSelect);
-
-        this._suspendUpdates = false;
-
-        if (this.selectedItems.size > 0) {
-            this._openCurrentSelection();
-        }
+        await this._openEntries(entries, targetIndex);
     }
 
-    _clearAll = () => {
-        if (this.selectedItems.size === 0) return;
-        this.selectedItems.clear();
-        this._renderSelectionHeader();
+    async _removeSlide(item) {
+        const conf = this._getConfig(item);
+        if (!conf?.id) return;
 
-        const checks = document.querySelectorAll(`#${this.windowId}-list input[type="checkbox"]`);
-        checks.forEach(ch => {
-            ch.checked = false;
-            this._toggleCardRing(ch.getAttribute("data-id"), false);
-        });
+        const currentActive = this._getActiveViewerIndex();
+        const entries = this._collectOpenEntries().filter(entry => entry.config?.id !== conf.id);
+        const nextActive = Math.min(currentActive, Math.max(0, entries.length - 1));
+
+        await this._openEntries(entries, nextActive);
+    }
+
+    _clearAll = async () => {
+        this.selectedItems.clear();
+        await this._openEntries([], 0);
     };
 
-    async _openCurrentSelection() {
-        const loadingTimer = setTimeout(() => USER_INTERFACE.Loading.show(), 500);
-        try {
-            const selection = Array.from(this.selectedItems.values());
-            if (selection.length === 0) return;
-
-            let data = [], background = [];
-            let indexes = [];
-
-            if (this.standalone) {
-                // Construct new session data from selected configs
-                selection.forEach((entry, idx) => {
-                    const staticConfig = entry.config;
-
-                    // Shallow copy is fine (tileSource is an object), but we MUST register as BackgroundConfig later
-                    const configCopy = { ...staticConfig };
-
-                    // In standalone mode, we move the "real" data reference into the new data[] array,
-                    // and re-index background.dataReference to the new numeric index.
-                    const ditem = configCopy.dataReference;
-
-                    configCopy.dataReference = idx; // Re-index for new data array
-                    data.push(ditem);
-                    background.push(configCopy);
-                    indexes.push(idx);
-                });
-
-                // IMPORTANT: core requires BackgroundConfig instances (otherwise it filters them out)
-                // This also stabilizes IDs via the registry.
-                background = background.map(bg => APPLICATION_CONTEXT.registerConfig(bg));
-            } else {
-                // Default mode: use global config
-                background = APPLICATION_CONTEXT.config.background;
-                data = APPLICATION_CONTEXT.config.data;
-                // Recover original indexes from the items if available, or find by ID
-                indexes = selection
-                    .map(entry => {
-                        if (entry.item.__bgIndex !== undefined) return entry.item.__bgIndex;
-                        // Fallback: find index in global background by ID
-                        return background.findIndex(b => b.id === entry.config.id);
-                    })
-                    .filter(i => i !== -1 && i !== undefined)
-                    .sort((a, b) => a - b);
-            }
-
-            await APPLICATION_CONTEXT.openViewerWith(
-                data,
-                background,
-                APPLICATION_CONTEXT.config.visualizations,
-                indexes,
-                undefined,
-                { deriveOverlayFromBackgroundGoals: true },
-            );
-
-            // Persist selection
-            APPLICATION_CONTEXT.setOption?.("activeBackgroundIndex", indexes);
-        } finally {
-            clearTimeout(loadingTimer);
-            USER_INTERFACE.Loading.show(false);
-        }
+    _focusItem(item) {
+        const viewer = VIEWER_MANAGER.getViewerForConfig(this._getConfig(item));
+        if (viewer) VIEWER_MANAGER.setActive(viewer);
+        this._syncWithViewer();
+        this._renderSelectionHeader();
+        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
     }
 
     // ---------- UI Rendering ----------
@@ -306,54 +320,49 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this._headerHost.classList.remove("hidden");
             const count = this.selectedItems.size;
 
-            const title = div({class: "text-xs font-bold text-base-content/50 uppercase tracking-wider px-2 py-1"},
-                `Selected (${count})`
+            const title = div({ class: "text-[10px] font-bold text-base-content/50 uppercase tracking-wider px-2 py-1" },
+                `Open (${count})`
             );
-            const listContainer = div({class: "flex flex-wrap gap-2 p-2 max-h-[160px] overflow-y-auto"});
+            const list = div({ class: "flex flex-col gap-1 p-2 max-h-[132px] overflow-y-auto" });
 
             this.selectedItems.forEach((entry) => {
-                listContainer.appendChild(this._renderSlideCard(entry.item, false));
+                list.appendChild(this._renderOpenSlideChip(entry.item, entry.config));
             });
 
-            this._headerHost.append(title, listContainer);
+            this._headerHost.append(title, list);
         });
     }
 
-    _renderCompactCard(item, config) {
-        const bg = config;
-        const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
-
-        const WRAP_CLASS = "relative group flex items-center bg-base-100 border border-base-300 rounded overflow-hidden w-[140px] h-[48px] shadow-sm select-none";
-        const IMG_CLASS = "h-full w-[48px] object-cover bg-black";
-
-        const imgEl = img({
-            class: IMG_CLASS,
-            src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png",
-            draggable: "false"
-        });
-
-        // Load thumbnail
+    _renderOpenSlideChip(item, config) {
+        const bg = config || this._getConfig(item);
+        const id = bg?.id;
+        const name = UTILITIES.nameFromBGOrIndex(bg);
         const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
-        let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
-        if (usedViewer && bg?.id) {
-            this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, null, imgEl, IMG_CLASS);
-        }
+        const linked = this._isLinked(viewer);
+        const isActive = viewer && VIEWER_MANAGER.get?.() === viewer;
+
+        const linkBtn = button({
+            id: `${this.windowId}-lnk-${id}`,
+            class: `btn btn-ghost btn-xs btn-square shrink-0 ${linked ? 'text-primary' : 'text-base-content/50'}`,
+            title: linked ? 'Linked' : 'Not linked',
+            onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
+        }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
 
         const closeBtn = button({
-            class: "btn btn-ghost btn-xs btn-square absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-base-100/80 hover:bg-base-100 text-error",
-            onclick: (e) => {
-                e.stopPropagation();
-                this._toggleItem(item, false);
-            }
-        }, new UI.FAIcon({ name: "fa-times" }).create());
+            class: 'btn btn-ghost btn-xs btn-square shrink-0 text-error',
+            title: 'Close',
+            onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+        }, new UI.FAIcon({ name: 'fa-xmark' }).create());
 
         return div({
-            class: WRAP_CLASS + " cursor-pointer hover:border-primary",
-            title: name,
-            onclick: () => this._toggleItem(item, true, true) // Click on header = exclusive select
-        },
-            imgEl,
-            div({ class: "flex-1 min-w-0 px-2 text-xs truncate" }, name),
+                id: `${this.windowId}-open-${id}`,
+                class: 'flex items-center gap-1 rounded border border-base-300 bg-base-100 px-2 py-1 min-h-[30px]'
+                    + (isActive ? ' ring ring-primary ring-offset-1' : ''),
+                title: 'Focus this viewer',
+                onclick: () => this._focusItem(item)
+            },
+            linkBtn,
+            div({ class: 'min-w-0 flex-1 truncate text-xs font-medium' }, name),
             closeBtn
         );
     }
@@ -365,11 +374,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 span({ class: "font-semibold" }, this.title),
             ),
             div({ class: "flex items-center gap-2" },
+                span({ class: "text-[11px] text-base-content/60 hidden sm:inline" }, "tap preview = Here, New = new viewer"),
                 button({
                     class: "btn btn-ghost btn-xs",
-                    title: "Clear all selections",
+                    title: "Close all opened slides",
                     onclick: this._clearAll
-                }, "Clear")
+                }, "Close all")
             )
         );
     }
@@ -382,38 +392,32 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             return this._wrapLevelsWithDefaults(levelsFromConfig);
         }
 
-        // Default Logic
-        const bg = APPLICATION_CONTEXT.config.background;
+        const bg = APPLICATION_CONTEXT.config.background || [];
         const items = bg.map((b, i) => ({
-            id: `bg-${i}`, // Explorer ID
-            label: globalThis.UTILITIES.nameFromBGOrIndex(b) ?? `Slide ${i + 1}`,
-            originalItem: b, // Source for config
+            id: `bg-${i}`,
+            label: UTILITIES.nameFromBGOrIndex(b) ?? `Slide ${i + 1}`,
+            originalItem: b,
             __bgIndex: i,
         }));
 
         if (items.length === 0) {
-            return this._wrapLevelsWithDefaults([
-                {
-                    id: "no-slides",
-                    label: "No Slides Available",
-                    canOpen: () => false,
-                    getChildren: async () => ({ items: [{ label: "No slides available to display" }], total: 0 }),
-                },
-            ]);
+            return this._wrapLevelsWithDefaults([{
+                id: "no-slides",
+                label: "No Slides Available",
+                canOpen: () => false,
+                getChildren: async () => ({ items: [{ label: "No slides available to display" }], total: 0 }),
+            }]);
         }
 
-        return this._wrapLevelsWithDefaults([
-            {
-                id: "slides", label: "Slides",
-                canOpen: () => false,
-                getChildren: async (parent, ctx) => {
-                    return {
-                        items: items.slice(ctx.pageSize * ctx.page, Math.min(items.length, ctx.pageSize * (ctx.page + 1))),
-                        total: items.length
-                    };
-                },
-            }
-        ]);
+        return this._wrapLevelsWithDefaults([{
+            id: "slides",
+            label: "Slides",
+            canOpen: () => false,
+            getChildren: async (_parent, ctx) => ({
+                items: items.slice(ctx.pageSize * ctx.page, Math.min(items.length, ctx.pageSize * (ctx.page + 1))),
+                total: items.length,
+            }),
+        }]);
     }
 
     _wrapLevelsWithDefaults(levels) {
@@ -423,7 +427,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             if (typeof L.getChildren === "function") {
                 const originalGetChildren = L.getChildren;
                 L.getChildren = async (parent, ctx) => {
-                    const timer = setTimeout(() => USER_INTERFACE.Loading.show(), 500);
+                    const timer = setTimeout(() => USER_INTERFACE.Loading.show(true), 500);
                     try {
                         return await originalGetChildren(parent, ctx);
                     } finally {
@@ -434,19 +438,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
 
             if (!L.renderItem) {
-                L.renderItem = (item, { itemIndex }) => {
+                L.renderItem = (item) => {
                     if (!L.canOpen(item)) return this._renderSlideCard(item);
                     return div({ class: "flex items-center gap-2 px-2 py-2" },
                         span(item.label || item.name || item.id || "Item")
                     );
                 };
             }
-
-            const originalClick = L.onClick;
-            L.onClick = (item, index) => {
-                if (!L.canOpen(item)) this._onCardRootClick(null, item);
-                return originalClick?.(item);
-            };
 
             return L;
         };
@@ -461,113 +459,97 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const bg = this._getConfig(item);
         if (!bg) return div({ class: "text-error", style: "pointer-events: none;" }, "Error: No Config");
 
-        const id = bg.id; // Stable ID from registry
-        const name = globalThis.UTILITIES.nameFromBGOrIndex(bg);
-        const checkboxId = `${this.windowId}-chk-${id}`;
-
-        const checked = this.selectedItems.has(id);
+        const id = bg.id;
+        const name = UTILITIES.nameFromBGOrIndex(bg);
         const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
+        const isOpen = !!viewer;
+        const linked = this._isLinked(viewer);
 
-        const WRAP_CLASS = "relative overflow-hidden aspect-[4/3] w-full";
-        const HOST_CLASS = "flex items-center justify-center";
-        const THUMBNAIL_CLASS = "block w-[86%] h-[86%] object-contain select-none pointer-events-none";
-        const LABEL_CLASS = "block max-w-[120px] absolute bottom-0 right-0";
+        const wrapClass = "relative overflow-hidden aspect-[4/3] w-full rounded border border-base-300 bg-base-100";
+        const hostClass = "flex items-center justify-center h-[120px]";
+        const thumbClass = "block w-[88%] h-[88%] object-contain select-none pointer-events-none";
+        const labelClass = "hidden";
 
         const previewImage = img({
             id: `${this.windowId}-thumb-${id}`,
-            class: THUMBNAIL_CLASS,
+            class: thumbClass,
             alt: name,
             draggable: "false",
             src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
-        let thumbWrap, syncButton;
+        let thumbWrap;
         if (withImagery) {
             const labelImage = img({
                 id: `${this.windowId}-label-${id}`,
-                class: LABEL_CLASS,
+                class: labelClass,
                 alt: name,
                 draggable: "false",
                 src: APPLICATION_CONTEXT.url + "src/assets/image.png"
             });
 
             thumbWrap = div(
-                { class: WRAP_CLASS },
-                div({ class: HOST_CLASS, style: "max-height: 150px;" }, previewImage),
-                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-primary rounded" }, name),
-                labelImage
+                {
+                    class: wrapClass,
+                    title: "Open in active viewer",
+                    onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
+                },
+                div({ class: hostClass }, previewImage),
+                div({ class: "absolute left-1 top-1 z-10 max-w-[80%] px-2 py-1 text-xs font-medium truncate bg-base-200/90 text-primary rounded" }, name),
+                labelImage,
+                isOpen ? div({ class: "absolute right-1 top-1 z-10" },
+                    span({ class: `badge badge-xs ${linked ? 'badge-primary' : 'badge-ghost'}` }, linked ? 'linked' : 'open')
+                ) : null
             );
 
             if (bg?.id) {
-                let usedViewer = viewer || VIEWER_MANAGER.viewers[0];
-                this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, THUMBNAIL_CLASS);
-                this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, LABEL_CLASS);
+                const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
+                if (usedViewer?.tools) {
+                    this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, thumbClass);
+                    this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, labelClass);
+                }
             }
         } else {
-            const linked = this._isLinked(viewer);
-            thumbWrap = div(
-                { class: WRAP_CLASS },
-                div({ class: "absolute left-1 top-1 z-10 px-2 py-1 text-xs font-medium truncate bg-base-200 text-primary rounded" }, name),
+            thumbWrap = div({ class: wrapClass },
+                div({ class: "absolute left-1 top-1 z-10 max-w-[80%] px-2 py-1 text-xs font-medium truncate bg-base-200/90 text-primary rounded" }, name)
             );
+        }
 
-            syncButton = button({
-                id: `${this.windowId}-lnk-${id}`,
+        const controls = div({ class: "flex items-center gap-1 p-2 shrink-0" },
+            button({
                 class: "btn btn-ghost btn-xs",
-                disabled: !viewer,
-                title: viewer ? (linked ? "Synced — click to unsync" : "Not synced — click to sync") : "Not open",
-                onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-            }, new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
-        }
-
-        const controls = div(
-            { class: "flex items-center gap-2 p-2" },
-            input({
-                id: checkboxId,
-                "data-id": id,
-                type: "checkbox",
-                class: "checkbox checkbox-xs",
-                checked,
-                onclick: (e) => e.stopPropagation(),
-                onchange: (e) => this._toggleItem(item, e.target.checked),
-                title: "Add/remove from view"
-            }), syncButton
+                title: "Open in active viewer",
+                onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
+            }, 'Here'),
+            button({
+                class: "btn btn-ghost btn-xs",
+                title: isOpen ? "Already open" : "Open in new viewer",
+                disabled: isOpen,
+                onclick: (e) => { e.stopPropagation(); this._openInViewer(item, true); }
+            }, 'New'),
+            isOpen ? button({
+                class: "btn btn-ghost btn-xs text-error",
+                title: "Close",
+                onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+            }, 'Close') : null
         );
 
-        return div(
-            {
+        return div({
                 id: `${this.windowId}-card-${id}`,
-                style: (withImagery ? "max-height:120px;overflow:hidden;" : "max-height: 30px;"),
-                class:
-                    "slide-card group bg-base-200 border border-base-300 transition " +
-                    (checked ? "ring ring-primary ring-offset-1 " : "") +
-                    "flex flex-row relative w-full",
-                onclick: (e) => this._onCardRootClick(e, item)
+                class: "slide-card group bg-base-200 border border-base-300 transition flex flex-col w-full overflow-hidden rounded"
+                    + (isOpen ? " ring ring-primary ring-offset-1" : ""),
             },
-            controls,
-            thumbWrap
+            thumbWrap,
+            div({ class: "flex items-center justify-between gap-2" },
+                controls,
+                isOpen ? button({
+                    id: `${this.windowId}-lnk-card-${id}`,
+                    class: `btn btn-ghost btn-xs btn-square mr-2 ${linked ? 'text-primary' : 'text-base-content/50'}`,
+                    title: linked ? 'Linked' : 'Not linked',
+                    onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
+                }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()) : span({ class: 'mr-2 text-xs text-base-content/50' }, '')
+            )
         );
-    }
-
-    _onCardRootClick(e, item) {
-        if (e && e.target) {
-            const t = e.target;
-            if (t.closest('button, input, .btn, .toggle, [data-no-open="1"]')) return;
-        }
-        this._toggleItem(item, true, true);
-    }
-
-    _updateExplorerCardVisual(id, isSelected) {
-        const checkbox = document.getElementById(`${this.windowId}-chk-${id}`);
-        if (checkbox) checkbox.checked = isSelected;
-        this._toggleCardRing(id, isSelected);
-    }
-
-    _toggleCardRing(id, on) {
-        const card = document.getElementById(`${this.windowId}-card-${id}`);
-        if (!card) return;
-        card.classList.toggle("ring", !!on);
-        card.classList.toggle("ring-primary", !!on);
-        card.classList.toggle("ring-offset-1", !!on);
     }
 
     // ---------- Utilities ----------
@@ -575,7 +557,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
         const cacheKey = bg.id;
 
-        // 1. If we have a finished HTML element in cache, apply it immediately
         if (cacheMap[cacheKey] instanceof HTMLElement) {
             this._applyToDOM(cacheMap[cacheKey], replacedImageNode, parentNode, imageClasses);
             return;
@@ -590,7 +571,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         cacheMap[cacheKey] = method(bg).then(node => {
             if (node) {
-                cacheMap[cacheKey] = node; // Store the actual DOM node for future re-renders
+                cacheMap[cacheKey] = node;
                 this._applyToDOM(node, replacedImageNode, parentNode, imageClasses);
             }
             return node;
@@ -601,13 +582,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     _applyToDOM(sourceNode, targetNode, parent, classes) {
-        if (!sourceNode) {
-            console.warn("SlideSwitcher: No source node provided for cloning", targetNode.id);
-            return;
-        }
+        if (!sourceNode || !targetNode) return;
 
-        const current = document.getElementById(targetNode.id) || parent?.querySelector(`#${targetNode.id}`);
-        if (!current) return; // It's okay if it's missing now; the cache handles the next render
+        const current = document.getElementById(targetNode.id) || parent?.querySelector?.(`#${targetNode.id}`);
+        if (!current) return;
 
         const clone = sourceNode.cloneNode(true);
         clone.id = targetNode.id;
@@ -617,33 +595,42 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _isLinked(viewer) {
         if (!viewer) return false;
-        return !!viewer.tools.isLinked();
+        return !!viewer.tools?.isLinked?.();
     }
+
     _link(viewer) {
-        if (!viewer) return;
-        return viewer.tools.link();
+        return viewer?.tools?.link?.();
     }
+
     _unlink(viewer) {
-        if (!viewer) return;
-        return viewer.tools.unlink();
+        return viewer?.tools?.unlink?.();
     }
-    _updateLinkIcon(id, viewer) {
-        const btn = document.getElementById(`${this.windowId}-lnk-${id}`);
-        if (!btn) return;
+
+    _refreshLinkIcons(id, item) {
+        const conf = this._getConfig(item);
+        const viewer = VIEWER_MANAGER.getViewerForConfig(conf);
         const linked = this._isLinked(viewer);
-        btn.title = viewer
-            ? (linked ? "Synced — click to unsync" : "Not synced — click to sync")
-            : "Not open";
-        btn.disabled = !viewer;
-        btn.innerHTML = "";
-        btn.appendChild(new UI.FAIcon({ name: linked ? "fa-link" : "fa-link-slash" }).create());
+
+        const btnIds = [`${this.windowId}-lnk-${id}`, `${this.windowId}-lnk-card-${id}`];
+        for (const btnId of btnIds) {
+            const btn = document.getElementById(btnId);
+            if (!btn) continue;
+            btn.title = viewer ? (linked ? 'Linked' : 'Not linked') : 'Not open';
+            btn.innerHTML = "";
+            btn.appendChild(new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
+            btn.classList.toggle('text-primary', !!linked);
+            btn.classList.toggle('text-base-content/50', !linked);
+        }
     }
+
     _onToggleLink(id, item, ev) {
         ev?.stopPropagation?.();
         const viewer = VIEWER_MANAGER.getViewerForConfig(this._getConfig(item));
         if (!viewer) return;
         if (this._isLinked(viewer)) this._unlink(viewer); else this._link(viewer);
-        this._updateLinkIcon(id, viewer);
+        this._refreshLinkIcons(id, item);
+        this._renderSelectionHeader();
+        this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
     }
 
     create() {

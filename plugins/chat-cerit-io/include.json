@@ -3,9 +3,7 @@
   "modules": ["vercel-ai-chat-sdk"],
   "providerTypeId": "cerit-llm-ai",
   // alias key to use in server proxy
-  "chatApiBaseUrl": "https://llm.ai.e-infra.cz/",
-  "proxyAlias": "cerit-io",
-  "chatApiUrl": "/v1/chat/completions",
+  "baseUrl": "https://llm.ai.e-infra.cz/",
   "modelsDiscoveryPath": "/v1/models",
   "defaultModelId": "",
   // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model

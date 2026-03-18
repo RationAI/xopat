@@ -37,9 +37,43 @@ class ChatModule extends XOpatModuleSingleton {
             await this.chatService.refreshProviderTypesFromServer();
             await this.chatService.refreshProvidersFromServer();
             this.chatPanel?.refreshProviders?.();
+
+            const activeProviderId =
+                this.chatPanel?._providerId ||
+                this.chatService.getProviders?.()[0]?.id ||
+                null;
+
+            if (activeProviderId) {
+                await this.chatPanel?._refreshModelsForCurrentProvider?.();
+            }
         } catch (error) {
             console.warn('Chat provider bootstrap failed:', error);
         }
+    }
+
+    _getActiveSessionModelCapabilities(): ModelCapabilities | null {
+        const sessionId = this.chatService._activeSessionId;
+        if (!sessionId) return null;
+
+        const state = this.chatService._sessionState?.get?.(sessionId);
+        const providerId = state?.providerId || null;
+        if (!providerId) return null;
+
+        const hydrationModels = this.chatService.getCachedModels?.(providerId) || [];
+        const activeSession = this.chatPanel?._sessions?.find?.((s: any) => s.id === sessionId) || null;
+        const modelId = activeSession?.modelId || this.chatPanel?._modelId || null;
+        if (!modelId) return null;
+
+        const model = hydrationModels.find((m: any) => m.id === modelId) || null;
+        return model?.capabilities || null;
+    }
+
+    _isModelImageCapable(): boolean {
+        return this._getActiveSessionModelCapabilities()?.images === 'supported';
+    }
+
+    _isModelFileCapable(): boolean {
+        return this._getActiveSessionModelCapabilities()?.files === 'supported';
     }
 
     getScriptConsentEntries(): ScriptNamespaceConsentState {
@@ -103,35 +137,49 @@ class ChatModule extends XOpatModuleSingleton {
 
         if (!manager.executeScript) {
             return {
-                role: 'user',
-                content: 'Script execution failed.\n\nScripting manager is not available.',
+                role: 'tool',
+                parts: [{ ok: false, type: 'script-result', text: 'The requested action could not be completed because scripting is not available.' }],
+                content: 'The requested action could not be completed because scripting is not available.',
                 createdAt: new Date(),
             };
         }
 
         try {
             const result = await manager.executeScript(script);
-            const content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-            return {
-                role: 'user',
-                content: `Script executed successfully.\n\n\`\`\`json\n${content}\n\`\`\``,
-                createdAt: new Date(),
-            };
+            return await this._normalizeScriptResultToMessage(result);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return {
-                role: 'user',
-                content: `Script execution failed.\n\n${message}`,
+                role: 'tool',
+                parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}` }],
+                content: `The requested action could not be completed: ${message}`,
                 createdAt: new Date(),
             };
         }
     }
 
     extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {
-        const content = String(message?.content || '');
-        const exactOnly = /^\s*```xopat-script\s*\n([\s\S]*?)\n```\s*$/i;
-        const match = content.match(exactOnly);
-        return match ? match[1]?.trim() : undefined;
+        const content = String(message?.content || "");
+
+        const exact = content.match(/```xopat-script\s*([\s\S]*?)```/i);
+        if (exact?.[1]?.trim()) return exact[1].trim();
+
+        const fallback = content.match(/```(?:javascript|js|typescript|ts)\s*([\s\S]*?)```/i);
+        if (fallback?.[1]?.trim()) return fallback[1].trim();
+
+        return undefined;
+    }
+
+    extractAssistantTextWithoutScript(message: ChatMessage): string | undefined {
+        const content = String(message?.content || "");
+        if (!content.trim()) return undefined;
+
+        const stripped = content
+            .replace(/```xopat-script\s*[\s\S]*?```/gi, "")
+            .replace(/```(?:javascript|js|typescript|ts)\s*[\s\S]*?```/gi, "")
+            .trim();
+
+        return stripped || undefined;
     }
 
     _getChatConfig(): { personalities: ChatPersonality[]; defaultPersonalityId: string } {
@@ -144,9 +192,11 @@ class ChatModule extends XOpatModuleSingleton {
             personalities.push({
                 id: 'default',
                 label: 'Default',
-                systemPrompt:
-                    'Be helpful and accurate. Use the scripting API when it is available and useful. ' +
-                    'When it is not available or insufficient, explain the limitation clearly.',
+                systemPrompt:`
+Be helpful and accurate. When the allowed scripting API can do the work, prefer using it silently instead of describing technical steps.
+Do not talk about scripts, code blocks, namespaces, or execution unless the user explicitly asks for technical details.
+For non-technical users, keep language plain and outcome-focused.
+When scripting is not available or insufficient, explain the limitation clearly.`
             });
         }
 
@@ -163,6 +213,201 @@ class ChatModule extends XOpatModuleSingleton {
             body: [this.chatPanel],
         });
         this._layoutAttached = true;
+    }
+
+    async _normalizeScriptResultToMessage(result: any): Promise<ChatMessage> {
+        const UTILITIES = (globalThis as any).UTILITIES || {};
+        const isImageLike = typeof UTILITIES.isImageLike === 'function'
+            ? UTILITIES.isImageLike.bind(UTILITIES)
+            : () => false;
+        const imageLikeToDataUrl = typeof UTILITIES.imageLikeToDataUrl === 'function'
+            ? UTILITIES.imageLikeToDataUrl.bind(UTILITIES)
+            : null;
+
+        const isDataUrl = (value: unknown): value is string =>
+            typeof value === 'string' && /^data:[^;]+;base64,/i.test(value.trim());
+
+        const inferMimeType = (value: string, fallback = 'application/octet-stream') => {
+            const match = value.match(/^data:([^;,]+)(?:;charset=[^;,]+)?;base64,/i);
+            return match?.[1] || fallback;
+        };
+
+        const asPlainTextMessage = (text: string, ok = true): ChatMessage => ({
+            role: 'tool',
+            parts: [{ ok, type: 'script-result', text }],
+            content: text,
+            createdAt: new Date(),
+        });
+
+        const asImageMessage = async (dataUrl: string, name = 'script-image.png'): Promise<ChatMessage> => {
+            const uploaded = await this._storeScriptAttachment({
+                kind: 'image',
+                dataUrl,
+                mimeType: inferMimeType(dataUrl, 'image/png'),
+                name,
+            });
+
+            return {
+                role: 'tool',
+                parts: [{
+                    type: 'image',
+                    attachmentId: uploaded.id,
+                    mimeType: uploaded.mimeType,
+                    name: uploaded.name,
+                    dataUrl: uploaded.dataUrl,
+                    metadata: uploaded.metadata,
+                }],
+                content: '[Image]',
+                createdAt: new Date(),
+            };
+        };
+
+        const asFileMessage = async (dataUrl: string, name = 'script-file'): Promise<ChatMessage> => {
+            const uploaded = await this._storeScriptAttachment({
+                kind: 'file',
+                dataUrl,
+                mimeType: inferMimeType(dataUrl),
+                name,
+            });
+
+            return {
+                role: 'tool',
+                parts: [{
+                    type: 'file',
+                    attachmentId: uploaded.id,
+                    mimeType: uploaded.mimeType,
+                    name: uploaded.name || name,
+                    dataUrl: uploaded.dataUrl,
+                    metadata: uploaded.metadata,
+                }],
+                content: '[File]',
+                createdAt: new Date(),
+            };
+        };
+
+        if (result == null) {
+            return asPlainTextMessage('Done.');
+        }
+
+        if (typeof result === 'string') {
+            const value = result.trim();
+
+            if (isImageLike(value) && this._isModelImageCapable() && imageLikeToDataUrl) {
+                const dataUrl = await imageLikeToDataUrl(value);
+                return await asImageMessage(dataUrl);
+            }
+
+            if (isDataUrl(value) && this._isModelFileCapable()) {
+                return await asFileMessage(value);
+            }
+
+            return asPlainTextMessage(value || 'Done.');
+        }
+
+        if (isImageLike(result) && this._isModelImageCapable() && imageLikeToDataUrl) {
+            const dataUrl = await imageLikeToDataUrl(result);
+            return await asImageMessage(dataUrl);
+        }
+
+        if (Array.isArray(result)) {
+            const parts: ChatMessagePart[] = [];
+            const textChunks: string[] = [];
+
+            for (const item of result) {
+                if (isImageLike(item) && this._isModelImageCapable() && imageLikeToDataUrl) {
+                    const dataUrl = await imageLikeToDataUrl(item);
+                    const uploaded = await this._storeScriptAttachment({
+                        kind: 'image',
+                        dataUrl,
+                        mimeType: inferMimeType(dataUrl, 'image/png'),
+                        name: 'script-image.png',
+                    });
+
+                    parts.push({
+                        type: 'image',
+                        attachmentId: uploaded.id,
+                        mimeType: uploaded.mimeType,
+                        name: uploaded.name,
+                        dataUrl: uploaded.dataUrl,
+                        metadata: uploaded.metadata,
+                    });
+                    continue;
+                }
+
+                if (typeof item === 'string' && isDataUrl(item) && this._isModelFileCapable()) {
+                    const uploaded = await this._storeScriptAttachment({
+                        kind: 'file',
+                        dataUrl: item,
+                        mimeType: inferMimeType(item),
+                        name: 'script-file',
+                    });
+
+                    parts.push({
+                        type: 'file',
+                        attachmentId: uploaded.id,
+                        mimeType: uploaded.mimeType,
+                        name: uploaded.name || 'script-file',
+                        dataUrl: uploaded.dataUrl,
+                        metadata: uploaded.metadata,
+                    });
+                    continue;
+                }
+
+                if (typeof item === 'string' && item.trim()) {
+                    textChunks.push(item.trim());
+                    continue;
+                }
+
+                if (item != null) {
+                    textChunks.push(JSON.stringify(item, null, 2));
+                }
+            }
+
+            if (textChunks.length) {
+                parts.unshift({
+                    ok: true,
+                    type: 'script-result',
+                    text: textChunks.join('\n\n'),
+                });
+            }
+
+            if (parts.length) {
+                return {
+                    role: 'tool',
+                    parts,
+                    content: textChunks.join('\n\n') || 'Done.',
+                    createdAt: new Date(),
+                };
+            }
+
+            return asPlainTextMessage(textChunks.join('\n\n') || 'Done.');
+        }
+
+        return asPlainTextMessage(
+            typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)
+        );
+    }
+
+    async _storeScriptAttachment(input: {
+        kind: 'image' | 'file' | 'screenshot';
+        dataUrl: string;
+        mimeType: string;
+        name?: string;
+        metadata?: Record<string, unknown>;
+    }): Promise<ChatAttachmentRecord> {
+        const sessionId = this.chatService._activeSessionId;
+        if (!sessionId) {
+            throw new Error('No active session for script attachment.');
+        }
+
+        return await this.chatService.uploadAttachment({
+            sessionId,
+            kind: input.kind,
+            name: input.name,
+            mimeType: input.mimeType,
+            dataBase64: input.dataUrl,
+            metadata: input.metadata,
+        });
     }
 
     registerPersonality(personality: ChatPersonality): void {
