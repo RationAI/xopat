@@ -42,10 +42,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
             if (e.htmlError) return;
 
             const showExplorer = () => {
-                if (this.menu) {
-                    this.menu.open();
-                    USER_INTERFACE.AppBar.View.setSelected('slide-info-switcher', true);
-                }
+                this.menu?.visibilityManager.on();
             };
 
             // TODO: does not work, OSD overlays are hidden behind another canvas - either annotations
@@ -121,23 +118,12 @@ addPlugin('slide-info', class extends XOpatPlugin {
     pluginReady() {
         if (this.slideBrowser) {
             this.menu = new SlideSwitcherMenu({
-                onClose: () => !this._preventChange && USER_INTERFACE.AppBar.View.setSelected('slide-info-switcher', false)
+                id: `${this.id}-slide-switcher`,
+                title: "Slide Switcher",
+                layout: globalThis.LAYOUT,
+                ownerPluginId: this.id,
             });
-
-            const manager = new UI.Mixins.VisibilityManager('slide-info.switcher').init(
-                () =>  {
-                    this._preventChange = true;
-                    this.menu.open();
-                    this._preventChange = false;
-                }, () => {
-                    this._preventChange = true;
-                    this.menu.close();
-                    this._preventChange = false;
-                },
-                false
-            );
-
-            USER_INTERFACE.AppBar.View.append('slide-info-switcher', 'fa-window-restore', 'Slide Manager', manager);
+            this.menu.attachToMainLayout();
         }
     }
 

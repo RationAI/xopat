@@ -3,6 +3,8 @@ import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { TabsMenu } from "./tabsMenu.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
+import { VisibilityManager } from "../mixins/visibilityManager.mjs";
+import { DockableWindow } from "./dockableWindow.mjs";
 
 const { div } = van.tags;
 
@@ -26,6 +28,7 @@ const { div } = van.tags;
  * @property {string} id - Unique tab identifier.
  * @property {string} [icon] - Icon class name, e.g., "fa-circle-info".
  * @property {string} [title] - Human-readable title.
+ * @property {VisibilityManager} [visibilityManager] - The visibility manager for this tab. Required.
  * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
  */
 
@@ -62,38 +65,160 @@ export class MainLayout extends BaseComponent {
         this._prevDockInlineStyles = null;
 
         this._tabsArr = [];
-        if (Array.isArray(options.tabs)) this._tabsArr.push(...options.tabs);
         this._menu = options.menu || null;
 
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
         this._onResize = () => this._applyResponsiveLayout();
+        this._dockViewItemId = `${this.id}-global-menu`;
+        this._dockViewTabCategory = "globalMenuTabs";
+        this._dockRegisteredInView = false;
+        this._registeredTabViewIds = new Set();
+
+        this._wrapperRegistry = new Map();
+        this._dockedWrappers = new Map();
+        this._pendingDockableRegistrations = new Set();
+
+        this._syncingDockRequestedState = false;
+        this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
+            () => {
+                if (!this._syncingDockRequestedState) {
+                    this._dockRequestedOpen = true;
+                }
+                this._applyDockVisibility();
+            },
+            () => {
+                if (!this._syncingDockRequestedState) {
+                    this._dockRequestedOpen = false;
+                }
+                if (this._isFullscreen) {
+                    this._closeFullscreen();
+                }
+                this._applyDockVisibility();
+            }
+        );
+
+        this._dockRequestedOpen = !!this.visibilityManager?.is?.();
+
+        if (Array.isArray(options.tabs)) {
+            for (const tab of options.tabs) {
+                const normalized = this._normalizeDockableTab(tab, { wrapInDockableWindow: true });
+                if (!normalized) continue;
+                this._tabsArr.push(normalized.tab);
+                this._wrapperRegistry.set(normalized.id, normalized.wrapper);
+                this._dockedWrappers.set(normalized.id, normalized.wrapper);
+            }
+        }
+
         window.addEventListener("resize", this._onResize, { passive: true });
     }
 
     /** ---- dynamic tab API ---- */
     /**
      * Add a tab to the dock menu (creates the menu if missing).
-     * @param {MainLayoutTab} mainLayoutTab - Tab definition to add.
+     * Plain tab payloads are normalized into DockableWindow wrappers so they can
+     * later be undocked without changing the external API.
+     *
+     * @param {MainLayoutTab|DockableWindow} mainLayoutTab - Tab definition or an already wrapped dockable.
+     * @param {{wrapInDockableWindow?: boolean}} [options]
+     * @returns {DockableWindow|null}
+     */
+    addTab(mainLayoutTab, options = undefined) {
+        const candidateId = mainLayoutTab instanceof DockableWindow
+            ? (mainLayoutTab._tabId || mainLayoutTab.id)
+            : mainLayoutTab?.id;
+
+        // Same-id reentry can happen while _normalizeDockableTab() is still
+        // constructing a DockableWindow and its VisibilityManager.init() fires.
+        if (candidateId && this._pendingDockableRegistrations.has(candidateId)) {
+            return mainLayoutTab instanceof DockableWindow
+                ? mainLayoutTab
+                : this._wrapperRegistry.get(candidateId) || null;
+        }
+
+        if (candidateId) {
+            this._pendingDockableRegistrations.add(candidateId);
+        }
+
+        try {
+            if (!this._menu) this._ensureMenu();
+
+            const normalized = this._normalizeDockableTab(mainLayoutTab, options);
+            if (!normalized) return null;
+
+            const { id, tab, wrapper } = normalized;
+
+            const existingIndex = this._tabsArr.findIndex(existingTab => existingTab.id === id);
+            if (existingIndex >= 0) {
+                this._tabsArr.splice(existingIndex, 1, tab);
+            } else {
+                this._tabsArr.push(tab);
+            }
+
+            this._wrapperRegistry.set(id, wrapper);
+            this._dockedWrappers.set(id, wrapper);
+            wrapper.markTabRegistered?.(true);
+
+            if (this._menu?.tabs?.[id]) {
+                this._menu.remove?.(id);
+                delete this._menu.tabs?.[id];
+            }
+
+            this._menu?.addTab(tab);
+            this._syncMenuTabs();
+
+            // NEW: now that the wrapper is actually registered, it is safe to
+            // apply its initial cached visibility state once.
+            wrapper._flushDeferredVisibilitySync?.();
+
+            this._updateDockVisibility();
+            return wrapper;
+        } finally {
+            if (candidateId) {
+                this._pendingDockableRegistrations.delete(candidateId);
+            }
+        }
+    }
+
+    /**
+     * Register an already created DockableWindow with the dock.
+     * @param {DockableWindow} dockableWindow
+     * @returns {DockableWindow|null}
+     */
+    addDockableWindow(dockableWindow) {
+        return this.addTab(dockableWindow, { wrapInDockableWindow: false });
+    }
+
+    /**
+     * Detach a docked tab from the dock while keeping its DockableWindow wrapper registered.
+     * Used when a wrapper is switching from docked to floating mode.
+     *
+     * @param {string} id - The tab id to detach.
      * @returns {void}
      */
-    addTab(mainLayoutTab) {
-        if (!this._menu) this._ensureMenu();
-        this._tabsArr.push(mainLayoutTab);
-        this._menu.addTab(mainLayoutTab);
+    detachDockableTab(id) {
+        if (!this._menu) return;
+
+        const i = this._tabsArr.findIndex(t => t.id === id);
+        if (i >= 0) this._tabsArr.splice(i, 1);
+
+        this._menu.remove?.(id);
+        delete this._menu.tabs?.[id];
+
+        const wrapper = this._dockedWrappers.get(id);
+        wrapper?.markTabRegistered?.(false);
+        this._dockedWrappers.delete(id);
         this._updateDockVisibility();
     }
 
     /**
-     * Remove a tab from the dock by its id.
+     * Remove a tab from the dock and unregister its wrapper.
      * @param {string} id - The tab id to remove.
      * @returns {void}
      */
     removeTab(id) {
-        if (!this._menu) return;
-        const i = this._tabsArr.findIndex(t => t.id === id);
-        if (i >= 0) this._tabsArr.splice(i, 1);
-        this._menu.remove(id);
-        this._updateDockVisibility();
+        this.detachDockableTab(id);
+        this._wrapperRegistry.delete(id);
+        this._registeredTabViewIds.delete(id);
     }
 
     /**
@@ -102,7 +227,21 @@ export class MainLayout extends BaseComponent {
      */
     clearTabs() {
         this._tabsArr.length = 0;
-        if (this._menu) this._menu.clear();
+        if (this._menu?.clear) {
+            this._menu.clear();
+        } else if (this._menu?.tabs) {
+            for (const id of Object.keys(this._menu.tabs)) {
+                this._menu.remove?.(id);
+            }
+        }
+
+        for (const wrapper of this._dockedWrappers.values()) {
+            wrapper?.markTabRegistered?.(false);
+        }
+
+        this._dockedWrappers.clear();
+        this._wrapperRegistry.clear();
+        this._registeredTabViewIds.clear();
         this._updateDockVisibility();
     }
 
@@ -133,7 +272,7 @@ export class MainLayout extends BaseComponent {
     expand() { this.collapsed = false; this._applyVisibility(); }
     /** Toggle the dock collapsed/expanded state. */
     toggle() {
-        const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
         if (narrow) {
             this.toggleFullscreen();
         } else {
@@ -141,16 +280,61 @@ export class MainLayout extends BaseComponent {
         }
     }
 
+    showGlobalMenu() {
+        if (!this._hasVisibleTabs()) {
+            USER_INTERFACE.Dialogs.show($.t("main.globalMenu.noMenuToView"));
+            this._setDockRequestedOpen(false);
+            return false;
+        }
+
+        this._setDockRequestedOpen(true);
+        return this._isDockEffectivelyVisible();
+    }
+
+    hideGlobalMenu() {
+        this._setDockRequestedOpen(false);
+        return !this._isDockEffectivelyVisible();
+    }
+
+    toggleGlobalMenu() {
+        return this.isOpened()
+            ? this.hideGlobalMenu()
+            : this.showGlobalMenu();
+    }
+
+    showTab(id) {
+        const tab = this._menu?.tabs?.[id];
+        if (!tab?.visibilityManager) return false;
+
+        tab.visibilityManager.on();
+        return this.showGlobalMenu();
+    }
+
+    hideTab(id) {
+        const tab = this._menu?.tabs?.[id];
+        if (!tab?.visibilityManager) return false;
+
+        tab.visibilityManager.off();
+
+        if (!this._hasVisibleTabs()) {
+            return this.hideGlobalMenu();
+        }
+
+        this._applyDockVisibility();
+        return true;
+    }
+
     isOpened() {
         const narrow = typeof window !== 'undefined' && window.innerWidth < this.collapseBreakpointPx;
         if (narrow) {
             return !!this._isFullscreen;
         }
-        return !this.collapsed;
+        return this._isDockEffectivelyVisible() && !this.collapsed;
     }
 
     /** Toggle fullscreen overlay when in narrow viewport. */
     toggleFullscreen() {
+        if (!this._isDockEffectivelyVisible()) return;
         this._isFullscreen ? this._closeFullscreen() : this._openFullscreen();
     }
 
@@ -159,7 +343,7 @@ export class MainLayout extends BaseComponent {
     }
 
     _openFullscreen() {
-        if (!this._dockEl || !this._viewerEl || this._isFullscreen) return;
+        if (!this._dockEl || !this._viewerEl || this._isFullscreen || !this._isDockEffectivelyVisible()) return;
         this._isFullscreen = true;
         // save inline state to restore later
         this._prevViewerDisplay = this._viewerEl.style.display || "";
@@ -190,11 +374,6 @@ export class MainLayout extends BaseComponent {
         this._dockEl.style.height = "100%";
         // hide only the image/container, keep top-side visible
         if (this._osdElement) this._osdElement.style.display = "none";
-        // add top padding so content is not hidden under pinned top-side
-        if (this._topSideElement) {
-            const rect = this._topSideElement.getBoundingClientRect();
-            const topH = Math.ceil(rect.height || 0);
-        }
         // pin top-side to fixed so it stays visible above the fullscreen dock
         if (this._topSideElement) {
             this._topSideElement.style.position = 'fixed';
@@ -236,34 +415,178 @@ export class MainLayout extends BaseComponent {
         this._updateDockVisibility();
     }
 
+    _setDockRequestedOpen(next) {
+        const desired = !!next;
+
+        if (this._dockRequestedOpen === desired) {
+            this._applyDockVisibility();
+            return true;
+        }
+
+        this._dockRequestedOpen = desired;
+        this._syncingDockRequestedState = true;
+
+        try {
+            if (desired) {
+                this.visibilityManager?.on?.();
+            } else {
+                this.visibilityManager?.off?.();
+            }
+        } finally {
+            this._syncingDockRequestedState = false;
+        }
+
+        this._applyDockVisibility();
+        return true;
+    }
+
+    /** @private */
+    _normalizeDockableTab(mainLayoutTab, options = undefined) {
+        const wrapInDockableWindow = options?.wrapInDockableWindow !== false;
+
+        if (!mainLayoutTab) return null;
+
+        if (mainLayoutTab instanceof DockableWindow) {
+            const wrapper = mainLayoutTab;
+            wrapper._layout = this;
+            const tab = wrapper.toMainLayoutTab();
+            return { id: tab.id, tab, wrapper };
+        }
+
+        if (mainLayoutTab.__dockableWindow instanceof DockableWindow) {
+            const wrapper = mainLayoutTab.__dockableWindow;
+            wrapper._layout = this;
+            const tab = wrapper.toMainLayoutTab();
+            return { id: tab.id, tab, wrapper };
+        }
+
+        if (!wrapInDockableWindow) {
+            const wrapper = new DockableWindow({
+                id: mainLayoutTab.id,
+                title: mainLayoutTab.title || mainLayoutTab.id,
+                icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                tabId: mainLayoutTab.id,
+                tabTitle: mainLayoutTab.title || mainLayoutTab.id,
+                tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                defaultMode: "tab",
+                layout: this,
+                visibilityManager: mainLayoutTab.visibilityManager,
+                floating: mainLayoutTab.floating,
+            }, ...(mainLayoutTab.body || []));
+            const tab = wrapper.toMainLayoutTab();
+            return { id: tab.id, tab, wrapper };
+        }
+
+        const wrapper = new DockableWindow({
+            id: mainLayoutTab.id,
+            title: mainLayoutTab.title || mainLayoutTab.id,
+            icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            tabId: mainLayoutTab.id,
+            tabTitle: mainLayoutTab.title || mainLayoutTab.id,
+            tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            defaultMode: "tab",
+            layout: this,
+            visibilityManager: mainLayoutTab.visibilityManager,
+            floating: mainLayoutTab.floating,
+            onModeChange: mode => {
+                if (mode === "floating") {
+                    this.detachDockableTab(mainLayoutTab.id);
+                } else {
+                    this.addDockableWindow(wrapper);
+                }
+                this._updateDockVisibility();
+            }
+        }, ...(mainLayoutTab.body || []));
+
+        const tab = wrapper.toMainLayoutTab();
+        return { id: tab.id, tab, wrapper };
+    }
+
+    /** @private */
+    _resolveDockable(tabOrId) {
+        const id = typeof tabOrId === "string" ? tabOrId : tabOrId?.id;
+        if (!id) return null;
+        return this._dockedWrappers.get(id)
+            || this._wrapperRegistry.get(id)
+            || tabOrId?.__dockableWindow
+            || null;
+    }
+
     /** ---- internals ---- */
     /** @private */
     _ensureMenu() {
         if (!this._menu) {
             const menu = new TabsMenu({ id: `${this.id}-menu` }, ...this._tabsArr);
             this._menu = menu;
-            menu.attachTo(this._dockEl);
+            if (this._dockEl) {
+                menu.attachTo(this._dockEl);
+                this._syncMenuTabs();
+            }
         }
+    }
+
+    _getMenuTabs() {
+        return Object.values(this._menu?.tabs || {});
+    }
+
+    _isTabVisible(tab) {
+        if (!tab) return false;
+        if (typeof tab.visibilityManager?.is === "function") {
+            return !!tab.visibilityManager.is();
+        }
+        if (typeof tab.hidden === "boolean") {
+            return !tab.hidden;
+        }
+        return true;
+    }
+
+    _hasVisibleTabs() {
+        const tabs = this._getMenuTabs();
+        const sourceTabs = tabs.length ? tabs : this._tabsArr;
+        return sourceTabs.some(tab => this._isTabVisible(tab));
+    }
+
+    _isDockEffectivelyVisible() {
+        return !!this._dockRequestedOpen && this._hasVisibleTabs();
+    }
+
+    _applyDockVisibility() {
+        if (!this._dockEl || !this._handleEl || !this._viewerEl) return;
+
+        const hasVisibleTabs = this._hasVisibleTabs();
+
+        if (!hasVisibleTabs && this._dockRequestedOpen) {
+            this._setDockRequestedOpen(false);
+            return;
+        }
+
+        const showDock = this._dockRequestedOpen && hasVisibleTabs;
+
+        if (!showDock && this._isFullscreen) {
+            this._closeFullscreen();
+        }
+
+        if (!showDock) {
+            this._dockEl.style.display = "none";
+            this._handleEl.style.display = "none";
+            this._viewerEl.style.flex = "1 1 100%";
+            return;
+        }
+
+        this._dockEl.style.display = "";
+        this._viewerEl.style.flex = "1 1 auto";
+        this._applyVisibility();
     }
 
     /** @private */
     _updateDockVisibility() {
-        const hasTabs = this._tabsArr.length > 0;
-        if (!this._dockEl) return;
-        if (!hasTabs) {
-            this._dockEl.style.display = "none";
-            this._handleEl.style.display = "none";
-            this._viewerEl.style.flex = "1 1 100%";
-        } else {
-            this._dockEl.style.display = "";
-            this._handleEl.style.display = this.collapsed ? "none" : "";
-            this._viewerEl.style.flex = "1 1 auto";
-        }
+        this._applyDockVisibility();
     }
 
     /** @private */
     _applyVisibility() {
-        if (!this._dockEl) return;
+        if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
+
         if (this.collapsed) {
             this._dockEl.style.width = "0px";
             this._dockEl.style.height = "0px";
@@ -284,16 +607,123 @@ export class MainLayout extends BaseComponent {
         this._shellEl.classList.toggle("flex-row", !narrow);
         this._viewerEl.style.order = this.position === "left" ? "1" : "0";
         this._dockEl.style.order = this.position === "left" ? "0" : "2";
-        this._applyVisibility();
 
         if (narrow) {
             // default collapsed on narrow; fullscreen may be toggled separately
-            this.collapse();
+            this.collapsed = true;
         } else {
             // leaving narrow viewport: ensure any fullscreen overlay is closed and viewer restored
             if (this._isFullscreen) this._closeFullscreen();
-            this.expand();
+            this.collapsed = false;
         }
+
+        this._applyDockVisibility();
+    }
+
+    _ensureViewCategory() {
+        const view = globalThis.USER_INTERFACE.AppBar.View;
+        if (!view?.structure) return null;
+
+        if (!view.structure[this._dockViewTabCategory]) {
+            view.structure[this._dockViewTabCategory] = {
+                id: "global-menu-tabs",
+                label: $.t("main.globalMenu.globalMenuTabs"),
+                icon: "fa-table-columns",
+                section: "global-windows",
+            };
+            view._visualMenuNeedsRefresh = true;
+        }
+
+        return view;
+    }
+
+    _registerDockInView() {
+        const view = this._ensureViewCategory();
+        if (!view || this._dockRegisteredInView) return;
+
+        view.append(
+            this._dockViewItemId,
+            "fa-table-columns",
+            $.t("main.globalMenu.globalMenu"),
+            {
+                is: () => this._isDockEffectivelyVisible(),
+                set: next => next
+                    ? this.showGlobalMenu()
+                    : this.hideGlobalMenu()
+            }
+        );
+
+        this._dockRegisteredInView = true;
+    }
+
+    _registerTabInView(tab) {
+        if (!tab?.id || this._registeredTabViewIds.has(tab.id)) return;
+        const view = this._ensureViewCategory();
+        if (!view) return;
+
+        const wrapper = this._resolveDockable(tab);
+        const viewRegistration = wrapper?.getViewRegistration?.();
+
+        view.registerViewComponent(this._dockViewTabCategory, {
+            id: viewRegistration?.id || tab.id,
+            title: viewRegistration?.title || tab.title || tab.id,
+            icon: viewRegistration?.icon || tab.iconName || tab.icon || "fa-window-maximize",
+            visibilityManager: {
+                is: () => this._isTabVisible(tab),
+                set: next => next
+                    ? this.showTab(tab.id)
+                    : this.hideTab(tab.id)
+            }
+        });
+
+        this._registeredTabViewIds.add(tab.id);
+    }
+
+    _syncMenuTabs() {
+        if (!this._menu) return;
+        this._registerDockInView();
+        for (const tab of this._getMenuTabs()) {
+            this._attachCloseButton(tab);
+            this._registerTabInView(tab);
+        }
+    }
+
+    _attachCloseButton(tab) {
+        const headerId = tab?.headerButton?.id;
+        if (!headerId) return;
+
+        const headerEl = document.getElementById(headerId);
+        if (!headerEl || headerEl.querySelector(`[data-main-layout-close="${tab.id}"]`)) return;
+
+        headerEl.style.position = headerEl.style.position || "relative";
+
+        const closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.setAttribute("data-main-layout-close", tab.id);
+        closeButton.setAttribute("title", $.t("common.close"));
+        closeButton.className = "btn btn-ghost btn-xs";
+        closeButton.style.position = "absolute";
+        closeButton.style.top = "2px";
+        closeButton.style.right = "2px";
+        closeButton.style.minHeight = "1rem";
+        closeButton.style.height = "1rem";
+        closeButton.style.width = "1rem";
+        closeButton.style.padding = "0";
+        closeButton.style.lineHeight = "1";
+        closeButton.innerHTML = "&times;";
+        closeButton.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const wrapper = this._resolveDockable(tab);
+            if (wrapper) {
+                wrapper.hide?.();
+            } else {
+                tab.visibilityManager?.off?.();
+            }
+            this._applyDockVisibility();
+        });
+
+        headerEl.append(closeButton);
     }
 
     /** @private */
@@ -316,7 +746,7 @@ export class MainLayout extends BaseComponent {
         };
 
         this._handleEl.addEventListener("mousedown", e => {
-            if (this.collapsed) return;
+            if (this.collapsed || !this._isDockEffectivelyVisible()) return;
             drag = true;
             startX = e.clientX;
             startW = this._dockEl.getBoundingClientRect().width;
@@ -357,23 +787,26 @@ export class MainLayout extends BaseComponent {
             },
             extraProperties: { style: `width:${this.widthPx}px;` }
         });
+
+        this._dockEl = dock.create();
+
         if (this._tabsArr.length) {
             const menu = new TabsMenu({ id:`${this.id}-menu` }, ...this._tabsArr);
             this._menu = menu;
-            menu.attachTo(dock);
+            menu.attachTo(this._dockEl);
         }
 
         const handle = div({ id:`${this.id}-handle`, class:"w-1 hover:bg-base-300/50 cursor-col-resize" });
-
-        this._dockEl = dock.create();
+        const dockNode = this._dockEl;
         const shell = div({ id:this.id, class:"absolute w-full h-full top-0 left-0 flex flex-row" },
-            this.position === "left" ? [dock.create(), handle, viewerWrap] : [viewerWrap, handle, this._dockEl]
+            this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
         this._shellEl = shell;
         this._viewerEl = viewerWrap;
         this._handleEl = handle;
 
+        this._syncMenuTabs();
         this._wireResize();
         this._applyResponsiveLayout();
         this._updateDockVisibility();
@@ -384,6 +817,5 @@ export class MainLayout extends BaseComponent {
     onLayoutChange(details) {
         console.log("Layout change detected in MainLayout:", details);
         this._applyResponsiveLayout();
-
     }
 }

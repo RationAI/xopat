@@ -170,32 +170,32 @@ export class AppBar {
             this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
-                                id: 'share',
-                                label: $.t('main.bar.share'),
-                                icon: 'fa-share-nodes',
-                                children: [
-                                            {
-                                                id: "global-export",
-                                                domID: true,
-                                                label: $.t("main.bar.exportFile"),
-                                                hint: $.t("main.bar.explainExportFile"),
-                                                onClick: () => {
-                                                    UTILITIES.export();
-                                                },
-                                                icon: "fa-download"
-                                            },
-                                            {
-                                                id: "copy-url-inner",
-                                                domID: true,
-                                                label: $.t("main.bar.exportUrl"),
-                                                hint: $.t("main.bar.explainExportUrl"),
-                                                onClick: () => {
-                                                    UTILITIES.copyUrlToClipboard();
-                                                },
-                                                icon: "fa-link"
-                                            }
-                                        ],
-                            });
+                id: 'share',
+                label: $.t('main.bar.share'),
+                icon: 'fa-share-nodes',
+                children: [
+                    {
+                        id: "global-export",
+                        domID: true,
+                        label: $.t("main.bar.exportFile"),
+                        hint: $.t("main.bar.explainExportFile"),
+                        onClick: () => {
+                            UTILITIES.export();
+                        },
+                        icon: "fa-download"
+                    },
+                    {
+                        id: "copy-url-inner",
+                        domID: true,
+                        label: $.t("main.bar.exportUrl"),
+                        hint: $.t("main.bar.explainExportUrl"),
+                        onClick: () => {
+                            UTILITIES.copyUrlToClipboard();
+                        },
+                        icon: "fa-link"
+                    }
+                ],
+            });
         },
     }
 
@@ -205,7 +205,6 @@ export class AppBar {
             this.otherWindows = {};
             this._visualMenuNeedsRefresh = false;
 
-            // Allowed Groups supported by this view
             this.structure = {
                 'sideViewerMenu': {
                     id: 'viewer-sidebars',
@@ -218,6 +217,12 @@ export class AppBar {
                     label: $.t('main.bar.viewerToolbars'),
                     icon: 'fa-columns',
                     section: 'global-windows',
+                },
+                'globalMenuTabs': {
+                    id: 'global-menu-tabs',
+                    label: $.t('main.bar.globalMenus'),
+                    icon: 'fa-table-columns',
+                    section: 'global-windows',
                 }
             };
         },
@@ -226,7 +231,6 @@ export class AppBar {
             if (!this._visualMenuNeedsRefresh) return;
             this.subMenu.clear();
 
-            // 1. Global Actions
             this.subMenu.addItem({
                 id: 'clone-viewer',
                 onClick: () => UTILITIES.clone(),
@@ -234,7 +238,6 @@ export class AppBar {
                 label: $.t('main.global.clone'),
             });
 
-            // 2. Custom Windows (from View.append)
             for (let id in this.otherWindows) {
                 const item = this.otherWindows[id];
                 const vm = item.visibilityManager;
@@ -248,23 +251,21 @@ export class AppBar {
                     id,
                     icon: item.icon,
                     label: item.label,
-                    // selected state comes from VisibilityManager
                     selected: vm.is(),
                     onClick: () => {
                         const next = !vm.is();
-                        vm.set(next);
-                        // keep menu open for multi-select behavior
+                        this._setVisibility(vm, next);
+                        this._visualMenuNeedsRefresh = true;
                         return true;
                     },
                     section: 'global-windows',
                 });
             }
 
-            // 3. Structured groups (sidebars, toolbars, etc.)
             for (let id in this.structure) {
                 const item = this.structure[id];
                 const subItemSpecs = this[id];
-                if (!subItemSpecs) return;
+                if (!subItemSpecs) continue;
 
                 const subChildren = [];
                 for (let subItem of subItemSpecs) {
@@ -276,19 +277,18 @@ export class AppBar {
 
                     subChildren.push({
                         id: subItem.id,
-                        icon: subItem.iconName || subItem.icon, // iconName old, backward compatibility
-                        label: subItem.title,
+                        icon: subItem.iconName || subItem.icon,
+                        label: subItem.title || subItem.label || subItem.id,
                         selected: vm.is(),
                         onClick: () => {
                             const next = !vm.is();
-                            vm.set(next);
-                            // Important: return true to keep the menu open for multi-select
+                            this._setVisibility(vm, next);
+                            this._visualMenuNeedsRefresh = true;
                             return true;
-                        }
+                        },
                     });
                 }
 
-                // Add the parent item with children
                 if (subChildren.length > 0) {
                     this.subMenu.addItem({
                         ...item,
@@ -299,16 +299,6 @@ export class AppBar {
             }
         },
 
-        /**
-         * Register a view menu item. Views are displayed inside View dropdown and should
-         * show available menus in the viewer with an option to hide them. Right-side menu
-         * panels are added automatically by other UI components using registerViewComponent.
-         *
-         * @param {string} ownerPluginId
-         * @param {string} icon
-         * @param {string} label
-         * @param {VisibilityManager} visibilityManager required visibility manager
-         */
         append(ownerPluginId, icon, label, visibilityManager) {
             if (!visibilityManager) {
                 throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
@@ -323,31 +313,19 @@ export class AppBar {
             this._visualMenuNeedsRefresh = true;
         },
 
-        /**
-         * Set custom item programmatically selected, useful when you need to change the UI state.
-         * @param {string} ownerPluginId
-         * @param {boolean} selected
-         */
         setSelected: function (ownerPluginId, selected) {
-            const item = this.otherWindows[ownerPluginId];
+            const item = this._findEntry(ownerPluginId);
             if (!item || !item.visibilityManager) {
                 console.warn(`View.setSelected: unknown or unmanaged view "${ownerPluginId}"`);
                 return;
             }
 
-            item.visibilityManager.set(Boolean(selected));
+            this._setVisibility(item.visibilityManager, Boolean(selected));
             this._visualMenuNeedsRefresh = true;
         },
 
-        /**
-         * Programmatically query the selection/visibility of a custom window.
-         * Delegates to the attached VisibilityManager.
-         * @param {string} ownerPluginId
-         * @param {boolean} [defaultValue=false] used when no manager exists
-         * @returns {boolean}
-         */
         isSelected: function (ownerPluginId, defaultValue = false) {
-            const item = this.otherWindows[ownerPluginId];
+            const item = this._findEntry(ownerPluginId);
             if (!item || !item.visibilityManager) {
                 return defaultValue;
             }
@@ -355,16 +333,8 @@ export class AppBar {
         },
 
         /**
-         * Register a sub-item of a View menu category - toolbars, sidebars, etc.
-         * They represent a grouped core view category where users can toggle particular item.
-         * This is then used internally and does not allow customizing the behavior.
-         * For custom view menus, see append().
-         *
-         * TODO try forcing plugin ID passing
-         * @param {'sideViewerMenu'|'toolbarMenu'} category
+         * @param {'sideViewerMenu'|'toolbarMenu'|'globalMenuTabs'|string} category
          * @param {UINamedItem & { visibilityManager: VisibilityManager }} tab
-         * @param {undefined} tab.body unused value
-         * @private
          */
         registerViewComponent(category, tab) {
             if (!this.structure[category]) {
@@ -382,7 +352,6 @@ export class AppBar {
                 this[category] = childList = [];
             }
 
-            // Prevent duplicates
             const index = childList.findIndex(item => item.id === tab.id);
             if (index < 0) {
                 childList.push(tab);
@@ -390,11 +359,41 @@ export class AppBar {
                 childList.splice(index, 1, tab);
             }
 
-            // todo support removal
-            // todo support order priority
-            childList.sort((a, b) => a.title.localeCompare(b.title));
+            childList.sort((a, b) => (a.title || a.label || a.id).localeCompare(b.title || b.label || b.id));
             this._visualMenuNeedsRefresh = true;
-        }
+        },
+
+        _findEntry(ownerPluginId) {
+            if (this.otherWindows?.[ownerPluginId]) {
+                return this.otherWindows[ownerPluginId];
+            }
+
+            for (const categoryId in this.structure) {
+                const list = this[categoryId];
+                if (!Array.isArray(list)) continue;
+
+                const found = list.find(item => item.id === ownerPluginId);
+                if (found) return found;
+            }
+
+            return null;
+        },
+
+        _setVisibility(visibilityManager, selected) {
+            if (!visibilityManager) return false;
+
+            if (typeof visibilityManager.set === "function") {
+                visibilityManager.set(Boolean(selected));
+                return true;
+            }
+
+            if (selected) {
+                visibilityManager.on?.();
+            } else {
+                visibilityManager.off?.();
+            }
+            return true;
+        },
     }
 
 

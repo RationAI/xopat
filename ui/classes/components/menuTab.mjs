@@ -112,7 +112,7 @@ class MenuTab extends BaseComponent {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton && tab.headerButton.id != this.headerButton?.id) {
                 tab._removeFocus();
-                APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
+                APPLICATION_CONTEXT.AppCache.set(`${tab.id}-open`, false);
             }
         }
 
@@ -202,7 +202,7 @@ class MenuTab extends BaseComponent {
         }
         if(this.parent.orientation==="RIGHT"){
             nodes[0].classList.add("rotate-90");
-        
+
         } else if(this.parent.orientation==="LEFT"){
             nodes[0].classList.add("-rotate-90");
         }

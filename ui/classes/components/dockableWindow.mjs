@@ -1,6 +1,7 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import { FloatingWindow } from "./floatingWindow.mjs";
+import { VisibilityManager } from "../mixins/visibilityManager.mjs";
 
 const { div } = van.tags;
 
@@ -87,6 +88,27 @@ class DockableWindow extends BaseComponent {
         /** @type {UI.MainLayout|null} */
         this._layout = options.layout || (globalThis.LAYOUT || null);
         this._tabRegistered = false;
+        this._tabConfig = null;
+
+        // ---- wrapper visibility ----
+        this.visibilityManager = options.visibilityManager || new VisibilityManager(this._tabId);
+        this._syncingVisibility = false;
+        this._suspendFloatingCloseHandler = false;
+
+        this._isBootstrappingVisibility = false;
+        this._deferredInitialVisibilitySync = false;
+        if (!options.visibilityManager && typeof this.visibilityManager.init === "function") {
+            this._isBootstrappingVisibility = true;
+            this.visibilityManager.init(
+                () => this._applyCurrentVisibility(),
+                () => this._applyCurrentVisibility()
+            );
+            this._isBootstrappingVisibility = false;
+
+            // We intentionally skipped the constructor-time callback body above.
+            // Flush once after the wrapper is actually registered in MainLayout.
+            this._deferredInitialVisibilitySync = true;
+        }
 
         // ---- Floating window integration ----
         this._floatingOpts = options.floating || {};
@@ -119,17 +141,20 @@ class DockableWindow extends BaseComponent {
      * The mode is persisted.
      */
     dock() {
-        if (this._mode === "tab") return;
+        const wasFloating = this._mode === "floating";
         this._mode = "tab";
         APPLICATION_CONTEXT.AppCache.set(this._modeKey, this._mode);
 
-        // Close floating window if it exists
-        if (this._floating) {
-            try { this._floating.close(); } catch (_) {}
-            this._floating = null;
+        if (wasFloating) {
+            this._closeFloatingSilently();
         }
 
         this._ensureTab();
+        if (this.visibilityManager.is()) {
+            this._layout?.showGlobalMenu?.();
+            this._layout?._applyDockVisibility?.();
+        }
+
         this.options.onModeChange?.(this._mode);
     }
 
@@ -138,22 +163,33 @@ class DockableWindow extends BaseComponent {
      * The mode is persisted.
      */
     float() {
-        if (this._mode === "floating") return;
+        const wasDocked = this._mode === "tab";
         this._mode = "floating";
         APPLICATION_CONTEXT.AppCache.set(this._modeKey, this._mode);
 
-        // Remove tab if present
         const layout = this._layout || globalThis.LAYOUT;
-        if (layout && this._tabRegistered && typeof layout.removeTab === "function") {
+        if (wasDocked && layout?.detachDockableTab) {
+            layout.detachDockableTab(this._tabId);
+        } else if (wasDocked && layout?.removeTab) {
             layout.removeTab(this._tabId);
         }
         this._tabRegistered = false;
 
-        const fw = this._ensureFloating();
-        // Attach if not already present
-        if (!fw.isOpened()) fw.attachTo(document.body); else fw.focus();
+        if (this.visibilityManager.is()) {
+            this._openFloatingWindow();
+        } else {
+            this._closeFloatingSilently();
+        }
 
         this.options.onModeChange?.(this._mode);
+    }
+
+    /**
+     * Mark the wrapper as registered / detached from the MainLayout tab strip.
+     * @param {boolean} nextState
+     */
+    markTabRegistered(nextState) {
+        this._tabRegistered = !!nextState;
     }
 
     /** Toggle between "floating" and "tab" modes. */
@@ -203,16 +239,22 @@ class DockableWindow extends BaseComponent {
      *
      * @returns {HTMLElement}
      */
+    /**
+     * @description
+     * Create the underlying DOM node. In "floating" mode this is the underlying
+     * {@link UI.FloatingWindow} root element. In "tab" mode, the DockableWindow
+     * registers a tab in the {@link UI.MainLayout} and returns a hidden placeholder.
+     *
+     * @returns {HTMLElement}
+     */
     create() {
         let el;
 
         if (this.isFloating() || !this._layout) {
-            // Fallback to floating mode if there is no layout
             const fw = this._ensureFloating();
             el = fw.create();
         } else {
             this._ensureTab();
-            // Just a hidden stub element so BaseComponent contract is kept.
             el = div({
                 ...this.commonProperties,
                 style: "display:none;",
@@ -224,7 +266,121 @@ class DockableWindow extends BaseComponent {
         return el;
     }
 
+    /**
+     * MainLayout-facing tab descriptor.
+     * @returns {{id:string,title:string,icon:string,iconName:string,body:Array,visibilityManager:object,__dockableWindow:DockableWindow}}
+     */
+    toMainLayoutTab() {
+        if (!this._tabConfig) {
+            this._tabConfig = {
+                id: this._tabId,
+                title: this._tabTitle,
+                icon: this._tabIcon,
+                iconName: this._tabIcon,
+                body: this._children.slice(),
+                visibilityManager: this.visibilityManager,
+                __dockableWindow: this,
+            };
+        }
+
+        return this._tabConfig;
+    }
+
+    /**
+     * View-menu registration payload for the wrapper.
+     * @returns {{id:string,title:string,icon:string,visibilityManager:{is:Function,set:Function}}}
+     */
+    getViewRegistration() {
+        return {
+            id: this._tabId,
+            title: this.getViewTitle(),
+            icon: this.getViewIcon(),
+            visibilityManager: {
+                is: () => this.visibilityManager.is(),
+                set: next => {
+                    next ? this.visibilityManager.on() : this.visibilityManager.off();
+                    return true;
+                }
+            }
+        };
+    }
+
     // ---------- internals ----------
+
+    /** @private */
+    _ensureTab() {
+        if (this._tabRegistered) return;
+
+        const layout = this._layout || globalThis.LAYOUT;
+        if (!layout || typeof layout.addDockableWindow !== "function") {
+            console.warn("[DockableWindow] No MainLayout instance available for tab mode.", this.id);
+            return;
+        }
+
+        const registered = layout.addDockableWindow(this);
+        this._tabRegistered = !!registered;
+    }
+
+    /** @private */
+    /** @private */
+    _applyCurrentVisibility() {
+        if (this._isBootstrappingVisibility || this._syncingVisibility) return;
+        this._syncingVisibility = true;
+
+        try {
+            const visible = this.visibilityManager.is();
+            const layout = this._layout || globalThis.LAYOUT;
+
+            if (this.isFloating()) {
+                if (visible) {
+                    this._openFloatingWindow();
+                } else {
+                    this._closeFloatingSilently();
+                }
+                return;
+            }
+
+            this._ensureTab();
+            if (visible) {
+                layout?.showGlobalMenu?.();
+            }
+            layout?._applyDockVisibility?.();
+        } finally {
+            this._syncingVisibility = false;
+        }
+    }
+
+    /** @private */
+    _flushDeferredVisibilitySync() {
+        if (!this._deferredInitialVisibilitySync) return;
+        this._deferredInitialVisibilitySync = false;
+        this._applyCurrentVisibility();
+    }
+
+    /** @private */
+    _openFloatingWindow() {
+        const fw = this._ensureFloating();
+        if (typeof fw.isOpened === "function" && !fw.isOpened()) {
+            fw.attachTo(document.body);
+        } else {
+            fw.open?.();
+            fw.focus?.();
+        }
+    }
+
+    /** @private */
+    _closeFloatingSilently() {
+        if (!this._floating) return;
+
+        this._suspendFloatingCloseHandler = true;
+        try {
+            this._floating.close?.();
+        } catch (_) {
+            // no-op
+        } finally {
+            this._suspendFloatingCloseHandler = false;
+        }
+    }
 
     /** @private */
     _ensureFloating() {
@@ -234,35 +390,16 @@ class DockableWindow extends BaseComponent {
             id: this.id,
             title: this.title,
             ...this._floatingOpts,
-            // keep user's onClose but still let DockableWindow know
             onClose: () => {
                 this._floatingOpts?.onClose?.();
-                // do not change mode here; just close the window
+                if (!this._suspendFloatingCloseHandler) {
+                    this.visibilityManager?.off?.();
+                }
             }
         };
 
         this._floating = new FloatingWindow(fwOpts, ...this._children);
         return this._floating;
-    }
-
-    /** @private */
-    _ensureTab() {
-        if (this._tabRegistered) return;
-
-        const layout = this._layout || globalThis.LAYOUT;
-        if (!layout || typeof layout.addTab !== "function") {
-            console.warn("[DockableWindow] No MainLayout instance available for tab mode.", this.id);
-            return;
-        }
-
-        layout.addTab({
-            id: this._tabId,
-            title: this._tabTitle,
-            icon: this._tabIcon,
-            body: this._children.slice()    // BaseComponents / nodes are fine here
-        });
-
-        this._tabRegistered = true;
     }
 
     /**
