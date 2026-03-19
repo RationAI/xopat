@@ -1,14 +1,16 @@
 # allow only build-in items in modules/plugins
 /modules/**
 !/modules/annotations
-!/modules/colormaps
+!/modules/chat
 !/modules/empaia-wsi-tile-source
 !/modules/empation-api
 !/modules/fabricjs
+!/modules/geotiff
 !/modules/human-readable-ids
 !/modules/icc_profile
 !/modules/jwt-decode
 !/modules/menu-pages
+!/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/pollyjs
 !/modules/rationai-wsi-tile-source
@@ -18,22 +20,24 @@
 !/modules/vega-secure
 !/modules/webgl
 !/modules/sam-segmentation-experimental
-!/modules/sam-segmentation-experimental/**
+!/modules/web-worker-manager
 
 /plugins/**
-!/plugins/annotations
-!/plugins/custom-pages
-!/plugins/empaia
-!/plugins/extra-tutorials
-!/plugins/hotkeys
-!/plugins/navigation-tracker
-!/plugins/profiler
-!/plugins/recorder
-!/plugins/simple-integration
-!/plugins/user-session
-!/plugins/youtrack-feedback-form
-!/plugins/sam-segment-tool-experimental
-!/plugins/sam-segment-tool-experimental/**
+!/plugins/annotations/*
+!/plugins/custom-pages/*
+!/plugins/empaia/*
+!/plugins/extra-tutorials/*
+!/plugins/rationai-wsi-file-browser/*
+!/plugins/hotkeys/*
+!/plugins/navigation-tracker/*
+!/plugins/profiler/*
+!/plugins/questionaire/*
+!/plugins/recorder/*
+!/plugins/user-session/*
+!/plugins/youtrack-feedback-form/*
+!/plugins/sam-segment-tool-experimental/*
+!/plugins/dicom/*
+!/plugins/slide-info/*
 
 #rubbish
 *.txt
@@ -46,11 +50,14 @@ Thumbs.db
 *.min.js
 *.min.js.map
 /openseadragon/
+/openseadragon-new/
 /node_modules/
 /build/
 /coverage/
 /env/
 !env/README.md
+!env/env.default.json
+dist
 
 #docs
 /docs/build/
@@ -74,3 +81,7 @@ cypress.env.*
 
 # hidden docs file
 !.readthedocs.yaml
+
+#ui
+ui/index.js
+ui/index.js.map

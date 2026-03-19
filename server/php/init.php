@@ -73,8 +73,8 @@ foreach ($_POST as $key=>&$value) {
 //ensureDefined($_POST, "background", []);
 //ensureDefined($_POST, "plugins", {});
 
-$CORE["serverStatus"]["name"] = "php";
-$CORE["serverStatus"]["supportsPost"] = true;
+$CORE["server"]["name"] = "php";
+$CORE["server"]["supportsPost"] = true;
 
 $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();
@@ -89,13 +89,14 @@ $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
             require_core("deps");
             require_core("app");
             require_core("env");
+            echo "<script>window.XOPAT_CSRF_TOKEN = '{$_SESSION['csrf_token']}';</script>";
             break;
 
         case "app":
             //Todo think of secure way of sharing POST with the app
 ?>
     <script type="text/javascript">
-        initXopat(
+        initXOpat(
             <?php echo json_encode((object)$PLUGINS) ?>,
             <?php echo json_encode((object)$MODULES) ?>,
             <?php echo json_encode((object)$CORE) ?>,

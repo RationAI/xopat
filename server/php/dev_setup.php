@@ -20,16 +20,10 @@ $replacer = function($match) use ($i18n) {
     switch ($match[1]) {
         case "head":
             require_openseadragon();
-            require_lib("primer");
-            require_lib("jquery");
-            require_lib("render");
+            require_libs();
             require_ui();
             require_core("env");
             require_core("deps");
-            include_once(PHP_INCLUDES . "plugins.php");
-            global $MODULES;
-            $MODULES["webgl"]["loaded"] = true;
-            require_modules(true);
             break;
 
         case "form-init":

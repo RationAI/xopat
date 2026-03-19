@@ -6,6 +6,15 @@ if (!defined( 'ABSPATH' )) {
     define( 'ABSPATH', __DIR__ . '/' );
 }
 
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(16));
+    $_SESSION['xopat_session'] = session_id();
+}
+
 $directive = isset($_GET["directive"]) ? $_GET["directive"] : "";
 if ($directive) {
     switch ($directive) {
@@ -14,6 +23,9 @@ if ($directive) {
             exit;
         case "user_setup":
             require_once ABSPATH . "server/php/user_setup.php";
+            exit;
+        case "proxy":
+            require_once ABSPATH . "server/php/proxy.php";
             exit;
         //redirect and others handled by index
         default:

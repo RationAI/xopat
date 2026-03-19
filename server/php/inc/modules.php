@@ -9,18 +9,102 @@ $MODULES = array();
 include_once PHP_INCLUDES . "comments.class.php";
 use Ahc\Json\Comment;
 
+/**
+ * Expands glob patterns within an array of includes.
+ * @param string $basePath The absolute path to the module/plugin directory.
+ * @param array $includes The includes array from the JSON config.
+ * @return array The expanded includes array.
+ */
+function expand_include_globs($basePath, $includes) {
+    $expanded = [];
+    foreach ($includes as $file) {
+        // We only support globs on string entries
+        if (is_string($file) && (str_contains($file, '*') || str_contains($file, '?'))) {
+            $matches = glob($basePath . $file, GLOB_BRACE);
+            if ($matches) {
+                foreach ($matches as $fullPath) {
+                    // Convert absolute path back to relative path for the include
+                    $expanded[] = str_replace($basePath, '', $fullPath);
+                }
+            }
+        } else {
+            $expanded[] = $file;
+        }
+    }
+    return $expanded;
+}
+
 foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
     $full_path = ABS_MODULES . "$dir/";
     $interface = $full_path . "include.json";
 
-    if (file_exists($interface)) {
-        try {
+    try {
+        // Base data from include.json (if present)
+        $data = NULL;
+        if (file_exists($interface)) {
             $data = (new Comment)->decode(file_get_contents($interface), true);
+        }
+
+        $workspace = $full_path . 'package.json';
+        if (file_exists($workspace)) {
+            $packageData = (new Comment)->decode(file_get_contents($workspace), true);
+
+            // Default entry points
+            $has_js = file_exists($full_path . 'index.workspace.js');
+            $has_mjs = file_exists($full_path . 'index.workspace.mjs');
+
+            // Logic: Default JS -> Default MJS -> Package 'main'
+            $workspaceEntry = null;
+            if ($has_js) {
+                $workspaceEntry = 'index.workspace.js';
+            } else if ($has_mjs) {
+                $workspaceEntry = 'index.workspace.mjs';
+            } else if (isset($packageData['main'])) {
+                $workspaceEntry = $packageData['main'];
+            }
+
+            if ($workspaceEntry) {
+                if (!isset($data['includes']) || !is_array($data['includes'])) {
+                    $data['includes'] = [];
+                }
+                // Avoid duplicate includes if 'main' is already there
+                if (!in_array($workspaceEntry, $data['includes'])) {
+                    array_unshift($data['includes'], $workspaceEntry);
+                }
+            } else {
+                error_log("Module $full_path has package.json but no valid entry point found (index.workspace or main)!");
+            }
+
+            $data['includes'] = expand_include_globs($full_path, $data['includes']);
+
+            // Fill missing fields from package.json
+            if (!isset($data['id']) || $data['id'] === '' ) {
+                if (isset($packageData['name'])) $data['id'] = $packageData['name'];
+            }
+            if (!isset($data['name']) || $data['name'] === '' ) {
+                if (isset($packageData['name'])) $data['name'] = $packageData['name'];
+            }
+            if (!isset($data['author']) || $data['author'] === '' ) {
+                if (isset($packageData['author'])) $data['author'] = $packageData['author'];
+            }
+            if (!isset($data['version']) || $data['version'] === '' ) {
+                if (isset($packageData['version'])) $data['version'] = $packageData['version'];
+            }
+            if (!isset($data['description']) || $data['description'] === '' ) {
+                if (isset($packageData['description'])) $data['description'] = $packageData['description'];
+            }
+        }
+
+        if (!empty($data) && is_array($data)) {
             $data["directory"] = $dir;
             $data["path"] = MODULES_FOLDER . "$dir/";
             $data["loaded"] = false;
             if (file_exists($full_path . "style.css")) {
                 $data["styleSheet"] = $data["path"] . "style.css";
+            }
+
+            if (!isset($data['requires']) || !is_array($data['requires'])) {
+                $data['requires'] = [];
             }
 
             try {
@@ -46,10 +130,10 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
             if (!isset($data["enabled"]) || $data["enabled"] != false) {
                 $MODULES[$data["id"]] = $data;
             }
-
-        } catch (Exception $e) {
-            trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
         }
+    } catch (Exception $e) {
+            // todo only log error, do not shut down everything
+        trigger_error("Module $full_path has invalid configuration file and cannot be loaded!", E_USER_WARNING);
     }
 }
 

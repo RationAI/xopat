@@ -1,35 +1,43 @@
 {
   "name": "xopat",
   "version": "2.3.1",
-  "description": "A flexible multipurose browser-based WSI viewer.",
-  "main": "index.php",
+  "description": "A flexible multipurpose WSI viewer.",
+  "main": "index.js",
+  "bin": "index.js",
   "scripts": {
-    "postinstall": "grunt css && grunt buildUI",
-    "build": "grunt all",
+    "env": "grunt env",
+    "build": "grunt build",
+    "postinstall": "grunt build",
+    "minify": "grunt minify",
+    "test": "npx cypress run --browser chrome --e2e",
+    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
     "build-css": "npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css",
+    "build-docs-api": "grunt jsdoc",
     "s-static": "grunt html",
     "s-node": "node index.js",
     "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js",
-    "env": "grunt env",
-    "docs": "grunt docs",
-    "mkdocs": "cd docs/readthedocs && mkdocs serve",
-    "format": "npx eslint",
-    "test": "npx cypress run --browser chrome --e2e",
-    "test-w": "cross-env ELECTRON_ENABLE_LOGGING=1 npx cypress open",
-    "ex-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
-    "ex-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
-
+    "docker-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
+    "docker-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
+    "create-module": "grunt generate:module",
+    "create-plugin": "grunt generate:plugin",
+    "publish-npm": "grunt npm-install",
+    "dev-docs": "cd docs/readthedocs && mkdocs serve",
     "dev-ui": "grunt connect watch",
     "dev": "node server/utils/node/dev-mode.js",
+    "watch-all": "cross-env WATCH_PATTERN={src,ui,plugins,modules}/**/*.{html,js,mjs,ts} grunt twinc",
     "watch-ui": "cross-env WATCH_PATTERN=ui/**/*.mjs grunt twinc",
-    "watch-core": "cross-env WATCH_PATTERN=src/**/*.{html,js,mjs} grunt twinc",
-    "watch-plugins": "cross-env WATCH_PATTERN=plugins/**/*.{html,js,mjs} grunt twinc",
-    "watch-modules": "cross-env WATCH_PATTERN=modules/**/*.{html,js,mjs} grunt twinc"
+    "watch-core": "cross-env WATCH_PATTERN={src,ui}/**/*.{html,js,mjs,ts} grunt twinc",
+    "watch-plugins": "cross-env WATCH_PATTERN=plugins/**/*.{html,js,mjs,ts} grunt twinc",
+    "watch-modules": "cross-env WATCH_PATTERN=modules/**/*.{html,js,mjs,ts} grunt twinc"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/RationAI/xopat.git"
   },
+  "workspaces": [
+    "plugins/*",
+    "modules/*"
+  ],
   "keywords": [
     "viewer",
     "WSI",
@@ -51,22 +59,27 @@
   "homepage": "https://github.com/RationAI/xopat#readme",
   "devDependencies": {
     "@catppuccin/tailwindcss": "^0.1.6",
-    "@frsource/cypress-plugin-visual-regression-diff": "^3.2.14",
+    "@frsource/cypress-plugin-visual-regression-diff": "^1.4.0",
+    "@types/node": "^25.5.0",
+    "@types/openseadragon": "^5.0.2",
+    "browserify": "^17.0.1",
     "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
     "cssnano": "^7.1.1",
-    "cypress": "^10.9.0",
+    "cypress": "^15.11.0",
     "cypress-real-events": "^1.7.1",
     "cypress-wait-until": "^1.7.2",
     "daisyui": "^4.10.2",
     "esbuild": "^0.25.1",
+    "esmify": "^0.1.2",
+    "glob": "^7.2.0",
     "glob-parent": "^6.0.2",
     "grunt": "^1.6.1",
     "grunt-contrib-connect": "^3.0.0",
     "grunt-contrib-uglify": "^5.2.2",
     "grunt-contrib-watch": "^1.1.0",
-    "grunt-git-describe": "^2.4.4",
+    "grunt-git-describe": "^1.0.2",
     "highlight.js": "^11.7.0",
     "i18n": "^0.15.1",
     "inquirer": "^12.1.0",
@@ -77,6 +90,18 @@
     "postcss-discard-duplicates": "^7.0.2",
     "postcss-merge-rules": "^7.0.6",
     "taffydb": "^2.6.2",
-    "tailwindcss": "^3.4.14"
+    "tailwindcss": "^3.4.14",
+    "terser": "^5.44.0",
+    "typescript": "^5.9.3"
+  },
+  "pkg": {
+    "assets": [
+      "server/templates/**/*",
+      "plugins/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "modules/**/*.{html,css,js,mjs,js.map,json,png,jpg,jpeg,bmp,tiff,svg,gif,woff,woff2,ttf,eot}",
+      "src/**/*",
+      "ui/**/*",
+      "env/env.json"
+    ]
   }
 }

@@ -33,9 +33,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.version = "0.0.1";
 		this.session = this.version + "_" + Date.now();
 
-        this._fabricProxy = new OSDAnnotations.FabricWrapper(VIEWER);
-        // hack for v3 (future) - remove once merged
-        OSDAnnotations.FabricWrapper.instances = () => [this._fabricProxy];
         this._activeViewer = VIEWER;
 		this._init();
 		this.user = XOpatUser.instance();
@@ -47,7 +44,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {OSDAnnotations.FabricWrapper}
      */
     get fabric() {
-        return this._fabricProxy;
+        return OSDAnnotations.FabricWrapper.instance(this.viewer);
+    }
+
+    /**
+     * Get target fabric wrapper instance
+     * @param {ViewerLikeItem} viewerOrId
+     */
+    getFabric(viewerOrId) {
+        return OSDAnnotations.FabricWrapper.instance(viewerOrId);
     }
 
     /**
@@ -55,9 +60,13 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @return {OpenSeadragon.Viewer}
      */
     get viewer() {
-        if (!this.mode.locksViewer()) {
+        if (this.__calledViewerGetter) return this._activeViewer;
+        this.__calledViewerGetter = true;
+        const newRef = VIEWER;
+        if (newRef !== this._activeViewer && !this.mode.locksViewer(this._activeViewer, newRef)) {
             this._activeViewer = VIEWER;
         }
+        this.__calledViewerGetter = false;
         return this._activeViewer;
     }
 
@@ -67,7 +76,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @param args
      */
     addFabricHandler(...args) {
-        this._fabricProxy.addHandler(...args);
+        OSDAnnotations.FabricWrapper.broadcastHandler(...args);
     }
 
     /**
@@ -75,7 +84,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
      * @param args
      */
     removeFabricHandler(...args) {
-        this._fabricProxy.removeHandler(...args);
+        OSDAnnotations.FabricWrapper.cancelBroadcast(...args);
     }
 
 	/**
@@ -151,17 +160,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 	/******************* EXPORT, IMPORT **********************/
+
+    /**
+     * @fires OSDAnnotations.requestExport::save-annotations
+     * @return {Promise<string>} returns message from the party that handled the event, or throws if no-one handled it
+     */
+    async requestExport() {
+        let handled = undefined;
+        await this.raiseEventAwaiting('save-annotations', {
+            setHandled: (message) => {
+                handled = message;
+            },
+            stopPropagation: () => {
+                return handled;
+            }
+        });
+
+        if (handled) {
+            return handled;
+        }
+
+        throw new Error("Annotation save action was requested but nothing has handled the request.");
+    }
+
+    setIOOption(name, value) {
+        if (!['imageCoordinatesOffset', 'format'].includes(name)) {
+            console.error('Invalid IO option %s set!', name);
+        } else {
+            this._ioArgs[name] = value;
+        }
+    }
+
+    getExportOptions() {
+        return this._ioArgs;
+    }
+
 	async exportData() {
+        // todo we should export all..
         return await this.fabric.export();
 	}
 
 	async importData(data) {
-		const options = {inheritSession: true};
+        // todo mutiplex
+        const options = {inheritSession: true};
 		if (typeof data === "object" && data.format) {
 			options.format = data.format;
 		}
         await this.fabric.import(data, options);
 	}
+
+    // todo implement
+    async exportViewerData(viewer, key, viewerTargetID) {
+        return {};
+    }
+
+    async importViewerData(viewer, key, viewerTargetID, data) {}
 
 	/**
 	 * Get the currently used data persistence storage module.
@@ -187,7 +240,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 					guard = 0;
 					//todo ensure cache can be non-persistent as a fallback
 					_this.cache.set('_unsaved', {
-						session: APPLICATION_CONTEXT.sessionName,
+                        // todo cache needs to store valid canvas ID to store to
+                        session: APPLICATION_CONTEXT.sessionName,
                         objects: _this.fabric.toObject(true)?.objects,
 						presets: _this.presets.toObject()
 					});
@@ -227,6 +281,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 				if (data?.session === APPLICATION_CONTEXT.sessionName) {
 					if (confirm("Your last annotation workspace was not saved! Load?")) {
 						//todo do not avoid import but import to a new layer!!!
+                        // todo multiplex delivery of annotations
 						this._avoidImport = true;
 						if (data?.presets) {
 							await this.presets.import(data?.presets, true);
@@ -462,23 +517,11 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this.historyManager.addAnnotationToBoard(object);
 	}
 
-	setCloseEdgeMouseNavigation(enable) {
-		this.previousEdgeMouseInteractive = this.edgeMouseInteractive;
-
-		if (enable !== this.edgeMouseInteractive && (!enable || this.mode.supportsEdgeNavigation())) {
-			this.edgeMouseInteractive = enable;
-
-			window.removeEventListener("mousemove", this._edgesMouseNavigation);
-			if (enable) {
-				window.addEventListener("mousemove", this._edgesMouseNavigation);
-			}
-
-			this.edgeNavDisabledByMode = false;
-		}
-
-		return this.edgeMouseInteractive;
-	}
-
+    setCloseEdgeMouseNavigation(enabled) {
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.setCloseEdgeMouseNavigation(enabled);
+        }
+    }
 	/************************ Canvas object modification utilities *******************************/
 
 	_generateInternalId() {
@@ -507,22 +550,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 	/**
 	 * Undo action, handled by either a history implementation, or the current mode
+     * todo remove
 	 */
 	undo() {
 		const can = this.mode.canUndo();
 		if (can === undefined) return this.history.undo();
 		this.mode.undo();
-		this.raiseEvent('history-change');
 	}
 
 	/**
 	 * Redo action, handled by either a history implementation, or the current mode
+     * todo remove
 	 */
 	redo() {
 		const can = this.mode.canRedo();
 		if (can === undefined) return this.history.redo();
 		this.mode.redo();
-		this.raiseEvent('history-change');
 	}
 
 	/**
@@ -548,16 +591,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	}
 
 
-
 	/**
 	 * Set annotation visual property to permanent value
 	 * @param {string} propertyName one of OSDAnnotations.CommonAnnotationVisuals keys
 	 * @param {any} propertyValue value for the property
 	 */
 	setAnnotationCommonVisualProperty(propertyName, propertyValue) {
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-			instance.module.presets.setCommonVisualProp(propertyName, propertyValue);
-            instance.updateAnnotationVisuals();
+        if (this.presets.setCommonVisualProp(propertyName, propertyValue)) {
+            for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+                instance.module.presets.setCommonVisualProp(propertyName, propertyValue);
+                instance.updateAnnotationVisuals();
+            }
         }
 	}
 
@@ -757,6 +801,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		// note the board would have to reflect the UI state when opening
 
 		const _this = this;
+        this._ioArgs = this.getStaticMeta("convertors") || {};
+        this._defaultFormat = this._ioArgs.format || "native";
 
 		/**
 		 * Attach factory getter to each object
@@ -824,9 +870,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		this._wasModeFiredByKey = false;
 		this._idCounter = 0;
 		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
-		this._exportPrivateAnnotations = APPLICATION_CONTEXT.getOption("exportPrivate", this.getStaticMeta("exportPrivate", false));
-        // Rewrite with bind this arg to use in events
-        this._edgesMouseNavigation = this._edgesMouseNavigation.bind(this);
+		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
 		this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
@@ -848,11 +892,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		 * @member {OSDAnnotations.AnnotationHistoryManager}
 		 */
 		this.historyManager = new OSDAnnotations.AnnotationHistoryManager("historyManager", this, this.presets);
-
-		this.history.setStateChangeCallback(({ canUndo, canRedo }) => {
-			this.historyManager.setHistoryState(canUndo, canRedo);
-			this.raiseEvent('history-change');
-		});
 
 		/**
 		 * FreeFormTool reference
@@ -892,8 +931,8 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 this.setMode(this.Modes.AUTO);
             }
         }, false);
-        VIEWER.addHandler('key-down', e => this._keyDownHandler(e));
-        VIEWER.addHandler('key-up', e => this._keyUpHandler(e));
+        VIEWER_MANAGER.addHandler('key-down', e => this._keyDownHandler(e));
+        VIEWER_MANAGER.addHandler('key-up', e => this._keyUpHandler(e));
         // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
     }
 
@@ -987,13 +1026,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 		if (mode.setFromAuto()) {
 			this.mode = mode;
 			this.raiseEvent('mode-changed', {mode: this.mode});
-
-			if (this.edgeNavDisabledByMode) this.setCloseEdgeMouseNavigation(this.previousEdgeMouseInteractive);
-
-			if (!this.mode.supportsEdgeNavigation()) {
-				this.setCloseEdgeMouseNavigation(false);
-				this.edgeNavDisabledByMode = true;
-			}
 		}
 	}
 
@@ -1012,33 +1044,6 @@ in order to work. Did you maybe named the ${type} factory implementation differe
             }
 		}
 	}
-
-	_edgesMouseNavigation(e) {
-		if (this.mode !== this.Modes.AUTO) {
-			const edgeThreshold = 20;
-			const mouseX = e.clientX;
-			const mouseY = e.clientY;
-
-			const nearLeftEdge = mouseX >= 0 && edgeThreshold - mouseX;
-			const nearTopEdge = mouseY >= 0 && edgeThreshold / 2 - mouseY; //top edge near
-			const nearRightEdge = mouseX - window.innerWidth + edgeThreshold;
-			const nearBottomEdge = mouseY - window.innerHeight + edgeThreshold;
-
-			if (
-				(nearTopEdge < edgeThreshold && nearTopEdge > 0) ||
-				(nearRightEdge < edgeThreshold && nearRightEdge > 0) ||
-				(nearBottomEdge < edgeThreshold && nearBottomEdge > 0) ||
-				(nearLeftEdge < edgeThreshold && nearLeftEdge > 0)
-			) {
-                const viewer = this.viewer;
-                const center = viewer.viewport.getCenter(true);
-                const current = viewer.viewport.windowToViewportCoordinates(new OpenSeadragon.Point(e.x, e.y));
-                let direction = current.minus(center);
-				direction = direction.divide(Math.sqrt(Math.pow(direction.x, 2) + Math.pow(direction.y, 2)));
-                viewer.viewport.panTo(direction.times(0.004 / viewer.scalebar.imagePixelSizeOnScreen()).plus(center));
-			}
-		}
-	};
 };
 
 
@@ -1325,9 +1330,20 @@ OSDAnnotations.AnnotationState = class {
      * Predicate that returns true if the viewer is locked and must not be changed (even though the
      * user might hover over different viewer). Because, for example, polygon creation can be in progress.
      * By default, locking is always on when cursor is down.
+     *
+     * This can be used also to listen for viewer changes, not necessarily to return a different
+     * value than the default one. E.g:
+     *   const willKeepViewer = super.locksViewer(...);
+     *   if (!willKeepViewer) {
+     *       ... do cleanup
+     *   }
+     *   return willKeepViewer;
+     *
+     * @param {OpenSeadragon.Viewer} oldViewerRef
+     * @param {OpenSeadragon.Viewer} newViewerRef
      * @return {boolean|*}
      */
-    locksViewer() {
+    locksViewer(oldViewerRef, newViewerRef) {
         return this.context.cursor.isDown;
     }
 
@@ -1366,7 +1382,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "open_with", "🆀  navigate / select annotations");
+		super(context, "auto", "fa-arrows-up-down-left-right", "🆀  navigate / select annotations");
 	}
 
 	// handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1535,7 +1551,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "brush", "🅴  brush to create/edit");
+		super(context, "fft-add", "fa-paintbrush", "🅴  brush to create/edit");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -1589,7 +1605,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "brush", "🆁  brush to remove");
+		super(context, "fft-remove", "fa-paintbrush", "🆁  brush to remove");
 		this.candidates = null;
 	}
 
@@ -1657,7 +1673,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "format_shapes","🆆  create annotations manually");
+		super(context, "custom", "fa-object-group", "🆆  create annotations manually");
 		this._lastUsed = null;
 	}
 
@@ -1768,7 +1784,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "brush", "🆉  correction tool");
+		super(context, "fft-correct", "fa-paintbrush", "🆉  correction tool");
 		this.candidates = null;
 	}
 

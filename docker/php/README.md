@@ -12,12 +12,17 @@ And works with the env configuration:
 ````json
 "image_group_server": "/wsi-server/", //the server url mapped to host machine localhost at port 8080
 "image_group_protocol": "`${path}v3/slides/${data}/info`", //the server query
-"image_group_preview": "`${path}v3/slides/${data}/thumbnail/max_size/1024/1024`", //the thumbnail query
 ````
 The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XOPAT_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 
 
+### Proxying
+The viewer env needs to specify the url of the viewer in the configuration.
+If your proxy wants a sub-root deployment, you have to also specify the ``XO_ROOT_PATH``
+subroot path for the apache server. If your server proxy strips the prefix, nothing extra needs to be done.
+
+Health check is available at ``health`` endpoint.
 
 ### Simple Setup
 

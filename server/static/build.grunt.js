@@ -34,17 +34,14 @@ module.exports = function (grunt, message) {
         });
         throwIfError(core, "Failed to parse the CORE inicialization!");
 
-        core.CORE.serverStatus.name = "static";
-        core.CORE.serverStatus.supportsPost = false;
+        core.CORE.server.name = "static";
+        core.CORE.server.supportsPost = false;
 
         //todo o18n and locale
         //const locale = $_GET["lang"] ?? ($parsedParams->params->locale ?? "en");
         grunt.log.writeln('Parsing module and plugins configuration...');
-        loadPlugins(core, grunt.file.isFile, grunt.file.read, dirName => {
-            return grunt.file.expand({filter: "isDirectory", cwd: dirName}, ["*"])
-        }, {t: function () {return "Dummy trasnlation function";}});
+        loadPlugins(core, grunt.file.isFile, grunt.file.read, {t: function () {return "Dummy trasnlation function";}});
         throwIfError(core, "Failed to parse the MODULES or PLUGINS initialization!");
-
 
         const replacer = function(match, p1) {
             try {
@@ -66,7 +63,7 @@ ${core.requireCore("app")}`;
     <script type="text/javascript">
     //todo better handling of translation data and the data uploading, now hardcoded
     const lang = 'en';
-    initXopat(
+    initXOpat(
         ${JSON.stringify(core.PLUGINS)},
         ${JSON.stringify(core.MODULES)},
         ${JSON.stringify(core.CORE)},

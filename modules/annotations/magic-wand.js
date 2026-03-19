@@ -1,6 +1,6 @@
 OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "magic-wand", "lasso_select", "🆃  automatic selection wand");
+        super(context, "magic-wand", "fa-wand-sparkles", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.threshold = 10;
@@ -13,41 +13,37 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this.oldMask = null;
         this.mask = null;
         //this._buttonActive = false;
-
+        this._lastViewportKey = null;
         this._scrollZoom = this.scrollZooming.bind(this);
 
-        this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length < 1 ||
-        APPLICATION_CONTEXT.config.visualizations.length < 1 ? 0 : 1;
-        this.disabled = !(APPLICATION_CONTEXT.config.background.length +
-            APPLICATION_CONTEXT.config.visualizations.length);
+        const shaders = this.context.viewer.drawer.renderer.getShaderLayerOrder();
+        this._selectedShader = shaders[0];
+        this.disabled = !shaders.length;
 
-        VIEWER.addHandler('visualization-used', () => {
+        VIEWER_MANAGER.broadcastHandler('visualization-used', () => {
+            this.prepareShaderConfig();
             this._invalidData = Date.now();
         });
+    }
 
-        VIEWER.addHandler('visualization-redrawn', () => {
-            this._invalidData = Date.now();
-        });
+    prepareShaderConfig() {
+        // for some reason change in drawer completely wrongs the logics
+        // of reading the texture, so the drawer must be recreated
 
-        // TODO works with OSD 5.0+
-        // const drawerType = "canvas"; //VIEWER.drawer.getType();
-        // const Drawer = OpenSeadragon.determineDrawer(drawerType);
-        // this.drawer = new Drawer({
-        //     viewer:             VIEWER,
-        //     viewport:           VIEWER.viewport,
-        //     element:            VIEWER.drawer.container,
-        //     debugGridColor:     VIEWER.debugGridColor,
-        //     options:            VIEWER.drawerOptions[drawerType]
-        // });
-        this.drawer = new OpenSeadragon.Drawer({
-            viewer:             VIEWER,
-            viewport:           VIEWER.viewport,
-            element:            VIEWER.canvas,
-            debugGridColor:     VIEWER.debugGridColor
-        });
-        this.drawer.canvas.style.setProperty('z-index', '-999');
-        this.drawer.canvas.style.setProperty('visibility', 'hidden');
-        this.drawer.canvas.style.setProperty('display', 'none');
+        if (!this.drawer || this.drawer.viewer !== this.context.viewer) {
+            this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
+        }
+
+        const shaders = this.context.viewer.drawer.renderer.getAllShaders();
+        const result = {};
+
+        const selectedShader = shaders[this._selectedShader];
+        for (let id in shaders) {
+            // If selection, keep the same amount of shaders, but except the target one make them vanish
+            // todo masks are not accounted for! make some flex drawer utility that solves this
+            result[id] = !selectedShader || id === this._selectedShader ? shaders[id].getConfig() : { type: 'identity', visible: 0, dataReferences: [0]};
+        }
+        this._renderConfig = result;
     }
 
     setLayer(index, key) {
@@ -80,58 +76,112 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         this._isLeft = isLeftClick;
     }
 
-    prepareViewportScreenshot(x, y, w, h) {
+    locksViewer(oldViewerRef, newViewerRef) {
+        const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
+        if (!willKeepViewer) {
+            this.oldMask = null;
+            if (this.result) {
+                this.context.fabric.deleteHelperAnnotation(this.result);
+            }
+        }
+        return willKeepViewer;
+    }
+
+    async prepareViewportScreenshot(x, y, w, h) {
+        const viewer = this.context.viewer;
         x = x || 0;
         y = y || 0;
-        w = w || Math.round(VIEWER.drawer.canvas.width);
-        h = h || Math.round(VIEWER.drawer.canvas.height);
+        w = w || Math.round(viewer.drawer.canvas.width);
+        h = h || Math.round(viewer.drawer.canvas.height);
 
-        //TODO single line works with OSD 5.0+
-        //this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
-        this.drawer.clear();
-        const targetImage = VIEWER.world.getItemAt(this.tiledImageIndex),
-            oldDrawer = targetImage._drawer;
-        targetImage._drawer = this.drawer;
-        targetImage.draw();
-        targetImage._drawer = oldDrawer;
-        // end
-        const data = this.drawer.canvas.getContext('2d',{willReadFrequently:true}).getImageData(x, y, w, h);
-        this.data = {
-            width: data.width,
-            height: data.height,
-            data: data.data,
-            bytes:4,
-            rawData: data,
-            binaryMask: new Uint8ClampedArray(data.width * data.height)
+        this._invalidData = true;
+
+        // todo this call needs to go to the renderer
+        this.drawer.renderer.gl.clear(this.drawer.renderer.gl.COLOR_BUFFER_BIT);
+        await this.drawer.drawWithConfiguration(
+            viewer.world._items,
+            this._renderConfig,
+            viewer.drawer,
+            { x: w, y: h }
+        );
+
+        const data = new Uint8Array(w * h * 4); // RGBA8
+        const gl   = this.drawer.renderer.gl;
+        gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+        gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        // vertical flip
+        const row = w * 4;
+        const tmp = new Uint8Array(row);
+        for (let t = 0, b = (h - 1) * row; t < b; t += row, b -= row) {
+            tmp.set(data.subarray(t, t + row));
+            data.copyWithin(t, b, b + row);
+            data.set(tmp, b);
         }
+
+        // todo make this available on ALL events! viewer relative position
+        this.offset = viewer.drawer.canvas.getBoundingClientRect();
+
+        this.data = {
+            width:  w,
+            height: h,
+            data:   data,
+            bytes:  4,
+            rawData: data,
+            binaryMask: new Uint8ClampedArray(w * h)
+        };
         this._invalidData = false;
         return this.data;
     }
 
-    _process(o) {
-        if (!this.data) return;
+    async _process(o) {
+        const viewer = this.context.viewer;
 
-        if (this._invalidData) {
-            this.prepareViewportScreenshot();
+        // Build a simple key from current viewport
+        const b = viewer.viewport.getBoundsNoRotateWithMargins(true);
+        const key = [
+            b.x, b.y, b.width, b.height,
+            viewer.viewport.getRotation(true),
+            viewer.viewport.getZoom(true)
+        ].join(",");
+
+        const needsNewScreenshot =
+            !this.data ||
+            this._invalidData ||
+            this._lastViewportKey !== key;
+
+        if (needsNewScreenshot) {
+            await this.prepareViewportScreenshot();
+            this._lastViewportKey = key;
         }
+
+        if (!this.data) return; // still nothing? bail out
 
         if (this.addMode && !this.oldMask) {
             this.oldMask = this.mask;
         }
-        const ref = VIEWER.scalebar.getReferencedTiledImage();
+        const ref    = viewer.scalebar.getReferencedTiledImage();
         const oldMask = this.oldMask && this.oldMask.data;
-        const ratio = OpenSeadragon.pixelDensityRatio;
+        const ratio  = OpenSeadragon.pixelDensityRatio;
 
-        this.mask = this.MagicWand.floodFill(this.data, Math.round(o.x*ratio), Math.round(o.y*ratio), this.threshold,
-            this.threshold, oldMask, true);
+        this.mask = this.MagicWand.floodFill(
+            this.data,
+            Math.round((o.x - this.offset.x) * ratio),
+            Math.round((o.y - this.offset.y) * ratio),
+            this.threshold,
+            this.threshold,
+            oldMask,
+            true
+        );
 
         if (this.mask) this.mask = this.MagicWand.gaussBlurOnlyBorder(this.mask, 5, oldMask);
         if (this.addMode && oldMask) {
             this.mask = this.mask ? this._concatMasks(this.mask, oldMask) : oldMask;
         }
         this.mask.bounds.minX = this.mask.bounds.minY = 0;
-        var cs = this.MagicWand.traceContours(this.mask);
+        let cs = this.MagicWand.traceContours(this.mask);
         cs = this.MagicWand.simplifyContours(cs, 0, 30);
+
         let largest, count = 0;
         for (let line of cs) {
             if (!line.inner && line.points.length > count) {
@@ -139,13 +189,19 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
                 count = largest.length;
             }
         }
+
         const factory = this.context.getAnnotationObjectFactory("polygon");
         if (this.result) {
             this.context.fabric.deleteHelperAnnotation(this.result);
         }
 
         if (largest && factory) {
-            largest = largest.map(pt => ref.windowToImageCoordinates(new OpenSeadragon.Point(pt.x / ratio, pt.y / ratio)));
+            largest = largest.map(pt =>
+                // we must call viewerElementToImageCoordinates since we don't want to strip the offset of the viewer
+                ref.viewerElementToImageCoordinates(
+                    new OpenSeadragon.Point((pt.x) / ratio, (pt.y) / ratio)
+                )
+            );
             const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
             visualProps.strokeDashArray = [15, 15];
             this.result = factory.create(largest, visualProps);
@@ -222,14 +278,14 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     handleMouseHover(event, point) {
         if (!this.context.presets.left) return;
         this._isLeft = true;
-        this._process(event);
+        this._process(event, true);
     }
 
     setFromAuto() {
-        this.drawer.canvas.style.setProperty('display', 'block');
+        this.prepareShaderConfig();
         this.prepareViewportScreenshot();
 
-        VIEWER.addHandler('animation-finish', this._scrollZoom);
+        this.context.viewer.addHandler('animation-finish', this._scrollZoom);
         this.context.setOSDTracking(false);
         this.context.fabric.canvas.hoverCursor = "crosshair";
         this.context.fabric.canvas.defaultCursor = "crosshair";
@@ -242,9 +298,8 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
             this.result = null;
         }
         this.data = null;
-        this.drawer.canvas.style.setProperty('display', 'none');
 
-        VIEWER.removeHandler('animation-finish', this._scrollZoom);
+        this.context.viewer.removeHandler('animation-finish', this._scrollZoom);
         if (temporary) return false;
         this.context.setOSDTracking(true);
         return true;
@@ -266,19 +321,21 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return e.code === "KeyT";
     }
 
-    setTiledImageIndex(value) {
+    setShaderToDetectFrom(value) {
+        this._selectedShader = value;
+        this.prepareShaderConfig();
         this._invalidData = Date.now();
-        this.tiledImageIndex = Number.parseInt(value);
     }
 
     customHtml() {
         let options;
-        if (APPLICATION_CONTEXT.config.background.length < 1) {
-            options = "<option selected value='0'>Overlay</option>";
-        } else if (APPLICATION_CONTEXT.config.visualizations.length < 1) {
-            options = "<option selected value='0'>Tissue</option>";
-        } else {
-            options = "<option value='0'>Tissue</option>" + "<option selected value='1'>Overlay</option>";;
+        for (let shaderId of this.context.viewer.drawer.renderer.getShaderLayerOrder()) {
+            const config = this.context.viewer.drawer.renderer.getShaderLayerConfig(shaderId);
+            if (this._selectedShader === shaderId) {
+                options += `<option value='${shaderId}' selected>${config.name}</option>`;
+            } else {
+                options += `<option value='${shaderId}'>${config.name}</option>`;
+            }
         }
 
         return `
@@ -288,6 +345,6 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
 </span><select class="ml-2 form-control text-small"
-onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setTiledImageIndex(Number.parseInt(this.value));">${options}</select>`;
+onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].setShaderToDetectFrom(this.value);">${options}</select>`;
     }
 };

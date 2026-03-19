@@ -2,7 +2,8 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 
-const { div, span, path, svg } = van.tags;
+const { div, span } = van.tags;
+const { svg, path } = van.tags("http://www.w3.org/2000/svg");
 
 const MODES = /** @type {const} */ (["neutral","info","success","warning","error"]);
 const isMode = v => MODES.includes(v);
@@ -52,8 +53,8 @@ export class Alert extends BaseComponent {
      *  onClose?: () => void,
      * }} opts
      */
-    constructor(opts = {}) {
-        super(opts);
+    constructor(opts = undefined) {
+        opts = super(opts).options;
         this.mode = isMode(opts.mode) ? opts.mode : "neutral";
         this.title = opts.title ?? "";
         this.description = opts.description ?? "";
@@ -70,9 +71,9 @@ export class Alert extends BaseComponent {
         const soft = MODE_CLASS_SOFT[this.mode] ?? "";
         const look = this.soft ? soft : filled;
         this.classMap.base = [
-            "alert",                       // DaisyUI alert
+            "alert",
             look,
-            this.compact ? "py-1 px-2 text-sm" : "py-2 px-3",
+            this.compact ? "pt-1 pb-0 px-2 text-sm" : "py-2 px-3",
         ].filter(Boolean).join(" ");
     }
 
@@ -89,15 +90,15 @@ export class Alert extends BaseComponent {
                     onclick: () => { this.hide(); this.onClose?.(); },
                     title: "Close",
                 },
-                span({ class: "material-icons text-base" }, "close")
+                span({ class: "fa-auto fa-close text-base" })
             )
             : null;
 
         const alertNode = div(
             {
                 ...this.commonProperties,
+                ...this.extraProperties,
                 id: this.id,
-                class: this.classMap.base,
                 role: "alert",
                 tabindex: "0",
                 onclick: (e) => {
@@ -168,7 +169,6 @@ export class Alert extends BaseComponent {
 }
 
 function iconSvg(mode, { soft = false, hidden = false } = {}) {
-    const {svg, path} = van.tags;            // ensure you use van.tags.* (not van.path)
     const size = "w-5 h-5 shrink-0";
     const color = soft ? (ICON_COLOR_SOFT[mode] || "text-base-content")
         : (ICON_COLOR_FILLED[mode] || "text-base-content");
@@ -199,7 +199,8 @@ function iconSvg(mode, { soft = false, hidden = false } = {}) {
     return svg({
         // width: "16px",
         viewBox: "0 0 24 24",
-        'class': svgCls,
+        class: svgCls,
+        style: "min-height: 20px;",
         fill: "none",
         "aria-hidden": hidden ? "true" : "false",
         xmlns: "http://www.w3.org/2000/svg"

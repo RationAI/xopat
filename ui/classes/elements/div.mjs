@@ -16,7 +16,7 @@ const { div } = van.tags
  *                     );
  * div.attachTo(document.body);
  */
-class Div extends BaseComponent {
+export class Div extends BaseComponent {
 
     /**
      * @param {*} options
@@ -33,5 +33,3 @@ class Div extends BaseComponent {
         );
     }
 }
-
-export { Div };

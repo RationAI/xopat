@@ -116,7 +116,7 @@ OSDAnnotations.Convertor = class {
  *      Optional image coordinate offset applied on export/import.
  * @param {boolean} [options.serialize]
  *      Optimization flag: if true, converters may return non-serialized data and encodeFinalize() will serialize them.
- * @param {OSDAnnotations} context
+ * @param {OSDAnnotations.FabricWrapper} context
  *      Annotations module instance.
  * @param {boolean} withAnnotations
  *      Request exporting annotation objects.
@@ -161,7 +161,7 @@ OSDAnnotations.Convertor = class {
                 throw err;
             }
         }
-        
+
         const annotationsGetter = (...exportedProps) => {
             if (!options.exportsObjects) return undefined;
             let objs = context.toObject(

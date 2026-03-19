@@ -3,26 +3,27 @@ import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
+import { Menu } from "./menu.mjs";
 
 const { div, span } = van.tags
 
-class TabsMenu extends BaseComponent {
+class TabsMenu extends Menu {
 
-    constructor(options, ...args) {
-        super(options,);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
 
         this.tabs = {};
-        this.focused = undefined;
-        this.design = options.design || "TITLEICON";
+        this._focused = undefined;
+        this._design = options.design || Menu.DESIGN.TITLEICON;
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
-        this.body = new Div({ id: this.id + "-body", extraClasses: { height: "h-full", width: "w-full", style: "boxed" } });
+        this.body = new Div({ id: this.id + "-body", extraClasses: { flex: "flex-1", minHeight: "min-h-0", width: "w-full", style: "boxed", margin: "m-0" } });
 
-        for (let i of args) {
+        for (let i of this._children) {
             this.addTab(i);
         }
-
+        this._children = [];
         this.classMap["base"] = "flex gap-1 bg-base-200 h-full";
         this.classMap["flex"] = "flex-col";
 
@@ -47,6 +48,10 @@ class TabsMenu extends BaseComponent {
 
         const tab = this._createTab(item);
         this.tabs[item.id] = tab;
+
+        if (!this._focused) {
+            this.focus(item.id);
+        }
 
         tab.headerButton.attachTo(this.header);
         if (tab.contentDiv) {
@@ -94,7 +99,7 @@ class TabsMenu extends BaseComponent {
             if (this.tabs[id].contentDiv) {
                 this.tabs[id].contentDiv.setClass("display", "");
             }
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -110,7 +115,7 @@ class TabsMenu extends BaseComponent {
                 tab.contentDiv.setClass("display", "display-none");
             }
         }
-        this.focused= undefined;
+        this._focused = undefined;
     }
 
 }

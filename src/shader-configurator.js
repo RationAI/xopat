@@ -89,35 +89,101 @@ var ShaderConfigurator = {
     staticShadersDocs: function() {
         let html = ["<div><h3>Available shaders and their parameters</h3><br>"];
         const uiControls = this._buildControls();
-        for (let shader of WebGLModule.ShaderMediator.availableShaders()) {
-            let id = shader.type();
 
-            html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
-                shader.name(), "</p><p style='max-width: 150px;'>", shader.description(),
-                "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
-                "<img alt='' style='max-width: 150px; max-height: 150px;' class='rounded-2' src='modules/webgl/shaders/",
-                shader.type(),".png'></div><div><code class='f4'>", id, "</code>");
+        for (let Shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
+            const id = Shader.type();
 
-            const supports = this.getAvailableControlsForShader(shader);
-            for (let control in supports) {
-                let supported = supports[control];
-                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
-                    "class='position-relative'><span class='flex-1'>Control <code>",
-                    control, "</code> | Supports: ", supported.join(", ") ,"</span></span></div>");
+            // Static metadata from ShaderLayer subclasses
+            const name        = Shader.name      ? Shader.name()        : id;
+            const description = Shader.description ? Shader.description() : "";
+            const previewSrc  = (typeof Shader.preview === "function")
+                ? Shader.preview()
+                : ("modules/webgl/shaders/" + id + ".png");
+
+            html.push(
+                "<div class='flex'>",
+                "<div style='min-width: 150px'>",
+                "<p class='text-lg font-semibold mb-0'>", name, "</p>",
+                "<p style='max-width: 150px;'>", description, "</p>",
+                "</div>",
+                "<div class='inline-block mx-1 px-1 py-1 cursor-pointer align-top rounded-md' ",
+                "style='border: 3px solid transparent'>",
+                "<img alt='' style='max-width: 150px; max-height: 150px;' ",
+                "class='rounded-md' src='", previewSrc, "'>",
+                "</div>",
+                "<div><code class='f4'>", id, "</code>"
+            );
+
+            // --- Sources + channel usage (new multi-channel support) ---
+            if (typeof Shader.sources === "function") {
+                const sources = Shader.sources();
+                if (sources && sources.length) {
+                    html.push("<hr>");
+                    html.push("<div><strong>Sources and channel usage</strong></div>");
+
+                    sources.forEach((src, idx) => {
+                        const desc = src.description || "";
+                        let accepted = "any";
+
+                        if (typeof src.acceptsChannelCount === "function") {
+                            const ok = [];
+                            // We don’t know the real upper bound; 1–32 is reasonable for docs.
+                            for (let n = 1; n <= 32; n++) {
+                                if (src.acceptsChannelCount(n)) ok.push(n);
+                            }
+                            accepted = ok.length ? ok.join(", ") : "none";
+                        }
+
+                        html.push(
+                            "<div style='margin-left: 0.5rem;'>",
+                            "<span>Source <code>", idx, "</code>: ",
+                            desc,
+                            " <span class='text-small'>(accepts channel counts: ",
+                            accepted,
+                            ")</span>",
+                            "</span>",
+                            "</div>"
+                        );
+                    });
+                }
             }
 
+            // --- Controls support (existing logic) ---
+            const supports = this.getAvailableControlsForShader(Shader);
+            for (let control in supports) {
+                const supported = supports[control];
+                html.push(
+                    "<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' ",
+                    "class='position-relative'><span class='flex-1'>Control <code>",
+                    control,
+                    "</code> | Supports: ",
+                    supported.join(", "),
+                    "</span></span></div>"
+                );
+            }
+
+            // --- Custom params (existing logic) ---
             let didParams = false;
-            for (let param in shader.customParams) {
+            const customParams = Shader.customParams || {};
+            for (let param in customParams) {
                 if (!didParams) {
                     didParams = true;
                     html.push("<hr>");
                 }
-                html.push("<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);'",
+                const meta = customParams[param];
+                html.push(
+                    "<div><span style='width: 20%;direction:rtl;transform: translate(0px, -4px);' ",
                     "class='position-relative'><span class='flex-1'>Parameter <code>",
-                    param, "</code> <br><span class='text-small'>", shader.customParams[param].usage ,"</span></span></span></div>");
+                    param,
+                    "</code> <br><span class='text-small'>",
+                    meta.usage || "",
+                    "</span></span></span></div>"
+                );
             }
+
             html.push("</div></div><br>");
         }
+
         html.push("</div><br>");
         return html.join("");
     },
@@ -129,7 +195,7 @@ var ShaderConfigurator = {
         for (let type in uiControls) {
             html.push("<div><h4>Type <code>", type, "</code></h4>");
             for (let ctrl of uiControls[type]) {
-                html.push( "<div class='d-flex'><div style='min-width: 150px'><p class='f3-light mb-0'>",
+                html.push( "<div class='flex'><div style='min-width: 150px'><p class='text-lg font-semibold mb-0'>",
                     ctrl.name,
                     "</p></div><div class='d-inline-block mx-1 px-1 py-1 pointer v-align-top rounded-2' style='border: 3px solid transparent'>",
                     "</div><div>");
@@ -209,7 +275,7 @@ var ShaderConfigurator = {
     parseJSONConfig(value, controlId) {
         const config = JSON.parse(value);
         const control = this.active.layer[controlId];
-        const t = WebGLModule.UIControls.IControl.getVarType;
+        const t = OpenSeadragon.FlexRenderer.UIControls.IControl.getVarType;
 
         function extendValuesBy(to, nameMap, suffix="") {
             Object.keys(nameMap).forEach(key => {
@@ -321,7 +387,7 @@ ${JSON.stringify(params, null, '\t')}
 
     getInteractiveControlsHtmlFor: function(shaderId) {
         let shader;
-        for (let s of WebGLModule.ShaderMediator.availableShaders()) {
+        for (let s of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
             if (shaderId === s.type()) {
                 shader = s;
                 break;
@@ -408,7 +474,7 @@ ${renders.join("")}
     },
 
     getCurrentShaderConfig() {
-        return JSON.parse(JSON.stringify(this.setup.shader, WebGLModule.jsonReplacer))
+        return JSON.parse(JSON.stringify(this.setup.shader, OpenSeadragon.FlexRenderer.jsonReplacer))
     },
 
     /**********************/
@@ -452,7 +518,7 @@ ${renders.join("")}
     _buildModule: function(id, htmlRenderer, onReady) {
         if (this["__module_"+id]) return this["__module_"+id];
         const _this = this;
-        const module = new WebGLModule({
+        const module = new OpenSeadragon.FlexRenderer({
             htmlControlsId: id,
             webGlPreferredVersion: "2.0",
             htmlShaderPartHeader: htmlRenderer,
@@ -478,11 +544,37 @@ ${renders.join("")}
     _buildControls: function () {
         if (this.__uicontrols) return this.__uicontrols;
         this.__uicontrols = {};
-        let types = WebGLModule.UIControls.types();
-        let fallbackLayer = new WebGLModule.IdentityLayer("id", {layer: {}});
+        let types = OpenSeadragon.FlexRenderer.UIControls.types();
+        const ShaderClass = OpenSeadragon.FlexRenderer.ShaderMediator.getClass("identity");
+        let fallbackLayer = new ShaderClass("id", {
+            shaderConfig: {
+                id: "fallback__",
+                name: "Layer",
+                type: "identity",
+                visible: 1,
+                fixed: false,
+                tiledImages: [0],
+                params: {},
+                cache: {},
+            },
+            webglContext: {
+                supportedUseModes: ["show"],
+                includeGlobalCode: () => {},
+            },
+            params: {},
+            interactive: false,
+            invalidate: () => {},
+            rebuild: () => {},
+            refetch: () => {}
+        });
         fallbackLayer.construct({}, [0]);
         for (let type of types) {
-            let ctrl = WebGLModule.UIControls.build(fallbackLayer, type, {type: type});
+            let ctrl = OpenSeadragon.FlexRenderer.UIControls.build(fallbackLayer, type, {
+                default: {
+                    type: type
+                },
+                accepts: () => true,
+            }, Date.now(), {});
             let glType = ctrl.type;
             ctrl.name = type;
             if (!this.__uicontrols.hasOwnProperty(glType)) this.__uicontrols[glType] = [];
@@ -663,7 +755,7 @@ ${renders.join("")}
             const _this = this,
                 keys = Object.keys(this.selectionRules),
                 REF = context.REF + ".picker",
-                allShaderTypeList = WebGLModule.ShaderMediator.availableShaders();
+                allShaderTypeList = OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders();
 
             const idPrefix = params.idPrefix || "shader-picker-";
             this.onFinish = params.onFinish || (() => {})

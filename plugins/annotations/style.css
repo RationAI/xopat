@@ -46,6 +46,10 @@
   z-index: 21;
 }
 
+#annotations-tool-bar-content span.fa-auto, #annotations-tool-bar-content i.fa-auto {
+    font-size: larger;
+}
+
 .format-selector:checked button {
   background: var(--color-diff-blob-comment-button-bg);
 }

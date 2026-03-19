@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const glob = require("glob");
 
 module.exports.safeScanDir = function (directory) {
     let resolvedPaths = [];
@@ -21,4 +22,27 @@ module.exports.safeScanDir = function (directory) {
         console.error(`Error scanning directory: ${directory}`, err.message);
     }
     return resolvedPaths.filter(Boolean);
+}
+
+/**
+ * Expands glob patterns within an array of includes.
+ * @param {string} basePath The absolute path to the directory.
+ * @param {Array} includes The includes array from config.
+ * @returns {Array} The expanded includes array.
+ */
+module.exports.expandIncludeGlobs = function (basePath, includes) {
+    let expanded = [];
+    for (let file of includes) {
+        // Only expand strings that look like globs
+        if (typeof file === "string" && (file.includes("*") || file.includes("?"))) {
+            // sync is used here to match your existing synchronous loading pattern
+            const matches = glob.sync(file, { cwd: basePath });
+            if (matches.length > 0) {
+                expanded.push(...matches);
+            }
+        } else {
+            expanded.push(file);
+        }
+    }
+    return expanded;
 }

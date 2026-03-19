@@ -15,10 +15,59 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
     $dir_path = ABS_PLUGINS . "$dir/";
     if (is_dir($dir_path)) {
         $interface = $dir_path . "include.json";
-        if (file_exists($interface)) {
-            try {
-                $data = (new Comment)->decode(file_get_contents($interface), true);
 
+        try {
+            $data = NULL;
+            if (file_exists($interface)) {
+                $data = (new Comment)->decode(file_get_contents($interface), true);
+            }
+
+            $workspace = $dir_path . "package.json";
+            if (file_exists($workspace)) {
+                $packageData = (new Comment)->decode(file_get_contents($workspace), true);
+
+                $has_js = file_exists($dir_path . 'index.workspace.js');
+                $has_mjs = file_exists($dir_path . 'index.workspace.mjs');
+
+                $workspaceEntry = null;
+                if ($has_js) {
+                    $workspaceEntry = 'index.workspace.js';
+                } else if ($has_mjs) {
+                    $workspaceEntry = 'index.workspace.mjs';
+                } else if (isset($packageData['main'])) {
+                    $workspaceEntry = $packageData['main'];
+                }
+
+                if ($workspaceEntry) {
+                    if (!isset($data['includes']) || !is_array($data['includes'])) {
+                        $data['includes'] = [];
+                    }
+                    if (!in_array($workspaceEntry, $data['includes'])) {
+                        array_unshift($data['includes'], $workspaceEntry);
+                    }
+                }
+
+                $data['includes'] = expand_include_globs($dir_path, $data['includes']);
+
+                // Fill missing fields from package.json
+                if (!isset($data['id']) || $data['id'] === '' ) {
+                    if (isset($packageData['name'])) $data['id'] = $packageData['name'];
+                }
+                if (!isset($data['name']) || $data['name'] === '' ) {
+                    if (isset($packageData['name'])) $data['name'] = $packageData['name'];
+                }
+                if (!isset($data['author']) || $data['author'] === '' ) {
+                    if (isset($packageData['author'])) $data['author'] = $packageData['author'];
+                }
+                if (!isset($data['version']) || $data['version'] === '' ) {
+                    if (isset($packageData['version'])) $data['version'] = $packageData['version'];
+                }
+                if (!isset($data['description']) || $data['description'] === '' ) {
+                    if (isset($packageData['description'])) $data['description'] = $packageData['description'];
+                }
+            }
+
+            if (!empty($data) && is_array($data)) {
                 if (!$data["id"]) {
                     $data["id"] = "__generated_id_$dir";
                     $data["error"] = "Plugin (dir $dir) removed: probably include.json misconfiguration.";
@@ -28,6 +77,10 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 $data["path"] = PLUGINS_FOLDER . "$dir/";
                 if (file_exists($dir_path . "style.css")) {
                     $data["styleSheet"] = $data["path"] . "style.css";
+                }
+
+                if (!isset($data['modules']) || !is_array($data['modules'])) {
+                    $data['modules'] = [];
                 }
 
                 foreach ($data["modules"] as $modId) {
@@ -61,20 +114,19 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                 if (!isset($data["enabled"]) || $data["enabled"] != false) {
                     $PLUGINS[$data["id"]] = $data;
                 }
-
-            } catch (Exception $e) {
-                $id = $dir;
-                $PLUGINS[$id] = array(
-                    "id" => $dir,
-                    "name" => $dir,
-                    "error" => $i18n->t('php.pluginInvalid', array("error" => $e->getMessage())),
-                    "author" => "-",
-                    "version" => "-",
-                    "icon" => "",
-                    "includes" => array(),
-                    "modules" => array(),
-                );
             }
+        } catch (Exception $e) {
+            $id = $dir;
+            $PLUGINS[$id] = array(
+                "id" => $dir,
+                "name" => $dir,
+                "error" => $i18n->t('php.pluginInvalid', array("error" => $e->getMessage())),
+                "author" => "-",
+                "version" => "-",
+                "icon" => "",
+                "includes" => array(),
+                "modules" => array(),
+            );
         }
     }
 }

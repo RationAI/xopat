@@ -8,7 +8,7 @@
 }
 /*Text with bg color outline*/
 .text-shadow {
-    text-shadow: -1px 0 var(--color-bg-primary), 0 1px var(--color-bg-primary), 1px 0 var(--color-bg-primary), 0 -1px var(--color-bg-primary);
+    text-shadow: -1px 0 var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 0 1px var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 1px 0 var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1))), 0 -1px var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));
 }
 .text-shadow-mild {
     text-shadow: 0px 0px 3px var(--color-bg-primary);
@@ -35,10 +35,10 @@ html[data-color-mode=dark] .invert-icon {
 .color-bg-white {
     background-color: white;
 }
-/*Use with material icons class 'btn-pointer' to make them highlight on hover, add class 'selected' to highlight,
-also good idea to use <span class="btn-pointer"><span class="material-icons">icon</span>text</span> */
+/*Use with FA icons class 'btn-pointer' to make them highlight on hover, add class 'selected' to highlight,
+also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-name"></span>text</span> */
 .btn-pointer:hover, .btn-pointer.selected,
-.btn-pointer:hover .material-icons, .btn-pointer.selected .material-icons {
+.btn-pointer:hover .fa-auto, .btn-pointer.selected .fa-auto {
     color:var(--color-state-focus-border) !important;
 }
 
@@ -211,7 +211,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
 .header-sep::after {
     content: '';
     flex-grow: 1;
-    border: 1px solid var(--color-border-primary) !important;
+    border: 1px solid var(--fallback-bc,oklch(var(--bc)/var(--tw-bg-opacity, 1))) !important;
     height: 0;
     margin-left: 20px;
     margin-top: 4px;
@@ -223,14 +223,7 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
     text-overflow: ellipsis;
     cursor: auto;
 }
-.error-container::before {
-    content: 'warning';
-    font-family: 'Material Icons';
-    color: var(--color-icon-danger);
-    font-size: initial;
-    padding: 3px 9px;
-    /*vertical-align: sub;*/
-}
+
 .error-container code {
     display: none;
     padding: 3px 9px;
@@ -240,21 +233,6 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
 }
 .error-container:hover {
     max-height: initial;
-}
-
-/* Show Info in a nice box, use: <div class="info-container">text</div> */
-.info-container {
-    border: 1px solid var(--color-bg-info);
-    text-overflow: ellipsis;
-    cursor: auto;
-}
-.info-container::before {
-    content: 'info';
-    font-family: 'Material Icons';
-    color: var(--color-icon-info);
-    font-size: initial;
-    padding: 3px 9px;
-    /*vertical-align: sub;*/
 }
 
 .notification {
@@ -317,38 +295,12 @@ also good idea to use <span class="btn-pointer"><span class="material-icons">ico
 /**
   Selectable multi-icon buttons (use with input radio or checkbox)
   Use (strictly follow this):
-    <input id="id" type="radio" name="name" class="switch d-none">
-    <label for="id"><span class="material-icons">icon_name</span></label>
+    <input id="id" type="radio" name="name" class="switch hidden">
+    <label for="id"><span class="fa-auto fa-icon-name"></span></label>
  */
 input.switch:checked + label span {
     background: var(--color-bg-tertiary);
     color: var(--color-state-focus-border);
-}
-
-/* HTML: <div class="loader"></div> from https://css-loaders.com/spinner/ */
-.loader {
-    width: 50px;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    border: 8px solid var(--color-icon-primary);
-    animation:
-            l20-1 0.8s infinite linear alternate,
-            l20-2 1.6s infinite linear;
-}
-@keyframes l20-1{
-    0%    {clip-path: polygon(50% 50%,0       0,  50%   0%,  50%    0%, 50%    0%, 50%    0%, 50%    0% )}
-    12.5% {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100%   0%, 100%   0%, 100%   0% )}
-    25%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 100% 100%, 100% 100% )}
-    50%   {clip-path: polygon(50% 50%,0       0,  50%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
-    62.5% {clip-path: polygon(50% 50%,100%    0, 100%   0%,  100%   0%, 100% 100%, 50%  100%, 0%   100% )}
-    75%   {clip-path: polygon(50% 50%,100% 100%, 100% 100%,  100% 100%, 100% 100%, 50%  100%, 0%   100% )}
-    100%  {clip-path: polygon(50% 50%,50%  100%,  50% 100%,   50% 100%,  50% 100%, 50%  100%, 0%   100% )}
-}
-@keyframes l20-2{
-    0%    {transform:scaleY(1)  rotate(0deg)}
-    49.99%{transform:scaleY(1)  rotate(135deg)}
-    50%   {transform:scaleY(-1) rotate(0deg)}
-    100%  {transform:scaleY(-1) rotate(-135deg)}
 }
 
 /**
@@ -375,22 +327,44 @@ input.switch:checked + label span {
 /**************************************************************
 **************** SYSTEM UI SPECIFIC STYLES ********************
 ***************************************************************/
-/* tailwind fix */
-.btn {
-    height: auto !important;
-    min-height: 0 !important;
-}
-/* fallback */
-@font-face {
-    font-family: 'Material Icons';
-    font-style: normal;
-    font-weight: 250;
-    src: url(icons.woff2) format('woff2');
-}
-
 /* font awesome: default behavior extended by these properties
                  to avoid the styling, use full name, e.g. fa-solid
 */
+/* Font Awesome Free – Regular */
+@font-face{
+    font-family: "FA6FreeRegular";
+    src: url("../libs/fontawesome/webfonts/fa-regular-400.woff2") format("woff2"),
+    url("../libs/fontawesome/webfonts/fa-regular-400.ttf") format("ttf");
+    font-weight: 200;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* Font Awesome Free – Solid */
+@font-face{
+    font-family: "FA6FreeSolid";
+    src: url("../libs/fontawesome/webfonts/fa-solid-900.woff2") format("woff2"),
+    url("../libs/fontawesome/webfonts/fa-solid-900.ttf") format("ttf");
+    font-weight: 900;
+    font-style: normal;
+    font-display: swap;
+    font-size: larger;
+}
+
+.fa-auto,
+.fa-auto::before {
+    font-family: "FA6FreeRegular","FA6FreeSolid", var(--fa-style-family, "Font Awesome 6 Free") !important; /* fallback order */
+    font-weight: 200;
+    font-style: normal;
+    font-variant: normal;
+    text-rendering: auto;
+    line-height: 1;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-smoothing: antialiased;
+    display: var(--fa-display, inline-block);
+    content: var(--fa);
+}
+
 .fas, .far, .fab {
     font-size: 24px;
     line-height: 1;
@@ -410,27 +384,6 @@ input.switch:checked + label span {
     font-feature-settings: 'liga';
 }
 
-.material-icons {
-    font-family: 'Material Icons';
-    font-weight: normal;
-    font-style: normal;
-    font-size: 24px;
-    line-height: 1;
-    letter-spacing: normal;
-    text-transform: none;
-    display: inline-block;
-    white-space: nowrap;
-    word-wrap: normal;
-    direction: ltr;
-    -webkit-font-feature-settings: 'liga';
-    -webkit-font-smoothing: antialiased;
-    color: var( --color-icon-primary);
-    vertical-align: middle;
-    padding: 0 5px;
-    text-rendering: optimizeLegibility;
-    -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'liga';
-}
 /*Important: fixes the navigator viewport position*/
 div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !important;}
 /*div.openseadragon-container, div.openseadragon-canvas, #panel-navigator,  {box-sizing: initial !important;}*/
@@ -444,18 +397,15 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     background-color: var(--color-bg-primary);opacity: 0.6;top: 0;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
 .system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
-.system-container .material-icons {color: var(--color-border-inverse);}
-#main-panel {z-index: 90;right: 0;transition: right 0.3s;user-select: none;background: var(--color-bg-primary); }
-#main-panel-hide {cursor: pointer;margin-left: -12px;}
-#main-panel-show {position: fixed;z-index: 89;top: 0px;right: 0px; padding: 5px; border-top-left-radius: 20%;
-    border-bottom-left-radius: 20%; cursor: pointer; color: var(--color-bg-primary); background: var(--color-text-primary);}
+.system-container .fa-solid, .system-container .fa-regular {color: var(--color-border-inverse);}
+.right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
 .inner-panel::after {content: '';}
 .inner-panel-simple {padding-left: 9px;padding-right: 5px;}
 .inner-panel-visible {padding: 0 5px 0 9px;}
-.inner-panel-hidden {padding: 0 5px 0 9px;transition: max-height 0.15s ease-in-out;overflow: hidden; display: none;
-    background-image: linear-gradient(to top, #85858514 , var(--color-bg-primary));border-radius: 6px; width: calc(100% - 5px)}
+.inner-panel-hidden {transition: max-height 0.15s ease-in-out;overflow: hidden; display: none;
+    border-radius: 6px; width: calc(100% - 5px)}
 .inner-panel.loading::before {content: '';position: absolute;width: 100%;height: 100%;
     background: rgba(34, 34, 34, 0.68);top: 0;left: 0;}
 .inner-panel.loading::after {content: '';position: absolute;width: 75px;height: 75px;display: inline-block;
@@ -468,8 +418,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
-.shader-part {background-image: linear-gradient(to right, var(--color-border-overlay) , var(--color-bg-primary));}
-.shader-part span {width: 30%;display: inline-block;}
 #tutorials {max-height: 50vh;overflow-y: auto;}
 .tutorial-item {transition: all .2s ease-in-out;border: 3px solid transparent;
     background: rgb(34 39 46 / 22%); cursor:pointer;}
@@ -491,59 +439,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     border-top: 3px solid var(--color-state-focus-border);}
 .panel-menu.panel-horizontal label.panel-menu-label {max-width: 180px;white-space: nowrap;}
 .panel-menu.panel-vertical label.panel-menu-label {max-height: 70px;width: 100%;}
-#tissue-preview-container {
-    flex-direction: row;
-    display: flex;
-}
-
-#tissue-preview-container .selected::before {
-    content: '';
-    width: 100%;
-    height: 10px;
-    background: var(--color-state-focus-border);
-    background: linear-gradient(180deg, var(--color-state-focus-border) 0%, rgba(0,212,255,0) 100%);
-    position: absolute;
-    top: 0;
-    z-index: 2;
-}
-
-#tissue-title-header {
-    font-size: 16px;
-    font-weight: bold;
-}
-
-.tissue-title-container {
-    position: relative;
-    display: inline-block;
-    white-space: nowrap; /* Ensures text stays on one line */
-    overflow: hidden; /* Ensures content beyond the container is hidden */
-    text-overflow: ellipsis; /* Adds ellipsis if text overflows */
-    max-width: 100%; /* Adjust max-width as needed */
-    flex-grow: 1;
-    vertical-align: top;
-}
-
-#tissue-preview-container .pointer {
-    cursor: pointer;
-    transition: transform .1s ease-out;
-    position: relative;
-}
-
-#tissue-preview-container .pointer:hover {
-    transform: scale(1.1);
-    box-shadow: var(--color-shadow-medium);
-    z-index: 3;
-}
-#tissue-preview-container .tissue-label {
-    position: absolute;
-    bottom: 2px;
-    text-wrap: nowrap;
-    font-size: xx-small;
-    color: var(--color-text-link);
-}
-#tissue-preview-container img:hover {
-
-}
 
 .fas, .fa-solid {
     font-weight: 900 !important;
@@ -562,15 +457,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 /*input.switch:checked + label {background: var(--color-diff-blob-comment-button-bg);}*/
 /*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
 /*input.switch + label:active:after {width: 130px;}*/
-
-
-
-/*TODO remove patches in V3*/
-.shader-part > div > div, .shader-part > div:first-child {display: flex; flex-direction: row} /*patch: force controls on the same row*/
-label>input[type=checkbox] {display: inline-block !important;}
-.btn, .btn.material-icons, .btn > .material-icons {background-color: oklch(var(--bc) / var(--tw-bg-opacity)); color: oklch(var(--b1) / var(--tw-text-opacity));} /*patch: button colors tailwind collides*/
-
-
 
 
 /** DIALOGS*/
@@ -595,48 +481,73 @@ input.selectable-image-row-context:checked + div {
     50% { opacity: 0.5; }
     to { opacity: 1; }
 }
+
+/* One row of controls */
+.shader-controls-row {
+    display: grid;
+    grid-template-columns:
+    minmax(0, var(--side, 30%))  /* left, max 30% */
+    minmax(0, 1fr)               /* middle, flexible */
+    minmax(0, var(--side, 30%)); /* right, max 30% */
+    gap: .5rem;                    /* adjust as needed */
+    align-items: center;
+}
+
+/* Let arbitrary incoming children shrink and not overflow */
+.shader-controls-row > * {
+    min-width: 0;
+    overflow: hidden;              /* optional: hide overly wide inner HTML */
+}
+
+/* Place elements into columns depending on how many arrive */
+.shader-controls-row > :nth-child(1) { grid-column: 1; }
+.shader-controls-row > :nth-child(2) { grid-column: 2; }
+.shader-controls-row > :nth-child(3) { grid-column: 3; }
+
+/* If there's only one child, center it (the “mid” rule) */
+.shader-controls-row > :only-child { grid-column: 2; }
+
+/* Small screens: stack vertically */
+@media (max-width: 560px) {
+    .shader-controls-row {
+        grid-template-columns: 1fr;
+    }
+    .shader-controls-row > * { grid-column: auto; }
+}
+
+@keyframes toastbar { from { transform: scaleX(1); transform-origin:left } to { transform: scaleX(0); transform-origin:left } }
+.animate-toastbar { animation-name: toastbar; animation-timing-function: linear; animation-fill-mode: forwards; }
+
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
-.svg-bg {fill: var(--color-bg-primary);}
-.svg-fg {fill: var(--color-text-primary);}
+.svg-bg {fill: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));}
+.svg-fg {fill: var(--fallback-bc,oklch(var(--bc)/1));}
+.stretch-grid__item {
+    /*aspect-ratio: var(--aspect);*/
+    display: grid;                 /* enables the stretch trick below */
+}
+
+/* anything you put inside (your OSD root div) fills the cell */
+.stretch-grid__item > * {
+    width: 100%;
+    height: 100%;
+    align-self: stretch;
+    justify-self: stretch;
+}
+
+/* extra safety for OSD’s own container */
+.openseadragon-container {
+    width: 100% !important;
+    height: 100% !important;
+}
 a {cursor: pointer;}
+input {background-color: inherit;}
+input[type=range]:not(.range) {
+    filter: contrast(0.5); /*attempt to make really visible*/
+}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
-/* For some reason Github css does not style input range */
-input[type=range] { height: 25px;  -webkit-appearance: none; /*margin: 3px 0;*/ width: 65%; background: transparent;
-    vertical-align: middle; margin: 0;}
-input[type=range].with-direct-input { width: calc(70% - 80px);}
-input[type=range]:focus { outline: none;}
-input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer;  background: var(--color-icon-tertiary);
-    border-radius: 7px; border: 0 }
-input[type=range]::-webkit-slider-thumb { box-shadow: 0 0 3px var(--color-text-tertiary); border: 0 solid; height: 18px;
-    width: 18px; border-radius: 25px; background: var(--color-bg-primary);
-    cursor: pointer; -webkit-appearance: none; margin-top: -5px;}
-input[type=range]:focus::-webkit-slider-runnable-track {  background: var(--color-icon-tertiary);}
-
-input[type=range]::-moz-range-track { width: 100%; height: 8px; cursor: pointer;  background: var(--color-icon-tertiary);
-    border-radius: 7px; border: 0;}
-input[type=range]::-moz-range-thumb { box-shadow: 0 0 3px var(--color-bg-tertiary); border: 0 solid; height: 18px;
-    width: 18px; border-radius: 25px; background: var(--color-bg-primary); cursor: pointer;}
-input[type=range]::-ms-track { width: 100%; height: 8px; cursor: pointer; background: transparent;
-    border-color: transparent; color: transparent;}
-input[type=range]::-ms-fill-lower { background: var(--color-icon-tertiary); border: 0 solid; border-radius: 14px; }
-input[type=range]::-ms-fill-upper { background: var(--color-icon-tertiary); border: 0 solid; border-radius: 14px;}
-input[type=range]::-ms-thumb { margin-top: 1px; box-shadow: 0 0 3px var(--color-text-tertiary); border: 0 solid ;
-    height: 18px; width: 18px; border-radius: 25px; background: var(--color-bg-primary); cursor: pointer;}
-input[type=range]:focus::-ms-fill-lower { background: var(--color-icon-tertiary);}
-input[type=range]:focus::-ms-fill-upper { background: var(--color-icon-tertiary);}
-
-input[type=range]:disabled::-webkit-slider-runnable-track { background: var(--color-bg-tertiary);}
-input[type=range]:disabled::-webkit-slider-thumb { box-shadow: 0 0 1px var(--color-text-tertiary); background: var(--color-bg-primary);}
-input[type=range]:disabled::-moz-range-track { background: var(--color-bg-tertiary);}
-input[type=range]:disabled::-moz-range-thumb { box-shadow: 0 0 1px var(--color-text-tertiary); background: var(--color-bg-primary);}
-input[type=range]:disabled::-ms-fill-lower { background: var(--color-bg-tertiary); }
-input[type=range]:disabled::-ms-fill-upper { background: var(--color-bg-tertiary); }
-input[type=range]:disabled::-ms-thumb { box-shadow: 0 0 3px var(--color-text-tertiary); background: var(--color-bg-primary); }
-
-
 ::-webkit-scrollbar {background: transparent;margin: 25px 0 25px 0;width: 14px;height: 14px;}
 ::-webkit-scrollbar-track {background: transparent;}
 ::-webkit-scrollbar-thumb {height: 6px;border: 4px solid rgba(0, 0, 0, 0);background-clip: padding-box;
@@ -644,10 +555,3 @@ input[type=range]:disabled::-ms-thumb { box-shadow: 0 0 3px var(--color-text-ter
     -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);}
 ::-webkit-scrollbar-button {width: 0;height: 0;display: none;}
 ::-webkit-scrollbar-corner {background-color: transparent;}
-input[type=color] {cursor: pointer}
-input[type=number]::-webkit-inner-spin-button,
-input[type=number]::-webkit-outer-spin-button {-webkit-appearance: none;margin: 0;}
-input[type=number] {-moz-appearance:textfield;}
-@-moz-document url-prefix() {
-    input[type=color] {padding: 7px 14px;width: 50px;}
-}

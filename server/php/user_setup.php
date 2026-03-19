@@ -62,16 +62,13 @@ include_once ABSPATH . "server/php/inc/core.php";
     (function(w) {
         var callback = w.console;
         const runLoader = initXOpatLoader(
+            <?php echo json_encode((object)$CORE) ?>
             <?php echo json_encode($PLUGINS) ?>,
             <?php echo json_encode($MODULES) ?>,
             '<?php echo PLUGINS_FOLDER ?>',
             '<?php echo MODULES_FOLDER ?>',
             '<?php echo VERSION ?>');
         runLoader();
-
-        UTILITIES.loadModules(()=>{
-            ShaderConfigurator.runShaderAndControlSelector("container", x => callback(x));
-        },'webgl');
 
         window.runConfigurator = function(clbck) {
             callback = clbck;

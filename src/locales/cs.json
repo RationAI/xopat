@@ -17,6 +17,7 @@
       },
       "bar": {
         "share": "Share",
+        "view": "View",
         "exportUrl": "URL",
         "explainExportUrl": "Získejte link; neobsahuje data pluginů",
         "exportFile": "Stáhnout",

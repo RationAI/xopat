@@ -10,6 +10,9 @@ To deploy xOpat, we need to configure it statically,
        
     !!! note 
         This env.json file is suitable for WSI-Server. If you have your own image server you need to configure your own.
+
+    !!! warning
+        Be sure that you use this env file with openseadragon* attributes or you have openseadragon builded in your repository.
        
     ``` json title="env.json"
     {
@@ -26,7 +29,6 @@ To deploy xOpat, we need to configure it statically,
                 // The default image server used. Configures an OpenSeadragon protocol using here URL of the service
                 "image_group_server": "http://localhost:8080",
                 "image_group_protocol": "`${path}/v3/slides/info?slide_id=${data}`",
-                "image_group_preview": "`${path}/v3/slides/thumbnail/max_size/250/250?slide_id=${data}`",
                 "data_group_server": "http://localhost:8080",
                 // This endpoint needs to ask for array of data items (get me tile level 5 x3 y0 for this slide list)
                 "data_group_protocol": "`${path}/v3/files/info?paths=${data.join(\",\")}`",

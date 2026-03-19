@@ -3,9 +3,9 @@ const { div } = van.tags;
 import { BaseComponent } from "../baseComponent.mjs";
 
 export class RawHtml extends BaseComponent {
-    constructor(options, html = "") {
-        super(options);
-        this._html = html;
+    constructor(options, ...args) {
+        super(options, ...args);
+        this._html = this._children.join("");
     }
     setHtml(html) {
         this._html = html;

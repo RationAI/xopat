@@ -8,6 +8,7 @@
 
 'use strict';
 var fs = require("fs");
+var path = require("path");
 const { parse } = require('comment-json');
 const parseJsonFile = (file, ...args) => {
     try {
@@ -17,12 +18,33 @@ const parseJsonFile = (file, ...args) => {
     }
 }
 const flatten = (obj) => typeof obj === "object" ? [].concat(...Object.values(obj).map(flatten)) : obj;
-
-//include only webGL for now
-const webglConfig = parseJsonFile('modules/webgl/include.json');
-
 //prepare source files, parse config
 const config = parseJsonFile('src/config.json');
+
+function listFilesRecursive(rootDir, exts, ignoreDirs = ['node_modules', '.git', 'dist', 'build', 'docs']) {
+    const out = [];
+    const stack = [rootDir];
+    const extSet = new Set(exts.map(e => e.startsWith('.') ? e.toLowerCase() : `.${e.toLowerCase()}`));
+    const ignoreSet = new Set(ignoreDirs);
+
+    while (stack.length) {
+        const dir = stack.pop();
+        for (const name of fs.readdirSync(dir)) {
+            const full = path.join(dir, name);
+            const stat = fs.statSync(full);
+            if (stat.isDirectory()) {
+                if (!ignoreSet.has(name)) stack.push(full);
+            } else {
+                const ext = path.extname(name).toLowerCase();
+                if (extSet.has(ext)) out.push(full);
+            }
+        }
+    }
+    return out;
+}
+
+// todo UI
+// const uiSources = listFilesRecursive('ui', ['mjs', 'ts']);
 
 // add your extensions if necessary, by default all except 'js' have only extracted comments
 const allowedExtensions = ['js', 'json', 'css', 'mjs'];
@@ -31,10 +53,8 @@ module.exports = {
     files: [
         ...flatten(config.js.external).map(x => `src/external/${x}`),
         ...flatten(config.js.src).map(x => `src/${x}`),
-        ...flatten(webglConfig.includes).map(x => `modules/webgl/${x}`),
+        // todo: fix UI comments and add to docs ...uiSources,
         'README.md',
-        'ui/components/buttons.mjs',
-        'ui/components/baseComponent.mjs',
         //other things we want to keep in docs, need @fileoverview tag, input as opts: {include: X }
         // 'src/assets/style.css',
         'src/config.json',

@@ -17,9 +17,9 @@ describe('Third party pyramidal image', () => {
             isSecure = x.APPLICATION_CONTEXT.secure;
         });
 
-        testBasic.mainMenu(firstConfig);
+        testBasic.RightSideMenu(firstConfig);
         cy.canvas().matchImage()
-        testBasic.shadersMainMenu(firstConfig);
+        testBasic.shadersRightSideMenu(firstConfig);
 
 
         let secondConfig = {
@@ -48,8 +48,8 @@ describe('Third party pyramidal image', () => {
             }
 
 
-            testBasic.mainMenu(secondConfig);
-            testBasic.shadersMainMenu(secondConfig);
+            testBasic.RightSideMenu(secondConfig);
+            testBasic.shadersRightSideMenu(secondConfig);
             testBasic.settingsMenu(secondConfig);
         });
     })
@@ -83,7 +83,7 @@ describe('Faulty data', () => {
         utils.waitForViewer().then(x => {
             testElements.systemNotification("Failed to load overlays");
             testElements.closeDialog();
-            testBasic.mainMenu(visualization);
+            testBasic.RightSideMenu(visualization);
         });
     })
 
@@ -120,85 +120,6 @@ describe('Faulty data', () => {
         testElements.getSwapBackgroundPlaceholder(1).click();
         utils.waitForViewer(false);
         cy.get("#tissue-title-header").should('not.contain.text', "Faulty")
-    })
-
-    it ('Stacked mode three layers', () => {
-        let visualization = {
-            params: config.params({
-                viewport: config.viewport('tissue', 0),
-                stackedBackground: true
-            }),
-            data: config.data('tissue'),
-            background: config.background({}, 0, 1, 2),
-        }
-
-        cy.launch(visualization);
-        utils.waitForViewer();
-
-        cy.get("#images-pin").click();
-        cy.get("#image-layer-options").children().should('have.length', 3)
-            .should('contain.text', 'FirstIndex')
-            .should('contain.text', 'SecondIndex')
-            .should('contain.text', 'ThirdIndex')
-            .should('not.contain.text', 'FourthIndex');
-    })
-
-    it('Stacked mode no valid data.', () => {
-        let visualization = {
-            params: config.params({
-                stackedBackground: true
-            }),
-            data: config.data('invalid'),
-            background: config.background({}, 0, 1),
-            visualizations: [
-                config.visualization({}, shaders.identity({}, 1))
-            ]
-        };
-
-        cy.launch(visualization);
-        utils.waitForViewer();
-
-        cy.get("#images-pin").click();
-
-        //first shown is the last rendered - the most visible
-        testElements.getStackedImageMenuItem(0).find("input[type=checkbox]").should('not.be.checked')
-        testElements.getStackedImageMenuItem(0).should('contain.text', 'Faulty')
-
-        testElements.getStackedImageMenuItem(1).find("input[type=checkbox]").should('not.be.checked')
-        testElements.getStackedImageMenuItem(1).should('contain.text', 'Faulty')
-        cy.get("#images-pin").click();
-
-        cy.get("#tissue-title-header").should('contain.text', "Faulty")
-    })
-
-    it('Valid and invalid background, invalid layers, stacked mode, invalid first.', () => {
-        let visualization = {
-            params: config.params({
-                stackedBackground: true
-            }),
-            data: config.data('even-indexes-valid-only'),
-            background: config.background({}, 1, 0),
-            visualizations: [
-                config.visualization({}, shaders.identity({}, 1))
-            ]
-        };
-
-        cy.launch(visualization);
-        utils.waitForViewer();
-
-        //failed image load dialog prevents click
-        testElements.closeDialog();
-        cy.get("#images-pin").click();
-
-        //first shown is the last rendered - the most visible
-        testElements.getStackedImageMenuItem(1).find("input[type=checkbox]").should('be.checked')
-        testElements.getStackedImageMenuItem(1).should('not.contain.text', 'Faulty')
-
-        testElements.getStackedImageMenuItem(0).find("input[type=checkbox]").should('not.be.checked')
-        testElements.getStackedImageMenuItem(0).should('contain.text', 'Faulty')
-        cy.get("#images-pin").click();
-
-        testBasic.mainMenu(visualization);
     })
 })
 

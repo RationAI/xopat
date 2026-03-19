@@ -1,14 +1,11 @@
-//----- base
 const { defineConfig } = require("cypress");
-
-//----- plugins
-// const { initPlugin } = require("cypress-plugin-snapshots/plugin");
-const { initPlugin } = require('@frsource/cypress-plugin-visual-regression-diff/plugins');
+const { initPlugin } = require("@frsource/cypress-plugin-visual-regression-diff/plugins");
 
 module.exports = defineConfig({
     e2e: {
         setupNodeEvents(on, config) {
-            initPlugin(on, config)
+            initPlugin(on, config);
+            return config;
         },
         supportFile: 'test/support/e2e.js',
         specPattern: 'test/e2e/**/*.cy.{js,jsx,ts,tsx}',

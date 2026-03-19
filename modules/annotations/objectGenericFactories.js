@@ -7,7 +7,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "crop_5_4";
+        return "fa-square";
     }
 
     fabricStructure() {
@@ -209,7 +209,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "brightness_1";
+        return "fa-circle";
     }
 
     fabricStructure() {
@@ -222,6 +222,27 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getCurrentObject() {
         return this._current;
+    }
+
+    _getReferencedTiledImage() {
+        return this._context.viewer.scalebar.getReferencedTiledImage();
+    }
+
+    _getViewportRotation() {
+        return this._context.viewer?.viewport?.getRotation(true) || 0;
+    }
+
+    _imageToWindowPoint(x, y) {
+        return this._getReferencedTiledImage().imageToWindowCoordinates(
+            new OpenSeadragon.Point(x, y)
+        );
+    }
+
+    _windowDeltaToImageLength(dx, dy) {
+        const ref = this._getReferencedTiledImage();
+        const p0 = ref.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        const p1 = ref.windowToImageCoordinates(new OpenSeadragon.Point(dx, dy));
+        return Math.hypot(p1.x - p0.x, p1.y - p0.y);
     }
 
     /**
@@ -248,7 +269,8 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     configure(object, options) {
         $.extend(object, {
-            angle: 0,
+            angle: options.angle ?? 0,
+            centeredRotation: true,
             type: this.type,
             factoryID: this.factoryID
         }, options);
@@ -256,7 +278,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     exportsGeometry() {
-        return ["left", "top", "rx", "ry"];
+        return ["left", "top", "rx", "ry", "angle"];
     }
 
     /**
@@ -267,13 +289,14 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      *              - rx: major axis radius
      *              - ry: minor axis radius
      */
-    copy(ofObject, parameters=undefined) {
+    copy(ofObject, parameters = undefined) {
         if (!parameters) parameters = ofObject;
         const copy = this.copyProperties(ofObject);
         copy.left = parameters.left;
         copy.top = parameters.top;
         copy.rx = parameters.rx;
         copy.ry = parameters.ry;
+        copy.angle = parameters.angle ?? ofObject.angle ?? 0;
         const conf = new fabric.Ellipse(copy);
         this.renderAllControls(conf);
         return conf;
@@ -295,16 +318,31 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    recalculate(theObject, ignoreReplace=false) {
-        let rx = theObject.rx * theObject.scaleX,
-            ry = theObject.ry * theObject.scaleY,
-            left = theObject.left,
-            top = theObject.top;
-        theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {
-            left: left, top: top, rx: rx, ry: ry
+    recalculate(theObject, ignoreReplace = false) {
+        const rx = theObject.rx * theObject.scaleX;
+        const ry = theObject.ry * theObject.scaleY;
+        const left = theObject.left;
+        const top = theObject.top;
+        const angle = theObject.angle ?? 0;
+
+        theObject.set({
+            left: this._left ?? left,
+            top: this._top ?? top,
+            scaleX: 1,
+            scaleY: 1,
+            hasControls: false,
+            lockMovementX: true,
+            lockMovementY: true
         });
+
+        const newObject = this.copy(theObject, {
+            left,
+            top,
+            rx,
+            ry,
+            angle
+        });
+
         theObject.calcACoords();
 
         if (!ignoreReplace) {
@@ -313,25 +351,37 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick = true) {
-        this._origX = x-1;
-        this._origY = y-1;
+        this._origX = x;
+        this._origY = y;
+        this._origScreen = this._imageToWindowPoint(x, y);
+
         this._current = this.create({
-            left: x-1,
-            top: y-1,
+            left: x - 1,
+            top: y - 1,
             rx: 1,
-            ry: 1
+            ry: 1,
+            angle: -this._getViewportRotation()
         }, this._presets.getAnnotationOptions(isLeftClick));
+
         this._context.fabric.addHelperAnnotation(this._current);
     }
 
     updateCreate(x, y) {
         if (!this._current) return;
-        let width = Math.abs(x - this._origX);
-        let height = Math.abs(y - this._origY);
+
+        const currentScreen = this._imageToWindowPoint(x, y);
+        const dxScreen = currentScreen.x - this._origScreen.x;
+        const dyScreen = currentScreen.y - this._origScreen.y;
+
+        const rx = this._windowDeltaToImageLength(dxScreen, 0);
+        const ry = this._windowDeltaToImageLength(0, dyScreen);
+
         this._current.set({
-            left:this._origX - width,
-            top:this._origY - height,
-            rx: width, ry: height
+            left: this._origX - rx,
+            top: this._origY - ry,
+            rx,
+            ry,
+            angle: -this._getViewportRotation()
         });
     }
 
@@ -387,8 +437,28 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
                 y = ry * Math.sin(param) + obj.top + ry;
             }
 
-            points.push(digits === undefined ? converter(x, y) :
-                converter(parseFloat(Number(x).toFixed(digits)), parseFloat(Number(y).toFixed(digits))));
+            const angle = (obj.angle || 0) * Math.PI / 180;
+            if (angle !== 0) {
+                const cx = obj.left + obj.rx;
+                const cy = obj.top + obj.ry;
+                const dx = x - cx;
+                const dy = y - cy;
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                const rxp = cx + dx * cos - dy * sin;
+                const ryp = cy + dx * sin + dy * cos;
+                x = rxp;
+                y = ryp;
+            }
+
+            points.push(
+                digits === undefined
+                    ? converter(x, y)
+                    : converter(
+                        parseFloat(Number(x).toFixed(digits)),
+                        parseFloat(Number(y).toFixed(digits))
+                    )
+            );
         }
         return points;
     }
@@ -437,7 +507,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "language_japanese_kana";
+        return "fa-font";
     }
 
     fabricStructure() {
@@ -450,6 +520,10 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
     getCurrentObject() {
         return this._current;
+    }
+
+    _getViewportCounterRotation() {
+        return -(this._context.viewer?.viewport?.getRotation(true) || 0);
     }
 
     /**
@@ -479,6 +553,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     configure(object, options) {
         object.hasBorders = true;
         options.autoScale = object.autoScale || options.autoScale || false;
+        const angle = this._getViewportCounterRotation();
+
         if (options.autoScale) {
             $.extend(object, options, {
                 fontSize: options.fontSize || 16,
@@ -492,9 +568,11 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 paintFirst: 'stroke',
                 strokeWidth: 4 / options.zoomAtCreation,
                 fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
-                scaleX: 1/options.zoomAtCreation,
-                scaleY: 1/options.zoomAtCreation,
+                scaleX: 1 / options.zoomAtCreation,
+                scaleY: 1 / options.zoomAtCreation,
                 fontWeight: 'bold',
+                angle,
+                centeredRotation: false
             });
         } else {
             $.extend(object, options, {
@@ -511,20 +589,21 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontFamily: 'Helvetica Nue, Helvetica, Sans-Serif, Arial, Trebuchet MS',
                 scaleX: 1,
                 scaleY: 1,
-                fontWeight: 'bold'
+                fontWeight: 'bold',
+                angle,
+                centeredRotation: false
             });
         }
         return object;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
-        // ensure necessary properties are not modified!
         delete visualProperties["stroke"];
         delete visualProperties["fill"];
         delete visualProperties["strokeWidth"];
         delete visualProperties["originalStrokeWidth"];
         visualProperties.hasBorders = true;
-        // no support for internal logics, text driven its own scaling, just set the rest
+        visualProperties.angle = this._getViewportCounterRotation();
         ofObject.set(visualProperties);
         this._context.fabric.rerender();
     }
@@ -539,12 +618,16 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
+        const props = {
+            angle: this._getViewportCounterRotation()
+        };
+
         if (ofObject.autoScale) {
-            ofObject.set({
-                scaleX: 1/realZoom,
-                scaleY: 1/realZoom
-            });
+            props.scaleX = 1 / realZoom;
+            props.scaleY = 1 / realZoom;
         }
+
+        ofObject.set(props);
         ofObject.isAtZoom = realZoom;
     }
 
@@ -589,11 +672,13 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {number} parameters.fontSize  optional
      */
     copy(ofObject, parameters) {
-        parameters = parameters || {text: ofObject.text, left: ofObject.left, top: ofObject.top};
+        parameters = parameters || { text: ofObject.text, left: ofObject.left, top: ofObject.top };
         let props = this.copyProperties(ofObject,
             "paintFirst", "lockUniScaling", "fontSize", "fontFamily", "textAlign", "autoScale");
         $.extend(props, parameters);
         props.paintFirst = 'stroke';
+        props.angle = ofObject.angle ?? this._getViewportCounterRotation();
+        props.centeredRotation = false;
         props.editable = false;
         const conf = new fabric.IText(parameters.text, props);
         this.renderAllControls(conf);
@@ -739,7 +824,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     getIcon() {
-        return "radio_button_checked";
+        return "fa-solid fa-location-crosshairs";
     }
 
     getDescription(ofObject) {
@@ -1278,7 +1363,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
 
     getIcon() {
-        return "horizontal_rule";
+        return "fa-minus";
     }
 
     fabricStructure() {
@@ -1571,7 +1656,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "pentagon";
+        return "fa-draw-polygon";
     }
 
     fabricStructure() {
@@ -1593,7 +1678,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "timeline";
+        return "share-nodes";
     }
 
     fabricStructure() {
@@ -1633,7 +1718,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "shape_line";
+        return "fa-object-group";
     }
 
     fabricStructure() {
@@ -1823,7 +1908,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getIcon() {
-        return "view_timeline";
+        return "fa-draw-polygon"; //todo same icon as polygon... does it matter?
     }
 
     fabricStructure() {

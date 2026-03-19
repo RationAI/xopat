@@ -32,25 +32,31 @@ const { div } = van.tags;
  * // you can also use just any buttons which have this type of onClick function
  * 
  **/
-class FullscreenMenu extends BaseComponent{
+export class FullscreenMenu extends BaseComponent{
 
     /**
      * @param {*} options
      * @param  {...any} args - items to be added to the menu, needs to be UI.Div
     **/
-    constructor(options, ...args) {
-        super(options, );
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
         this.tabs = {};
 
-        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full", color: "bg-base-100"} });
+        this.content = new Div({ id: this.id + "-content", extraClasses: {height: "h-full", width: "w-full"} });
         this.closeBtn = new Button({
             size: Button.SIZE.TINY,
             type: Button.TYPE.NONE,
             onClick: () => this.unfocusAll(),
             extraClasses: {position: "absolute right-2"}
         }, new FAIcon({name: 'fa-close'}));
-        for (let i of args) {
+        for (let i of this._children) {
             this.addTab(i);
+        }
+        // todo - better usage design? prevent using this directly...
+        this._children = [];
+        this.mobile = false;
+        if (window.innerWidth < 600) {
+            this.mobile = true;
         }
     }
 
@@ -73,7 +79,7 @@ class FullscreenMenu extends BaseComponent{
     }
 
     create(){
-        return div({ id: "overlay", class: "hidden" },
+        return div({ id: "overlay", class: "hidden " + (this.mobile ? "mobile" : "") },
             div({ id: "overlay-darken", onclick: () => {this.unfocusAll()} }),
             div({ id: "overlay-content", class: "relative" }, this.closeBtn.create(), this.content.create()),
         );
@@ -89,6 +95,7 @@ class FullscreenMenu extends BaseComponent{
 
         if (overlay.classList.contains("hidden")) {
             document.getElementById("overlay").classList.toggle("hidden");
+            document.getElementById("toolbars-container").style.display = "none";
         }
 
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
@@ -100,6 +107,7 @@ class FullscreenMenu extends BaseComponent{
             }
             else if(tab.id == id && tab.classMap.display == "") {
                 document.getElementById("overlay").classList.toggle("hidden");
+                document.getElementById("toolbars-container").style.display = "";
             }
 
             tab.setClass("display", "hidden");
@@ -111,6 +119,7 @@ class FullscreenMenu extends BaseComponent{
             tab.setClass("display", "hidden");
         }
         document.getElementById("overlay").classList.add("hidden");
+        document.getElementById("toolbars-container").style.display = "";
     }
 
 
@@ -120,5 +129,12 @@ class FullscreenMenu extends BaseComponent{
     getContentDomNode() {
         return document.getElementById(this.id + "-content");
     }
+
+    onLayoutChange(details) {
+        if (details.width < 600) {
+            document.getElementById("overlay").classList.add("mobile");
+        } else {
+            document.getElementById("overlay").classList.remove("mobile");
+        }
+    }
 }
-export { FullscreenMenu };

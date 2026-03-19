@@ -1,5 +1,11 @@
 name: Publish and Build Docker Image
 
+run-name: >
+  Image
+  ${{ github.event_name == 'release' && github.ref_name
+      || github.event_name == 'workflow_dispatch' && inputs.TAG_NAME
+      || 'unknown-tag' }}
+
 on:
   release:
     types: [published]

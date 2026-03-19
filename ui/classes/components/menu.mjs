@@ -6,7 +6,7 @@ import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Dropdown } from "../elements/dropdown.mjs";
 
-const ui = { Join, Div, Button, MenuTab };
+const ui = { Join, Div, Button, MenuTab, Dropdown };
 const { div, span, h3 } = van.tags()
 
 /**
@@ -29,36 +29,31 @@ class Menu extends BaseComponent {
      * @param {keyof typeof Menu.BUTTONSIDE} [options.buttonSide] - The side of the buttons
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
-    constructor(options, ...args) {
-        super(options,);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
 
         this.tabs = {};
-        this.focused = undefined;
-        this.orientation = "TOP";
-        this.design = "TITLEICON";
+        this._focused = undefined;
+        this._orientation = "TOP";
+        this._design = "TITLEICON";
 
         this.header = new ui.Join({ id: this.id + "-header", style: ui.Join.STYLE.HORIZONTAL });
         this.body = new ui.Div({ id: this.id + "-body", extraClasses: {height: "h-full", width: "w-full"} });
 
-        for (let i of args) {
-            // todo require ID
-            if (i.class === Dropdown) {
-                this.addDropdown(i);
-                continue;
-            }
+        for (let i of this._children) {
             this.addTab(i);
         }
 
         this.classMap["base"] = "flex gap-1 h-full";
-        this.classMap["orientation"] = Menu.ORIENTATION.TOP;
-        this.classMap["buttonSide"] = Menu.BUTTONSIDE.LEFT;
-        this.classMap["design"] = Menu.DESIGN.TITLEICON;
-        this.classMap["rounded"] = Menu.ROUNDED.DISABLE;
         this.classMap["flex"] = "flex-col";
 
-        if (options) {
-            this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
-        }
+        this.options["orientation"] = Menu.ORIENTATION.TOP;
+        this.options["buttonSide"] = Menu.BUTTONSIDE.LEFT;
+        this.options["design"] = Menu.DESIGN.TITLEICON;
+        this.options["rounded"] = Menu.ROUNDED.DISABLE;
+
+        this._applyOptions(options, "orientation", "buttonSide", "design", "rounded");
+        this._children = [];
     }
 
 
@@ -102,22 +97,26 @@ class Menu extends BaseComponent {
      *     { id: "clone", section: "actions", label: "Clone Repository…", icon: "content_copy" },
      *     { id: "xopat", section: "recent",  label: "xopat", icon: "widgets", selected: true },
      *   ],
+     * @param {XOpatElementID} [componentId]
      * @description adds a dropdown type item to the menu
+     * @return {Dropdown}
      */
-    addDropdown(item){
+    addDropdown(item, componentId=undefined){
         if (item.class !== Dropdown || !item.id){
             throw new Error("Item for addDropdown needs to be of type Dropdown and have id property!");
         }
         const id = item.id;
         item.parentId = this.id;
         item.onClick = item.onClick || (() => {});
-        const tab = new Dropdown(item);
+        let tab = new Dropdown(item);
 
         this.tabs[id] = tab;
 
-
         tab.headerButton.setClass("join", "join-item");
-        switch (this.design) {
+        if (componentId) {
+            tab = BaseComponent.ensureTaggedAsExternalComponent(tab, componentId);
+        }
+        switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
                 break;
@@ -136,19 +135,34 @@ class Menu extends BaseComponent {
     }
 
     /**
-     *
-     * @param {*} item dictionary with id, icon, title, body which will be added to the menu
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be added to the menu
+     * @param {XOpatElementID} [componentId]
+     * @return {MenuTab|Dropdown}
      */
-    addTab(item) {
+    addTab(item, componentId=undefined) {
+        if (item.class === Dropdown) {
+            return this.addDropdown(item, componentId);
+        }
+
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-        const tab = item.class ? new item.class(item,this) : new MenuTab(item, this);
+        let tab = item.class ? new item.class(item, this) : new MenuTab(item, this);
+
+        const prevTab = this.tabs[item.id];
+        if (prevTab) {
+            tab.headerButton?.removeFrom(this.header);
+            tab.contentDiv?.removeFrom(this.body);
+        }
 
         this.tabs[item.id] = tab;
 
         tab.headerButton.setClass("join", "join-item");
-        switch (this.design) {
+        if (componentId) {
+            tab = BaseComponent.ensureTaggedAsExternalComponent(tab, componentId);
+        }
+
+        switch (this._design) {
             case "ICONONLY":
                 tab.iconOnly();
                 break;
@@ -175,7 +189,7 @@ class Menu extends BaseComponent {
     focus(id) {
         if (id in this.tabs) {
             this.tabs[id].focus();
-            this.focused = id;
+            this._focused = id;
             return true;
         }
         return false;
@@ -185,7 +199,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab.focus();
         }
-        this.focused = "all";
+        this._focused = "all";
     }
 
     /**
@@ -195,7 +209,7 @@ class Menu extends BaseComponent {
         for (let tab of Object.values(this.tabs)) {
             tab.unfocus();
         }
-        this.focused= undefined;
+        this._focused= undefined;
     }
 
     /**
@@ -234,51 +248,57 @@ class Menu extends BaseComponent {
         }
     }
 
-    appendExtended(title, titleHtml, html, hiddenHtml, id, pluginId) {
-        const titleHtmlIn = div();
-        titleHtmlIn.innerHTML = titleHtml;
+    append(title, titleItem, item, id, pluginId, bg=undefined) {
+        let content =
+            div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root overflow-x-hidden` },
+                div(
+                    h3({class: "d-inline-block h3 btn-pointer ml-2"}, title),
+                    this.toNode(titleItem),
+                ),
+                div({ class: "inner-panel-visible" },
+                    this.toNode(item),
+                )
+            );
 
-        const htmlIn = div();
-        htmlIn.innerHTML = html;
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
-        const hiddenHtmlIn = div();
-        hiddenHtmlIn.innerHTML = hiddenHtml;
+        // todo implement focus manager, similar to visibility manager
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
+            this.tabs[id]._setFocus();
+        } else {
+            this.tabs[id]._removeFocus();
+        }
+    }
 
+    appendExtended(title, titleItem, item, hiddenItem, id, pluginId, bg=undefined) {
         let content =
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
                     span({
-                        class: "material-icons inline-arrow plugins-pin btn-pointer",
+                        class: "fa-auto fa-chevron-right inline-arrow plugins-pin btn-pointer",
                         id: `${id}-pin`,
                         style: "padding: 0;" },
-                        "navigate_next",
                     ),
-                    h3({
-                        class: "d-inline-block h3 btn-pointer",},
-                        title,
-                    ),
-                    titleHtmlIn,
+                    h3({class: "d-inline-block h3 btn-pointer"}, title),
+                    this.toNode(titleItem),
                 ),
                 div({ class: "inner-panel-visible" },
-                    htmlIn,
+                    this.toNode(item),
                 ),
                 div({ class: "inner-panel-hidden" },
-                    hiddenHtmlIn,
+                    this.toNode(hiddenItem),
                 ),
-            );  
+            );
 
-        this.addTab({id: id, icon: "fa-gear", title: title, body: [content]});
+        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
 
-        if (APPLICATION_CONTEXT.getOption(`${id}-open`, true)){
+        // todo move to focus manager like visibility manager
+        if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
             this.tabs[id]._setFocus();
-        }
-        else{
+        } else{
             this.tabs[id]._removeFocus();
         }
 
-        if (APPLICATION_CONTEXT.getOption(`${id}-hidden`, false)){
-            this.tabs[id].toggleHiden();
-        }
     }
 
     clickHeader() {
@@ -327,27 +347,27 @@ window["workspaceItem"].deleteTab("s3");
 Menu.ORIENTATION = {
     TOP: function () {
         this.setClass("flex", "flex-col");
-        this.orientation = "TOP";
+        this._orientation = "TOP";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     BOTTOM: function () {
         this.setClass("flex", "flex-col-reverse");
-        this.orientation = "BOTTOM";
+        this._orientation = "BOTTOM";
         this.header.set(ui.Join.STYLE.HORIZONTAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.HORIZONTAL); t.iconRotate(); }
     },
     LEFT: function () {
         this.setClass("flex", "flex-row");
-        this.orientation = "LEFT";
+        this._orientation = "LEFT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_LEFT); t.iconRotate(); }
     },
     RIGHT: function () {
         this.setClass("flex", "flex-row-reverse");
-        this.orientation = "RIGHT";
+        this._orientation = "RIGHT";
         this.header.set(ui.Join.STYLE.VERTICAL);
-        for (let t of Object.values(this.tabs)) { t.headerButton.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
+        for (let t of Object.values(this.tabs)) { t.headerButton?.set(ui.Button.ORIENTATION.VERTICAL_RIGHT); t.iconRotate(); }
     }
 }
 
@@ -358,15 +378,15 @@ Menu.BUTTONSIDE = {
 
 Menu.DESIGN = {
     ICONONLY: function () {
-        this.design = "ICONONLY";
+        this._design = "ICONONLY";
         for (let t of Object.values(this.tabs)) { t.iconOnly(); t.iconRotate(); }
     },
     TITLEONLY: function () {
-        this.design = "TITLEONLY";
+        this._design = "TITLEONLY";
         for (let t of Object.values(this.tabs)) { t.titleOnly(); t.iconRotate(); }
     },
     TITLEICON: function () {
-        this.design = "TITLEICON";
+        this._design = "TITLEICON";
         for (let t of Object.values(this.tabs)) { t.titleIcon(); t.iconRotate(); }
     }
 }

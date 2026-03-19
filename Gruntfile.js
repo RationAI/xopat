@@ -1,4 +1,3 @@
-const {execSync: exec} = require("child_process");
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);
@@ -18,34 +17,19 @@ module.exports = function(grunt) {
         "Generate a plugin or module",
         require('./server/utils/grunt/tasks/generate-plugin-module')(grunt)
     );
+    grunt.registerTask("npm-install",
+        "Install a module from npm",
+        require('./server/utils/grunt/tasks/generate-npm-module')(grunt)
+    );
     grunt.registerTask("twinc",
         'Tailwind incremental build/watch by parts.',
-        require('./server/utils/grunt/tasks/css-and-ui-dev-tool')(grunt)
+        require('./server/utils/grunt/tasks/realtime-compile')(grunt)
     );
 
     // library tasks
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks("grunt-contrib-connect");
     grunt.loadNpmTasks("grunt-contrib-watch");
-    // grunt.loadNpmTasks("grunt-contrib-clean");
-
-    const uglification = {
-        options: {
-            sourceMap: true,
-            beautify: false,
-            banner: '/*! <%= pkg.name %> - v<%= pkg.version %> - ' +
-                '<%= grunt.template.today("yyyy-mm-dd") %> */'
-        },
-        plugins: {
-            files: {},
-        },
-        modules: {
-            files: {},
-        },
-        ui: {
-            files: {},
-        }
-    };
 
     grunt.initConfig({
         pkg: grunt.file.readJSON('package.json'),
@@ -61,91 +45,127 @@ module.exports = function(grunt) {
                 }
             }
         },
-        watch: {
-            options: {
-                livereload: true
-            },
-            components: {
-                files: ["ui/*", "ui/components/*", "./tailwind.config.js", "Gruntfile.js", "src/assets/custom.css"],
-                tasks: "css"
-            }
-        },
         uglify: {
-
-            ...grunt.util.reduceModules( (acc, module, folder) => {
-                //we cannot minify items that have third-party network deps, object describes source URL
-                if (module.includes.some(i => typeof i === "object")) {
-                    grunt.log.write(" (non-minifiable)");
-                    return acc;
-                }
-
-                acc.modules.files[`modules/${folder}/index.min.js`] =
-                    module.includes.map(i => `modules/${folder}/${i}`);
-                return acc;
-            }, uglification, true, true),
-
-            ...grunt.util.reducePlugins((acc, plugin, folder) => {
-                //we cannot minify items that have third-party network deps, object describes source URL
-                if (plugin.includes.some(i => typeof i === "object")) {
-                    grunt.log.write(" (non-minifiable)");
-                    return acc;
-                }
-
-                acc.plugins.files[`plugins/${folder}/index.min.js`] =
-                    plugin.includes.map(i => `plugins/${folder}/${i}`);
-                return acc;
-            }, uglification, true, true),
-
-            ...grunt.util.reduceUI((acc, ui, folder) => {
-                exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
-                acc.ui.files[`ui/index.min.js`] = ["ui/index.js"];
-                return acc;
-            }, uglification, true, true),
+            options: {
+                sourceMap: true,
+                banner: '/*! <%= pkg.name %> <%= grunt.template.today("yyyy-mm-dd") %> */'
+            },
+            modules: { files: {} },
+            plugins: { files: {} },
+            ui: { files: { 'ui/index.min.js': ['ui/index.js'] } }
         },
-        // Custom twinc task
+        // Configuration for realtime dev incremental build/watch
         twinc: {
             inputCSS:   './src/assets/tailwind-spec.css',
             configFile: './tailwind.config.js',
             outFile:    './src/libs/tailwind.min.css',   // single output
             cacheDir:   './.dev-cache',
             watch: [
-                'ui/**/*.{html,js,mjs}',
-                'modules/**/*.{html,js,mjs}',
-                'plugins/**/*.{html,js}',
-                'src/**/*.{html,js}'
+                'ui/**/*.{html,js,mjs,ts}',
+                'modules/**/*.{html,js,mjs,ts}',
+                'plugins/**/*.{html,js,mjs,ts}',
+                'src/**/*.{html,js,mjs,ts}'
             ],
             ignore: [
                 'ui/index.js',
                 'src/libs/**',
                 '.dev-cache/**',
-                '**/*.min.js'
+                '**/*.min.js',
+                '**/*.workspace.js',
+                '**/*.workspace.js.map',
+                '**/*.workspace.mjs',
+                '**/*.workspace.mjs.map',
+                "src/dist/**",
             ],
             minify: true,
             debounceMs: 150,
+            // todo make this more approachable
             // usePolling: true, interval: 250, // if needed on WSL/Docker/UNC
         },
     });
 
-    grunt.registerTask('default', []);
-    grunt.registerTask('all', ["uglify", "css"]);
+    grunt.registerTask('workspaceBuild', 'Compile all workspaces', async function() {
+        const done = this.async();
+        const build = async (acc, data) => {
+            const pkgPath = `${data.directory}/package.json`;
+            // Check if it's actually a workspace element
+            if (!grunt.file.exists(pkgPath)) {
+                return;
+            }
+            const pkg = grunt.file.readJSON(pkgPath);
+            await grunt.util.buildWorkspaceItem(data.directory, pkg);
+        };
+        await grunt.util.reduceModules(build, []);
+        await grunt.util.reducePlugins(build, []);
+        done();
+    });
 
-    // todo enable build-only step
-    grunt.registerTask('build', 'Build Necessary Parts of the Viewer', function () {
-        // todo only on a single place:
-        exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
+    // DYNAMIC MINIFICATION CONFIG
+    grunt.registerTask('prepMinify', function() {
+        const moduleFiles = {};
+        const pluginFiles = {};
+
+        grunt.util.reduceModules((acc, mod, folder) => {
+            moduleFiles[`modules/${folder}/index.min.js`] = mod.includes
+                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
+                .map(i => `${mod.directory}/${i}`);
+        }, {});
+
+        grunt.util.reducePlugins((acc, plug, folder) => {
+            pluginFiles[`plugins/${folder}/index.min.js`] = plug.includes
+                .filter(i => typeof i === "string" && !i.endsWith(".min.js"))
+                .map(i => `${plug.directory}/${i}`);
+        }, {});
+
+        grunt.config.set('uglify.modules.files', moduleFiles);
+        grunt.config.set('uglify.plugins.files', pluginFiles);
     });
-    grunt.registerTask('plugins', ["uglify:plugins"]);
-    grunt.registerTask('modules', ["uglify:modules"]);
-    grunt.registerTask('buildUI', function (){
-        grunt.log.writeln('esbuild');
-        const result = exec("npx esbuild --bundle --sourcemap --format=esm --outfile=ui/index.js ui/index.mjs");
-        grunt.log.writeln(result);
+
+    grunt.registerTask('minify', ['workspaceBuild', 'buildUI', 'prepMinify', 'uglify']);
+    grunt.registerTask('default', ['minify']);
+
+    grunt.registerTask('default', ['minify']);
+    grunt.registerTask('all', ['minify']);
+
+    grunt.registerTask('build', ['workspaceBuild', 'buildUI', 'buildCore']);
+    grunt.registerTask('buildUI', async function() {
+        const done = this.async();
+        try {await BuildLogic.buildUI({
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg),
+        });done();
+        } catch (e) {grunt.fail.warn(e.message);}
     });
-    grunt.registerTask('css', 'Generate Tailwind CSS files for usage.', function (file) {
-        grunt.log.writeln('Tailwind');
-        //TODO change back to minify
-        const result = exec('npx tailwindcss -i ./src/assets/tailwind-spec.css -o ./src/libs/tailwind.min.css --no-minify');
-        grunt.log.writeln(result);
+    grunt.registerTask('buildCore', async function() {
+        const done = this.async();
+        try {await BuildLogic.buildCore({
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg),
+        });done();
+        } catch (e) {grunt.fail.warn(e.message);}
     });
-    // Default task(s).
+    grunt.registerTask('css', async function() {
+        const done = this.async();
+        await BuildLogic.spawnAsync("npx", ["tailwindcss", "-i", "./src/assets/tailwind-spec.css", "-o", "./src/libs/tailwind.min.css"]);
+        done();
+    });
+    grunt.registerTask('clean', 'Clean all workspace artifacts', async function() {
+        const done = this.async();
+        const cleanItem = async (acc, data) => {
+            const pkgPath = `${data.directory}/package.json`;
+
+            if (!grunt.file.exists(pkgPath)) {
+                return; // not a workspace
+            }
+
+            const pkg = grunt.file.readJSON(pkgPath);
+            await grunt.util.cleanWorkspaceItem(data.directory, pkg);
+        };
+        await grunt.util.reduceModules(cleanItem, []);
+        await grunt.util.reducePlugins(cleanItem, []);
+        // todo consider also .dev-cache and core files
+        done();
+    });
 };

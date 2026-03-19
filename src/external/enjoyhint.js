@@ -188,7 +188,7 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
 
                 that.$skip_btn = $("<div>", { class: that.cl.skip_btn })
                     .appendTo(that.enjoyhint)
-                    .html("<span class='material-icons' style='color: white; font-size: xx-large; text-shadow: #000 0px 0px 14px;'>close</span>")
+                    .html("<span class='fa-close fa-auto' style='color: white; font-size: xx-large; text-shadow: #000 0px 0px 14px;'></span>")
                     .click(function(e) {
                         that.hide();
                         that.options.onSkipClick();
@@ -306,13 +306,6 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                         $('.enjoyhint_prev_btn').css('visibility', 'visible');
                         $('.enjoyhint_skip_btn').css('visibility', 'visible');
                     }
-
-                    doit = setTimeout(function() {
-                        if(boundingClientRect.top < 0 || boundingClientRect.bottom > (window.innerHeight || document.documentElement.clientHeight)){
-                            $('#main-panel-content').scrollTo(that.stepData.enjoyHintElementSelector, 150, {offset: -200, onAfter:renderAfterResize});
-                        }
-                        else renderAfterResize();
-                    }, 150);
 
 
                     var newWidth = window.innerWidth;

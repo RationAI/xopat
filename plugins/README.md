@@ -22,6 +22,8 @@ Inside a plugin, at least this file must exist (otherwise the directory is not t
 }
 ````
 
+exception to this rule is a workspace plugin, which is set to use NPM ([see development basics](../DEVELOPMENT.md)).
+
 ##### Built-in keys
 
   - `id` is a required value that defines plugin's ID as well as it's variable name (everything is set-up automatically)
@@ -37,6 +39,9 @@ Inside a plugin, at least this file must exist (otherwise the directory is not t
   - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
+
+##### Built-in options
+  - `ignorePostIO` - see below the default IO lifecycle
 
 ##### Custom keys
 A developer can provide custom parameters to `include.json` and retrieve them later in the code.
@@ -57,10 +62,18 @@ These are called **Static Configurations**.
     - interact with static & dynamic configuration values
     - provide built-in IO logics
     - ...
+- If your entity works with a viewer instance, the xOpat viewer can have multiple viewers open at the same time.
+Make sure you know viewer lifecycle from events of the VIEWER_MANAGER and that you use ``viewer.uiqueId`` to 
+reference the viewer. There is also ``viewer.id`` which is suitable to use only if you care about the viewer
+position/element, **not the data it opens**.
 
 > **IMPORTANT.** Please respect the viewer API and behavior. Specifically,
 > respect the ``APPLICATION_CONTEXT.secure`` parameter
 > and provide necessary steps to ensure secure execution if applicable.
+
+### NPM Support and UI
+Please, [see development basics](../DEVELOPMENT.md) on how to develop with NPM and have live UI support.
+Also, [read ui specification](../ui/README.md) and get to know available UI elements.
 
 ### Interface XOpatPlugin
 Basic functions that are available to plugins atop what ``XOpatElement`` provides.
@@ -173,24 +186,77 @@ This (global) function will register the plugin and initialize it. It will make 
 >
 
 
-### IO Handling
-``bindIO`` method is available that explicitly enables IO support. You probably want to
-call (somewhere in the initialization phase, usually in `pluginReady()`) function `initPostIO`
-on itself as well as any other module that does not call it explicitly.
+## IO Handling
+Plugins are free to implement their own IO handling. If you are writing a plugin that connects e.g. annotations
+to some database, you can use (and the authors of the target plugin you want to save data from) rich event system
+to react upon the data item lifecycle.
+
+In case you are writing a plugin (or module) that has no given service it should save data to, you
+should:
+ - provide a way to export data via lifecycle of the data item(s) through events
+ - register to the default POST IO system the xOpat offers.
+
+This way, one can use static file export to share their data with others, or 
+turn on some storage logics for the data. In that case, the data source plugin or module can be disabled
+to load the POST IO data using ``ignorePostIO`` option (works only if the target interface implements `getOption()`).
+
+### Default POST IO
+
+> **IMPORTANT**: The IO distinguishes between global and viewer-local data. You can have two viewers open
+> at the same time and you need to deliver different data to each of them? Use the viewer local export.
+
+All you need to do is to override ``exportData`` and `importData` methods (for global)
+or ``exportViewerData`` and ``importViewerData`` methods (for viewer-local)
+in the element root class
+and call ``this.initPostIO()`` at the startup. You can call the initialization repeatedly
+for different keys.
+
+````js
+constructor(id) {
+    super(id);
+    this.initPostIO({
+        exportKey: "", // unique data-context key, default empty string
+        inViewerContext: false  // or true, in that case `exportViewerData` and `importViewerData` will be used
+    });
+}
+````
+
+If you want to have a custom logics with the IO initialization,
+you can override the initialization like this:
+````js
+async initPostIO(opts) {
+    const postStore = await super.initPostIO(opts);
+    if (postStore) {
+        //... do something
+        // e.g. read key 'key'
+        const data = await postStore.get('key');
+    }
+    return postStore;
+}
+````
+This might come in handy if you for example want to do additional IO initialization logics.
+
 
 > **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
 > ``plugin[<plugin_id>.key] = value;``. Nested keys are up to the plugin to manage for itself,
 > e.g. ``plugin[<plugin_id>.parentKey.subKey] = value;``.
 
-TODO docs
 The example below shows how to implement IO within with proper function overrides.
 ````js
-async exportData() {
-    return await this.export(); //our internal function returns a string promise
+async exportData(key) {
+    return await this.export(key); //our internal function returns a string promise
 }
 
-async importData(data) {
-    await this.import(data); //our import function expects data as a serialized string
+async importData(key, data) {
+    await this.import(key, data); //our import function expects data as a serialized string
+}
+
+async exportViewerData(viewer, key, viewerContextID) {
+    // somehow handle the export of data meant for a target viewer
+}
+
+async importViewerData(viewer, key, viewerContextID, data) {
+    // somehow handle the import of data meant for a target viewer
 }
 ````
 
@@ -269,7 +335,7 @@ First, get familiar with (sorted in importance order):
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
-    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``  todo docs is this still true?
+ - ``window.HTTPClient`` for seamless auth integration
  - Third party code (see below)    
  - `window.UIComponents`
     - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...
@@ -283,17 +349,20 @@ such as pre-defined color maps, (already mentioned) webgl processing, fabricJS c
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
 
 ### Available Third-party Code and UI
-- You should use new UI components, see [this](../ui/README.md)
+- You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
 
 You can use
  - [jQuery](https://jquery.com/), 
- - [Material Design icons](https://fonts.google.com/icons?selected=Material+Icons)
- - [Font Awesome 6 Free icons](https://fontawesome.com/)
- for icons (prefer using `<span>`) and 
- - [Primer CSS bootstrap](https://primer.style/css).
+ - [Font Awesome 6 Free icons](https://fontawesome.com/) for icons
+   - Do use ``fa-auto`` which prefers regular over solid icons
+ - DaisyUI + TailwindCSS styling
+ - The CORE UI Component system (see `ui/`)
  - Pre-defined, documented CSS in the core ``src/assets/style.css``
+   - slowly moving away from, rely on UI components and tailwind / daisy UI
  - other libraries included in `/external`, the Monaco editor is available only in a child window
    context via the `Dialogs` interface
+
+> Primer.css and material icons are deprecated and slowly removed!
  
 #### `includes` property
 In fact, the plugin can either specify a string value to indicate local file, 
@@ -312,6 +381,15 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+## Viewer Multiplexing
+There can be multiple viewers open at once. You might need to create:
+- custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
+- custom viewer-oriented data models: use `XOpatViewerSingleton` if you need only instance per viewer.
+
+### ``XOpatViewerSingleton``
+The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
+created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton).``
 
 ## Dynamic Loading
 As workers and js modules (recommended usage), the viewer does not offer advanced tools for
@@ -331,6 +409,26 @@ the functionality appropriately. Also, **do not store reference** to any tiled i
 Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
 all measures should be done.
 
+For authentication, ``HttpClient`` is avaiable and strongly recommended. It integrates with
+the viewer auth flows directly, and you can use custom contexts for authentication too.
+Moreover, you can use proxies to hide API keys: the proxy can be used only trusted services: you should use ``HttpClient`` to talk to the proxy, and not ``fetch``
+````javascript
+// here is some login that logs within contextId
+const authClient = new OIDCAuthClient(oidcConfig, {
+    userContextId: "my-service",
+    serviceName,
+    authMethod: "popup",
+});
+
+const client = new HttpClient({
+    proxy: "proxy-key",           // the config key in server.secure.proxies
+    baseURL: "/v1",               // optional base path inside the proxy
+    auth: {                       // optional authentication, if configured, directly integrates with xOpatUser API
+        contextId: "my-service",
+        types: ["jwt"],
+    },
+});
+````
  
 ## Hints
 If you have a panel registered under your ID, you can use `loading` class to show a loading spinner

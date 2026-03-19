@@ -1,7 +1,7 @@
 const {parse} = require("comment-json");
-const {safeScanDir} = require("./utils");
+const {safeScanDir, expandIncludeGlobs} = require("./utils");
 
-module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n) {
+module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
     const isType = core.isType;
     const MODULES = core.MODULES,
@@ -15,12 +15,50 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
         let fullPath = `${core.ABS_MODULES}${dir}/`;
         let modConfig = fullPath + "include.json";
 
-        if (fileExists(modConfig)) {
-            try {
-                let data = parse(readFile(modConfig));
+        let data = null;
+
+        try {
+            if (fileExists(modConfig)) {
+                data = parse(readFile(modConfig));
+            }
+
+            let workspace = fullPath + "package.json";
+            if (fileExists(workspace)) {
+                let packageData = parse(readFile(workspace));
+
+                let workspaceEntry = "index.workspace.js";
+                let hasDefaultJs = fileExists(fullPath + "index.workspace.js");
+                let hasDefaultMjs = fileExists(fullPath + "index.workspace.mjs");
+
+                if (!hasDefaultJs && !hasDefaultMjs && packageData["main"]) {
+                    workspaceEntry = packageData["main"];
+                } else if (hasDefaultMjs && !hasDefaultJs) {
+                    workspaceEntry = "index.workspace.mjs";
+                }
+
+                // 2. Validate that the file actually exists
+                if (!fileExists(fullPath + workspaceEntry)) {
+                    console.warn(`Module ${fullPath} defines workspace but ${workspaceEntry} is missing! Compile it first.`);
+                }
+
+                data = data || {};
+                data["includes"] = data["includes"] || [];
+                data["includes"].unshift(workspaceEntry);
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+
+                data["id"] = data["id"] || packageData["name"];
+                data["name"] = data["name"] || packageData["name"];
+                data["author"] = data["author"] || packageData["author"];
+                data["version"] = data["version"] || packageData["version"];
+                data["description"] = data["description"] || packageData["description"];
+            }
+
+            if (data) {
                 data["directory"] = dir;
                 data["path"] = `${core.MODULES_FOLDER}${dir}/`;
                 data["loaded"] = false;
+                data["requires"] = data["requires"] || [];
+
                 if (fileExists(fullPath + "style.css")) {
                     data["styleSheet"] = data["path"] + "style.css";
                 }
@@ -50,11 +88,11 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
                 if (core.parseBool(data["enabled"]) !== false) {
                     MODULES[data["id"]] = data;
                 }
-
-            } catch (e) {
-                core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
-                console.error(core.exception, e);
             }
+        } catch (e) {
+            // todo only log error, do not shut down everything
+            core.exception = `Module ${fullPath} has invalid configuration file and cannot be loaded!`;
+            console.error(core.exception, e);
         }
     }
 
@@ -162,6 +200,10 @@ module.exports.loadModules = function(core, fileExists, readFile, scanDir, i18n)
 
         if (production && fileExists(`${directory}${item["directory"]}/index.min.js`)) {
             return result + `    <script src="${directory}${item["directory"]}/index.min.js?v=${version}"></script>\n`;
+        }
+
+        if (production && fileExists(`${directory}${item["directory"]}/index.workspace.min.js`)) {
+            return result + `    <script src="${directory}${item["directory"]}/index.workspace.min.js?v=${version}"></script>\n`;
         }
 
         for (let file of item["includes"]) {

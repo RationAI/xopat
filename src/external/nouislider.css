@@ -1,3 +1,11 @@
+.noUi-connect.color-zoom-range {
+    background: linear-gradient(to right,
+    #FF0000 0%,  /* Red for outside native zoom */
+    #FF9900 25%,  /* Yellow for zoom outside */
+    #00FF00 50%,  /* Green for native zoom */
+    #FFFF00 75%, /* Yellow for zoom inside */
+    #0000FF 100%); /* Blue for maximum zoom */
+}
 /* Functional styling;
  * These styles are required for noUiSlider to function.
  * You don't need to change these rules to apply your design.
@@ -17,6 +25,8 @@
 }
 .noUi-target {
     position: relative;
+    width: 100%;
+    height: 100%;
 }
 .noUi-base,
 .noUi-connects {
@@ -24,12 +34,6 @@
     height: 100%;
     position: relative;
     z-index: 1;
-}
-/* Wrapper for all connect elements.
- */
-.noUi-connects {
-    overflow: hidden;
-    z-index: 0;
 }
 .noUi-connect,
 .noUi-origin {
@@ -46,8 +50,7 @@
     transform-origin: 0 0;
     transform-style: flat;
 }
-/* Offset direction
- */
+/* Offset direction */
 .noUi-txt-dir-rtl.noUi-horizontal .noUi-origin {
     left: 0;
     right: auto;
@@ -79,8 +82,8 @@
 .noUi-state-drag * {
     cursor: inherit !important;
 }
-/* Slider size and handle placement;
- */
+
+/* Slider size and handle placement; */
 .noUi-horizontal {
     height: 18px;
 }
@@ -105,11 +108,12 @@
     left: -17px;
     right: auto;
 }
+
 /* Styling;
  * Giving the connect element a border radius causes issues with using transform: scale
  */
 .noUi-target {
-    background: var(--color-icon-tertiary);
+    background: oklch(var(--b3));              /* was var(--color-icon-tertiary) */
     border-radius: 4px;
     border: 1px solid transparent;
 }
@@ -117,8 +121,7 @@
     border-radius: 3px;
 }
 
-/* Handles and cursors;
- */
+/* Handles and cursors; */
 .noUi-draggable {
     cursor: ew-resize;
 }
@@ -128,27 +131,31 @@
 .noUi-handle {
     border: 0;
     border-radius: 3px;
-    background: var(--color-bg-primary);
+    background: oklch(var(--b1));              /* was var(--color-bg-primary) */
     cursor: pointer;
-    box-shadow: 0px 0px 3px var(--color-text-tertiary);
+    box-shadow: 0 0 3px oklch(var(--bc) / 0.25); /* was var(--color-text-tertiary) */
 }
 .noUi-active {
-    box-shadow: inset 0 0 1px var(--color-icon-primary), inset 0 1px 7px var(--color-icon-secondary), 0 3px 6px -3px var(--color-icon-tertiary);
+    /* was: inset 0 0 1px var(--color-icon-primary),
+            inset 0 1px 7px var(--color-icon-secondary),
+            0 3px 6px -3px var(--color-icon-tertiary); */
+    box-shadow:
+            inset 0 0 1px oklch(var(--p) / 0.7),
+            inset 0 1px 7px oklch(var(--s) / 0.35),
+            0 3px 6px -3px oklch(var(--b3) / 0.8);
 }
 
-/* Disabled state;
- */
+/* Disabled state; */
 [disabled] .noUi-connect {
-    background: var(--color-icon-tertiary);
+    background: oklch(var(--b3));              /* was var(--color-icon-tertiary) */
 }
 [disabled].noUi-target,
 [disabled].noUi-handle,
 [disabled] .noUi-handle {
     cursor: not-allowed;
 }
-/* Base;
- *
- */
+
+/* Base; */
 .noUi-pips,
 .noUi-pips * {
     -moz-box-sizing: border-box;
@@ -156,11 +163,11 @@
 }
 .noUi-pips {
     position: absolute;
-    color: var(--color-text-primary);
+    color: oklch(var(--bc));
+    top: 0;
 }
-/* Values;
- *
- */
+
+/* Values; */
 .noUi-value {
     position: absolute;
     white-space: nowrap;
@@ -168,25 +175,23 @@
     cursor: pointer;
 }
 .noUi-value-sub {
-    color: var(--color-text-tertiary);
+    color: oklch(var(--bc) / 0.5);             /* was var(--color-text-tertiary) */
     font-size: 10px;
 }
-/* Markings;
- *
- */
+
+/* Markings; */
 .noUi-marker {
     position: absolute;
-    background: var(--color-text-primary);
+    background: oklch(var(--bc));              /* was var(--color-text-primary) */
 }
 .noUi-marker-sub {
-    background: var(--color-text-tertiary);
+    background: oklch(var(--bc) / 0.5);        /* was var(--color-text-tertiary) */
 }
 .noUi-marker-large {
-    background: var(--color-text-primary);
+    background: oklch(var(--bc));              /* was var(--color-text-primary) */
 }
-/* Horizontal layout;
- *
- */
+
+/* Horizontal layout; */
 .noUi-pips-horizontal {
     height: 30px;
     top: 100%;
@@ -212,14 +217,8 @@
 .noUi-marker-horizontal.noUi-marker-large {
     height: 15px;
 }
-/* Vertical layout;
- *
- */
-.noUi-pips-vertical {
-    height: 100%;
-    top: 0;
-    left: 100%;
-}
+
+/* Vertical layout; */
 .noUi-value-vertical {
     -webkit-transform: translate(0, -50%);
     transform: translate(0, -50%);
@@ -230,23 +229,30 @@
     transform: translate(0, 50%);
 }
 .noUi-marker-vertical.noUi-marker {
-    width: 5px;
-    height: 2px;
+    width: 6px; height: 2px;
     margin-top: -1px;
+    left: -3px;
 }
 .noUi-marker-vertical.noUi-marker-sub {
     width: 10px;
 }
 .noUi-marker-vertical.noUi-marker-large {
-    width: 15px;
+    width: 10px !important;
 }
+
+.noUi-reverse .noUi-marker-vertical.noUi-marker {
+    right: 4px;
+    left: auto;
+}
+
+/* Tooltip */
 .noUi-tooltip {
     display: none;
     position: absolute;
-    border: 1px solid var(--color-border-primary);
+    border: 1px solid oklch(var(--b3));        /* was var(--color-border-primary) */
     border-radius: 3px;
-    background: var(--color-bg-primary);
-    color: var(--color-text-primary);
+    background: oklch(var(--b1));              /* was var(--color-bg-primary) */
+    color: oklch(var(--bc));                   /* was var(--color-text-primary) */
     padding: 5px;
     text-align: center;
     white-space: nowrap;
@@ -279,3 +285,31 @@
     top: auto;
     right: 28px;
 }
+
+
+/* Panel-friendly, readable slider */
+.noUi-target { background: oklch(var(--bc) / 0.14); }
+.noUi-connect { background: oklch(var(--p) / 0.65); }     /* active segment */
+.noUi-vertical { width: 6px; }                           /* match JS width */
+.noUi-handle {
+    width: 14px; height: 14px; border-radius: 9999px;
+    right: -4px; top: -7px;
+    background: oklch(var(--b1));
+    border: 1px solid oklch(var(--b3));
+    box-shadow: 0 1px 2px oklch(var(--bc) / 0.15);
+}
+.noUi-active {
+    box-shadow: 0 0 0 3px oklch(var(--p) / 0.2), 0 1px 2px oklch(var(--bc) / 0.2) !important;
+}
+
+/* Pips: push labels to the right, soften color */
+.noUi-pips-vertical { left: 100%; height: 100%; }        /* move labels away from track */
+.noUi-value {
+    color: oklch(var(--bc) / 0.6);
+    font-size: 12px;
+    line-height: 1;
+}
+.noUi-value-vertical { padding-left: 0; transform: translate(0, -50%); }
+
+.noUi-value-large {left: calc(100% + 15px);}
+.noUi-reverse  .noUi-value-large {right: calc(100% + 17px); left: auto; text-align: right;}

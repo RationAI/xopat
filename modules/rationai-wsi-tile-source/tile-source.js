@@ -11,27 +11,83 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     constructor(options) {
         super(options);
 
-        //this.level_meta = {};
-        //Asume levels ordered by downsample factor asc (biggest level first)
-        //options.levels.sort((x, y) => x.downsample_factor - y.downsample_factor);
-        // let OSD_level;
-        // for (let i = options.levels-1; i >= 0; i--) {
-        //     let level = options.levels[i];
-        //     level_meta[i] = OSD_level++;
-        // }
         if (!this.__configuredDownload) {
             this._setDownloadHandler(options.multifetch);
         }
 
         if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
             const user = XOpatUser.instance();
+            // fixme: login called multiple times, go to the http client api
             user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
             user.addHandler('secret-updated', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = e.secret));
             user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
             user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
         }
+
+        this._qArgs = "";
+        this._dataFormat = "rasterBlob";
     }
 
+    /**
+     * WSI Server Source Options. For available options see the server documentation.
+     * @param {SlideSourceOptions} options
+     * @param {?String} options.format - image format, default undefined, 'tiff', 'jpeg', 'png', 'bmp'..
+     * @param {?Number} options.quality - image quality, default undefined, 0-100
+     * @param {?'all'|Array<number>} options.channels - applies only for 'tiff' format, channels to fetch
+     */
+    setSourceOptions(options) {
+        const params = new URLSearchParams(this._qArgs || '');
+        if (options.format) {
+            params.set('image_format', options.format);
+            if (options.format === 'tiff') {
+                this._dataFormat = 'rawTiff';
+            }
+        }
+
+        if (options.quality) {
+            params.set('image_quality', options.quality);
+        }
+
+        const channelsOpt =
+            options.channels !== undefined
+                ? options.channels
+                : options.image_channels;
+
+        const availableChannels = this.data && this.data.channels;
+
+        const addChannelParam = id => {
+            if (id === undefined || id === null) return;
+            params.append('image_channels', String(id));
+        };
+
+        if (channelsOpt === 'all') {
+            // Use all IDs from slide info if available
+            if (Array.isArray(availableChannels) && availableChannels.length > 0) {
+                for (const ch of availableChannels) {
+                    // Channel might be a number or an object
+                    if (typeof ch === 'number') {
+                        addChannelParam(ch);
+                    } else if (typeof ch === 'object') {
+                        addChannelParam(
+                            ch.id ??
+                            ch.channel_id ??
+                            ch.index
+                        );
+                    }
+                }
+            }
+            // else: no channel info known → fall back to server default
+        } else if (Array.isArray(channelsOpt)) {
+            for (const ch of channelsOpt) {
+                addChannelParam(ch);
+            }
+        }
+
+        this._qArgs = params.toString();
+        if (this._qArgs.length > 0) {
+            this._qArgs = '&' + this._qArgs;
+        }
+    }
 
     /**
      * Determine if the data and/or url imply the image service is supported by
@@ -112,7 +168,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 innerFormat: data.format,
                 ajaxHeaders: headers,
                 multifetch: false,
+                // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
+                    // empaia stores pixel size in nanometers, we need microns
                     micronsX: chosenMq?.x / 1000,
                     micronsY: chosenMq?.y / 1000,
                 },
@@ -190,10 +248,20 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         };
     }
 
-    getLevelScale( level ) {
-        level = this.maxLevel-level;
+    getLevelScale(level) {
+        const serverLevel = this.maxLevel - level;
         const levels = this.data.levels;
-        return levels[level].extent.x / levels[0].extent.x;
+
+        const getDS = (lvl, idx) => {
+            if (lvl.downsample_factor != null) return Number(lvl.downsample_factor);
+            if (lvl.downsample != null)        return Number(lvl.downsample);
+            // worst-case fallback
+            return Math.pow(2, idx);
+        };
+
+        const dsBase = getDS(levels[0], 0);
+        const dsHere = getDS(levels[serverLevel], serverLevel);
+        return dsBase / dsHere;
     }
 
     getImageInfo(url) {
@@ -217,9 +285,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             headers: this.ajaxHeaders || {}
         }).then(async res => {
             const text = await res.text();
-            const json = JSON.parse(text);
-            if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
+            let json;
+            try { json = JSON.parse(text) } catch (e) {}
+            if (res.status !== 200 || !json) {
+                throw new HTTPError("Empaia standalone failed to fetch image info!", json || text, res.error);
             }
             return json;
         }).then(imageInfo => {
@@ -240,7 +309,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         });
     }
 
-    getImageMetaAt(index) {
+    getMetadata() {
         return this.metadata;
     }
 
@@ -267,10 +336,17 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
         if (this.multifetch) {
             //endpoint files/tile/level/[L]/tile/[X]/[Y]/?paths=id,list,separated,by,commas
-            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}`
+            return `${tiles}/tile/level/${level}/tile/${x}/${y}?paths=${this.fileId}${this._qArgs}`;
         }
         //endpoint slides/tile/level/[L]/tile/[X]/[Y]/?slide_id=id
-        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}`
+        return `${tiles}/tile/level/${level}/tile/${x}/${y}?slide_id=${this.fileId}${this._qArgs}`;
+    }
+
+    async getThumbnail({ targetWidth = 512 } = {}) {
+        // todo multifetch - how to handle multiple thumbnails?
+        targetWidth = Math.min(targetWidth, 500); //default max value
+        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`)
+            .then(async res => res.blob());
     }
 
     /**
@@ -278,7 +354,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     async downloadICCProfile() {
         const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
-        return fetch(url).then(async res => res.arrayBuffer())
+        return fetch(url).then(async res => res.arrayBuffer());
     }
 
     _setDownloadHandler(isMultiplex) {
@@ -366,7 +442,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                             })
                         ).then(result =>
                             //we return array of promise responses - images
-                            context.finish(result, dataStore.request, undefined)
+                            // todo does not work well -> fix this
+                            context.finish(result, dataStore.request, "image[]")
                         ).catch(
                             abort
                         );
@@ -386,9 +463,34 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         this.__configuredDownload = true;
     }
 
-    downloadTileStart(context) {
-        if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
-        super.downloadTileStart(context);
+    downloadTileStart(imageJob) {
+        let context = imageJob.userData;
+        if (this.ajaxHeaders["Authorization"]) imageJob.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
+        context.promise = this.myFetch(imageJob.src, {
+            method: "GET",
+            mode: 'cors',
+            cache: 'no-cache',
+            credentials: 'same-origin',
+            headers: imageJob.ajaxHeaders || {},
+            body: null
+        }).then(res => res.blob()).then(data => {
+            imageJob.finish(data, null, this._dataFormat);
+        }).catch(e => {
+            imageJob.fail('Failed to fetch tile: ' + e, null);
+        });
+    }
+
+    downloadTileAbort(imageJob) {
+        imageJob.userData.promise.controller.abort();
+    }
+
+    myFetch(input, init) {
+        let controller = new AbortController();
+        let signal = controller.signal;
+        init = Object.assign({signal}, init);
+        let promise = fetch(input, init);
+        promise.controller = controller;
+        return promise;
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {

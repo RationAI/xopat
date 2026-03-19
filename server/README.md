@@ -63,8 +63,8 @@ Scanning existing modules and plugins folder and parsing the available items:
  - override this plugins default configuration with relevant values from the global 
 static configuration available (the environment-based config) 
 
-It should also reason about what items should be loaded at the beginning (e.g. load the `webgl` module
-if the viewer is going to render visualizations, etc. Server should parse correctly the
+It should also reason about what items should be loaded at the beginning (e.g. load the `annotations` plugin
+if the viewer is going to be used with annotations, etc. Server should parse correctly the
 configuration input and act relevantly on errors, providing translated interface where possible.
 Servers should also allow to
  - pass POST data to the JS app initialization function
@@ -149,6 +149,18 @@ To do so, each server must attempt to process POST data by:
      }
  }
 ````
+
+### Proxy support
+Support proxying to services:
+ - parse ``config.json`` (usually referred to as CORE config in servers) and read the `server` -> `secure` -> `proxies` object
+ - adhering to the proxy configuration, proxy requests to the services
+ - a plugin can issue ``proxy/[key]/...`` and the key is the key to `proxies` object in `config.json`
+ - the session must be secured: use CSRF protection - you must set ``window.XOPAT_CSRF_TOKEN`` when user visits the viewer page
+ - the resource must be secured: if configured, the server must verify a desired authentication method (so called verifier) - see ``config.json`` for more details
+
+> !IMPORTANT!: The server, when delivering CORE configuration to the front-end *MUST DELETE* the secure object 
+> of the server configuration, which MUST NOT be available on the client - it can contain secrets that are explicitly left
+> hidden on the server.
 
 ### WASM Support
 WASM Files need all content to be served with the correct MIME type and headers, required by threading.

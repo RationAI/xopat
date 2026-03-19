@@ -1,0 +1,11 @@
+{
+  "providerDefaults": {
+    "baseUrl": "https://cerit.example/v1",
+    "modelsPath": "/models",
+    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    "defaultModelId": "coder",
+    "contextId": "jwt",
+    "authType": "jwt",
+    "requiresLogin": true
+  }
+}

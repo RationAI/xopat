@@ -1,5 +1,16 @@
 # Changelog
 
+### 3.0
+New Renderer and requirement for OpenSeadragon v6
+
+Breaking: some minor breaking changes in the session API, large changes in the internal API - modules and plugins must adjust
+* the viewer now has viewer manager which allows to create multiple viewers on the same page
+  * most core events changed
+* new UI system
+  * primer css & material icons are deprecated
+
+------
+
 The changelog file describes changes made since v2.0.0, which made significant changes
 to the versions 1.x.x.
 

@@ -18,7 +18,7 @@ const { div, h3, span } = van.tags
  * //class to simulate original mainMenu and AdvancedMenu components from previous versions of xOpat
  * // WIP
  */
-class MainPanel extends Menu {
+export class MainPanel extends Menu {
     constructor(options, ...args) {
         super(options, ...args);
     }
@@ -75,7 +75,7 @@ class MainPanel extends Menu {
     _sync() {
         this.navigator.css("position", this.opened ? "relative" : this.navigator.attr("data-position"));
         let width = this.opened ? "calc(100% - 400px)" : "100%";
-        USER_INTERFACE.TopPluginsMenu.selfContext.context.style['max-width'] = width;
+        USER_INTERFACE.AppBar.Plugins.selfContext.context.style['max-width'] = width;
         if (pluginsToolsBuilder) pluginsToolsBuilder.context.style.width = width;
         if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
     }
@@ -95,7 +95,4 @@ class MainPanel extends Menu {
     }
     _buildMenu(context, builderId, parentMenuId, parentMenuTitle, ownerPluginId, toolsMenuId, title, html, icon, withSubmenu, container) {
     }
-
 }
-
-export { MainPanel };

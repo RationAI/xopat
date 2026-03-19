@@ -1,0 +1,10 @@
+{
+  "name": "web-worker-manager",
+  "version": "1.0.0",
+  "description": "Web Worker Manager",
+  "author": "Aiosa",
+  "buildEntry": "manager.ts",
+  "dependencies": {
+    "comlink": "^4.4.2"
+  }
+}

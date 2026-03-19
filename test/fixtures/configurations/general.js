@@ -23,7 +23,6 @@ export default {
         return dataIndexes.map(i => ({
             "dataReference": i,
             "name": ["FirstIndex", "SecondIndex", "ThirdIndex", "FourthIndex"][i],
-            "lossless": false,
             ...overrides
         }));
     },
@@ -50,12 +49,10 @@ export default {
         permaLoadPlugins: false,
         bypassCookies: true, //by default tests do not work with cookies
         theme: "dark",
-        stackedBackground: false,
         maxImageCacheCount: 1200,
         webGlPreferredVersion: "2.0",
         headers: {},
         preferredFormat: "zip",
-        fetchAsync: false,
         ...overrides
     }),
     viewport: (key, index) => ({

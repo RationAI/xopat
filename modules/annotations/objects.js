@@ -378,7 +378,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 ctx.stroke();
 
                 const iconX = -halfWidth + iconSize / 2;
-                ctx.font = `${iconSize * 0.8}px "Material Icons"`;
+                ctx.font = `${iconSize * 0.8}px Font Awesome 5 Free`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -435,26 +435,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     }
 
-    renderAllControls(ofObject) { // TODO: Integrate with new code
-//        const baseControls = fabric.Object.prototype.controls || {};
-//        const controls = { ...baseControls};
-//
-//        controls.private = this.renderIcon(
-//            (obj) => obj.private ? 'visibility_lock' : 'visibility',
-//            undefined,
-//            undefined,
-//        );
-//        const commentsControl = this.renderIcon(
-//            'comment',
-//            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-//            () => {
-//                this._context.raiseEvent('comments-control-clicked')
-//            },
-//        );
-//        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
-//        controls.comments = commentsControl;
-//
-//        ofObject.controls = controls;
+    // TODO: incomming PR commened this code block - test if valid!
+    renderAllControls(ofObject) {
+        const controls = {};
+
+        controls.private = this.renderIcon(
+            (obj) => obj.private ? 'fa-lock' : 'fa-eye',
+            undefined,
+            undefined,
+        );
+        const commentsControl = this.renderIcon(
+            'fa-comments',
+            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+            () => {
+                this._context.raiseEvent('comments-control-clicked')
+            },
+        );
+        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
+        controls.comments = commentsControl;
+
+        ofObject.controls = controls;
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {

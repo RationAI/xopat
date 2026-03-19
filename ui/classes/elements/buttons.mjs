@@ -1,11 +1,11 @@
 import van from "../../vanjs.mjs";
-import { BaseComponent } from "../baseComponent.mjs";
+import { BaseSelectableComponent } from "../baseComponent.mjs";
 
 const { button } = van.tags
 
 /**
  * @class Button
- * @extends BaseComponent
+ * @extends BaseSelectableComponent
  * @description A button component
  * @example
  * const button = new Button({
@@ -16,30 +16,27 @@ const { button } = van.tags
  *                           "Click me");
  * button.attachTo(document.body);
  */
-class Button extends BaseComponent {
+class Button extends BaseSelectableComponent {
 
     /**
-     * @param {*} options
+     * @param {BaseUIOptions} options
      * @param  {...any} args
      * @param {Function} [options.onClick] - The click event handler
      * @param {keyof typeof Button.SIZE} [options.size] - The size of the button
      * @param {keyof typeof Button.OUTLINE} [options.outline] - The outline style of the button
      * @param {keyof typeof Button.TYPE} [options.type] - The button type
      */
-    constructor(options, ...args) {
-        super(options, ...args);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
         this.classMap["base"] = options["base"] || "btn";
-        this.classMap["type"] = options["type"] || "btn-primary";
+        this.classMap["type"] = options["type"] || "btn-neutral";
         this.classMap["size"] = "";
         this.classMap["outline"] = "";
         this.classMap["orientation"] = "";
         this.style = "ICONTITLE";
 
-
-        if (options) {
-            if (options.onClick) this.onClick = options.onClick;
-            this._applyOptions(options, "size", "outline", "type", "orientation");
-        }
+        this.onClick = options.onClick;
+        this._applyOptions(options, "size", "outline", "type", "orientation", "style");
     }
 
     create() {
@@ -51,7 +48,7 @@ class Button extends BaseComponent {
 
     /**
      * @description Sets button to show only icon
-    **/
+     **/
     iconOnly(){
         this.style = "ICONONLY";
         const nodes = this.children;
@@ -66,7 +63,7 @@ class Button extends BaseComponent {
 
     /**
      * @description Sets button to show only title
-    **/
+     **/
     titleOnly(){
         this.style = "TITLEONLY";
         const nodes = this.children;
@@ -82,7 +79,7 @@ class Button extends BaseComponent {
 
     /**
      * @description Sets button to show title and icon
-    **/
+     **/
     titleIcon(){
         this.style = "TITLEICON";
         const nodes = this.children;
@@ -93,19 +90,29 @@ class Button extends BaseComponent {
 
     /**
      * @description Rotates icon based on orientation
-    **/
+     * TODO WE SHOULD DEFINE ROTABLE COMPONENT AND MENU ONLY ACCEPTS SUCH COMPONENT...
+     **/
     iconRotate(){
         const nodes = this.children;
         for (let n of nodes){
             if (n.nodeName === "I"){
-                if(this.orientation==="b-vertical-right"){
+                if(this._orientation==="b-vertical-right"){
                     n.classList.add("rotate-90");
-                
-                } else if(this.orientation==="b-vertical-left"){
+
+                } else if(this._orientation==="b-vertical-left"){
                     n.classList.add("-rotate-90");
                 }
             }
         }
+    }
+
+    /**
+     * Set the selected state of the button.
+     * Applies the 'btn-active' DaisyUI class if selected.
+     * @param {string|boolean} itemID - The ID of the selected item, or false/null to deselect
+     */
+    setSelected(itemID) {
+        this.toggleClass("selected", "btn-active", this.itemID === itemID);
     }
 
     static generateCode() {
@@ -148,6 +155,7 @@ Button.TYPE = {
     PRIMARY: function () { this.setClass("type", "btn-primary") },
     SECONDARY: function () { this.setClass("type", "btn-secondary") },
     TERNARY: function () { this.setClass("type", "btn-accent") },
+    NEUTRAL: function () { this.setClass("type", "btn-neutral") },
     NONE: function () { this.setClass("type", "") }
 };
 

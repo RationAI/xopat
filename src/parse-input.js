@@ -83,12 +83,15 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
 
         // In case we could not retrieve the session from data, we try URL
         if (!session || session.error) {
-            const data = url.hash ? decodeURIComponent(url.hash.substring(1)) : //remove '#'
-                url.searchParams.get("visualization");
+            const fromHash = !!url.hash;
+            const data = fromHash
+                ? decodeURIComponent(url.hash.substring(1))
+                : url.searchParams.get("visualization");
+
             if (data) {
-                // Prefer redirect due to server-side logics
-                if (supportsPost) {
-                    //Try parsing url for serialized config in the headers and redirect
+                // If it’s already in the hash, parse locally so refresh/share stays stable.
+                if (supportsPost && !fromHash) {
+                    // existing POST redirect logic (unchanged)
                     const form = document.createElement("form");
                     form.method = "POST";
                     const node = document.createElement("input");
@@ -97,12 +100,10 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     form.appendChild(node);
                     form.style.visibility = 'hidden';
                     document.body.appendChild(form);
-                    // prevents recursion
+
                     url.hash = "";
                     form.action = String(url);
                     form.submit();
-
-                    //todo return?
                 } else {
                     session = _parse(data);
                 }
@@ -123,7 +124,6 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                 handMadeConfiguration.background = slideList.map((slide, index) => {
                     return {
                         dataReference: index,
-                        lossless: false,
                     }
                 });
                 processed = true;
@@ -133,7 +133,6 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                 masks = masks.split(',');
                 const visConfig = {
                     name: "Masks",
-                    lossless: true,
                     shaders: {}
                 };
                 handMadeConfiguration.visualizations = [visConfig];
@@ -170,13 +169,14 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     session = _parse(viz);
                     session.__fromLocalStorage = true;
                 }
-                window.localStorage.removeItem("xoSessionCache");
             } else {
                 strData = window.sessionStorage.getItem("xoSessionCache");
                 const data = strData && strData !== "undefined" && JSON.parse(strData);
-                postData = data;
-                session = data.visualization && _parse(data.visualization);
-                session.__fromLocalStorage = true;
+                if (data) {
+                    postData = data;
+                    session = data.visualization && _parse(data.visualization);
+                    session.__fromLocalStorage = true;
+                }
             }
         } else if (!session.error) {
             // Save current state (including post) in case we loose it and need to restore it (e.g. auth redirect)

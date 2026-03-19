@@ -14,21 +14,20 @@ const { div } = van.tags
  *                       }, button1, button2, button3);
  * join.attachTo(document.body);
  */
-class Join extends BaseComponent {
+export class Join extends BaseComponent {
 
     /**
      * @param {*} options
      * @param {keyof typeof Join.STYLE} [options.style=undefined]
      * @param  {...any} args
      */
-    constructor(options, ...args) {
-        super(options, ...args);
+    constructor(options = undefined, ...args) {
+        options = super(options, ...args).options;
 
         //Todo add support for tracking the selected button if the join is a list of buttons (possibly define component buttongroup that inherits from a join)
         this.classMap["base"] = "join bg-join";
-        this.classMap["rotation"];
-        this.classMap["flex"];
-        if (!options) options = {};
+        // this.classMap["rotation"];
+        // this.classMap["flex"];
         options.style = options.style || Join.STYLE.VERTICAL;
         this._applyOptions(options, "style", "rounded", "rotation");
     }
@@ -54,4 +53,3 @@ Join.ROUNDED = {
     DISABLE: function () { this.setClass("rounded", "join-unrounded"); },
 };
 
-export { Join };

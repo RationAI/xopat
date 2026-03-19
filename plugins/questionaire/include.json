@@ -1,0 +1,12 @@
+{
+  "id": "questionaire",
+  "name": "Questionaire",
+  "author": "Aiosa",
+  "version": "1.0.0",
+  "description": "Forms and questionaires for tests, tutoring and information collecting.",
+  "includes": [
+    "formio.full.min.js",
+    "questionaire.js"
+  ],
+  "modules": []
+}

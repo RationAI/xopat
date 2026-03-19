@@ -32,25 +32,23 @@ addPlugin('hotkeys', class extends XOpatPlugin {
     }
 
     pluginReady() {
-        USER_INTERFACE.AdvancedMenu.setMenu(this.id, "hotkeys", "Hotkey Shortcuts", `
-<h2>Shortcuts</h2>
-This plugin is a naive shortcut add-on. Later version will attempt to allow users re-defining
-system shortcuts and map available ones real-time.
-
-<br><br>
-<div>
-<span class="key">Alt</span>+<span class="key">w</span> &emsp; Viewport Focus <br>
-<span class="text-small">Copies current viewport or aligns the viewport if copied already. <b>Transferable between different viewers.</b></span>
-<br><br>
-<span class="key">Alt</span>+<span class="key">s</span> &emsp; Screenshot <br>
-<span class="text-small">Opens the current viewport as an image in a new tab.</span>
-</div>
-        
-        `, 'keyboard_keys');
+        USER_INTERFACE.AppBar.Plugins.setMenu(this.id, "b-hotkey-plugins", "Preview",
+            `
+            <h2>Shortcuts</h2>
+            This plugin is a naive shortcut add-on. Later version will attempt to allow users re-defining
+            system shortcuts and map available ones real-time.
+            <br><br>
+            <div>
+            <span class="key">Alt</span>+<span class="key">w</span> &emsp; Viewport Focus <br>
+            <span class="text-small">Copies current viewport or aligns the viewport if copied already. <b>Transferable between different viewers.</b></span>
+            <br><br>
+            <span class="key">Alt</span>+<span class="key">s</span> &emsp; Screenshot <br>
+            <span class="text-small">Opens the current viewport as an image in a new tab.</span>
+            </div>`, "fa-keyboard");
 
         const _this = this;
         //todo make key management module that adds shortcuts support handling in uniform way and checks for collisions
-        VIEWER.addHandler('key-down', function (e) {
+        VIEWER_MANAGER.addHandler('key-down', function (e) {
             if (e.altKey) {
                 const handler = _this.keys[e.key];
                 if (handler) handler();

@@ -1,25 +1,17 @@
 import {default as elements} from './basic-ui-elements';
 
 export default {
-    mainMenu(config) {
+    RightSideMenu(config) {
         if (!config.params.bypassCookies) {
-            cy.log("mainMenu:: Test without bypassCookies is not intended to pass.");
+            cy.log("RightSideMenu:: Test without bypassCookies is not intended to pass.");
         }
 
         ["#panel-navigator", "#navigator-pin", "#copy-url"].forEach(x =>  cy.get(x).should('be.visible'))
-
-        if (config.params.stackedBackground) {
-            cy.get("#global-tissue-visibility").should('not.be.visible');
-        } else {
-            cy.get("#global-tissue-visibility").should('be.visible');
-        }
 
         cy.get("#navigator-pin").should('have.class', 'inline-pin')
             .should('not.have.class', 'pressed')
 
         cy.get("#navigator-pin").click()
-
-        cy.get("#main-panel-hide").click()
 
         cy.get("#navigator-pin").should('be.visible').should('have.class', 'pressed')
 
@@ -31,17 +23,11 @@ export default {
 
         ["#global-tissue-visibility", "#global-export", "#add-plugins"].forEach(x =>  cy.get(x).should('not.be.visible'))
 
-        cy.get("#main-panel-show").click()
-
-        if (!config.params.stackedBackground) {
-            cy.get("#global-tissue-visibility input").should('be.checked');
-        }
-
-        ["#add-plugins", "#panel-navigator", "#navigator-pin", "#main-panel-hide",
+        ["#add-plugins", "#panel-navigator", "#navigator-pin",
             "#add-plugins"].forEach(x =>  cy.get(x).should('be.visible'))
     },
 
-    shadersMainMenu(config) {
+    shadersRightSideMenu(config) {
         if (!config.visualizations || config.visualizations.length < 1) {
             cy.get("#shaders").should('not.be.visible')
         } else {

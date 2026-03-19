@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
     "icon": null,
-    "includes" : ["presenter.js"],
+    "includes" : ["recorder.js"],
     "modules": ["snapshots", "annotations"],
     "permaLoad": false
 }

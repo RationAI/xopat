@@ -15,11 +15,15 @@
       "nothingToRenderDetails": "The active session does not specify any image or layers for opening. Is your link valid?",
       "renderTitle": "Rendering Warning",
       "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended.",
+      "defaultDemoHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the session has been lost - please, report the issue.</li></ul>",
+      "invalidDataHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the data you are trying to view does not exist, or</li><li>you are not authorized to view the data</li></ul>",
+      "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
       "slide": {
         "404": "The data you are trying to open does not exist!",
         "401": "Your login session has expired: please refresh the window to log in.",
         "403": "You do not have necessary permission to access this data!",
-        "pending": "The loading seems to be stuck: an image server might be unresponsive."
+        "pending": "The loading seems to be stuck: an image server might be unresponsive.",
+        "failed": "The loading of the image failed. Please, try again later."
       }
     },
     "user": {
@@ -30,12 +34,16 @@
       "global": {
         "tissue": "Tissue",
         "layerOpacity": "Opacity",
-        "clone": "Clone the viewer and synchronize"
+        "clone": "Clone the viewer",
+        "preview": "Data Window"
       },
       "navigator": {
-        "faultyTissue": "Faulty {{slide}}"
+        "title": "Navigator",
+        "faultyTissue": "Faulty {{slide}}",
+        "faultyViz": "Invalid Data"
       },
       "shaders": {
+        "title": "Shaders Menu",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",
@@ -44,26 +52,55 @@
         "maskDisable": "Enable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
+        "notAvailable": "No visualization available.",
+        "shader": "Shader",
+        "type": "Shader type",
+        "modeShow": "Overlay",
+        "modeBlend": "Mask",
+        "modeBlendClip": "Clip mask",
+        "modeShowShort": "Show",
+        "modeBlendShort": "Mask",
+        "modeClipShort": "Clip",
+        "blendConfigure": "Configure blending",
+        "blendMode": "Blend mode",
+        "blend": "Blend",
         "faulty": "Possibly faulty layer.",
+        "blendingTitle": "Blending",
+        "blendingInfoShow": "Layer is shown without masking.",
+        "blendingInfoMask": "Layer is used as a mask over layers below.",
+        "blendingInfoMaskClip": "Layer is used as a clipping mask over layers below.",
         "defaultTitle": "Custom Visualization",
         "cacheByOrder": "Remember settings by layers order",
         "cacheByName": "Remember settings by layer name",
+        "cacheClear": "Clear cache",
+        "cacheHit": "Loaded from cache",
+        "cacheMiss": "Not cached",
+        "clipHint": "The layer is masking the element directly below.",
+        "cacheStale": "",
+        "cacheTitle": "Layer visuals are cached",
+        "cacheInfo": "The layer remembers parameter values set before.",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
         }
       },
       "bar": {
+        "pinFullscreen": "Pin to Fullscreen Menu",
+        "copy": "Copy",
+        "view": "View",
+        "share": "Share",
         "exportUrl": "URL",
         "explainExportUrl": "Get the link without data",
         "exportFile": "Export",
         "explainExportFile": "Download together with plugins data",
-        "plugins": "Plugins",
+        "plugins": "Get plugins",
         "explainPlugins": "Add plugins to the visualization",
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
-        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved."
+        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved.",
+        "viewerSidebars": "Viewer Side Menus",
+        "viewerToolbars": "Tool Bars"
       }
     },
     "messages": {
@@ -89,6 +126,7 @@
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",
       "modalWindowBlocked": "An application modal window '{{title}}' was blocked by your browser. <a onclick=\"{{action}}\" class='btn-pointer'>Click here to open.</a>",
+      "windowBlocked": "An application modal window '{{title}}' was blocked by your browser.",
       "failedToSetMask": "Target layer not found!",
       "swapImagesFail": "Could not load the selected image!",
       "stillLoadingSwap": "Another image is still being loaded - please wait.",
@@ -139,6 +177,7 @@
     },
     "settings": {
       "theme": {
+        "title": "Theme",
         "auto": "Automatic",
         "light": "Light Theme",
         "dark": "Dark Theme",
@@ -159,6 +198,7 @@
     },
     "common": {
       "Load": "Load",
+      "Loaded": "Loaded",
       "Loading": "Loading",
       "Exit": "Exit",
       "Failed": "Failed",
@@ -167,7 +207,8 @@
       "Tissues": "Tissues",
       "Source": "Source",
       "selectAll": "Select All",
-      "deselectAll": "Deselect All"
+      "deselectAll": "Deselect All",
+      "Close": "Close"
     }
   }
 }

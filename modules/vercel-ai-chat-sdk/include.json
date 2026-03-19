@@ -1,0 +1,12 @@
+{
+  "description": "Integration hub for AI chat models",
+  "requires": ["oidc-client-ts", "@xopat-npm-module/marked", "sanitize-html"],
+  "defaultPersonalityId": "pathology-assistant",
+  "personalities": [
+    {
+      "id": "pathology-assistant",
+      "label": "Pathology Assistant",
+      "systemPrompt": "You are a pathology slide-review assistant. Be concise. Prefer structured answers. When unsure, ask targeted questions."
+    }
+  ]
+}

@@ -17,16 +17,14 @@
      *   path: string,
      *   image_group_server: string,
      *   image_group_protocol: string,
-     *   image_group_preview: string,
      *   data_group_server: string,
      *   data_group_protocol: string,
-     *   headers: ?Object,
+     *   osdOptions: ?Object,
      *   js_cookie_expire: ?number,
      *   js_cookie_path: ?string,
      *   js_cookie_same_site: ?string,
      *   js_cookie_secure: ?boolean,
      *   secureMode: ?boolean,
-     *   redirectUrl: ?string
      *   production: ?boolean
      * }} xoClientSetup
      */
@@ -47,19 +45,14 @@
              */
             "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`", //one-liner expression
-            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`", //one-liner expression
             /*
                Data Group Server for visualized data, specifies the server and protocol as javascript one-liner
                resulting in a string. Available are 'path' (image server URL) and 'data'
                (string array of image identifiers such as image path).
                Server URL can be relative, if on the same server domain as the viewer.
-
-               In case of parameter fetchAsync = true, data is a single string, not an array!
              */
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`", //one-liner expression
-            // Can be overridden by params.headers
-            "headers": {},
             /* Cookie Setup */
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
@@ -69,8 +62,10 @@
             "secureMode": false,
             /* Production mode (serve minified files if available) */
             "production": false,
-            /* Where share-with-url links are sent: can be relative or absolute path (needs protocol) */
-            "redirectUrl": "redirect.php"
+            /* OpenSeadragon.Options to pass, some values are overridden as necessary. */
+            "osdOptions": {
+              "crossOriginPolicy": "Anonymous"
+            }
         },
         // We can keep multiple configurations within the file and switch between them...
         "prod": {
@@ -78,10 +73,8 @@
             "path": null,
             "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
-            "image_group_preview": "`${path}?Deepzoom=${data}_files/0/0_0.jpg`",
             "data_group_server": "/iipsrv/iipsrv.fcgi",
             "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
-            "headers": {},
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
             "js_cookie_same_site": "strict",
@@ -89,7 +82,9 @@
             "js_cookie_domain": null,
             "secureMode": true,
             "production": true,
-            "redirectUrl": "redirect.php"
+            "osdOptions": {
+              "crossOriginPolicy": "Anonymous"
+            }
         }
     },
     /**
@@ -101,6 +96,7 @@
      *   debugMode: ?boolean,
      *   webglDebugMode: ?boolean,
      *   scaleBar: ?boolean,
+     *   toolBar: ?boolean,
      *   statusBar: ?boolean,
      *   viewport: ?Object,
      *   activeBackgroundIndex: ?number,
@@ -110,16 +106,12 @@
      *   preventNavigationShortcuts: ?boolean,
      *   permaLoadPlugins: ?boolean,
      *   theme: ?string,
-     *   stackedBackground: ?boolean,
      *   maxImageCacheCount: ?number,
      *   webGlPreferredVersion: ?string,
-     *   headers: ?Object,
-     *   preferredFormat: ?string,
-     *   fetchAsync: ?boolean,
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
-     *   disablePluginsUi: ?boolean,
+     *   disablePluginsUi: ?boolean
      * }} xoParams
      */
     "setup": {
@@ -131,7 +123,11 @@
         "debugMode": false,
         "webglDebugMode": false,
         "scaleBar": true,
+        "toolBar": true,
         "statusBar": true,
+        // default background color, a hex RGB or RGBA
+        "background": null,
+        // todo update docs, this can carry multiple viewport configurations, also consider moving multiple params to the viewer-dependent configuration
         // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
         // point is in the viewport coordinate system of OpenSeadragon
         "viewport": null,
@@ -149,16 +145,11 @@
         "bypassCacheLoadTime": false,
         // can be dimmed, dark, light, auto
         "theme": "auto",
-        "stackedBackground": false,
         "maxImageCacheCount": 1200,
         // can be 1.0 or 2.0
         "webGlPreferredVersion": "2.0",
-        // custom headers for image fetching
-        "headers": {},
-        // can be anything that supports the protocol of your choice,
-        // ExtendedDZI supports "png", "zip", "jpg"
+        // deprecated
         "preferredFormat": "zip",
-        "fetchAsync": false,
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
@@ -166,27 +157,102 @@
         "historySize": 50
     },
     /**
-     * The Server status. This object is here just for the reference and
+     * The Server configuration. This object is here just for the reference and
      * to provide default values; the server shall set up these properties accordingly.
-     * DO NOT modify these
      * @typedef {{
      *   name: string,
      *   supportsPost: boolean
-     * }} xoServerState
+     * }} xoServerConfig
      */
-    "serverStatus": {
+    "server": {
         "name": null,
         // Disable for servers that do not support POST parsing: will not support direct data sharing
-        "supportsPost": true
+        "supportsPost": true,
+        // EVERYTHING in the config.js (env.json, XO_ENV) is AVAILABLE AND READABLE at client-server.
+        // The only thing that is not readable is this part - this stays on the server.
+        // If you have some secret you MUST NOT expose at any cost, do your logics
+        // via proxying and use your secrets in the 'secure' part of the server configuration.
+        "secure": {
+            // The server supports url+header configuration for custom proxies. You can
+            // - configure module/plugin to use local proxy endpoint
+            // - configure the proxy here
+            "proxies": {
+              // My proxy service will proxy a resource using token that is NOT exposed on the client.
+              //"my-service": {
+              //    "baseUrl": "https://api.example.com",
+              //    "headers": {
+              //        "Authorization": "Bearer <% MY_SERVICE_TOKEN %>"
+              //    },
+              //    // The proxy service can explicitly VERIFY the user has necessary rights to call the endpoint
+              //    // Supported verifiers are: 'jwt'
+              //    "auth": {
+              //        "enabled": true,
+              //        "mode": "all"         // "all" (default) or "any" - all or any verifier must pass
+              //        // From now on, other configuration depends on the actual verifier used, see HTTP Client
+              //        "verifiers": {
+              //            "jwt": {
+              //                "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
+              //                "issuer": "https://login.example.com/",
+              //                "audience": "xopat-viewer",
+              //                "forward": false,
+              //                "userClaimHeader": "x-user-sub"
+              //            }
+              //        }
+              //    }
+              //}
+            },
+            //The server supports direct server-side execuion, configure your optional auth here
+            "rpcAuth": {
+                //Default system login
+                "default": {
+                    //by default no auth
+                }
+                // //Custom HTTP Client context auth accepted by server, see above
+                //"my-service-context": {
+                //    "enabled": true,
+                //    "mode": "all",
+                //    "verifiers": {
+                //    "jwt": {
+                //        "secret": "<% YOU_CAN_READ_ENV_OR_ADD_STATIC_VALUE %>",
+                //        "issuer": "https://login.example.com/",
+                //        "audience": "xopat-viewer",
+                //        "forward": false,
+                //        "userClaimHeader": "x-user-sub"
+                //    }
+                //}
+            },
+            // Server side configurations for your elements are available here, these are not dynamically changeable,
+            // never exposed to client. Check README of your plugin or module to see the syntax.
+            "modules": {
+                ////custom values here
+                //"my-module-id": {
+                //
+                //}
+            },
+            "plugins": {
+                //similar to modules
+            }
+        }
     },
 
     /**
      * Below are project-specific paths used internally. Do not modify if you don't know what you are doing.
      */
     "monaco": "src/libs/monaco/",
-    "openSeadragonPrefix": "openseadragon/build/openseadragon/",
+    "openSeadragonPrefix": "src/libs/",
     "openSeadragon": "openseadragon.js",
-
+    "openSeadragonConfiguration": {
+      "showNavigator": true,
+      "maxZoomPixelRatio": 2,
+      "zoomPerClick": 2,
+      "zoomPerScroll": 1.7,
+      "blendTime": 0,
+      // This is due to annotations (multipolygon brush) that are disabled during animations
+      // ease out behavior makes user think they can already start drawing and slows them down
+      "animationTime": 0,
+      "showNavigationControl": false,
+      "crossOriginPolicy": "Anonymous"
+    },
     /**
      * JS Source files. Each group conforms to pre-determined folder path.
      */
@@ -197,13 +263,16 @@
             "i18n": ["i18next.jquery.min.js", "i18next.min.js"],
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
-            "unzip_it": "unzipit.min.js"
+            "unzip_it": "unzipit.min.js",
+            "render": "flex-renderer.js"
+            //"geotiff": "geotiff-tilesource.min.js"
         },
         // src/external  key: source / [sources,list]
         "external": {
             "protocols": [
                 "dziexttilesource.js",
-                "emptytilesource.js"
+                "emptytilesource.js",
+                "previewsource.js"
             ],
             "common": [
                 "enjoyhint.js",
@@ -217,7 +286,7 @@
         },
         /**
          * Unlike other keys, keys inside 'src' are pre-determined and must be kept:
-         * "env" sets up the browser environment - styles, todo: icons, coding libraries (jQuery)
+         * "env" sets up the browser environment - styles
          * "loader" is the core component module functionality, loaded as soon as possible.
          * "deps" are UI dependencies, loaded before JS index code.
          * "app" contains the core files, loaded after JS index code.
@@ -226,12 +295,19 @@
          */
         "src": {
             //"env": "",
-            "loader": ["store.js", "loader.js"],
+            "loader": ["dist/store.js", "dist/loader.js"],
             "deps": ["ui-components.js", "shader-configurator.js"],
-            "app": ["parse-input.js", "app.js", "user-interface.js", "scripts.js", "layers.js", "user.js"]
+            "app": [
+              "dist/classes/user.js",
+              "parse-input.js",
+              "dist/app.js",
+              "user-interface.js",
+              "layers.js",
+              "dist/tile-source.js"
+            ]
         },
         "ui": {
-          "van": ["index.js"]
+            "van": ["index.js"]
         }
     },
     /**
