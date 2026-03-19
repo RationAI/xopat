@@ -108,6 +108,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             originY: "top",
             left: text.left,
             top: text.top,
+            angle: text.angle ?? this._getViewportCounterRotation(),
+            centeredRotation: false,
         })], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
@@ -319,8 +321,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     _updateText(line, text) {
         const d = Math.sqrt(Math.pow(line.x1 - line.x2, 2) + Math.pow(line.y1 - line.y2, 2));
         const strText = this._context.viewer.scalebar.imageLengthToGivenUnits(d);
-        //todo update text should not recompute the text value on zoom, does not change
-        text.set({text: strText, left: (line.x1 + line.x2) / 2, top: (line.y1 + line.y2) / 2});
+
+        text.set({
+            text: strText,
+            left: (line.x1 + line.x2) / 2,
+            top: (line.y1 + line.y2) / 2,
+            angle: this._getViewportCounterRotation()
+        });
+
+        this._applyTextScreenTransform(text);
         return strText;
     }
 
@@ -405,11 +414,33 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             fill: 'black',
             paintFirst: 'stroke',
             strokeWidth: 2,
-            scaleX: 1/options.zoomAtCreation,
-            scaleY: 1/options.zoomAtCreation,
+            scaleX: 1 / options.zoomAtCreation,
+            scaleY: 1 / options.zoomAtCreation,
+            originX: 'left',
+            originY: 'top',
+            centeredRotation: false,
+            angle: this._getViewportCounterRotation()
+        });
+    }
+
+    _getViewportCounterRotation() {
+        return -(this._context.viewer?.viewport?.getRotation(true) || 0);
+    }
+
+    _getViewportRealZoom() {
+        return this._context.viewer?.viewport?.getZoom(true) || 1;
+    }
+
+    _applyTextScreenTransform(text, realZoom = this._getViewportRealZoom()) {
+        text.set({
+            angle: this._getViewportCounterRotation(),
+            scaleX: 1 / realZoom,
+            scaleY: 1 / realZoom,
+            centeredRotation: false,
             originX: 'left',
             originY: 'top'
         });
+        text.setCoords?.();
     }
 
     _configureParts(line, text, options) {

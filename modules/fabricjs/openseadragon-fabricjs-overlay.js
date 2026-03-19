@@ -91,8 +91,70 @@
      * @param zoom zoom value, if undefined it gets the current zoom
      * @return {number}
      */
-    fabric.Canvas.prototype.computeGraphicZoom = function (zoom = undefined) {
-        return Math.sqrt(zoom === undefined ? this.getZoom() : zoom) / 2;
+    fabric.Canvas.prototype.computeGraphicZoom = function(zoom = undefined) {
+        let effectiveZoom = zoom;
+        if (this.__osdViewportScale !== undefined) {
+            effectiveZoom = this.__osdViewportScale;
+        } else if (effectiveZoom === undefined) {
+            const vpt = this.viewportTransform;
+            if (Array.isArray(vpt) && vpt.length >= 2) {
+                effectiveZoom = Math.sqrt((vpt[0] * vpt[0]) + (vpt[1] * vpt[1]));
+            } else {
+                effectiveZoom = this.getZoom();
+            }
+        }
+        return Math.sqrt(effectiveZoom) / 2;
+    };
+
+    // Force Fabric visibility checks to recalculate object coords when needed.
+// This helps with zoom-driven / stroke-width-driven false negatives.
+    const _origIsOnScreen = fabric.Object.prototype.isOnScreen;
+    fabric.Object.prototype.isOnScreen = function(calculate = true) {
+        return _origIsOnScreen.call(this, calculate);
+    };
+
+    if (fabric.Object.prototype.isPartiallyOnScreen) {
+        const _origIsPartiallyOnScreen = fabric.Object.prototype.isPartiallyOnScreen;
+        fabric.Object.prototype.isPartiallyOnScreen = function(calculate = true) {
+            return _origIsPartiallyOnScreen.call(this, calculate);
+        };
+    }
+
+// Fabric's default calcViewportBoundaries assumes a non-rotated viewport.
+// For rotated OSD->Fabric viewportTransform, compute all 4 inverse-mapped corners
+// and store an axis-aligned bounding box that fully contains the rotated viewport.
+// This is conservative: it may render a few extra objects, but it should not hide visible ones.
+    fabric.StaticCanvas.prototype.calcViewportBoundaries = function() {
+        const width = this.width;
+        const height = this.height;
+        const invVpt = fabric.util.invertTransform(this.viewportTransform);
+
+        const pTL = fabric.util.transformPoint(new fabric.Point(0, 0), invVpt);
+        const pTR = fabric.util.transformPoint(new fabric.Point(width, 0), invVpt);
+        const pBL = fabric.util.transformPoint(new fabric.Point(0, height), invVpt);
+        const pBR = fabric.util.transformPoint(new fabric.Point(width, height), invVpt);
+
+        const minX = Math.min(pTL.x, pTR.x, pBL.x, pBR.x);
+        const minY = Math.min(pTL.y, pTR.y, pBL.y, pBR.y);
+        const maxX = Math.max(pTL.x, pTR.x, pBL.x, pBR.x);
+        const maxY = Math.max(pTL.y, pTR.y, pBL.y, pBR.y);
+
+        this.vptCoords = {
+            tl: new fabric.Point(minX, minY),
+            tr: new fabric.Point(maxX, minY),
+            bl: new fabric.Point(minX, maxY),
+            br: new fabric.Point(maxX, maxY),
+
+            // keep the real rotated corners too, in case you want them later
+            corners: {
+                tl: pTL,
+                tr: pTR,
+                bl: pBL,
+                br: pBR,
+            }
+        };
+
+        return this.vptCoords;
     };
 
     if (!window.OpenSeadragon) {
@@ -141,6 +203,7 @@
             });
             // disable fabric selection because default click is tracked by OSD
             this._fabricCanvas.selection = false;
+            this._fabricCanvas.__osdViewportScale = 1;
 
             this._viewer.addHandler('update-viewport', function () {
                 self.resize();
@@ -179,47 +242,77 @@
             }
         }
 
-        resizecanvas(updateObjects=true) {
-            this._fabricCanvas.setDimensions({width: this._containerWidth, height: this._containerHeight});
-            const zoom = this._viewer.viewport._containerInnerSize.x * this._viewer.viewport.getZoom(true) / this._scale;
-            this._fabricCanvas.setZoom(zoom);
+        _getReferencedTiledImage() {
+            return this._viewer.scalebar?.getReferencedTiledImage?.() || this._viewer.world?.getItemAt?.(0);
+        }
 
-            //square root will make closer zoom a bit larger (wrt linear scale) -> nicer
-            const smallZoom = Math.sqrt(zoom) / 2;
-            this._fabricCanvas._objects.forEach(x => {
-                x.zooming?.(smallZoom, zoom);
-            });
-            this._lastZoomUpdate = zoom;
+        _imageToViewerElementCoordinates(tiledImage, imagePoint) {
+            if (!tiledImage) return null;
 
-            var viewportOrigin = this._viewer.viewport.viewportToWindowCoordinates(new OpenSeadragon.Point(0, 0));
-            var canvasOffset = this._canvasdiv.getBoundingClientRect();
-            var pageScroll = OpenSeadragon.getPageScroll();
-            this._fabricCanvas.absolutePan(new fabric.Point(
-                    canvasOffset.left - viewportOrigin.x + pageScroll.x, //Math.round(viewportOrigin.x);
-                    canvasOffset.top - viewportOrigin.y + pageScroll.y
-                )
+            // image pixel coords -> viewport coords -> viewer element pixel coords
+            const viewportPoint = tiledImage.imageToViewportCoordinates(imagePoint);
+            return this._viewer.viewport.pixelFromPoint(viewportPoint, true);
+        }
+
+        _computeFabricViewportTransform() {
+            const tiledImage = this._getReferencedTiledImage();
+            if (!tiledImage) return null;
+
+            // derive full affine transform from three image-space basis points
+            const origin = this._imageToViewerElementCoordinates(
+                tiledImage,
+                new OpenSeadragon.Point(0, 0)
+            );
+            const basisX = this._imageToViewerElementCoordinates(
+                tiledImage,
+                new OpenSeadragon.Point(1, 0)
+            );
+            const basisY = this._imageToViewerElementCoordinates(
+                tiledImage,
+                new OpenSeadragon.Point(0, 1)
             );
 
-            // Potential rotation logics implementaiton, together with fabric Layers could work....
-            // {
-            //     var p = this._viewer.viewport.pixelFromPoint(new $.Point(0, 0), true);
-            //     let zoom = this._viewer.viewport.getZoom(true);
-            //     var rotation = this._viewer.viewport.getRotation();
-            //     var flipped = this._viewer.viewport.getFlip();
-            //     var containerSizeX = this._viewer.viewport._containerInnerSize.x
-            //     var scaleX = containerSizeX * zoom;
-            //     var scaleY = scaleX;
-            //
-            //     if(flipped){
-            //         // Makes the x component of the scale negative to flip the svg
-            //         scaleX = -scaleX;
-            //         // Translates svg back into the correct coordinates when the x scale is made negative.
-            //         p.x = -p.x + containerSizeX;
-            //     }
-            //
-            //     this._node.setAttribute('transform',
-            //         'translate(' + p.x + ',' + p.y + ') scale(' + scaleX + ',' + scaleY + ') rotate(' + rotation + ')');
-            // }
+            if (!origin || !basisX || !basisY) return null;
+
+            const a = basisX.x - origin.x;
+            const b = basisX.y - origin.y;
+            const c = basisY.x - origin.x;
+            const d = basisY.y - origin.y;
+            const e = origin.x;
+            const f = origin.y;
+            const uniformScale = Math.sqrt((a * a) + (b * b));
+
+            return {
+                matrix: [a, b, c, d, e, f],
+                zoom: uniformScale,
+            };
+        }
+
+        resizecanvas(updateObjects = true) {
+            this._fabricCanvas.setDimensions({
+                width: this._containerWidth,
+                height: this._containerHeight
+            });
+            this._fabricCanvas.calcOffset();
+
+            const transform = this._computeFabricViewportTransform();
+            if (!transform) {
+                this._fabricCanvas.renderAll();
+                return 1;
+            }
+
+            const zoom = transform.zoom;
+            this._fabricCanvas.__osdViewportScale = zoom;
+            this._fabricCanvas.setViewportTransform(transform.matrix);
+
+            // square root will make closer zoom a bit larger -> nicer
+            const smallZoom = Math.sqrt(zoom) / 2;
+            if (updateObjects !== false) {
+                this._fabricCanvas._objects.forEach(x => {
+                    x.zooming?.(smallZoom, zoom);
+                });
+            }
+            this._lastZoomUpdate = zoom;
 
             this._fabricCanvas.renderAll();
             return zoom;
