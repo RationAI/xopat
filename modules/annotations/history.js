@@ -11,7 +11,6 @@ OSDAnnotations.AnnotationHistoryManager = class {
         this._ctx = this._globalContext;
         this.__self = `${this._globalContext}.${selfName}`;
         this._globalSelf = this.__self;
-        this._globalHistory = `${this._globalContext}.history`;
         this._canvasFocus = '';
 
         this._autoIncrement = 0;
@@ -104,7 +103,6 @@ OSDAnnotations.AnnotationHistoryManager = class {
             this.destroyHistoryWindow();
             this._lastOpenedInDetachedWindow = false;
             this._globalSelf = this.__self;
-            this._globalHistory = `${this._globalContext}.history`;
             this._ctx = this._globalContext;
             this._canvasFocus = '';
             renderer(this, this.containerId);
@@ -119,7 +117,6 @@ OSDAnnotations.AnnotationHistoryManager = class {
             this.destroyHistoryWindow();
             this._lastOpenedInDetachedWindow = true;
             this._globalSelf = `opener.${this.__self}`;
-            this._globalHistory = `opener.${this._globalContext}.history`;
             this._ctx = `opener.${this._globalContext}`;
             this._canvasFocus = 'window.opener.focus();';
 
@@ -371,8 +368,6 @@ ${this._lastOpenedInDetachedWindow ? '' : 'overflow-y: auto; max-height: ' + thi
 
         <span class="history-head-sep"></span>
 
-        <span id="history-undo" class="material-icons btn-pointer no-select" style="color: var(--color-icon-tertiary);" onclick="${this._globalHistory}.undo()">undo</span>
-        <span id="history-redo" class="material-icons btn-pointer no-select" style="color: var(--color-icon-tertiary);" onclick="${this._globalHistory}.redo()">redo</span>
         <span id="history-refresh" class="material-icons btn-pointer no-select" onclick="${this._globalSelf}.refresh()" 
               title="Refresh board (fix inconsistencies).">refresh</span>
         ${this.getWindowSwapButtonHtml()}

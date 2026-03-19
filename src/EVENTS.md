@@ -118,12 +118,11 @@ Submit your serialized data to the export event. Direct use is not advised. You 
 retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
 Note that this can be both viewer independent and viewer-contextualized export, see the docs on initPostIO.
 
-## OpenSeadragon: User Input Events
-These are listed just for the reference, for other input events see the OpenSeadragon documentation.
-Note that the interaction should be thoroughly tested with annotations plugin. You might also find the annotations API
-fully re-usable for your purposes, **using custom annotation objects to perform tasks**.
-
-### Viewer-Local Events: ``VIEWER/viewer``
+## Viewer-Local Events: ``VIEWER/viewer``
+The events below only extend available events in OpenSeadragon. For other input events see the OpenSeadragon documentation.
+Note that the most interaction should be thoroughly tested with annotations plugin/module.
+Not all events and OpenSeadragon methods are 'OK' to use directly, especially those that manipulate the world items.
+Prefer viewer-specific events and methods first.
 
 #### `open` | e: {source: TileSource}
 Fired when the viewer is ready. Note this is not the OSD native event but instead invoked when everything is ready.
@@ -131,19 +130,19 @@ It works just like the OSD event, but it also tells you how many times the viewe
 initial load). Has extra argument `firstLoad` which is true for the first load of the particular viewer instance.
 Called every time the viewer is reloaded.
 
-### async `tile-source-created` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: OpenSeadragon.TileSource, error: null}
+#### async `tile-source-created` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: OpenSeadragon.TileSource, error: null}
 Fired when a tile source is created - the protocol connection to a server or service is established.
 You can perform additional actions like other initialization dependent on the data source.
 
-### async `tile-source-failed` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: null, error: string}
+#### async `tile-source-failed` | e: `{viewer: OpenSeadragon.Viewer, originalSource: string|object|OpenSeadragon.TileSource, kind: "background"|"visualization", index: number, tileSource: null, error: string}
 Fired when a tile source is created - the protocol connection to a server or service failed.
 
-### `visualization-ready` | e: `{visualization: VisualizationItem}
+#### `visualization-ready` | e: `{visualization: VisualizationItem}
 Fired when a visualization is ready for rendering. Unlike open event, this event
 is fired each time a visualization is changed. Visualization can be updated even
 if the viewer is not reloaded.
 
-### `show-demo-page` | e: `{id: string, show: function, htmlError: string|undefined}`
+#### `show-demo-page` | e: `{id: string, show: function, htmlError: string|undefined}`
 When the viewer does not open any valid data, it shows a demo page. This event allows to use custom UI to show the demo page.
 If the viewer captures an error during loading, the error message is included.
 The first call wins - other show(...) calls are ignored.
@@ -187,8 +186,45 @@ enriched by (private) properties of the rendering module.
 #### `close`
 Native OpenSeadragon event called when the canvas gets reloaded or destroyed.
 
+## History events
+Called on ``APPLICATION_CONTEXT.history`` object, these events are not related to any specific viewer.
 
-### User Events
+#### async `register-provider` | e: { provider: HistoryProvider }
+This event is fired after a new history provider is registered through ``registerProvider(provider)``.
+The event payload contains the registered provider instance in ``e.provider``.
+
+History providers can override the default undo/redo behavior and are checked before the internal history buffer.
+You can use this event to refresh UI that depends on history capabilities, such as Undo and Redo buttons.
+
+#### async `change-size` | e: { size: number }
+This event is fired after the history buffer size is changed through the ``size`` setter.
+The event payload contains the requested new size in ``e.size``.
+
+This only changes the configured buffer capacity. It does not itself perform an undo or redo step.
+You can use this event to refresh controls that display or depend on history capacity.
+
+#### async `push` | e: {}
+This event is fired when a new history step is pushed into the internal history buffer through ``push(forward, backward)``.
+At the moment this event fires, the new history entry has already been written into the buffer and the internal history cursor has been updated.
+
+In the current implementation, this event fires before the provided ``forward()`` callback is executed.
+You can use this event to refresh Undo and Redo UI, since the history state already reflects the new step.
+
+#### async `undo` | e: {}
+This event is fired when an undo operation is performed, either by a registered history provider or by the internal history buffer.
+It indicates that the application is moving one step back in history.
+
+In the current implementation, if the undo is handled by the internal buffer, this event fires after ``backward()`` is executed but before the internal cursor and redo boundary are fully finalized.
+If you need the final ``canUndo()`` / ``canRedo()`` state inside the event handler, defer the read with ``queueMicrotask(...)`` or move ``raiseEvent('undo')`` to the end of the method.
+
+#### async `redo` | e: {}
+This event is fired when a redo operation is performed, either by a registered history provider or by the internal history buffer.
+It indicates that the application is moving one step forward in history.
+
+For buffer-backed history, this event fires after the internal cursor moves to the next entry and after ``forward()`` is executed.
+You can use this event to refresh Undo and Redo UI based on the updated history state.
+
+## User Events
 Called on ``xOpatUser.instance()`` object, these events support contextualized logging.
 By default, contextId undefined (or `core`) is the main viewer auth context. Other contexts
 are for arbitrary log-ins against third party services. 

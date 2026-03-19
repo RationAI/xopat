@@ -31,6 +31,14 @@ export class AppBar {
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
+                id: "edit",
+                icon: undefined,
+                title: $.t('main.bar.edit'),
+                body: [],
+                class: Dropdown,
+                extraClasses: { width: "min-w-max" },
+                onClick: e => this.Edit.refresh(true)
+            }, {
                 id: "plugins", icon: "fa-bars", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
             }
@@ -129,6 +137,7 @@ export class AppBar {
 
         // init submenus
         this.View.init(this.menu.getTab("view"));
+        this.Edit.init(this.menu.getTab("edit"));
         this.Plugins.init(this.menu.getTab("plugins"));
     }
 
@@ -170,32 +179,32 @@ export class AppBar {
             this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {USER_INTERFACE.FullscreenMenu.menu.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
-                                id: 'share',
-                                label: $.t('main.bar.share'),
-                                icon: 'fa-share-nodes',
-                                children: [
-                                            {
-                                                id: "global-export",
-                                                domID: true,
-                                                label: $.t("main.bar.exportFile"),
-                                                hint: $.t("main.bar.explainExportFile"),
-                                                onClick: () => {
-                                                    UTILITIES.export();
-                                                },
-                                                icon: "fa-download"
-                                            },
-                                            {
-                                                id: "copy-url-inner",
-                                                domID: true,
-                                                label: $.t("main.bar.exportUrl"),
-                                                hint: $.t("main.bar.explainExportUrl"),
-                                                onClick: () => {
-                                                    UTILITIES.copyUrlToClipboard();
-                                                },
-                                                icon: "fa-link"
-                                            }
-                                        ],
-                            });
+                id: 'share',
+                label: $.t('main.bar.share'),
+                icon: 'fa-share-nodes',
+                children: [
+                    {
+                        id: "global-export",
+                        domID: true,
+                        label: $.t("main.bar.exportFile"),
+                        hint: $.t("main.bar.explainExportFile"),
+                        onClick: () => {
+                            UTILITIES.export();
+                        },
+                        icon: "fa-download"
+                    },
+                    {
+                        id: "copy-url-inner",
+                        domID: true,
+                        label: $.t("main.bar.exportUrl"),
+                        hint: $.t("main.bar.explainExportUrl"),
+                        onClick: () => {
+                            UTILITIES.copyUrlToClipboard();
+                        },
+                        icon: "fa-link"
+                    }
+                ],
+            });
         },
     }
 
@@ -397,6 +406,59 @@ export class AppBar {
         }
     }
 
+    Edit = {
+        init(subMenu) {
+            this.subMenu = subMenu;
+
+            this.subMenu.addItem({
+                id: 'history-undo',
+                icon: 'fa-rotate-left',
+                label: $.t('main.bar.undo'),
+                disabled: true,
+                onClick: () => {
+                    const history = APPLICATION_CONTEXT.history;
+                    if (!history?.canUndo?.()) return true;
+                    history.undo();
+                    return true;
+                }
+            });
+
+            this.subMenu.addItem({
+                id: 'history-redo',
+                icon: 'fa-rotate-right',
+                label: $.t('main.bar.redo'),
+                disabled: true,
+                onClick: () => {
+                    const history = APPLICATION_CONTEXT.history;
+                    if (!history?.canRedo?.()) return true;
+                    history.redo();
+                    return true;
+                }
+            });
+
+            const history = APPLICATION_CONTEXT.history;
+            if (history?.addHandler) {
+                const deferredRefresh = () => queueMicrotask(() => this.refresh());
+
+                history.addHandler('push', deferredRefresh);
+                history.addHandler('undo', deferredRefresh);
+                history.addHandler('redo', deferredRefresh);
+                history.addHandler('register-provider', deferredRefresh);
+                history.addHandler('change-size', deferredRefresh);
+            }
+
+            this.refresh();
+        },
+
+        refresh() {
+            const history = APPLICATION_CONTEXT.history;
+            const canUndo = !!history?.canUndo?.();
+            const canRedo = !!history?.canRedo?.();
+
+            this.subMenu.setItemDisabled('history-undo', !canUndo);
+            this.subMenu.setItemDisabled('history-redo', !canRedo);
+        }
+    }
 
     Plugins = {
         init(subMenu) {
