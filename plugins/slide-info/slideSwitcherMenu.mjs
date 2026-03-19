@@ -17,44 +17,42 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         this._cachedPreviews = {};
         this._cachedLabels = {};
         this._levels = undefined;
-        this._dock = undefined;
-        this._headerHost = null;
-    }
 
-    // ---------- Public API ----------
+        this.windowId = this.options.id ?? "slide-switcher";
+        this.title = this.options.title ?? "Slide Switcher";
+        this.w = this.options.width ?? 520;
+        this.h = this.options.height ?? 600;
+        this.l = this.options.startLeft ?? 80;
+        this.t = this.options.startTop ?? 80;
+        this.layout = this.options.layout || globalThis.LAYOUT || null;
+        this._preventOpen = false;
 
-    open() {
-        if (this._preventOpen) return;
+        this._headerHost = div({
+            class: "flex-none bg-base-200 border-b border-base-300 empty:hidden"
+        });
 
-        if (!this._dock) {
-            this.windowId = this.options.id ?? "slide-switcher";
-            this.title = this.options.title ?? "Slide Switcher";
-            this.w = this.options.width ?? 520;
-            this.h = this.options.height ?? 600;
-            this.l = this.options.startLeft ?? 80;
-            this.t = this.options.startTop ?? 80;
+        this.explorer = new UI.Explorer({
+            id: `${this.windowId}-explorer`,
+            levels: this._levels
+        });
 
-            const body = document.createElement("div");
-            body.className = "h-full w-full flex flex-col overflow-hidden";
+        const contentHost = document.createElement("div");
+        contentHost.className = "flex-1 min-h-0 relative w-full overflow-hidden";
+        contentHost.appendChild(this.explorer.create());
 
-            this._headerHost = div({
-                class: "flex-none bg-base-200 border-b border-base-300 empty:hidden"
-            });
-            const toolbar = this._renderToolbar();
+        this._body = div(
+            { class: "h-full w-full flex flex-col overflow-hidden" },
+            this._headerHost,
+            this._renderToolbar(),
+            contentHost
+        );
 
-            const contentHost = document.createElement("div");
-            contentHost.className = "flex-1 min-h-0 relative w-full overflow-hidden";
-
-            body.append(this._headerHost, toolbar, contentHost);
-
-            this.explorer = new UI.Explorer({ id: "slide-switcher-explorer", levels: this._levels });
-            contentHost.appendChild(this.explorer.create());
-
-            this._dock = new UI.DockableWindow({
+        this.window = new UI.DockableWindow({
                 id: this.windowId,
                 title: this.title,
                 icon: "fa-images",
                 defaultMode: "tab",
+                layout: this.layout,
                 floating: {
                     width: this.w,
                     height: this.h,
@@ -63,20 +61,69 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     resizable: true,
                     onClose: () => this.options.onClose?.(),
                 }
-            }, body);
+            },
+            this._body
+        );
 
-            const el = this._dock.create();
-            USER_INTERFACE.addHtml(el, 'slide-info');
+        this.visibilityManager = {
+            is: () => !!this.window?.isVisible?.(),
+            on: () => this.open(),
+            off: () => this.close(),
+            set: next => next ? this.open() : this.close(),
+            toggle: () => this.visibilityManager.is() ? this.close() : this.open()
+        };
+    }
+
+    // ---------- Public API ----------
+
+    attachToMainLayout() {
+        if (this._attached) return this._dockable;
+
+        const layout = this.layout || globalThis.LAYOUT || null;
+        if (!layout) {
+            console.warn("[SlideSwitcherMenu] No MainLayout available for slide switcher.", this.windowId);
+            return null;
         }
+
+        this.layout = layout;
+
+        this._dockable = layout.addTab({
+            id: this.windowId,
+            title: this.title,
+            iconName: "fa-images",
+            body: [this._body],
+            visibilityManager: this.visibilityManager,
+            floating: {
+                width: this.w,
+                height: this.h,
+                startLeft: this.l,
+                startTop: this.t,
+                resizable: true,
+                onClose: () => this.options.onClose?.(),
+            }
+        });
+
+        this._attached = !!this._dockable;
+        return this._dockable;
+    }
+
+    open() {
+        if (this._preventOpen) return false;
+
+        this.attachToMainLayout();
 
         this._syncWithViewer();
         this._renderSelectionHeader();
+        // todo avoid this manual private method call
         this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
-        this._dock.open();
+
+        const layout = this.layout || globalThis.LAYOUT || null;
+        return layout?.showTab?.(this.windowId) ?? false;
     }
 
     close() {
-        this._dock?.close();
+        const layout = this.layout || globalThis.LAYOUT || null;
+        return layout?.hideTab?.(this.windowId) ?? false;
     }
 
     refresh(newConfig) {
@@ -634,6 +681,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     create() {
-        return this._dock ? this._dock.create() : super.create();
+        this.attachToMainLayout();
+        return this._body;
     }
 }

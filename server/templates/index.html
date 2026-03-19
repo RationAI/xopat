@@ -58,20 +58,6 @@
 
     <div id="bottom-container" style="display: flex; flex-direction: column; flex-shrink: 0;"></div>
 
-    <script>
-        // todo make sure our globals dont get out of hand...
-        window.LAYOUT = new UI.MainLayout({
-            id: "viewer-container",
-            position: "right",
-            initialWidth: 360,
-            // tabs: [
-            //     { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
-            //     { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
-            // ]
-        });
-        // Attach once (replaces your static HTML wrapper)
-        window.LAYOUT.attachTo(document.getElementById("middle-container"));
-    </script>
 <!--&lt;!&ndash; OSD viewer &ndash;&gt;-->
 <!--<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">-->
 <!--    <div id="osd" style="pointer-events: auto;" class="absolute w-full h-full top-0 left-0"></div>-->

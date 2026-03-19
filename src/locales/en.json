@@ -37,6 +37,10 @@
         "clone": "Clone the viewer",
         "preview": "Data Window"
       },
+      "globalMenu": {
+        "globalMenu": "Global menu",
+        "noMenuToView": "There is no menu to view."
+      },
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
