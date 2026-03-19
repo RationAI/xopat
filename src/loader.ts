@@ -4,7 +4,7 @@ import type { OpenEvent } from "openseadragon";
 
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
-import type {ImageLike} from "./types/misc";
+import type { ImageLike } from "./types/misc";
 
 /** Token symbols for internal element storage */
 const STORE_TOKEN = Symbol("XOpatElementDataStore");
@@ -50,7 +50,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return REGISTERED_PLUGINS === undefined;
     }
 
-    const showPluginError = (window as any).showPluginError = function (id: string, e: any, loaded: any = undefined) {
+    const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
@@ -136,7 +136,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return plugin;
     }
 
-    async function initializePlugin(plugin: any) {
+    async function initializePlugin(plugin: IXOpatPlugin) {
         if (!plugin) {
             console.warn("Attempt to initialize undefined plugin.");
             return false;
@@ -214,7 +214,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             document.body.append(container);
         }
 
-        let script = document.createElement("script") as any;
+        let script = document.createElement("script") as HTMLScriptElement;
         for (let key in properties) {
             if (key === 'src') continue;
             script[key] = properties[key];
@@ -498,7 +498,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             super.registerClass(class extends XOpatStorage.AsyncStorage {
                 ref!: string;
                 async getItem(key: string) {
-                    let storage = POST_DATA[this.ref];
+                    let storage = POST_DATA[this.ref] as Record<string, unknown>;
                     // backward non-namespaced compatibility
                     return POST_DATA[key] || (storage && storage[key]);
                 }
@@ -1665,6 +1665,42 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
     };
 
+    function isImageLikeString(value: unknown): value is string {
+        if (typeof value !== "string") return false;
+
+        const s = value.trim();
+
+        return (
+            /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(s) ||
+            /^blob:/i.test(s) ||
+            /^https?:\/\//i.test(s) ||
+            /^\/[^/]/.test(s) ||
+            /^\.\.?\//.test(s)
+        );
+    }
+
+    async function loadImageElement(src: string): Promise<HTMLImageElement> {
+        return await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`Failed to load image source: ${src.slice(0, 120)}`));
+            img.src = src;
+        });
+    }
+
+    async function blobToDataUrl(blob: Blob): Promise<string> {
+        return await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(new Error("Failed to read Blob as data URL."));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    function canvasToDataUrl(canvas: HTMLCanvasElement, mimeType = "image/png", quality?: number): string {
+        return canvas.toDataURL(mimeType, quality);
+    }
+
     const _alphabet = 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict';
     const _alphaset = new Set(_alphabet.split(''));
 
@@ -1756,8 +1792,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Load a plugin at runtime
          * NOTE: in case of failure, loading such id no longer works unless the page is refreshed
-         * @param id plugin to load
-         * @param onload function to call on successful finish
          */
         loadPlugin: function (id: string, onload?: (...args: any[]) => any, force?: boolean) {
             let meta = PLUGINS[id];
@@ -1857,7 +1891,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
         },
 
-        generateID: function(input: any, size= 12) {
+        generateID: function (input: any, size = 12) {
             if (!Number.isFinite(size) || size <= 0) return '';
             input = String(input);
             const alphLen = _alphabet.length;
@@ -1870,7 +1904,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             function rand32() {
                 h ^= h << 13; h >>>= 0;
                 h ^= h >>> 17; h >>>= 0;
-                h ^= h << 5;  h >>>= 0;
+                h ^= h << 5; h >>>= 0;
                 return h >>> 0;
             }
             let id = '';
@@ -1914,7 +1948,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Copy content to the user clipboard.
          */
-        copyToClipboard: function(content: string, alert: boolean = true) {
+        copyToClipboard: function (content: string, alert: boolean = true) {
             // todo try         navigator.clipboard?.writeText(content).catch(() => {}); on catch go this old way
             let $temp = $("<input>");
             $("body").append($temp);
@@ -1927,7 +1961,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Export only the viewer direct link (without data) to the clipboard.
          */
-        copyUrlToClipboard: function() {
+        copyUrlToClipboard: function () {
             const data = UTILITIES.serializeAppConfig();
             UTILITIES.copyToClipboard(APPLICATION_CONTEXT.url + "#" + encodeURIComponent(data));
         },
@@ -1950,7 +1984,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * Create a screenshot of the current viewer viewport and open it in a new tab.
          * @returns {void}
          */
-        makeScreenshot: function() {
+        makeScreenshot: function () {
             // todo OSD v5.0 ensure we can copy the canvas among drawers
             const canvas = document.createElement("canvas"),
                 viewportCanvas = VIEWER.drawer.canvas, width = viewportCanvas.width, height = viewportCanvas.height;
@@ -1981,19 +2015,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 return crypto.randomUUID();
             }
             // Fallback for environments where crypto.randomUUID is not available
-            return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) =>
-                (
-                    c ^
-                    (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))
-                ).toString(16)
-            );
+            return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c: string) => {
+                const cNum = parseInt(c, 10);
+                return (
+                    cNum ^
+                    ((crypto.getRandomValues(new Uint8Array(1))[0] as number) & (15 >> (cNum / 4)))
+                ).toString(16);
+            });
         },
 
         /**
          * Export the current viewer session as a self-contained HTML file.
          * When opened, it automatically loads the saved session.
          */
-        export: async function() {
+        export: async function () {
 
             let doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
@@ -2010,7 +2045,7 @@ ${await UTILITIES.getForm()}
         /**
          * Clone the viewer to a new window, only two windows can be shown at the time.
          */
-        clone: async function() {
+        clone: async function () {
             if (window.opener) {
                 return;
             }
@@ -2033,7 +2068,7 @@ ${await UTILITIES.getForm()}
          * @param {string[]|undefined} [includedPluginsList] - IDs of plugins to include; current active if omitted.
          * @returns {Promise<void>}
          */
-        refreshPage: async function(includedPluginsList: string[] | undefined = undefined) {
+        refreshPage: async function (includedPluginsList: string[] | undefined = undefined) {
             if (APPLICATION_CONTEXT.__cache.dirty) {
                 Dialogs.show($.t('messages.warnPageReload', {
                     onExport: "UTILITIES.export();",
@@ -2053,7 +2088,7 @@ ${await UTILITIES.getForm()}
         /**
          * Download a string as a file via a temporary link element.
          */
-        downloadAsFile: function(filename: string, content: string) {
+        downloadAsFile: function (filename: string, content: string) {
             let data = new Blob([content], { type: 'text/plain' });
             let downloadURL = window.URL.createObjectURL(data);
             let elem = document.getElementById('link-download-helper') as HTMLAnchorElement;
@@ -2070,7 +2105,7 @@ ${await UTILITIES.getForm()}
          *   See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file#unique_file_type_specifiers
          * @param mode - Read as text or as ArrayBuffer.
          */
-        uploadFile: async function(onUploaded: (arg0: (string | ArrayBuffer)) => void, accept=".json", mode="text") {
+        uploadFile: async function (onUploaded: (arg0: (string | ArrayBuffer)) => void, accept = ".json", mode = "text") {
             const uploader = $("#file-upload-helper");
             uploader.attr('accept', accept);
             uploader.on('change', (e: JQuery.ChangeEvent) => {
@@ -2087,7 +2122,7 @@ ${await UTILITIES.getForm()}
          * @param {("text"|"bytes")} [mode="text"] - Read as text or as ArrayBuffer.
          * @returns {Promise<string|ArrayBuffer>} Resolves with file contents.
          */
-        readFileUploadEvent: function(e: Event, mode="text") {
+        readFileUploadEvent: function (e: Event, mode = "text") {
             return new Promise((resolve, reject) => {
                 let file = e.currentTarget.files?.[0];
                 if (!file) return reject("Invalid input file: no file.");
@@ -2123,36 +2158,129 @@ ${await UTILITIES.getForm()}
         },
 
         /**
+         * Check if value is a image-like interpretable object (type ImageLike)
+         */
+        isImageLike: function (value: unknown): value is ImageLike {
+            return (
+                value instanceof HTMLImageElement ||
+                value instanceof HTMLCanvasElement ||
+                value instanceof CanvasRenderingContext2D ||
+                value instanceof Blob ||
+                isImageLikeString(value)
+            );
+        },
+
+        /**
          * Convert image-like object to an HTMLImageElement or HTMLCanvasElement for DOM rendering.
          */
-        imageLikeToImage: async function(imageLike: ImageLike) {
-            if (imageLike instanceof HTMLImageElement) return Promise.resolve(imageLike);
-            if (imageLike instanceof HTMLCanvasElement) return Promise.resolve(imageLike);
-            if (imageLike instanceof CanvasRenderingContext2D) return Promise.resolve(imageLike.canvas);
-            let type;
+        imageLikeToImage: async function (imageLike: ImageLike): Promise<HTMLImageElement | HTMLCanvasElement> {
+            if (imageLike instanceof HTMLImageElement) return imageLike;
+            if (imageLike instanceof HTMLCanvasElement) return imageLike;
+            if (imageLike instanceof CanvasRenderingContext2D) return imageLike.canvas;
+
             if (imageLike instanceof Blob) {
-                type = "rasterBlob";
-            } else if (typeof imageLike === 'string') {
-                //todo
-                throw "TODO: neds to implement image src loading";
-            } else {
-                throw "Invalid imageLike type";
+                return await (OpenSeadragon as any).converter.convert({}, imageLike, "rasterBlob", "image");
             }
-            return OpenSeadragon.converter.convert({}, imageLike, type, "image");
+
+            if (typeof imageLike === "string") {
+                const src = imageLike.trim();
+
+                if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(src)) {
+                    return await loadImageElement(src);
+                }
+
+                if (/^blob:/i.test(src) || /^https?:\/\//i.test(src) || /^\/[^/]/.test(src) || /^\.\.?\//.test(src)) {
+                    return await loadImageElement(src);
+                }
+
+                throw new Error("String value is not a supported image source.");
+            }
+
+            throw new Error("Invalid imageLike type.");
+        },
+
+        /**
+         * Convert image-like object to a data url
+         */
+        imageLikeToDataUrl: async function (
+            imageLike: ImageLike,
+            options?: { mimeType?: string; quality?: number }
+        ): Promise<string> {
+            const mimeType = options?.mimeType || "image/png";
+
+            if (typeof imageLike === "string") {
+                const src = imageLike.trim();
+
+                if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(src)) {
+                    return src;
+                }
+
+                if (/^blob:/i.test(src) || /^https?:\/\//i.test(src) || /^\/[^/]/.test(src) || /^\.\.?\//.test(src)) {
+                    const image = await loadImageElement(src);
+                    const canvas = document.createElement("canvas");
+                    canvas.width = image.naturalWidth || image.width;
+                    canvas.height = image.naturalHeight || image.height;
+                    const ctx = canvas.getContext("2d");
+                    if (!ctx) throw new Error("Failed to create canvas context.");
+                    ctx.drawImage(image, 0, 0);
+                    return canvasToDataUrl(canvas, mimeType, options?.quality);
+                }
+
+                throw new Error("String value is not a supported image source.");
+            }
+
+            if (imageLike instanceof HTMLCanvasElement) {
+                return canvasToDataUrl(imageLike, mimeType, options?.quality);
+            }
+
+            if (imageLike instanceof CanvasRenderingContext2D) {
+                return canvasToDataUrl(imageLike.canvas, mimeType, options?.quality);
+            }
+
+            if (imageLike instanceof HTMLImageElement) {
+                const canvas = document.createElement("canvas");
+                canvas.width = imageLike.naturalWidth || imageLike.width;
+                canvas.height = imageLike.naturalHeight || imageLike.height;
+                const ctx = canvas.getContext("2d");
+                if (!ctx) throw new Error("Failed to create canvas context.");
+                ctx.drawImage(imageLike, 0, 0);
+                return canvasToDataUrl(canvas, mimeType, options?.quality);
+            }
+
+            if (imageLike instanceof Blob) {
+                if (imageLike.type.startsWith("image/")) {
+                    return await blobToDataUrl(imageLike);
+                }
+
+                const image = await UTILITIES.imageLikeToImage(imageLike);
+                if (image instanceof HTMLCanvasElement) {
+                    return canvasToDataUrl(image, mimeType, options?.quality);
+                }
+
+                const canvas = document.createElement("canvas");
+                canvas.width = image.naturalWidth || image.width;
+                canvas.height = image.naturalHeight || image.height;
+                const ctx = canvas.getContext("2d");
+                if (!ctx) throw new Error("Failed to create canvas context.");
+                ctx.drawImage(image, 0, 0);
+                return canvasToDataUrl(canvas, mimeType, options?.quality);
+            }
+
+            throw new Error("Invalid imageLike type.");
         },
 
         /**
          * Get the date as ISO string (DD/MM/YYYY by default).
          */
-        todayISO: function(separator: string = "/") {
-            return new Date().toJSON().slice(0,10).split('-').reverse().join(separator);
+        todayISO: function (separator: string = "/") {
+            return new Date().toJSON().slice(0, 10).split('-').reverse().join(separator);
         },
 
         /**
          * Get the current date in ISO order (YYYY/MM/DD by default).
          */
-        todayISOReversed: function(separator: string = "/") {
-            return new Date().toJSON().slice(0,10).split('-').join(separator);
+        todayISOReversed: function (separator: string = "/") {
+            return new Date().toJSON().slice(0, 10).split('-').join(separator);
         },
 
         /**
@@ -2160,7 +2288,7 @@ ${await UTILITIES.getForm()}
          * Treats strings as true unless they equal "false" (case-insensitive) or are empty.
          * Numbers are coerced by JavaScript truthiness, undefined falls back to defaultValue.
          */
-        isJSONBoolean: function(value: any, defaultValue: boolean) {
+        isJSONBoolean: function (value: any, defaultValue: boolean) {
             return (defaultValue && value === undefined) || (value && (typeof value !== "string" || value.trim().toLocaleLowerCase() !== "false"));
         },
 
@@ -2215,7 +2343,7 @@ ${await UTILITIES.getForm()}
         /**
          * Sleep for a given number of milliseconds.
          */
-        sleep: async function(ms: number | undefined = undefined) {
+        sleep: async function (ms: number | undefined = undefined) {
             return new Promise(resolve => setTimeout(resolve, ms));
         },
 
@@ -2231,12 +2359,12 @@ ${await UTILITIES.getForm()}
          * @param {boolean} [staticPreview=false] - Produce a static preview configuration.
          * @returns {string} JSON string representing the current application configuration.
          */
-        serializeAppConfig: function(withCookies=false, staticPreview = false) {
+        serializeAppConfig: function (withCookies = false, staticPreview = false) {
             //TODO consider bypassCache etc...
 
             //delete unnecessary data, copy params so that overrides do not affect current session
-            const data = {...APPLICATION_CONTEXT.config} as any;
-            data.params = {...APPLICATION_CONTEXT.config.params};
+            const data = { ...APPLICATION_CONTEXT.config } as any;
+            data.params = { ...APPLICATION_CONTEXT.config.params };
             delete data.defaultParams;
 
             if (staticPreview) data.params.isStaticPreview = true;
@@ -2261,7 +2389,7 @@ ${await UTILITIES.getForm()}
                     const s = v.trim();
                     // cheap + safe: only try objects/arrays
                     if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
-                        try { data.params[k] = JSON.parse(s); } catch (_) {}
+                        try { data.params[k] = JSON.parse(s); } catch (_) { }
                     }
                 }
             }
@@ -2276,10 +2404,10 @@ ${await UTILITIES.getForm()}
          * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
          * @param withCookies - Include cookies in export payload.
          */
-        getForm: async function(customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false) {
+        getForm: async function (customAttributes: string = "", includedPluginsList: string[] | undefined = undefined, withCookies: boolean = false) {
             const url = (APPLICATION_CONTEXT.url.startsWith('http') ? "" : "http://") + APPLICATION_CONTEXT.url;
 
-            if (! APPLICATION_CONTEXT.env.server.supportsPost) {
+            if (!APPLICATION_CONTEXT.env.server.supportsPost) {
                 return `
     <form method="POST" id="redirect" action="${url}#${encodeURI(UTILITIES.serializeAppConfig(withCookies, true))}">
         <input type="hidden" id="visualization" name="visualization">
@@ -2289,7 +2417,7 @@ ${await UTILITIES.getForm()}
     <script type="text/javascript">const form = document.getElementById("redirect").submit();<\/script>`;
             }
 
-            const {app, data} = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
+            const { app, data } = await UTILITIES.serializeApp(includedPluginsList, withCookies, true);
             data.visualization = app;
 
             let form = `
@@ -2456,7 +2584,7 @@ form.submit();
      * @property layout - Grid layout where viewers are mounted.
      */
     const ViewerManager = (window as any).ViewerManager = class extends OpenSeadragon.EventSource {
-        CONFIG: APPLICATION_CONTEXT.config;
+        CONFIG: typeof APPLICATION_CONTEXT.config;
         menu: any;
         viewers: OpenSeadragon.Viewer[];
         viewerMenus: Record<string, any>;
@@ -2469,13 +2597,13 @@ form.submit();
          * Create a ViewerManager.
          * @param {object} CONFIG - Configuration bag; must contain params.headers etc. used to configure viewers.
          */
-        constructor(CONFIG: OpenSeadragon.Options) {
+        constructor(CONFIG: typeof APPLICATION_CONTEXT.config) {
             super();
             this.CONFIG = CONFIG;
             this.menu = null;
             this.viewers = [];
             this.viewerMenus = {};
-            this.broadcastEvents = {};
+            this.broadcastEvents = {} as typeof this.broadcastEvents;
             this.active = null;
             this._singletonsKey = Symbol('singletons');
 
@@ -2501,12 +2629,12 @@ form.submit();
             v.addHandler("canvas-press", set);
 
             v.addOnceHandler &&
-            v.addOnceHandler("destroy", () => {
-                if (this.active === v) {
-                    this.active = this.viewers.find((x) => x !== v) || null;
-                }
-                this.viewers = this.viewers.filter((x) => x !== v);
-            });
+                v.addOnceHandler("destroy", () => {
+                    if (this.active === v) {
+                        this.active = this.viewers.find((x) => x !== v) || null;
+                    }
+                    this.viewers = this.viewers.filter((x) => x !== v);
+                });
         }
 
         /**
@@ -2551,7 +2679,7 @@ form.submit();
         /**
          * Get viewer reference for the configuration object
          */
-        getViewerForConfig(config) {
+        getViewerForConfig(config: any) {
             if (!config) return undefined;
 
             const dataRegistry = APPLICATION_CONTEXT.config.data;
@@ -2941,7 +3069,7 @@ form.submit();
             if (!eventList) {
                 eventList = this.broadcastEvents[eventName] = new Map();
             }
-            eventList.set(handler, {userData, priority});
+            eventList.set(handler, { userData, priority });
             for (let v of this.viewers) {
                 v.addHandler(eventName, handler, userData, priority);
             }
@@ -3027,6 +3155,9 @@ form.submit();
             const viewer = this.viewers[index];
             if (!viewer) return;
 
+            const slotIndex = this.viewers.indexOf(viewer);
+            const removeIndex = slotIndex >= 0 ? slotIndex : index;
+
             /**
              * Raised when an existing viewer is removed from the grid layout. Called before the viewer
              * is actually removed along with all its data.
@@ -3036,30 +3167,50 @@ form.submit();
              * @event viewer-destroy
              * @memberof VIEWER_MANAGER
              */
-            this.raiseEvent('viewer-destroy', { viewer, uniqueId: viewer.uniqueId, index });
+            this.raiseEvent('viewer-destroy', { viewer, uniqueId: viewer.uniqueId, index: removeIndex });
+
+            const menu = this.viewerMenus[viewer.id];
+            if (menu) {
+                try {
+                    menu.destroy?.();
+                } catch (e) {
+                    console.warn('Viewer menu destroy failed', e);
+                }
+                delete this.viewerMenus[viewer.id];
+            }
 
             try {
-                const menu = this.viewerMenus[viewer.id];
-                if (menu) {
-                    menu.destroy();
-                    this.viewerMenus[viewer.id] = null;
-                }
-
                 delete viewer.__cachedUUID;
                 viewer.destroy();
-                this.viewers.splice(index, 1);
-                this.layout.removeAt(index);
+            } catch (e) {
+                console.warn('Viewer destroy failed', e);
+            }
 
-                //todo check if viewer has data and if yes prompt user and export if possible
-                // explicitly clean store
-                for (let key in (viewer as any)[STORE_TOKEN]) {
-                    const store = (viewer as any)[STORE_TOKEN][key];
+            try {
+                this.layout.removeAt(removeIndex);
+            } catch (e) {
+                console.warn('Viewer layout removal failed', e);
+            }
+
+            if (slotIndex >= 0) {
+                this.viewers.splice(slotIndex, 1);
+            }
+
+            if (this.active === viewer) {
+                this.active = this.viewers[0] || null;
+            }
+
+            const stores = (viewer as any)[STORE_TOKEN];
+            if (stores) {
+                for (let key in stores) {
+                    const store = stores[key];
+                    if (!store) continue;
                     for (let pKey in store) {
                         delete store[pKey];
                     }
-                    delete viewer[STORE_TOKEN][key];
+                    delete stores[key];
                 }
-            } catch (_) { }
+            }
         }
 
         /**

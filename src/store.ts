@@ -212,7 +212,7 @@ class APIProxy {
 /**
  * Synchronous Data Generic API. Private class.
  */
-class SyncAPIProxy extends APIProxy {
+export class SyncAPIProxy extends APIProxy {
     constructor(options: StorageOptions) {
         super(options);
     }
@@ -258,7 +258,7 @@ class SyncAPIProxy extends APIProxy {
 /**
  * Asynchronous Data Generic API. Private class.
  */
-class AsyncAPIProxy extends APIProxy {
+export class AsyncAPIProxy extends APIProxy {
     constructor(options: StorageOptions) {
         super(options);
     }

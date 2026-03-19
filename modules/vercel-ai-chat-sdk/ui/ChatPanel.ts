@@ -40,6 +40,7 @@ export class ChatPanel extends BaseComponent {
     _root: HTMLElement | null;
     _inputEl: HTMLTextAreaElement | null;
     _sendBtnEl: any;
+    _sendBtnLabelEl: HTMLElement | null;
     _statusEl: HTMLElement | null;
     _sessionTitleEl: HTMLElement | null;
     _loginBtn: any;
@@ -51,8 +52,6 @@ export class ChatPanel extends BaseComponent {
     _modelSelectEl: HTMLSelectElement | null;
     _chatViewEl: HTMLElement | null;
     _sessionsViewEl: HTMLElement | null;
-    _isRunning: boolean;
-    _stopRequested: boolean;
 
     _displayMode: "all" | "user-friendly";
     _viewMode: "chat" | "sessions";
@@ -62,6 +61,9 @@ export class ChatPanel extends BaseComponent {
     _messageList: ChatMessageList | null;
 
     _sanitizeConfig: any;
+    _isRunning: boolean;
+    _stopRequested: boolean;
+    _turnAbortController: AbortController | null;
 
     declare options: ChatPanelOptions;
     declare classMap: Record<string, string>;
@@ -91,6 +93,7 @@ export class ChatPanel extends BaseComponent {
         this._root = null;
         this._inputEl = null;
         this._sendBtnEl = null;
+        this._sendBtnLabelEl = null;
         this._statusEl = null;
         this._sessionTitleEl = null;
         this._loginBtn = null;
@@ -102,12 +105,14 @@ export class ChatPanel extends BaseComponent {
         this._modelSelectEl = null;
         this._chatViewEl = null;
         this._sessionsViewEl = null;
-        this._isRunning = false;
-        this._stopRequested = false;
 
         this._sessionPicker = null;
         this._attachmentBar = null;
         this._messageList = null;
+
+        this._isRunning = false;
+        this._stopRequested = false;
+        this._turnAbortController = null;
 
         this.classMap["base"] = "flex flex-col h-full border-l border-base-300 bg-base-100 text-sm";
         this._applyOptions(options);
@@ -453,16 +458,17 @@ export class ChatPanel extends BaseComponent {
             },
         }) as HTMLTextAreaElement;
 
+        this._sendBtnLabelEl = span("Send") as HTMLElement;
         this._sendBtnEl = new Button(
             {
                 size: Button.SIZE.SMALL,
                 type: Button.TYPE.PRIMARY,
                 extraClasses: { base: "btn btn-sm" },
                 extraProperties: { title: "Send message" },
-                onClick: (e: Event) => this._handleSend(e),
+                onClick: (e: Event) => this._isRunning ? this._handleStop(e) : this._handleSend(e),
             },
             new FAIcon({ name: "fa-paper-plane" }),
-            span("Send")
+            this._sendBtnLabelEl
         ).create();
 
         const inputWrap = div(
@@ -579,13 +585,20 @@ export class ChatPanel extends BaseComponent {
     _updateInputState({ keepStatus = false }: { keepStatus?: boolean } = {}): void {
         const ready = this._isReady();
         if (this._inputEl) this._inputEl.disabled = !ready;
-        if (this._sendBtnEl) this._sendBtnEl.disabled = !ready;
-        this._attachmentBar?.setDisabled(!ready);
-        this._sessionPicker?.setDisabled(!this._providerId);
-        if (this._modelSelectEl) this._modelSelectEl.disabled = !this._providerId || !this._models.length;
+        if (this._sendBtnEl) this._sendBtnEl.disabled = this._isRunning ? false : !ready;
+        if (this._sendBtnLabelEl) this._sendBtnLabelEl.textContent = this._isRunning ? "Stop" : "Send";
+        if (this._sendBtnEl) this._sendBtnEl.title = this._isRunning ? "Stop the current response" : "Send message";
+        this._attachmentBar?.setDisabled(!ready || this._isRunning);
+        this._sessionPicker?.setDisabled(!this._providerId || this._isRunning);
+        if (this._modelSelectEl) this._modelSelectEl.disabled = this._isRunning || !this._providerId || !this._models.length;
+        if (this._providerSelectEl) this._providerSelectEl.disabled = this._isRunning;
+        if (this._personalitySelectEl) this._personalitySelectEl.disabled = this._isRunning;
+        if (this._displayModeSelectEl) this._displayModeSelectEl.disabled = this._isRunning;
 
         if (!keepStatus) {
-            if (!this._providerId) {
+            if (this._isRunning) {
+                this._setStatus(this._stopRequested ? "Stopping…" : "Waiting for the assistant…");
+            } else if (!this._providerId) {
                 this._setStatus("Select a provider to start.");
             } else if (!ready) {
                 const provider = this.chatService.getProvider(this._providerId);
@@ -1099,6 +1112,7 @@ export class ChatPanel extends BaseComponent {
         event?.preventDefault?.();
 
         if (this._isRunning) {
+            this._handleStop(event);
             return;
         }
 
@@ -1118,38 +1132,59 @@ export class ChatPanel extends BaseComponent {
         };
 
         this._inputEl.value = "";
-        if (this._sendBtnEl) this._sendBtnEl.disabled = true;
+        this._isRunning = true;
+        this._stopRequested = false;
+        this._turnAbortController = new AbortController();
+        this._updateInputState({ keepStatus: true });
+        this._setStatus("Sending request…");
 
         try {
-            this._isRunning = true;
-            this._stopRequested = false;
-
             await this._ensureActiveSession();
-            await this._runAssistantLoop(userMsg, this.MAX_SCRIPT_STEPS);
-            await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
-            this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
-            this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
-            this._setStatus("Ready.");
+            await this._runAssistantLoop(userMsg, this.MAX_SCRIPT_STEPS, this._turnAbortController.signal);
+
+            if (!this._stopRequested) {
+                await this._refreshSessionsForCurrentProvider({ autoLoadLatest: false });
+                this._sessionPicker?.setActiveSession(this.chatService.getActiveSessionId());
+                this._updateSessionTitle(this._sessions.find((s) => s.id === this.chatService.getActiveSessionId()) || null);
+                this._setStatus("Ready.");
+            } else {
+                this._setStatus("Stopped.");
+            }
         } catch (err) {
-            console.error("Chat loop failed:", err);
-            this._pushErrorBubble("The assistant could not complete this turn.", err);
-            this._setStatus("Turn failed.");
+            if (this.chatService?.isAbortError?.(err)) {
+                this._setStatus("Stopped.");
+            } else {
+                console.error("Chat loop failed:", err);
+                this._pushErrorBubble("The assistant could not complete this turn.", err);
+                this._setStatus("Turn failed.");
+            }
         } finally {
-            this._updateInputState({ keepStatus: true });
             this._isRunning = false;
             this._stopRequested = false;
+            this._turnAbortController = null;
+            this.chatService?.cancelActiveTurn?.();
+            this._messageList?.removeProgress();
             this._updateInputState({ keepStatus: true });
         }
     }
 
-    _handleStop(): void {
+    _handleStop(event?: Event): void {
+        event?.preventDefault?.();
         if (!this._isRunning) return;
+
         this._stopRequested = true;
         this._setStatus("Stopping…");
         this._messageList?.updateProgress("Stopping…");
+        this._turnAbortController?.abort("Stopped by user.");
+        this.chatService?.cancelActiveTurn?.("Stopped by user.");
+        this._updateInputState({ keepStatus: true });
     }
 
-    async _runAssistantLoop(initialMessage: ChatMessage, maxSteps: number): Promise<void> {
+    _shouldStopAssistantLoop(): boolean {
+        return !!this._stopRequested || !!this._turnAbortController?.signal?.aborted;
+    }
+
+    async _runAssistantLoop(initialMessage: ChatMessage, maxSteps: number, signal?: AbortSignal): Promise<void> {
         const chatModule = this.chat;
         this._messages.push(initialMessage);
         this._messageList?.addMessage(initialMessage);
@@ -1157,23 +1192,17 @@ export class ChatPanel extends BaseComponent {
 
         try {
             for (let step = 0; step < maxSteps; step++) {
-                if (this._stopRequested) {
-                    this._messageList?.removeProgress();
-                    this._setStatus("Stopped.");
-                    return;
-                }
+                if (this._shouldStopAssistantLoop()) return;
 
                 this._setStatus(step === 0 ? "Sending…" : "Thinking…");
 
-                const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice());
+                const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+                if (this._shouldStopAssistantLoop()) return;
+
                 this._messages.push(reply);
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
-
-                const rawProgress = this.chat?.extractAssistantTextWithoutScript?.(reply);
-                const assistantProgress = rawProgress?.split(/\n\s*\n/)[0]?.trim()
-                    .slice(0, 220) || this._friendlyProgress(reply, null, step);
-                this._messageList?.updateProgress(assistantProgress || this._friendlyProgress(reply, null, step));
+                this._messageList?.updateProgress(this._friendlyProgress(reply, null, step));
 
                 if (!script) {
                     this._messageList?.removeProgress();
@@ -1202,15 +1231,13 @@ export class ChatPanel extends BaseComponent {
                     };
                 }
 
-                if (this._stopRequested) {
-                    this._messageList?.removeProgress();
-                    this._setStatus("Stopped.");
-                    return;
-                }
+                if (this._shouldStopAssistantLoop()) return;
 
                 this._messages.push(executionMessage);
                 this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
             }
+
+            if (this._shouldStopAssistantLoop()) return;
 
             const capMessage: ChatMessage = {
                 role: "user",
@@ -1225,13 +1252,8 @@ export class ChatPanel extends BaseComponent {
             this._messages.push(capMessage);
             this._messageList?.updateProgress("Preparing the final answer…");
 
-            const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice());
-
-            if (this._stopRequested) {
-                this._messageList?.removeProgress();
-                this._setStatus("Stopped.");
-                return;
-            }
+            const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
+            if (this._shouldStopAssistantLoop()) return;
 
             this._messages.push(finalReply);
             this._messageList?.removeProgress();

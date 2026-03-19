@@ -1,1 +1,6 @@
-export type ImageLike = string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob;
+export type ImageLike =
+    | string
+    | HTMLImageElement
+    | CanvasRenderingContext2D
+    | HTMLCanvasElement
+    | Blob;

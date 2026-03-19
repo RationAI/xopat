@@ -1,4 +1,4 @@
-export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any }) => Promise<any>;
+export type RpcMethodCaller = (input?: any, options?: { contextId?: string; client?: any; signal?: AbortSignal }) => Promise<any>;
 export type RpcScope = Record<string, RpcMethodCaller>;
 
 export interface ChatServiceOptions {
@@ -24,6 +24,7 @@ export class ChatService {
     _activeSessionId: string | null;
     _sessionState: Map<string, { syncedCount: number; providerId: string }>;
     _modelCatalog: Map<string, ChatProviderModelInfo[]>;
+    _activeTurnAbortController: AbortController | null;
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
@@ -36,6 +37,7 @@ export class ChatService {
         this._activeSessionId = null;
         this._sessionState = new Map();
         this._modelCatalog = new Map();
+        this._activeTurnAbortController = null;
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -53,6 +55,45 @@ export class ChatService {
         const scope = this._serverFactory?.() || (window as any)?.xserver?.module?.["vercel-ai-chat-sdk"];
         if (!scope) throw new Error('ChatService: server RPC scope for module "chat" is not available.');
         return scope;
+    }
+
+    _clearActiveTurnAbortController(controller?: AbortController | null): void {
+        if (!controller || this._activeTurnAbortController !== controller) return;
+        this._activeTurnAbortController = null;
+    }
+
+    cancelActiveTurn(reason = 'Chat request aborted by user.'): void {
+        if (!this._activeTurnAbortController) return;
+        this._activeTurnAbortController.abort(reason);
+        this._activeTurnAbortController = null;
+    }
+
+    isAbortError(error: unknown): boolean {
+        if (!error) return false;
+        const anyError = error as any;
+        return anyError?.name === 'AbortError'
+            || anyError?.code === 'ABORT_ERR'
+            || /abort(ed|ing)?/i.test(String(anyError?.message || error));
+    }
+
+    _createActiveTurnAbortController(externalSignal?: AbortSignal): AbortController {
+        this.cancelActiveTurn('Superseded by a newer chat turn.');
+        const controller = new AbortController();
+
+        if (externalSignal) {
+            if (externalSignal.aborted) {
+                controller.abort((externalSignal as any).reason || 'Aborted.');
+            } else {
+                const relayAbort = () => controller.abort((externalSignal as any).reason || 'Aborted.');
+                externalSignal.addEventListener('abort', relayAbort, { once: true });
+                controller.signal.addEventListener('abort', () => {
+                    externalSignal.removeEventListener('abort', relayAbort);
+                }, { once: true });
+            }
+        }
+
+        this._activeTurnAbortController = controller;
+        return controller;
     }
 
     async registerProviderType(input: CreateProviderTypeInput | UpdateProviderTypeInput): Promise<ChatProviderTypeRecord> {
@@ -307,6 +348,7 @@ export class ChatService {
         sessionId?: string | null;
         providerId?: string | null;
         allowedScriptApi?: AllowedScriptApiManifest;
+        signal?: AbortSignal;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
         if (!sessionId) {
@@ -324,12 +366,21 @@ export class ChatService {
         }
 
         const personality = this.getCurrentPersonality();
-        const result = await this._server().sendTurn!({
-            sessionId,
-            allowedScriptApi: options?.allowedScriptApi || this.getAllowedScriptApi(),
-            personalityId: this._currentPersonalityId,
-            personalityPrompt: personality?.systemPrompt || null,
-        });
+        const controller = this._createActiveTurnAbortController(options?.signal);
+
+        let result: any;
+        try {
+            result = await this._server().sendTurn!({
+                sessionId,
+                allowedScriptApi: options?.allowedScriptApi || this.getAllowedScriptApi(),
+                personalityId: this._currentPersonalityId,
+                personalityPrompt: personality?.systemPrompt || null,
+            }, {
+                signal: controller.signal,
+            });
+        } finally {
+            this._clearActiveTurnAbortController(controller);
+        }
 
         if (result?.capabilities && sessionId) {
             const sessionProviderId = result?.session?.providerId || options?.providerId || null;
@@ -387,7 +438,7 @@ export class ChatService {
         return capabilities;
     }
 
-    async sendMessage(providerId: string, messages: ChatMessage[]): Promise<ChatMessage> {
+    async sendMessage(providerId: string, messages: ChatMessage[], options?: { signal?: AbortSignal }): Promise<ChatMessage> {
         let sessionId = this._activeSessionId;
         if (!sessionId) {
             const models = await this.listModels(providerId);
@@ -407,7 +458,7 @@ export class ChatService {
             await this.appendMessages(sessionId, delta);
         }
 
-        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi() });
+        const reply = await this.sendTurn({ sessionId, providerId, allowedScriptApi: this.getAllowedScriptApi(), signal: options?.signal });
         return reply;
     }
 

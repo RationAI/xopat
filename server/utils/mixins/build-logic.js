@@ -105,7 +105,6 @@ function findServerEntryFiles(itemDirectory) {
                 if (
                     entry.name === "node_modules" ||
                     entry.name === ".git" ||
-                    entry.name === ".xopat-server" ||
                     entry.name === ".server-dist"
                 ) continue;
 
@@ -195,13 +194,12 @@ const BuildLogic = {
                 `--global-name=window.${namespace}['${cleanId}']`,
                 `--banner:js=window.${namespace} = window.${namespace} || {};`,
                 `--footer:js=window.${namespace}['${cleanId}'] = window.${namespace}['${cleanId}'] || globalThis.__temp_bundle_export; delete globalThis.__temp_bundle_export;`
-                // // Map the internal variable to your specific namespace location
-                // `--footer:js=window.${namespace}.${cleanId} = globalThis.__temp_bundle_export || exports?.default || exports; delete globalThis.__temp_bundle_export;`
             ]);
         } else {
             logger.warn(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
 
+        // todo consider rebuilding only server parts that actually changed
         await buildServerEntries(itemDirectory, logger, logPrefix);
 
         // 3. Handle asset copying if defined

@@ -1,7 +1,7 @@
 /**
  * Extending upon OpenSeadragon.TileSource, these properties are usable for advanced integration.
  */
-import type {ImageLike} from "./types/misc";
+import type { ImageLike } from "./types/misc";
 
 declare const APPLICATION_CONTEXT: {
     httpClient: {

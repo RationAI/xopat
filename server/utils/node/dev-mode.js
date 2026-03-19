@@ -22,22 +22,7 @@ function restartServer() {
 if (process.env.WATCH_PATTERN) {
     run("WATCH", "grunt", ["twinc"]);
 } else {
-    run("WATCH", "npm", ["run", "watch-core"]);
+    run("WATCH", "npm", ["run", "watch-all"]);
 }
 
 startServer();
-
-const watchRoots = ["plugins", "modules"];
-const debounce = new Map();
-for (const root of watchRoots) {
-    const full = path.resolve(process.cwd(), root);
-    if (!fs.existsSync(full)) continue;
-    fs.watch(full, { recursive: true }, (_, filename) => {
-        if (!filename || !/\.server\.(js|mjs|ts)$/i.test(filename)) return;
-        clearTimeout(debounce.get(filename));
-        debounce.set(filename, setTimeout(() => {
-            process.stdout.write(`[DEV] server source changed: ${filename}\n`);
-            restartServer();
-        }, 150));
-    });
-}

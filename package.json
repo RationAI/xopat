@@ -24,6 +24,7 @@
     "dev-docs": "cd docs/readthedocs && mkdocs serve",
     "dev-ui": "grunt connect watch",
     "dev": "node server/utils/node/dev-mode.js",
+    "watch-all": "cross-env WATCH_PATTERN={src,ui,plugins,modules}/**/*.{html,js,mjs,ts} grunt twinc",
     "watch-ui": "cross-env WATCH_PATTERN=ui/**/*.mjs grunt twinc",
     "watch-core": "cross-env WATCH_PATTERN={src,ui}/**/*.{html,js,mjs,ts} grunt twinc",
     "watch-plugins": "cross-env WATCH_PATTERN=plugins/**/*.{html,js,mjs,ts} grunt twinc",

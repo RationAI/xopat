@@ -95,7 +95,10 @@ export type XOpatCoreConfig = {
     css: Record<string, unknown>;
 };
 
-export type XOpatElementRecord = {
+/**
+ * The record as defined in include.json file
+ */
+export type XOpatElementItem = {
     id: string;
     /** Human readable name */
     name?: string;
@@ -105,15 +108,33 @@ export type XOpatElementRecord = {
     includes: Array<string | Record<string, any>>;
     /** If true, the element is always loaded on boot */
     permaLoad: boolean;
-    /** Instantiated class reference */
-    instance?: any;
-    loaded: boolean;
-    error?: any;
-    /** Optional CSS file to inject */
-    styleSheet?: string;
     /** Module IDs to require for a plugin */
     modules?: string[];
     /** Module IDs to require for a module */
     requires?: string[];
     [key: string]: any;
-};
+}
+
+/**
+ * The internal representation in the app, extends XOpatElementItem
+ */
+export interface XOpatElementInternalRecord extends XOpatElementItem {
+    /** Instantiated class reference */
+    instance?: XOpatElementClass;
+    loaded: boolean;
+    error?: any;
+    /** Optional CSS file to inject */
+    styleSheet?: string;
+}
+
+export interface XOpatVisualizationConfig {
+    params?: Record<string, unknown>;
+    data?: DataSpecification[];
+    background?: BackgroundItem[];
+    visualizations?: VisualizationItem[];
+    plugins?: Record<string, unknown>;
+    error?: string;
+    description?: string;
+    details?: string;
+    __fromLocalStorage?: boolean;
+}

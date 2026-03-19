@@ -1,10 +1,17 @@
-import type {ViewportSetup, XOpatCoreConfig, XOpatElementRecord} from "./types/config";
-import type {OpenEvent, TileLoadFailedEvent} from "openseadragon";
+import type {
+    ViewportSetup,
+    XOpatCoreConfig,
+    XOpatElementItem,
+    XOpatSetup,
+    XOpatVisualizationConfig
+} from "./types/config";
+import type { OpenEvent, TileLoadFailedEvent } from "openseadragon";
 import { BackgroundConfig } from "./classes/background-config";
 import { HttpClient } from "./classes/http-client";
 import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
-import {ScriptingManager} from "./classes/scripting-manager";
+import { ScriptingManager } from "./classes/scripting-manager";
+import {BaseComponent} from "../ui/classes/baseComponent.d.ts";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -27,7 +34,7 @@ declare class ViewerManager { constructor(env: any, config: any);[key: string]: 
  * @param I18NCONFIG
  * @private
  */
-export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: Record<string, XOpatElementRecord>, ENV: XOpatCoreConfig, POST_DATA: any, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: any = {}) {
+export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Record<string, XOpatElementItem>, ENV: XOpatCoreConfig, POST_DATA: Record<string, unknown>, PLUGINS_FOLDER: string, MODULES_FOLDER: string, VERSION: string, I18NCONFIG: Record<string, unknown> = {}) {
     const savedState = checkLocalState();
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
@@ -66,8 +73,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
             localizeDom();
         });
     }
-    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost);
-    let CONFIG = POST_DATA.visualization;
+    POST_DATA = xOpatParseConfiguration(POST_DATA, $.i18n, ENV.server.supportsPost) as Record<string, unknown>;
+    let CONFIG = POST_DATA.visualization as XOpatVisualizationConfig;
     if (!CONFIG) {
         CONFIG = {
             error: $.t('error.nothingToRender'),
@@ -89,7 +96,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     const viewerSecureMode = // For safety test string too
         ENV.client.secureMode && (ENV.client.secureMode as unknown as string) !== "false";
     //default parameters not extended by CONFIG.params (would bloat link files)
-    CONFIG.params = CONFIG.params || {};
+    CONFIG.params = (CONFIG.params || {}) as XOpatSetup;
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
     // todo enforce parsing also other by class models
@@ -157,46 +164,41 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
          */
         config: {
             /**
-             * Get parameters object of the viewer setup
-             * @type {xoParams}
+             * Get parameters object of the viewer setup.
+             * getOption should be preferred over direct params access
              */
-            get params() { // getOption should be preferred over params access
+            get params(): Readonly<XOpatSetup> {
                 return CONFIG.params || {};
             },
             /**
              * Get default (static) parameters of the viewer setup
-             * @return {any[]}
              */
-            get defaultParams() {
+            get defaultParams(): Readonly<XOpatSetup> {
                 return defaultSetup;
             },
             /**
              * Get all the data WSI identifiers list
-             * @type {Array<string>}
              */
-            get data() {
+            get data(): Readonly<DataSpecification[]> {
                 return CONFIG.data || [];
             },
             /**
              * Configuration of the 'image group'
-             * @type {Array<BackgroundItem>}
              */
-            get background() {
-                return CONFIG.background || [];
+            get background(): Readonly<BackgroundItem[]> {
+                return (CONFIG.background || []) as BackgroundItem[];
             },
             /**
              * Configuration of the 'data group'
-             * @type {Array<VisualizationItem>}
              */
-            get visualizations() {
-                return CONFIG.visualizations || [];
+            get visualizations(): Readonly<VisualizationItem[]> {
+                return (CONFIG.visualizations || []) as VisualizationItem[];
             },
             /**
              * Startup configuration of plugins
-             * @type {{}}
              */
-            get plugins() {
-                return CONFIG.plugins || {};
+            get plugins(): Readonly<Record<string, XOpatElementItem>> {
+                return (CONFIG.plugins || {}) as Record<string, XOpatElementItem>;
             },
         },
         /**
@@ -358,7 +360,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
          * @return {string}
          */
         referencedName(stripSuffix = false) {
-            if (CONFIG.background.length < 0) {
+            if (!CONFIG.background || CONFIG.background.length < 0) {
                 return undefined;
             }
             const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
@@ -372,7 +374,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
          * @return {string}
          */
         referencedId() {
-            if (CONFIG.background.length < 0) {
+            if (!CONFIG.background || CONFIG.background.length < 0) {
                 return "__anonymous__";
             }
             let config;
@@ -382,14 +384,14 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
                     || CONFIG.background[0];
             }
-            return config ? CONFIG.data[config.dataReference] : "__anonymous__";
+            return config ? CONFIG.data?.[config.dataReference] : "__anonymous__";
         },
         /**
          * Return the current active visualization
          * @return {*}
          */
         activeVisualizationConfig() {
-            return CONFIG.visualizations[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
+            return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
         },
         _dangerouslyAccessConfig() {
             //remove in the future?
@@ -439,6 +441,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
         if (!a || !b) return false;
         return APPLICATION_CONTEXT.registerConfig(a).id === APPLICATION_CONTEXT.registerConfig(b).id;
     };
+
+    // todo make sure our globals dont get out of hand...
+    window.LAYOUT = new UI.MainLayout({
+        id: "viewer-container",
+        position: "right",
+        initialWidth: 360,
+        // tabs: [
+        //     { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
+        //     { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
+        // ]
+    });
+    // Attach once (replaces your static HTML wrapper)
+    (window.LAYOUT as any).attachTo(document.getElementById("middle-container"));
 
 
     initXOpatUI();
@@ -1240,7 +1255,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
 
         if (Array.isArray(config.background)) {
             // always call from(...) it will remap data references to indexes
-            config.background = config.background.map((bg: any) => BackgroundConfig.from(bg));
+            config.background = config.background.map((bg: BackgroundItem | BackgroundConfig) => BackgroundConfig.from(bg));
         }
 
         const cfg = APPLICATION_CONTEXT.config;
@@ -1932,10 +1947,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
 
     // Key event handlers - todo create shortcut manager
-    $.extend($.scrollTo.defaults, {axis: 'y'});
+    $.extend($.scrollTo.defaults, { axis: 'y' });
 
     let failCount = new InvertedWeakMap();
-    VIEWER_MANAGER.broadcastHandler('tile-load-failed', function(e: TileLoadFailedEvent) {
+    VIEWER_MANAGER.broadcastHandler('tile-load-failed', function (e: TileLoadFailedEvent) {
         if (e.message === "Image load aborted") return;
         let index = e.eventSource.world.getIndexOfItem(e.tiledImage);
         let failed = failCount.get(index) || 0;
@@ -1971,11 +1986,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     if (!APPLICATION_CONTEXT.getOption("preventNavigationShortcuts")) {
         function adjustBounds(speedX: number, speedY: number) {
             let bounds = VIEWER.viewport.getBounds();
-            bounds.x += speedX*bounds.width;
-            bounds.y += speedY*bounds.height;
+            bounds.x += speedX * bounds.width;
+            bounds.y += speedY * bounds.height;
             VIEWER.viewport.fitBounds(bounds);
         }
-        VIEWER_MANAGER.addHandler('key-up', function(e: KeyboardEvent & { focusCanvas: boolean }) {
+        VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
             if (e.focusCanvas) {
                 if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
                     let zoom = null,
@@ -2040,27 +2055,37 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementRecord>, MODULES: 
     // Tutorials... todo to different file
     const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
     window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
-        {'next #viewer-container' : $.t('tutorials.basic.1')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.3')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.4'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
-        }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
-        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
-        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
-        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
-        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
-        }, {'next #left-side-buttons-menu-b-share' : $.t('tutorials.basic.14')
-        }, {'next #left-side-buttons-menu-b-tutorial' : $.t('tutorials.basic.15')}], function() {
-        if (withLayers()) {
-            //prerequisite - pin in default state
-            let pin = $("#shaders-pin");
-            let container = pin.parents().eq(1).children().eq(1);
-            pin.removeClass('pressed');
-            container.removeClass('force-visible');
-        }
-    });
+        {
+            'next #viewer-container': $.t('tutorials.basic.1')
+        }, {
+            'next #myMenu-opendiv-navigator': $.t('tutorials.basic.3')
+        }, {
+            'next #myMenu-opendiv-navigator': $.t('tutorials.basic.4'),
+            runIf: function () { return APPLICATION_CONTEXT.config.background.length === 1 && withLayers(); }
+        }, {
+            'next #tissue-title-header': $.t('tutorials.basic.4a'),
+            runIf: function () { return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers(); }
+        }, {
+            'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
+        }, {
+            'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
+        }, {
+            'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
+        }, {
+            'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
+        }, {
+            'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
+        }, {
+            'next #left-side-buttons-menu-b-share': $.t('tutorials.basic.14')
+        }, { 'next #left-side-buttons-menu-b-tutorial': $.t('tutorials.basic.15') }], function () {
+            if (withLayers()) {
+                //prerequisite - pin in default state
+                let pin = $("#shaders-pin");
+                let container = pin.parents().eq(1).children().eq(1);
+                pin.removeClass('pressed');
+                container.removeClass('force-visible');
+            }
+        });
 }
 
 (window as any).initXOpat = initXOpat;
