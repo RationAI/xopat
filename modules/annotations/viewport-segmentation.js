@@ -21,7 +21,8 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         if (this._allowCreation && this.annotations) {
             for (let i = 0; i < this.annotations.length; i++) {
                 delete this.annotations[i].strokeDashArray;
-                this.context.fabric.promoteHelperAnnotation(this.annotations[i]);
+                this.context.fabric.deleteHelperAnnotation(this.annotations[i]);
+                this.context.fabric.addAnnotation(this.annotations[i]);
             }
 
             this.annotations = [];
@@ -213,11 +214,12 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                const index = (y * width + x) * 4 + 3;
-                let a = data[index];
+                const index = (y * width + x) * 4;
+                const a = data[index + 3];
 
                 if (compareAlpha(a)) {
-                    mask[y * width + x] = 1;
+                    const idx = y * width + x;
+                    mask[idx] = 1;
 
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -227,8 +229,13 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             }
         }
 
-        bounds = maxX === -1 || maxY === -1 ? null : { minX, minY, maxX, maxY };
-        return { data: mask, width: width, height: height, bounds: bounds };
+        if (maxX === -1 || maxY === -1) {
+            bounds = null;
+        } else {
+            bounds = { minX, minY, maxX, maxY };
+        }
+
+        return { data: mask, width, height, bounds };
     }
 
     _getPixelAlpha(point) {

@@ -84,6 +84,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
     ];
 
     /**
+     * Geometry properties.
+     * Used internally for cloning, when only geometry should be copied.
+     * @type {string[]}
+     */
+    static geometryProps = [
+        'left', 'top', 'originX', 'originY',
+        'angle', 'flipX', 'flipY',
+        'scaleX', 'scaleY',
+        'skewX', 'skewY',
+        'transformMatrix',
+        'width', 'height',
+        'strokeWidth', 'strokeDashArray', 'strokeLineCap',
+        'strokeLineJoin', 'strokeMiterLimit', 'strokeUniform',
+        'radius', 'rx', 'ry',
+        'x1', 'y1', 'x2', 'y2',
+        'points',
+        'path', 'pathOffset'
+    ];
+
+    /**
      * Human-readable annotation title
      * @returns {string}
      */
@@ -415,6 +435,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     }
 
+    // TODO: incomming PR commened this code block - test if valid!
     renderAllControls(ofObject) {
         const controls = {};
 
@@ -648,39 +669,65 @@ OSDAnnotations.AnnotationObjectFactory = class {
         // }
     }
 
-    /**
-     * Creates a deep clone of a Fabric.js object
-     * @param {fabric.Object} theObject the Fabric.js object to clone
-     * @param {string[]} customProps an array of custom properties to include in the clone
-     * @returns {Promise<fabric.Object>} a promise that resolves with the cloned object
-     */
-    cloneFabricObject(theObject, customProps = []) {
-        return new Promise((resolve, reject) => {
-            theObject.clone(cloned => {
-                resolve(cloned);
-            }, customProps, error => {
-                reject(error || new Error("Failed to clone Fabric object"));
-            });
+    _copyVal(val) {
+        if (Array.isArray(val)) {
+            return val.map(item => this._copyVal(item));
+        }
+        if (val && typeof val === 'object') {
+            const copy = {};
+            for (const key in val) {
+                if (val.hasOwnProperty(key)) copy[key] = this._copyVal(val[key]);
+            }
+            return copy;
+        }
+        return val;
+    }
+
+    _cloneFabricObject(theObject, customProps = []) {
+        const toCopy = [...this.constructor.geometryProps, ...customProps];
+
+        let cloned;
+        try {
+            cloned = new theObject.constructor();
+        } catch (e) {
+            cloned = new fabric.Object();
+        }
+
+        const props = {};
+        toCopy.forEach(p => {
+          if (theObject[p] !== undefined) props[p] = this._copyVal(theObject[p]);
         });
+
+        cloned.set(props);
+
+        if (theObject.path && !cloned.path) cloned.path = this._copyVal(theObject.path);
+        if (theObject.points && !cloned.points) cloned.points = this._copyVal(theObject.points);
+
+        cloned.setCoords();
+        return cloned;
     }
 
     /**
-     * Called when object is selected
-     * @param {fabric.Object} theObject selected fabricjs object
-     * @returns fabricjs object that will be used for highlighting
+     * Create highlight object for the given object
+     * @param {fabric.Object} theObject object to highlight
+     * @return {fabric.Object|null} highlight object or null on error
      */
-    async selected(theObject) {
+    createHighlight(theObject) {
         try {
-            const clonedObj = await this.cloneFabricObject(theObject);
+            const clonedObj = this._cloneFabricObject(theObject, [
+                "originalStrokeWidth",
+                "cornerColor",
+                "borderColor",
+                //"factoryID"
+            ]);
 
-            let newStroke = theObject.strokeWidth * 7;
-            let newStrokeDashArray = [newStroke * 4, newStroke * 2];
+            let newStroke = theObject.strokeWidth * 5;
+            let newStrokeDashArray = [newStroke * 3, newStroke * 2];
 
             clonedObj.set({
                 fill: '',
-                stroke: theObject.cornerColor,
+                stroke: theObject.borderColor,
                 strokeWidth: newStroke,
-                originalStrokeWidth: theObject.originalStrokeWidth,
                 strokeDashArray: newStrokeDashArray,
                 strokeLineCap: 'round',
                 strokeUniform: true,
@@ -689,10 +736,12 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 originX: 'center',
                 originY: 'center',
                 selectable: false,
+                evented: false,
                 opacity: 1,
                 hasControls: false,
                 hasBorders: false,
-                isHighlight: true
+                isHighlight: true,
+                excludeFromExport: true
             });
             delete clonedObj.type;
 
@@ -701,6 +750,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
             console.error("Error in selected function:", error);
             return null;
         }
+    }
+
+    /**
+     * Called when object is selected
+     * @param {fabric.Object} theObject selected fabricjs object
+     */
+    selected(theObject) {
     }
 
     /**
@@ -766,6 +822,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
         ofObject.set({
             stroke: 'rgba(251, 184, 2, 0.75)',
         });
+    }
+
+
+    /**
+     * Resolve annotation text from preset metadata (category) and render it on the object.
+     * Intended for text-based objects.
+     * @param {*} ofObject
+     */
+    renderPresetText(ofObject) {
     }
 
     /**
@@ -848,12 +913,26 @@ OSDAnnotations.PolygonUtilities = {
 
     },
 
-    simplify: function (points, imagePixelOnScreen, highestQuality = true) {
-        // both algorithms combined for performance, simplifies the object based on zoom level
+    simplify: function (points, highestQuality = true) {
         if (points.length <= 2) return points;
 
-        let tolerance = 15 / imagePixelOnScreen;
-        points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
+        // desired visual tolerance in screen pixels
+        const desiredScreenTol = 15;
+        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+
+        // convert to image coords
+        let tolerance = desiredScreenTol / pxSize;
+
+        // CLAMP to keep polygons sane at huge zooms
+        const MIN_TOL = 1.5;   // at least ~1–2 image pixels
+        const MAX_TOL = 100;   // avoid over-simplifying at tiny zoom
+        if (!isFinite(tolerance)) tolerance = MIN_TOL;
+        tolerance = Math.max(MIN_TOL, Math.min(MAX_TOL, tolerance));
+
+        points = highestQuality
+            ? points
+            : this._simplifyRadialDist(points, tolerance * tolerance);
+
         return this._simplifyDouglasPeucker(points, tolerance);
     },
 

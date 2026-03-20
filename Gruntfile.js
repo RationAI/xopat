@@ -1,5 +1,3 @@
-const BuildLogic = require("./server/utils/mixins/build-logic");
-
 module.exports = function(grunt) {
     // import utils first to initialize them
     require('./server/utils/grunt/utils')(grunt);

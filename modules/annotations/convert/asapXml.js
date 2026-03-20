@@ -68,12 +68,12 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                 const xml_annotation = doc.createElement("Annotation");
                 let coordinates=[];
 
-                let factory = this.context.getAnnotationObjectFactory(obj.factoryID);
+                let factory = this.context.module.getAnnotationObjectFactory(obj.factoryID);
                 if (factory) {
                     // Todo some better reporting mechanism
                     if (factory.factoryID === "multipolygon") {
                         wasError = 'ASAP XML Does not support multipolygons - saved as polygon.';
-                        coordinates = this.context.polygonFactory.toPointArray({points: obj.points[0]},
+                        coordinates = this.context.module.polygonFactory.toPointArray({points: obj.points[0]},
                             OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
                     } else {
                         coordinates = factory.toPointArray(obj, OSDAnnotations.AnnotationObjectFactory.withArrayPoint);

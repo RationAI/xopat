@@ -1,6 +1,6 @@
 OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
-    constructor(context, autoCreationStrategy, presetManager) {
-        super(context, autoCreationStrategy, presetManager, "rect", "rect");
+    constructor(context, presetManager) {
+        super(context, presetManager, "rect", "rect");
         this._origX = null;
         this._origY = null;
         this._current = null;
@@ -31,7 +31,6 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        parameters.controls = {};
         const instance = new fabric.Rect(parameters);
         const conf = this.configure(instance, options);
         this.renderAllControls(conf);
@@ -84,6 +83,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._left = theObject.left;
         this._top = theObject.top;
         theObject.set({
+            hasControls: true,
             lockMovementX: false,
             lockMovementY: false,
             hasRotatingPoint: false,
@@ -97,7 +97,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
             left = theObject.left,
             top = theObject.top;
         theObject.set({ left: this._left??left, top: this._top??top, scaleX: 1, scaleY: 1,
-            lockMovementX: true, lockMovementY: true});
+            hasControls: false, lockMovementX: true, lockMovementY: true});
         let newObject = this.copy(theObject, {
             left: left, top: top, width: width, height: height
         });
@@ -330,7 +330,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             top: this._top ?? top,
             scaleX: 1,
             scaleY: 1,
-            hasControls: true,
+            hasControls: false,
             lockMovementX: true,
             lockMovementY: true
         });
@@ -384,6 +384,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
             angle: -this._getViewportRotation()
         });
     }
+
     discardCreate() {
         if (this._current) {
             this._context.fabric.deleteHelperAnnotation(this._current);
@@ -502,7 +503,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
 OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
     constructor(context, presetManager) {
-        super(context, presetManager, "text", "text");
+        super(context, presetManager, "text", "i-text");
     }
 
     getIcon() {
@@ -535,7 +536,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {Object} options see parent class
      */
     create(parameters, options) {
-        const instance = new fabric.Text(parameters.text);
+        options.editable = false;
+        const instance = new fabric.IText(parameters.text);
         const conf = this.configure(instance, $.extend(options, parameters));
         this.renderAllControls(conf);
         return conf;
@@ -558,7 +560,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontSize: options.fontSize || 16,
                 type: this.type,
                 factoryID: this.factoryID,
-                selectable: false,
+                selectable: true,
                 hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
@@ -577,7 +579,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
                 fontSize: (options.fontSize || 16) / options.zoomAtCreation,
                 type: this.type,
                 factoryID: this.factoryID,
-                selectable: false,
+                selectable: true,
                 hasControls: false,
                 lockUniScaling: true,
                 stroke: 'white',
@@ -603,6 +605,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         visualProperties.hasBorders = true;
         visualProperties.angle = this._getViewportCounterRotation();
         ofObject.set(visualProperties);
+        this._context.fabric.rerender();
+    }
+
+    renderPresetText(ofObject) {
+        ofObject.text = this._context.fabric.getAnnotationDescription(ofObject, "category", true, false);
+        this._context.fabric.rerender();
     }
 
     applySelectionStyle(ofObject) {
@@ -671,7 +679,8 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         props.paintFirst = 'stroke';
         props.angle = ofObject.angle ?? this._getViewportCounterRotation();
         props.centeredRotation = false;
-        const conf = new fabric.Text(parameters.text, props);
+        props.editable = false;
+        const conf = new fabric.IText(parameters.text, props);
         this.renderAllControls(conf);
         return conf;
     }
@@ -679,9 +688,12 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     edit(theObject) {
         this._left = theObject.left;
         this._top = theObject.top;
+        this._origText = (theObject.text || "").trim();
+
         theObject.set({
             lockMovementX: false,
-            lockMovementY: false
+            lockMovementY: false,
+            editable: true
         });
     }
 
@@ -691,12 +703,41 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
 
     recalculate(theObject, ignoreReplace=false) {
         let left = theObject.left,
-            top = theObject.top,
-            text = this._context.fabric.getAnnotationDescription(theObject, "category", false) || theObject.text;
+            top = theObject.top;
 
+        let customText = theObject.text.trim();
+        theObject.meta = theObject.meta || {};
+
+        if (this._origText !== customText) {
+            theObject.meta.category = customText;
+        } else {
+            theObject.text = theObject.meta?.category;
+        }
+
+        let newText = this._context.fabric.getAnnotationDescription(theObject, "category", true, false);
         theObject.set({ left: this._left, top: this._top, scaleX: 1, scaleY: 1,
-            hasControls: false, lockMovementX: true, lockMovementY: true});
-        let newObject = this.copy(theObject, {left: left, top: top, text: text});
+            hasControls: false, lockMovementX: true, lockMovementY: true, editable: false});
+
+        let newObject = this.copy(theObject, {
+            left: left,
+            top: top,
+            text: newText
+        });
+
+        const meta = JSON.parse(JSON.stringify(theObject.meta || {}));
+        let preset = this._context.presets.get(theObject.presetID);
+        let metadata = preset ? preset.meta : {};
+        let presetCategory = metadata['category'] ? metadata['category'].value : null;
+        let defaultText = "Text";
+
+        if (this._origText !== defaultText && this._origText !== presetCategory) {
+            meta['category'] = this._origText;
+        } else {
+            meta['category'] = '';
+        }
+
+        theObject.text = this._origText;
+        theObject.meta = meta;
         theObject.calcACoords();
 
         if (!ignoreReplace) {
@@ -766,7 +807,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         };
     }
 
-    selected(theObject) {
+    createHighlight(theObject) {
         return undefined;
     }
 };
@@ -1040,6 +1081,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
+        theObject.set({ hoverCursor: 'default' });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1135,6 +1177,7 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
             x: point.x + deltaX,
             y: point.y + deltaY
         }));
+        // todo make copy optional!
         const newObject = this.copy(theObject, {
             points: translatedPoints,
             left: theObject.left + deltaX,
@@ -1903,8 +1946,9 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     configure(object, options) {
-        super.configure(object, options);
-        object.fillRule = "evenodd";
+        const obj = super.configure(object, options);
+        obj.fillRule = "evenodd";
+        return obj;
     }
 
     _createPathFromPoints(multiPoints) {
@@ -2018,9 +2062,9 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return multipolygonPoints;
     }
 
-    async selected(theObject) {
+    createHighlight(theObject) {
         try {
-            const result = await super.selected(theObject);
+            const result = super.createHighlight(theObject);
             return this.setPoints(result);
 
         } catch (error) {
@@ -2039,6 +2083,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
 
         const self = this;
+        theObject.set({ hoverCursor: 'default' });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -2075,7 +2120,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         return fabric.util.transformPoint(
             { x, y },
             fabric.util.multiplyTransformMatrices(
-                fabricObject.fabric.canvas.viewportTransform,
+                fabricObject.canvas.viewportTransform,
                 fabricObject.calcTransformMatrix()
             )
         );

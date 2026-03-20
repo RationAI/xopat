@@ -1,17 +1,14 @@
 {
-    "id": "gui_annotations",
-    "name": "Annotations",
-    "author": "Jirka Horák",
-    "version": "1.0.0",
-    "description": "A plugin for annotations creation, management and sharing.",
-    "icon": null,
-    "includes": ["annotationsGUI.js", "preview.js", "measurements.js"],
-    "modules": ["annotations", "human-readable-ids", "sam-segmentation-experimental"],
-    "permaLoad": false,
-    //Available annotation object types
-    "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
-    //Windowed history + annotation list
-    "modalHistoryWindow": true,
-    //Enable adjustment of presets
-    "enablePresetModify": true
+  "id": "gui_annotations",
+  "name": "Annotations",
+  "author": "Jirka Horák",
+  "version": "1.0.0",
+  "description": "A plugin for annotations creation, management and sharing.",
+  "icon": null,
+  "includes": ["annotationsPlugin.mjs", "preview.js"],
+  "modules": ["annotations", "human-readable-ids", "sam-segmentation-experimental"],
+  "permaLoad": false,
+  "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
+  "modalHistoryWindow": true,
+  "enablePresetModify": true
 }

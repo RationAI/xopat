@@ -1,10 +1,106 @@
 {
-  "errors": {
-    "noTargetTissue": "No target tissue (background image) available.",
-    "noPresetAction": "You need to <a onclick=\"{{action}}\">set a preset</a> for annotation creation."
+  "annotations": {
+    "viewerMenu": {
+      "title": "Annotations",
+      "toggleVisibility": "Show or hide annotations",
+      "outlineOnly": "Outline only",
+      "edgeNavigation": "Enable edge navigation",
+      "save": "Save",
+      "moreOptions": "More options",
+      "border": "Border",
+      "opacity": "Opacity",
+      "editPresets": "Edit",
+      "tabs": {
+        "classes": "Classes",
+        "annotations": "Annotations",
+        "authors": "Authors"
+      }
+    },
+    "toolbar": {
+      "title": "Annotations",
+      "undo": "Undo",
+      "redo": "Redo",
+      "history": "History",
+      "measurements": "Measurements",
+      "modeOptions": "Mode options"
+    },
+    "export": {
+      "menuTitle": "Annotations",
+      "forSlide": "for slide {{slide}}",
+      "description": "Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.",
+      "fileSection": "File Download / Upload",
+      "scopeLabel": "Export scope (annotations):",
+      "replaceOnImport": "Replace existing data on import",
+      "downloadPresets": "Download presets.",
+      "downloadAnnotations": "Download annotations.",
+      "scopeOptions": {
+        "all": "All",
+        "selected": "Selected"
+      },
+      "formatHint": "Format",
+      "importFileButton": "Import file: format '{{format}}'",
+      "saveFailed": "Failed to save annotations.",
+      "downloadFallbackHandled": "Annotations downloaded as a file - no service integration available."
+    },
+    "comments": {
+      "title": "Comments",
+      "enable": "Enable comments",
+      "autoOpen": "Automatically open comments on initial click",
+      "rememberState": "Remember comments window opened/closed state",
+      "rememberOptions": {
+        "none": "Always keep open",
+        "global": "Keep open globally",
+        "individual": "Keep open per-annotation"
+      },
+      "inputPlaceholder": "Add a comment...",
+      "replyPlaceholder": "Add a reply...",
+      "send": "Send comment",
+      "reply": "Reply",
+      "delete": "Delete comment",
+      "confirmDelete": "Click again to delete",
+      "empty": "No comments to show",
+      "time": {
+        "justNow": "just now",
+        "minutesAgo": "{{count}}m ago",
+        "hoursAgo": "{{count}}h ago",
+        "daysAgo": "{{count}}d ago",
+        "weeksAgo": "{{count}}w ago",
+        "monthsAgo": "{{count}}mo ago",
+        "yearsAgo": "{{count}}y ago"
+      }
+    },
+    "authors": {
+      "empty": "No authors found",
+      "annotationCount": "{{count}} annotation(s)",
+      "show": "Show",
+      "ignoreStyling": "Ignore styling",
+      "color": "Color:",
+      "dash": "Dash:"
+    },
+    "measurements": {
+      "title": "Metrics",
+      "presetLabel": "Preset",
+      "compute": "Compute",
+      "helperText": "Area in unit², length in unit (aggregate per preset).",
+      "metrics": {
+        "area": "Area",
+        "length": "Length"
+      },
+      "combineTitle": "Combine results",
+      "resultLabel": "Result",
+      "saveResult": "Save as result",
+      "copyCsv": "Copy CSV",
+      "clear": "Clear",
+      "empty": "No computed results yet.",
+      "objectShort": "obj",
+      "remove": "Remove",
+      "valueLabel": "Value",
+      "resultId": "Result id",
+      "pick": "(pick)",
+      "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
+    }
   },
-  "showBoard": "Show board",
-  "onOff": "Enable/disable annotations",
-  "outlineOnly": "Outline only.",
-  "presetsInCookies": "Presets stored in cookies"
+  "common": {
+    "cancel": "Cancel"
+  }
 }

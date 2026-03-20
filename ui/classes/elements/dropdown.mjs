@@ -135,6 +135,21 @@ class Dropdown extends BaseSelectableComponent {
         }
     }
 
+    _applyDisabledState(item, node = undefined) {
+        const root = node || item?._node;
+        const anchor = root?.matches?.('a') ? root : root?.querySelector?.('a');
+        if (!anchor) return;
+
+        const disabled = !!item.disabled;
+
+        anchor.classList.toggle('opacity-50', disabled);
+        anchor.classList.toggle('select-none', disabled);
+        anchor.classList.toggle('cursor-default', disabled);
+        anchor.classList.toggle('pointer-events-none', disabled);
+        anchor.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+        anchor.tabIndex = disabled ? -1 : 0;
+    }
+
     _open(trigger, place) {
         if (this._isOpen) {
             if (this._fmToken) UI.Services.FloatingManager.bringToFront(this._fmToken);
@@ -211,12 +226,25 @@ class Dropdown extends BaseSelectableComponent {
     addItem(item, sectionTitleIfNew = "") {
         const secId = item.section || this.sections[0]?.id || "default";
         const target = this._ensureSection(secId, sectionTitleIfNew) || this._sectionMap.get(this.sections[0].id);
-        const node = this._renderItem({ ...item, section: secId });
+
+        const storedItem = { ...item, section: secId };
+        const node = this._renderItem(storedItem);
+        storedItem._node = node;
+
         if (target) target.appendChild(node);
-        this.items[item.id] = { ...item, section: secId };
+        this.items[item.id] = storedItem;
     }
 
     getItem(id) { return this.items[id]; }
+
+    setItemDisabled(id, disabled) {
+        const item = this.items[id];
+        if (!item) return false;
+
+        item.disabled = !!disabled;
+        this._applyDisabledState(item);
+        return true;
+    }
 
     setSelected(id) {
         this.selectedId = id;
@@ -288,10 +316,17 @@ class Dropdown extends BaseSelectableComponent {
                 "hover:bg-base-300 focus:bg-base-300",
                 // Highlight background ONLY if NOT in check mode
                 (selected && !isCheckStyle) ? "bg-primary/20 text-primary-content" : "",
+                item.disabled ? "opacity-50 select-none cursor-default pointer-events-none" : "",
                 item.pluginRootClass || "",
             ].join(" "),
             onclick: (e) => {
                 if (!item.href) e.preventDefault();
+
+                if (item.disabled) {
+                    e.stopPropagation();
+                    return true;
+                }
+
                 if (hasChildren) return;
 
                 const keepOpen = item.onClick?.(e, item) === true;
@@ -386,7 +421,7 @@ class Dropdown extends BaseSelectableComponent {
                 self._scheduleSubmenuCheck();
             });
         }
-
+        this._applyDisabledState(item, liEl);
         return liEl;
     }
 

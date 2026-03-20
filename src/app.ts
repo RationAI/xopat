@@ -1826,7 +1826,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         }
     };
 
-    const XOpatHistory = class XOpatHistory {
+    const XOpatHistory = class XOpatHistory extends OpenSeadragon.EventSource {
         _buffer: Array<{ forward: () => any; backward: () => void } | null>;
         _buffidx: number;
         _lastValidIndex: number;
@@ -1834,6 +1834,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         BUFFER_LENGTH: number;
 
         constructor(size = 99) {
+            super();
             this._buffer = [];
             // points to the current state in the redo/undo index in circular buffer
             this._buffidx = -1;
@@ -1851,6 +1852,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         registerProvider(provider: HistoryProvider) {
             this._providers.push(provider);
+            this.raiseEvent('register-provider', { provider });
         }
 
         /**
@@ -1859,6 +1861,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         set size(value: number) {
             this.BUFFER_LENGTH = Math.max(2, value);
+            this.raiseEvent('change-size', { size: value });
         }
 
         /**
@@ -1876,7 +1879,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
             this._buffer[this._buffidx] = { forward, backward };
             this._lastValidIndex = this._buffidx;
-
+            this.raiseEvent('push');
             return forward();
         }
 
@@ -1887,7 +1890,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (!this.canUndo()) return;
 
             for (let historyProvider of this._providers) {
-                if (historyProvider.undo()) return;
+                if (historyProvider.undo()) {
+                    this.raiseEvent('undo');
+                    return;
+                }
             }
 
             const entry = this._buffer[this._buffidx];
@@ -1901,6 +1907,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 this._lastValidIndex--;
                 if (this._lastValidIndex < 0) this._lastValidIndex = this.BUFFER_LENGTH - 1;
             }
+            this.raiseEvent('undo');
         }
 
         /**
@@ -1910,13 +1917,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (!this.canRedo()) return;
 
             for (let historyProvider of this._providers) {
-                if (historyProvider.redo()) return;
+                if (historyProvider.redo()) {
+                    this.raiseEvent('redo');
+                    return;
+                }
             }
 
             this._buffidx = (this._buffidx + 1) % this.BUFFER_LENGTH;
             const entry = this._buffer[this._buffidx];
             if (!entry) return;
             entry.forward();
+            this.raiseEvent('redo');
         }
 
         /**

@@ -150,7 +150,7 @@ OSDAnnotations.PresetManager = class {
         selectable: true,
         originalStrokeWidth: 3,
         borderColor: 'rgba(251,184,2,0.35)',
-        cornerColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251, 185, 2, 1)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',
@@ -541,9 +541,9 @@ OSDAnnotations.PresetManager = class {
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
-        const layerID = this._context.fabric.getActiveLayer()?.id;
+        //const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: layerID,
+            layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });

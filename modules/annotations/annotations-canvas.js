@@ -12,8 +12,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.overlay.resizecanvas(); //if plugin loaded at runtime, 'open' event not called
         // this._debugActiveObjectBinder();
 
-        this.__selectionSnapshot = null;
-        this.__snapshotIsModifierToggle = false;
+        this.__selectionSnapshot = [];
+        this.__programmaticClear = false;   // to avoid firing clear selection events from fabric on empty clicks
+
         this._trackedDoppelGangers = {};
         this._dopperlGangerCount = 0;
         // todo move layers functionality?
@@ -162,6 +163,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return Promise((string|object)) serialized data or object of serialized annotations and presets (if applicable)
      */
     async export(options={}, withAnnotations=true, withPresets=true) {
+        if (this.module.historyManager.isOngoingEdit()) this.module.historyManager._boardItemSave();
+
         options = $.extend(true, {}, this.module.getExportOptions(), options);
         //prevent immediate serialization as we feed it to a merge immediately, -> we don't reuse exportPartial(..)
         options.serialize = false;
@@ -314,6 +317,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         props = Array.from(new Set(props));
 
         let objectsToExport = this.canvas.getObjects();
+        objectsToExport = objectsToExport.filter(o => !o.excludeFromExport);
         if (filter && typeof filter === "function") {
             objectsToExport = objectsToExport.filter(filter);
         }
@@ -372,20 +376,18 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 objects[i].lockScalingY = false;
                 objects[i].lockUniScaling = false;
             }
-            if (this.cachedTargetCanvasSelection) {
-                const selection = this.cachedTargetCanvasSelection;
-                if (selection.type === 'activeSelection') {
-                    selection.getObjects().forEach(obj => {
+            if (this._cachedTargetCanvasSelection) {
+                const selection = this._cachedTargetCanvasSelection;
+                if (Array.isArray(selection) && selection.length > 1) {
+                    selection.forEach(obj => {
                         this.selectAnnotation(obj, true);
-                        this.updateSingleAnnotationVisuals(obj);
                     });
                 } else {
-                    this.selectAnnotation(selection, true);
-                    this.updateSingleAnnotationVisuals(selection);
+                    this.selectAnnotation(selection[0], true);
                 }
             }
         } else {
-            this.cachedTargetCanvasSelection = this.canvas.getActiveObject();
+            this._cachedTargetCanvasSelection = this.getSelectedAnnotations();
             for (let i = 0; i < objects.length; i++) {
                 //set all objects as invisible and lock in position
                 objects[i].visible = false;
@@ -413,14 +415,15 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * @return {OSDAnnotations.Layer} layer it belongs to
      */
     checkLayer(ofObject) {
-        if (ofObject.hasOwnProperty("layerID") && String(ofObject.layerID) && !this._layers.hasOwnProperty(ofObject.layerID)) {
+        if (!this._layers.hasOwnProperty(ofObject.layerID) && ofObject.hasOwnProperty("layerID") && String(ofObject.layerID)) {
             this._createLayer({id: ofObject.layerID, _objects: []});
         }
     }
 
     /**
      * Set current active layer
-     * @param layer layer to set
+     * @param {OSDAnnotations.Layer|number} layer layer instance or id
+     * @event active-layer-changed
      */
     setActiveLayer(layer) {
         if (typeof layer === 'number') layer = this._layers[layer];
@@ -428,13 +431,13 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this._layer.setActive(true);
 
         this.raiseEvent('active-layer-changed', {
-            id: String(this._layer.id)
+            layer: this._layer
         });
     }
 
     /**
      * Unset the current active layer (keeps selection intact)
-     * @param {boolean} silent do not emit event
+     * @event active-layer-changed
      */
     unsetActiveLayer() {
         if (!this._layer) return;
@@ -442,14 +445,13 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this._layer = undefined;
 
         this.raiseEvent('active-layer-changed', {
-            id: undefined
+            layer: undefined
         });
     }
 
     /**
-     * Select a layer (optionally append for multi-selection).
+     * Select a layer, supports multi selection
      * @param {OSDAnnotations.Layer|number} layer layer instance or id
-     * @param {boolean} append true to keep existing selection and add this one
      * @param {boolean} silent do not emit event
      */
     selectLayer(layer, silent=false) {
@@ -460,44 +462,41 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             this._selectedLayers.add(layer.id);
             layer.setActive(true);
 
-            if (!silent) this._emitLayerSelectionChanged(layer.id, true);
+            if (!silent) this._emitLayerSelectionChanged([layer], []);
         }
     }
 
     /**
-     * Deselect a specific layer (if it was active, active layer becomes last remaining or undefined)
-     * @param {number} layerId
-     * @param {boolean} silent
+     * Deselect a specific layer (if it was active, active layer becomes last remaining or none)
+     * @param {OSDAnnotations.Layer|number} layer layer instance or id
+     * @param {boolean} silent do not emit event
      */
-    deselectLayer(layerId, silent=false) {
-        layerId = String(layerId);
-        if (!this._selectedLayers.has(layerId)) return;
-        const layer = this._layers[layerId];
-        this._selectedLayers.delete(layerId);
-        if (layer) layer.setActive(false);
+    deselectLayer(layer, silent=false) {
+        layer = typeof layer === 'number' ? this._layers[layer] : layer;
+        if (!layer || !this._selectedLayers.has(layer.id)) return;
 
-        if (this._layer && this._layer.id === layerId) {
+        this._selectedLayers.delete(layer.id);
+        layer.setActive(false);
+
+        if (this._layer && this._layer.id === layer.id) {
             const last = Array.from(this._selectedLayers).at(-1);
             last ? this.setActiveLayer(Number(last)) : this.unsetActiveLayer();
         }
-        if (!silent) this._emitLayerSelectionChanged(layerId, false);
+        if (!silent) this._emitLayerSelectionChanged([], [layer]);
     }
 
     /**
      * Clear all layer selection (no active layer afterwards)
-     * @param {boolean} silent
+     * @param {boolean} silent do not emit event
      */
     clearLayerSelection(silent=false) {
-        if (this._selectedLayers.size === 0) return;
-        const ids = this.getSelectedLayerIds();
+        const deselect = this.getSelectedLayers();
+        if (deselect.length === 0) return;
 
-        this._selectedLayers.forEach(id => {
-            const l = this._layers[id];
-            if (l) l.setActive(false);
-        });
-
+        deselect.forEach(layer => layer.setActive(false));
         this._selectedLayers.clear();
-        if (!silent) this._emitLayerSelectionChanged(ids, false);
+
+        if (!silent) this._emitLayerSelectionChanged([], deselect);
     }
 
     /**
@@ -517,17 +516,20 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     /**
-     * Emit selection change event
+     * Emit layer selection change event
+     * @event layer-selection-changed
      * @private
      */
-    _emitLayerSelectionChanged(layerIds, isSelected) {
-        const ids = Array.isArray(layerIds)
-            ? layerIds.map(String)
-            : (layerIds !== undefined && layerIds !== null ? String(layerIds) : layerIds);
+    _emitLayerSelectionChanged(selected, deselected) {
+        const norm = v => (v === undefined || v === null) ? [] : (Array.isArray(v) ? v : [v]);
+
+        const sel = norm(selected);
+        const desel = norm(deselected);
+        if (sel.length === 0 && desel.length === 0) return;
 
         this.raiseEvent('layer-selection-changed', {
-            ids: ids,
-            isSelected: isSelected
+            selected: sel,
+            deselected: desel
         });
     }
 
@@ -557,7 +559,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
         const data = layer.toObject();
         if (this.module.historyManager) {
-            data._position = this.module.historyManager.getBoardIndex('layer', layerId);
+            data.position = this.module.historyManager.getBoardIndex('layer', layerId);
         }
         return data;
     }
@@ -663,15 +665,61 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     /**
-     * Delete object without knowledge of its identity (fully-fledged annotation or helper one)
-     * @param {fabric.Object} o
-     * @param _raise @private
-     * @return {boolean} true if object was deleted
+     * Delete object(s) depending on their kind:
+     * - Layer: delete via history.
+     * - Helper annotations: delete immediately (no history).
+     * - Full annotations: delete via history.
+     *
+     * Accepts a single annotation, an array of annotations, or any container with an `_objects` array
+     * (e.g., ActiveSelection, Group, Canvas, or a plain object).
+     *
+     * @param {fabric.Object|fabric.Object[]|fabric.ActiveSelection|Object|OSDAnnotations.Layer} target
+     * @param {boolean} [_raise=true]
+     * @return {boolean} true if processed
      */
-    deleteObject(o, _raise=true) {
-        // this._deletedObject = o;
-        if (this.isAnnotation(o)) return this._deleteAnnotation(o, _raise);
-        return this.deleteHelperAnnotation(o);
+    deleteObject(target, _raise=true) {
+        if (!target) return false;
+
+        function handleAnnotation(annot) {
+            // If full annotation, keep it (returned for filtering)
+            if (this.isAnnotation(annot)) return annot;
+            // Otherwise delete helper and drop from filtering
+            this.deleteHelperAnnotation(annot);
+            return undefined;
+        }
+
+        if (target.type === 'layer') {
+            this.deleteLayer(target.id);
+            return true;
+        }
+
+        const boundHandle = handleAnnotation.bind(this);
+
+        const targetAnnots = []
+        const targets = Array.isArray(target)
+            ? target
+            : target._objects && Array.isArray(target._objects)
+                ? target._objects
+                : [target];
+
+        targetAnnots.push(...targets.map(boundHandle).filter(Boolean));
+
+        for (const obj of targetAnnots) {
+            if (obj.layerID) {
+                const layer = this.getLayer(obj.layerID);
+                obj._position = layer ? layer.getAnnotationIndex(obj) : undefined;
+            } else {
+                obj._position = this.module.historyManager.getBoardIndex('annotation', obj.incrementId);
+            }
+        }
+        targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
+
+        this.module.history.push(
+            () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
+            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise))
+        )
+
+        return true;
     }
 
     /**
@@ -770,8 +818,8 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         this.addAnnotationToLayer(annotation, layerIndex);
 
         if (!_dangerousSkipHistory) this.module.historyManager.addAnnotationToBoard(annotation, undefined, boardIndex);
-        // this.clearAnnotationSelection(true);
-        // this.selectAnnotation(annotation, true);
+        //this.clearAnnotationSelection(true);
+        this.selectAnnotation(annotation, true, true);
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
         this.canvas.requestRenderAll();
@@ -801,8 +849,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         if (updateUI) {
             this.module.historyManager.addAnnotationToBoard(next, previous, boardIndex);
 
-            // this.clearAnnotationSelection(true);
-            // this.selectAnnotation(next, true);
+            this.selectAnnotation(next, true, true);
             this.raiseEvent('annotation-replace', {previous, next});
         }
 
@@ -810,14 +857,14 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     _createLayer(layerData) {
-        const restoredLayer = new OSDAnnotations.Layer(this, layerData.id);
+        const restoredLayer = new OSDAnnotations.Layer(this.module, layerData.id);
 
         for (let [key, value] of Object.entries(layerData)) {
             restoredLayer[key] = value;
         }
 
         this._layers[layerData.id] = restoredLayer;
-        const boardIndex = restoredLayer.hasOwnProperty("_position") ? restoredLayer._position : undefined;
+        const boardIndex = restoredLayer.hasOwnProperty("position") ? restoredLayer.position : undefined;
         this.module.historyManager.addLayerToBoard(restoredLayer, boardIndex);
 
         for (let obj of layerData._objects) {
@@ -1147,12 +1194,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     }
 
     /**
-     * Get array of selected annotation IDs (incrementId as strings)
+     * Get array of selected annotations internalIDs
      * @returns {string[]}
      */
     getSelectedAnnotationIds() {
         return this.getSelectedAnnotations()
-            .map(obj => String(obj.incrementId))
+            .map(obj => String(obj.internalID))
             .filter(Boolean);
     }
 
@@ -1164,94 +1211,97 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         const activeObject = this.canvas.getActiveObject();
         if (!activeObject) return [];
 
-        return activeObject.type === 'activeSelection'
-            ? activeObject._objects
-            : [activeObject];
+        return [ ...(this.__selectionSnapshot.slice(0, -1)), activeObject];
     }
 
     /**
      * Select an annotation by object or incrementId; supports multi-select.
-     * @param {fabric.Object|number|string} annotation
+     * @param {fabric.Object|number|string} annotation object or incrementId of the annotation to select
      * @param {boolean} [fromCanvas=false] if the selection event originates on canvas, set true
+     * @param {boolean} [clearPrevious=false] if true, clears previous selections
      * @returns {void}
      */
-    selectAnnotation(annotation, fromCanvas=false) {
-        //todo fix this method
+    selectAnnotation(annotation, fromCanvas=false, clearPrevious=false) {
         if (annotation === null || annotation === undefined) return;
         const obj = typeof annotation === 'object' ?
             annotation : this.findObjectOnCanvasByIncrementId(Number(annotation));
-
         if (!obj) return;
+
+        let deselect = [];
+        if (clearPrevious) {
+            this.removeHighlight();
+
+            deselect = this.getSelectionSnapshot();
+            deselect = deselect.filter(x => { return x.internalID !== obj.internalID });
+
+            this.clearSelectionSnapshot();
+            this.__programmaticClear = true;
+            this.canvas.discardActiveObject();
+        }
+
         const canvas = this.canvas;
-        const baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
-        if (!baseIds.includes(obj.incrementId)) baseIds.push(obj.incrementId);
-        this._applySelectionFromIds(baseIds, true);
+        let baseAnnotations = clearPrevious ? [] : this.getSelectionSnapshot();
+        if (!baseAnnotations.includes(obj)) baseAnnotations.push(obj);
+        this._applySelection(baseAnnotations);
 
         canvas.requestRenderAll();
-        this._emitAnnotationSelectionChanged(baseIds, true, fromCanvas);
+        this._emitAnnotationSelectionChanged(baseAnnotations, deselect, fromCanvas);
     }
-
 
     /**
      * Deselect an annotation by incrementId.
      * Handles single and multi-selection.
-     * @param {fabric.Object|string|number} object object or incrementId of the annotation to deselect
-     * @param {boolean} [fromCanvas=false]
+     * @param {fabric.Object|string|number} annotation object or incrementId of the annotation to deselect
+     * @param {boolean} [fromCanvas=false] if the deselection event originates on canvas, set true
      * @returns {void}
      */
-    deselectAnnotation(object, fromCanvas=false) {
+    deselectAnnotation(annotation, fromCanvas=false) {
         const canvas = this.canvas;
-        const obj = typeof object === 'object' ? object : this.findObjectOnCanvasByIncrementId(object);
+        const obj = typeof annotation === 'object' ? annotation : this.findObjectOnCanvasByIncrementId(Number(annotation));
         if (!obj) return;
 
-        let baseIds = this.__snapshotIsModifierToggle ? (this.__selectionSnapshot?.map(x => x.incrementId) || []) : this.getSelectionSnapshot();
-        baseIds = baseIds.filter(x => x !== obj.incrementId);
-        this._applySelectionFromIds(baseIds);
+        let baseAnnotations = this.getSelectionSnapshot();
+        baseAnnotations = baseAnnotations.filter(x => x.internalID !== obj.internalID);
+        this._applySelection(baseAnnotations);
 
         canvas.requestRenderAll();
-        this._emitAnnotationSelectionChanged(baseIds, false, fromCanvas);
+        this._emitAnnotationSelectionChanged(baseAnnotations, [obj], fromCanvas);
     }
 
     /********************* PRIVATE **********************/
 
     getSelectionSnapshot() {
-        const active = this.canvas.getActiveObject();
-        if (!active) return [];
-        if (active.type === 'activeSelection') return active._objects.map(o => o.incrementId);
-        return [active.incrementId];
+        return this.__selectionSnapshot || [];
     }
 
-    clearSelectionSnapshot(keepCached=false) {
-        if (!keepCached) this.__selectionSnapshot = null;
-        this.__snapshotIsModifierToggle = false;
+    clearSelectionSnapshot() {
+        this.__selectionSnapshot = [];
     }
 
-    _applySelectionFromIds(ids) {
+    _applySelection(annotations) {
         const canvas = this.canvas;
-        if (!ids || ids.length === 0) {
+        if (!annotations || annotations.length === 0) {
+            this.removeHighlight();
+            this.clearSelectionSnapshot();
+
+            this.__programmaticClear = true;
             canvas.discardActiveObject();
             canvas.requestRenderAll();
             return;
         }
-        const objs = ids
-            .map(id => this.findObjectOnCanvasByIncrementId(Number(id)))
-            .filter(Boolean);
 
-        if (objs.length === 1) {
-            const obj = objs[0];
+        if (annotations.length === 1) {
+            const obj = annotations[0];
+            this.highlightAnnotation(obj);
             canvas.setActiveObject(obj);
+
             this.__selectionSnapshot = [obj];
         } else {
-            // active is single object, convert to ActiveSelection
-            const sel = new fabric.ActiveSelection([], { canvas });
-            // Build selection incrementally to keep child positions intact
-            for (let o of objs) {
-                sel.addWithUpdate(o);
-            }
-            sel.hasBorders = false;
-            sel.hasControls = false;
-            canvas.setActiveObject(sel);
-            this.__selectionSnapshot = sel._objects;
+            const last = annotations[annotations.length - 1];
+
+            canvas.setActiveObject(last);
+            this.highlightAnnotation(last);
+            this.__selectionSnapshot = [...annotations];
         }
 
         canvas.requestRenderAll();
@@ -1259,33 +1309,40 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
 
     /**
      * Emit annotation selection change
+     * @event annotation-selection-changed
      */
-    _emitAnnotationSelectionChanged(annotationIds, isSelected, fromCanvas) {
-        const ids = Array.isArray(annotationIds)
-            ? annotationIds.map(id => String(id))
-            : (annotationIds !== undefined && annotationIds !== null ? String(annotationIds) : annotationIds);
+    _emitAnnotationSelectionChanged(selected, deselected, fromCanvas) {
+        const norm = (v) =>
+            (v === undefined || v === null) ? [] : (Array.isArray(v) ? v : [v]);
 
-        // todo selection event collision
+        const sel = norm(selected);
+        const desel = norm(deselected);
+
+        if (sel.length === 0 && desel.length === 0) return;
+
         this.raiseEvent('annotation-selection-changed', {
-            ids: ids,
-            isSelected: isSelected,
-            fromCanvas: fromCanvas
+          selected: sel,
+          deselected: desel,
+          fromCanvas
         });
     }
 
     /**
      * Clear all annotation selection
+     * @param {boolean} [fromCanvas=false] if the clear selection event originates on canvas, set true
      */
     clearAnnotationSelection(fromCanvas=false) {
-        this.__selectionSnapshot = [];
-        const selected = this.getSelectedAnnotationIds();
-        if (!selected.length) return;
+        this.removeHighlight();
 
+        const deselect = this.getSelectionSnapshot();
+        if (!deselect.length) return;
+
+        this.clearSelectionSnapshot();
+        this.__programmaticClear = true;
         this.canvas.discardActiveObject();
         this.canvas.requestRenderAll();
-        // this.__oldSelection = null;
 
-        this._emitAnnotationSelectionChanged(selected, false, fromCanvas);
+        this._emitAnnotationSelectionChanged([], deselect, fromCanvas);
     }
 
     /**
@@ -1298,16 +1355,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     isAnnotationSelected(object, reference = null) {
         if (!object) return false;
 
-        if (Array.isArray(reference)) {
-            return reference.find(x => x.incrementId === object.incrementId);
-        }
-
-        const active = reference || this.canvas.getActiveObject();
+        const active = reference || this.getSelectedAnnotations();
         if (!active) return false;
-        if (active.type === 'activeSelection') {
-            return !!(active._objects && active._objects.find(x => x.incrementId === object.incrementId));
+
+        if (Array.isArray(active)) {
+            return !!active.find(x => x.internalID === object.internalID);
         }
-        return active.incrementId === object.incrementId;
     }
 
     /**
@@ -1343,9 +1396,12 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         }
 
         const combined = [
-            ...layersData.map(ld => ({ type: "layer", data: ld, pos: ld._position })),
+            ...layersData.map(ld => ({ type: "layer", data: ld, pos: ld.position })),
             ...annToDelete.map(a => ({ type: "annotation", data: a, pos: a._position }))
         ].sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+
+        this.clearLayerSelection?.(true);
+        this.clearAnnotationSelection?.(true);
 
         this.module.history.push(
             () => {
@@ -1356,8 +1412,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                         this._deleteLayer?.(String(item.data.id));
                     }
                 }
-                this.clearLayerSelection?.(true);
-                this.clearAnnotationSelection?.(true);
             },
             () => {
                 for (const item of combined) {
@@ -1418,14 +1472,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             return;
         }
 
-        if (activeObject.type === 'activeSelection') {
-            activeObject.getObjects().forEach(obj => {
-                this.deleteObject(obj);
-            });
-            this.canvas.requestRenderAll();
-        } else {
-            this.deleteObject(activeObject);
-        }
+        this.deleteObject(activeObject);
     }
 
     /**
@@ -1440,18 +1487,16 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
         let objects = this.canvas.getObjects();
         if (!objects || objects.length === 0) return;
 
-        let objectsLength = objects.length;
-        for (let i = 0; i < objectsLength; i++) {
-            this.deleteObject(objects[objectsLength - i - 1]);
-        }
+        this.deleteObject(objects);
     }
 
     /**
      * Update single object visuals
      * @param {fabric.Object} object
-     * @return {boolean} true on update success
+     * @param {Array} [selection=null] current selection array
+     * @return {boolean} true if visuals were updated
      */
-    updateSingleAnnotationVisuals(object) {
+    updateSingleAnnotationVisuals(object, selection=null) {
         if (object.isHighlight) return false;
 
         let preset = this.module.presets.get(object.presetID);
@@ -1459,8 +1504,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             const factory = this.module.getAnnotationObjectFactory(object.factoryID);
             const visuals = {...this.module.presets.commonAnnotationVisuals};
             factory.updateRendering(object, preset, visuals, visuals);
+            factory.renderPresetText(object);
 
-            const isSelected = this.isAnnotationSelected(object);
+            const isSelected = this.isAnnotationSelected(object, selection);
             if (isSelected) factory?.applySelectionStyle?.(object, this);
             return true;
         }
@@ -1483,14 +1529,9 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
     _setListeners() {
         const _this = this;
 
-        // todo this event is called too often when clicking, the update should be preformed once to reflect the correct state - e.g. prevent by flag, or add deferred execution
         this.addHandler('annotation-selection-changed', (payload) => {
-            const ids = Array.isArray(payload.ids) ? payload.ids : [payload.ids];
-
-            ids.forEach(id => {
-                const annotation = _this.findObjectOnCanvasByIncrementId(Number(id));
-                if (annotation) _this.updateSingleAnnotationVisuals(annotation);
-            });
+            let annotations = payload.selected.concat(payload.deselected);
+            annotations.forEach(annot => _this.updateSingleAnnotationVisuals(annot, payload.selected));
         });
 
         this.viewer.addHandler('screenshot', e => {
@@ -1660,13 +1701,10 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             }
         });
 
-        const handleDeselectionFromCanvas = (e) => {
-            const ids = (e?.deselected || []).map(obj => obj.incrementId);
-            if (ids.length) _this._emitAnnotationSelectionChanged(ids, false, true);
-            this.clearSelectionSnapshot(true);
-        };
-        this.canvas.on('selection:updated', handleDeselectionFromCanvas);
-        this.canvas.on('selection:cleared', handleDeselectionFromCanvas);
+        this.canvas.on('selection:cleared', function(e) {
+            if (!_this.__programmaticClear && e.deselected && e.deselected.length > 0) _this.canvas.setActiveObject(e.deselected[0]);
+            _this.__programmaticClear = false;
+        });
 
         /****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
@@ -1777,49 +1815,6 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
             // non-user event, selection fired by the system (e.g. annotation added to canvas)
             if (!originalEvent || !clickedObject) return;
 
-            // const isOnActive = !!(active && active.containsPoint && active.containsPoint(pointer));
-
-            if (clickedObject.type === 'activeSelection') {
-                // todo simona moved code here to compute only when needed, select one to use
-
-                const pointer = this.canvas.getPointer(event);
-
-                // const point = new OpenSeadragon.Point(originalEvent.x, originalEvent.y);
-                // const pointer = this.viewer.scalebar.getReferencedTiledImage().imageToWindowCoordinates(point);
-
-                // todo simona removed pointer creation here, re-using the created one above, either we use image-coords-level pointer or window, don't create a third one, if you prefer creation of
-                //  fabric pointer, create it above
-                for (const obj of clickedObject._objects) {
-                    let currObj = {
-                        left: obj.left + clickedObject.left + (clickedObject.width / 2),
-                        top: obj.top + clickedObject.top + (clickedObject.height / 2),
-                        width: obj.width,
-                        height: obj.height
-                    }
-
-                    if (
-                        pointer.x >= currObj.left &&
-                        pointer.x <= currObj.left + currObj.width &&
-                        pointer.y >= currObj.top &&
-                        pointer.y <= currObj.top + currObj.height
-                    ) {
-                        // todo simona this needs to do fine selection upon AAB hit similar to what brush tool does, but RN it is point VS polygon - simpler
-
-                        // select only if not already selected
-                        if (clickedObject !== obj) {
-                            clickedObject = obj;
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (clickedObject.type === 'activeSelection') {
-                // this happens if the active selection is 'above' the clicked object, which is not part of the selection,
-                // but hidden underneath -> find the object!
-                clickedObject = this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
-            }
-
             if (!clickedObject) {
                 this.clearAnnotationSelection(true);
                 return;
@@ -1837,24 +1832,20 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 return;
             }
 
-            if (originalEvent.ctrlKey || originalEvent.metaKey || originalEvent.shiftKey) {
-                this.__snapshotIsModifierToggle = true;
-                //
-                // // check old selection
-                // const isSelected = this.isAnnotationSelected(clickedObject, this.__oldSelection);
-                // // If the mode does not allow, skip
-                // if (isSelected && this.module.mode.objectDeselected(event, object)) {
-                //	 this.deselectAnnotation(clickedObject, true);
-                // } else if (!isSelected && this.module.mode.objectSelected(event, object)) {
-                //	 this.selectAnnotation(clickedObject, true);
-                // }
+            if (originalEvent.altKey) {
+                let nextObject = this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
+                if (!nextObject) return;
+                clickedObject = nextObject;
+            }
 
-                const ref = this.__selectionSnapshot || [];
+            if (originalEvent.ctrlKey || originalEvent.metaKey || originalEvent.shiftKey) {
+
+                const ref = this.getSelectionSnapshot() || [];
                 const isSelected = this.isAnnotationSelected(clickedObject, ref);
                 if (isSelected && this.module.mode.objectDeselected(event, clickedObject)) {
                     this.deselectAnnotation(clickedObject, true);
                 } else if (!isSelected && this.module.mode.objectSelected(event, clickedObject)) {
-                    this.selectAnnotation(clickedObject, true);
+                    this.selectAnnotation(clickedObject, true, false);
                 }
                 return;
             }
@@ -1864,10 +1855,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 return;
             }
 
-            this.__snapshotIsModifierToggle = false;
-            // todo: this calls the event with updates TWICE -> it would be better to have a single event with all the updates
-            this.clearAnnotationSelection(true);
-            this.selectAnnotation(clickedObject, true);
+            this.selectAnnotation(clickedObject, true, true);
         } catch (e) {
             console.error(e);
         }
@@ -1885,18 +1873,17 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
      * helper annotation
      * @param {fabric.Object} selectedObject selected annotation to highlight
      */
-    async highlightAnnotation(selectedObject) {
+    highlightAnnotation(selectedObject) {
         this.removeHighlight();
 
         let factory = this.module.getAnnotationObjectFactory(selectedObject.factoryID);
         if (!factory) return;
 
-        const highlight = await factory.selected(selectedObject);
+        const highlight = factory.createHighlight(selectedObject);
         if (!highlight) return;
 
         this.setHighlight(highlight);
     }
-
 
     /**
      * Sets the highlight object, removing any existing one first
@@ -1934,6 +1921,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 fabricObjects.push(obj);
             } else {
                 const factory = this.module.getAnnotationObjectFactory(obj.factoryID);
+                if (!factory) continue;
                 factory.initializeBeforeImport(obj);
                 nonFabricObjects.push(obj);
             }
@@ -1948,7 +1936,7 @@ OSDAnnotations.FabricWrapper = class extends XOpatViewerSingleton {
                 this.module.historyManager.clearBoard();
                 this._layers = {};
                 this._layer = undefined;
-                this.clearAnnotationSelection();
+                this.clearAnnotationSelection(true);
                 this.clearLayerSelection();
                 this.unsetActiveLayer();
             }
