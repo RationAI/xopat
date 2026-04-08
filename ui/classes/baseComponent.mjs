@@ -111,22 +111,14 @@ export class BaseComponent {
         if (isComponentLike(element)) {
             const mount = document.getElementById(element.id);
             if (mount === null) {
-                element._children.push(this);
+                if (element instanceof BaseComponent && Array.isArray(element._children)) {
+                    element._children.push(this);
+                }
             } else {
                 mount.append(this.create());
             }
         } else {
-            // Resolve mount target from id/string or direct reference
-            let mount = typeof element === "string"
-                ? document.getElementById(element)
-                : element;
-
-            // If we got a jQuery/Cash wrapper, unwrap to the first DOM node
-            // (supports libraries exposing .jquery flag or .get/.[0])
-            if (mount && (mount.jquery || typeof mount.get === "function" || Array.isArray(mount))) {
-                const candidate = typeof mount.get === "function" ? mount.get(0) : (Array.isArray(mount) ? mount[0] : mount[0]);
-                if (candidate) mount = candidate;
-            }
+            const mount = this._resolveMountNode(element);
 
             if (!mount) {
                 console.error(`Element ${element} not found`);
@@ -164,24 +156,35 @@ export class BaseComponent {
 
         if (element instanceof BaseComponent) {
             const mount = document.getElementById(element.id);
-            if (document.getElementById(element.id) === null) {
-                element._children.unshift(this);
+            if (mount === null) {
+                if (Array.isArray(element._children)) element._children.unshift(this);
             } else {
                 mount.prepend(this.create());
             }
         } else {
-            const mount = typeof element === "string"
-                ? document.getElementById(element)
-                : element;
-
+            const mount = this._resolveMountNode(element);
             if (!mount) {
                 console.error(`Element ${element} not found`);
-                van.add(element, this.create());
             } else {
                 mount.prepend(this.create());
             }
         }
         return this;
+    }
+
+    /**
+     * Resolve a DOM node from a string id, jQuery wrapper, or direct element reference.
+     * @param {string|Element|Object} element
+     * @return {Element|null}
+     */
+    _resolveMountNode(element) {
+        if (typeof element === "string") return document.getElementById(element);
+        let mount = element;
+        if (mount && (mount.jquery || typeof mount.get === "function" || Array.isArray(mount))) {
+            const candidate = typeof mount.get === "function" ? mount.get(0) : (Array.isArray(mount) ? mount[0] : mount[0]);
+            if (candidate) mount = candidate;
+        }
+        return mount || null;
     }
 
     /**
@@ -445,11 +448,7 @@ export class BaseComponent {
     _applyOptions(options, ...names) {
         for (let prop of names) {
             const option = options[prop];
-            try {
-                if (option) option.call(this);
-            } catch (e) {
-                console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
-            }
+            if (option) option.call(this);
         }
 
         this.refreshClassState();
@@ -463,8 +462,8 @@ export class BaseComponent {
  */
 export class BaseSelectableComponent extends BaseComponent {
     constructor(options, ...args) {
-        options = super(options, ...args);
-        this.itemID = options.itemID || this.id;
+        super(options, ...args);
+        this.itemID = this.options.itemID || this.id;
     }
 
     setSelected(itemID) {

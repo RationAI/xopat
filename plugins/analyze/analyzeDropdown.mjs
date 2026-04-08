@@ -7,207 +7,143 @@ addPlugin('analyze', class extends XOpatPlugin {
         super(id);
         this.params = params || {};
         // plugin-level stored recent jobs can be configured via params or saved options
-        this.recentJobs = this.getOption('recentJobs') || this.params.recentJobs || [];
+        this.recentJobs = this.getOption('recentJobs') || [];
     }
 
     pluginReady() {
-        const register = () => {
-            
-                if (!window.USER_INTERFACE || !USER_INTERFACE.AppBar || !USER_INTERFACE.AppBar.menu) {
-                
-                // retry shortly if AppBar not ready yet
-                return setTimeout(register, 50);
-            }
-
-                // safe translation helper: return translated value or fallback when missing
-                const tOr = (key, fallback) => {
-                    if (typeof $?.t === 'function') {
-                        try {
-                            const translated = $.t(key);
-                            if (translated && translated !== key) return translated;
-                        } catch (e) { /* ignore and fallback */ }
-                    }
-                    return fallback;
-                };
-
-                const title = tOr('analyze.title', 'Analyze');
-                const tab = USER_INTERFACE.AppBar.addTab(
-                    this.id,                    // ownerPluginId
-                    title,                     // title (localized if available)
-                    'fa-magnifying-glass',      // icon
-                    [],                         // body
-                    Dropdown                    // itemClass so Menu constructs plugin component
-                );
-
-                
-                if (tab) {
-                    const attachToggle = () => {
-                        try {
-                            const btnId = `${tab.parentId}-b-${tab.id}`;
-                            const btnEl = document.getElementById(btnId);
-                            if (!btnEl) return false;
-                            let wrapper = btnEl.closest('.dropdown');
-                            if (!wrapper) {
-                                try {
-                                    const newWrapper = tab.create();
-                                    const parent = btnEl.parentElement;
-                                    if (parent) {
-                                        parent.insertBefore(newWrapper, btnEl);
-                                        btnEl.remove();
-                                        wrapper = newWrapper;
-                                    }
-                                } catch (e) {
-                                }
-                            }
-
-                            if (wrapper) {
-                                const trigger = wrapper.querySelector('[tabindex]') || wrapper;
-                                trigger.addEventListener('click', (e) => {
-                                    try {
-                                        wrapper.classList.toggle('dropdown-open');
-                                        if (!wrapper.classList.contains('dropdown-open')) {
-                                            try { tab.hideRecent?.(); } catch(_) {}
-                                        }
-                                    } catch(_) {}
-                                    e.stopPropagation();
-                                });
-                                return true;
-                            }
-                        } catch (e) { console.error('[analyze] attachToggle error', e); }
-                        return false;
-                    };
-                    // Try immediate attach; if DOM not present yet, retry shortly
-                    if (!attachToggle()) setTimeout(attachToggle, 50);
-                }
-
-                // Configure dropdown items using the Dropdown API
-                try {
-                    if (tab && typeof tab.addItem === 'function') {
-                        // create the 'recent' section but keep its title empty so no uppercase header is shown
-                        try { tab.addSection({ id: 'recent', title: '' }); } catch (e) {}
-                        // prefer a slightly wider dropdown to match previous styling
-                        try { if (tab) { tab.widthClass = 'w-64'; if (tab._contentEl) tab._contentEl.classList.add('w-64'); } } catch(e) {}
-
-                        // Only add a single anchor item for Run Recent; the detailed list appears in the SidePanel on hover
-                        tab.addItem({
-                            id: 'run-recent',
-                            section: 'recent',
-                            label: tOr('analyze.runRecent', 'Run Recent') + ' \u2192',
-                            onClick: () => false,
-                        });
-
-                        // create a reusable SidePanel and attach delegated hover handlers to show it
-                        try {
-                            // let the panel size to its content by default (width: 'auto')
-                            const side = new SidePanel({ id: `${this.id}-recent-panel`, width: 'auto', maxHeight: '70vh' });
-                            const attachHover = () => {
-                                try {
-                                    const content = tab._contentEl;
-                                    if (!content) return false;
-
-                                    // delegate to the 'run-recent' item inside the dropdown content
-                                    content.addEventListener('mouseover', (e) => {
-                                        const hit = e.target.closest && e.target.closest('[data-item-id]');
-                                        if (hit && hit.dataset && hit.dataset.itemId === 'run-recent') {
-                                            try {
-                                                // cancel any pending hide so we can reopen immediately
-                                                side.cancelHide?.();
-                                                const jobs = (this.recentJobs && this.recentJobs.length) ? this.recentJobs : ['Recent Job 1','Recent Job 2','Recent Job 3'];
-                                                // use SidePanel helper to build a menu and position the panel next to the anchor
-                                                side.setMenu(jobs, (it, idx) => {
-                                                    try { if (typeof this.onJobClick === 'function') this.onJobClick({ index: idx, label: (typeof it === 'string' ? it : (it && it.label)) }); } catch(_){}
-                                                });
-                                                side.showNear(hit, { nudge: 1 });
-                                                try { tab.hideRecent = () => side.hide(); } catch(_) {}
-                                            } catch (err) { console.error('[analyze] show side panel error', err); }
-                                        }
-                                    });
-
-                                    content.addEventListener('mouseout', (e) => {
-                                        const related = e.relatedTarget;
-                                        if (!related || !related.closest || !related.closest(`#${side.id}`)) side.scheduleHide();
-                                    });
-                                    return true;
-                                } catch (e) { console.error('[analyze] attachHover error', e); }
-                                return false;
-                            };
-                            if (!attachHover()) setTimeout(attachHover, 50);
-                        } catch (e) { /* ignore */ }
-
-                        
-
-                        tab.addItem({
-                            id: 'create-app',
-                            label: tOr('analyze.createApp', 'Create New App'),
-                            onClick: () => {
-                                try {
-                                    const form = new NewAppForm({ onSubmit: (data) => {
-                                        try { 
-                                            if (this.params.onCreate?.(data) !== false) { 
-                                                USER_INTERFACE.Dialogs.show('Successfuly created new app');
-                                            } 
-                                        }
-                                        catch (err) { console.error(err); }
-                                    }});
-                                    const win = form.showFloating({ title: tOr('analyze.createApp', 'Create New App'), width: 420, height: 360 });
-                                    if (!win) {
-                                        const overlayId = `${this.id}-newapp-overlay`;
-                                        USER_INTERFACE.Dialogs.showCustom(overlayId, 'New App', `<div id="${overlayId}-content"></div>`, '', { allowClose: true });
-                                        const container = document.getElementById(overlayId)?.querySelector('.card-body');
-                                        if (container) form.attachTo(container);
-                                    }
-                                } catch (e) { console.error('[analyze] create-app error', e); }
-                                return false;
-                            }
-                        });
-
-                        // Add Apps item: collapses dropdown and opens floating window listing apps
-                        tab.addItem({
-                            id: 'apps-list',
-                            label: tOr('analyze.apps', 'Apps'),
-                            onClick: async () => {
-                                try {
-                                    this._collapseDropdown(tab);
-                                    await this._showAppsWindow(tOr);
-                                } catch (e) {
-                                    console.error('[analyze] apps-list error', e);
-                                }
-                                return false;
-                            }
-                        });
-                    }
-                } catch (e) { console.warn('[analyze] failed to configure dropdown items', e); }
-                // Close dropdowns when clicking away: attach a document-level click handler once per tab
-                const attachDocumentCloser = (t) => {
-                    try {
-                        if (!t || t.__analyzeDocCloserAttached) return;
-                        const btnId = `${t.parentId}-b-${t.id}`;
-                        const docHandler = (ev) => {
-                            try {
-                                const openWrappers = Array.from(document.querySelectorAll('.dropdown.dropdown-open'));
-                                openWrappers.forEach((wrapper) => {
-                                    const btnEl = document.getElementById(btnId);
-                                    if (btnEl && (btnEl === ev.target || btnEl.contains(ev.target))) return;
-                                    try { wrapper.classList.remove('dropdown-open'); } catch(_) {}
-                                });
-                                try { t.hideRecent?.(); } catch(_) {}
-                            } catch (_) { /* swallow */ }
-                        };
-                        document.addEventListener('click', docHandler, true);
-                        const keyHandler = (ev) => { if (ev.key === 'Escape') { try { Array.from(document.querySelectorAll('.dropdown.dropdown-open')).forEach(w=>w.classList.remove('dropdown-open')); try { t.hideRecent?.(); } catch(_){} } catch(_){} } };
-                        document.addEventListener('keydown', keyHandler, true);
-                        t.__analyzeDocCloserAttached = true;
-                    } catch (e) { /* ignore */ }
-                };
-                try { attachDocumentCloser(tab); } catch(e) { /* ignore */ }
+        const tOr = (key, fallback) => {
+            const translated = $.t(key);
+            return (translated && translated !== key) ? translated : fallback;
         };
 
-        register();
+        const title = tOr('analyze.title', 'Analyze');
+        const tab = USER_INTERFACE.AppBar.addTab(
+            this.id,
+            title,
+            'fa-magnifying-glass',
+            [],
+            Dropdown
+        );
+
+        if (tab) {
+            const btnId = `${tab.parentId}-b-${tab.id}`;
+            const btnEl = document.getElementById(btnId);
+            if (btnEl) {
+                let wrapper = btnEl.closest('.dropdown');
+                if (!wrapper) {
+                    const newWrapper = tab.create();
+                    const parent = btnEl.parentElement;
+                    if (parent) {
+                        parent.insertBefore(newWrapper, btnEl);
+                        btnEl.remove();
+                        wrapper = newWrapper;
+                    }
+                }
+                if (wrapper) {
+                    const trigger = wrapper.querySelector('[tabindex]') || wrapper;
+                    trigger.addEventListener('click', (e) => {
+                        wrapper.classList.toggle('dropdown-open');
+                        if (!wrapper.classList.contains('dropdown-open')) {
+                            tab.hideRecent?.();
+                        }
+                        e.stopPropagation();
+                    });
+                }
+            }
+        }
+
+        if (tab && typeof tab.addItem === 'function') {
+            tab.addSection({ id: 'recent', title: '' });
+            tab.widthClass = 'w-64';
+            if (tab._contentEl) tab._contentEl.classList.add('w-64');
+
+            tab.addItem({
+                id: 'run-recent',
+                section: 'recent',
+                label: tOr('analyze.runRecent', 'Run Recent') + ' \u2192',
+                onClick: () => false,
+            });
+
+            const side = new SidePanel({ id: `${this.id}-recent-panel`, width: 'auto', maxHeight: '70vh' });
+            const content = tab._contentEl;
+            if (content) {
+                content.addEventListener('mouseover', (e) => {
+                    const hit = e.target.closest?.('[data-item-id]');
+                    if (hit?.dataset?.itemId === 'run-recent') {
+                        side.cancelHide?.();
+                        const jobs = this.recentJobs.length ? this.recentJobs : ['Recent Job 1', 'Recent Job 2', 'Recent Job 3'];
+                        side.setMenu(jobs, (it, idx) => {
+                            if (typeof this.onJobClick === 'function') {
+                                this.onJobClick({ index: idx, label: typeof it === 'string' ? it : it?.label });
+                            }
+                        });
+                        side.showNear(hit, { nudge: 1 });
+                        tab.hideRecent = () => side.hide();
+                    }
+                });
+                content.addEventListener('mouseout', (e) => {
+                    if (!e.relatedTarget?.closest?.(`#${side.id}`)) side.scheduleHide();
+                });
+            }
+
+            tab.addItem({
+                id: 'create-app',
+                label: tOr('analyze.createApp', 'Create New App'),
+                onClick: () => {
+                    const form = new NewAppForm({ onSubmit: (data) => {
+                        try {
+                            this.params.onCreate?.(data);
+                        } catch (err) { console.error(err); }
+                    }});
+                    const win = form.showFloating({ title: tOr('analyze.createApp', 'Create New App'), width: 420, height: 360 });
+                    if (!win) {
+                        const overlayId = `${this.id}-newapp-overlay`;
+                        USER_INTERFACE.Dialogs.showCustom(overlayId, 'New App', `<div id="${overlayId}-content"></div>`, '', { allowClose: true });
+                        const container = document.getElementById(overlayId)?.querySelector('.card-body');
+                        if (container) form.attachTo(container);
+                    }
+                    return false;
+                }
+            });
+
+            tab.addItem({
+                id: 'apps-list',
+                label: tOr('analyze.apps', 'Apps'),
+                onClick: async () => {
+                    this._collapseDropdown(tab);
+                    await this._showAppsWindow(tOr);
+                    return false;
+                }
+            });
+        }
+
+        if (tab && !tab.__analyzeDocCloserAttached) {
+            const btnId = `${tab.parentId}-b-${tab.id}`;
+            document.addEventListener('click', (ev) => {
+                const btnEl = document.getElementById(btnId);
+                document.querySelectorAll('.dropdown.dropdown-open').forEach((wrapper) => {
+                    if (btnEl && (btnEl === ev.target || btnEl.contains(ev.target))) return;
+                    wrapper.classList.remove('dropdown-open');
+                });
+                tab.hideRecent?.();
+            }, true);
+            document.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Escape') {
+                    document.querySelectorAll('.dropdown.dropdown-open').forEach(w => w.classList.remove('dropdown-open'));
+                    tab.hideRecent?.();
+                }
+            }, true);
+            tab.__analyzeDocCloserAttached = true;
+        }
     }
 
     // Hardcoded case ID for now - should be made configurable
+    // TODO: this plugin is currently tightly coupled to the Empaia WorkBench API
+    //  (EmpaiaStandaloneJobs, EmpationAPI, Empaia-specific app/case/EAD models).
+    //  Future work should generalize to support other backends (DICOM, HuggingFace, generic REST)
+    //  via an adapter/provider pattern, with the plugin only depending on an abstract interface.
     get _caseId() {
-        return '87fbb59a-3183-4d36-ab22-48f4e027d1f0';
+        return this.getOption('caseId') || this.params.caseId;
     }
 
     _collapseDropdown(tab) {

@@ -1,13 +1,12 @@
-import van from "../../ui/vanjs.mjs";
-import { BaseComponent } from "../../ui/classes/baseComponent.mjs";
-import { FloatingWindow } from "../../ui/classes/components/floatingWindow.mjs";
+const van = globalThis.van;
+const { BaseComponent, FloatingWindow } = globalThis.UI;
 
 const { div, input, textarea, span, button, label, h3 } = van.tags;
 
 class NewAppForm extends BaseComponent {
     constructor(options = {}) {
         options = super(options).options;
-        this.id = options.id || 'new-app';
+        this.id = options.id || 'analyze-new-app-form';
         this.onSubmit = options.onSubmit || (() => {});
         this.values = options.values || {};
         this._el = null;
@@ -36,7 +35,7 @@ class NewAppForm extends BaseComponent {
     const outputsEl = textarea({ id: this.id + '-outputs', class: 'textarea w-full', style: smallTextareaBase + 'height:48px;', rows: 3 }, this.values.outputs || '');
     const jobEl = input({ type: 'text', id: this.id + '-joburl', class: 'input w-full', style: smallInputStyle, value: this.values.jobUrl || '' });
 
-    const btnEdit = button({ class: 'btn btn-secondary btn-sm mr-2', type: 'button', onclick: (ev) => this._onEdit() }, 'Edit EAD');
+    const btnEdit = button({ class: 'btn btn-secondary btn-sm mr-2', type: 'button', disabled: true }, 'Edit EAD');
     const btnCreate = button({ class: 'btn btn-primary btn-sm', type: 'button', onclick: (ev) => this._onCreate() }, 'Create');
 
     // remove inner title and close button to rely on the FloatingWindow header
@@ -135,6 +134,8 @@ class NewAppForm extends BaseComponent {
         };
     }
 
+    // TODO: implement EAD editor integration — currently Empaia-specific, needs generalization
+    //  to support generic app config formats (DICOM, HuggingFace, REST, etc.)
     _onEdit() {
     }
 
@@ -143,7 +144,7 @@ class NewAppForm extends BaseComponent {
         try {
             const r = this.onSubmit(data);
             if (r !== false) {
-                try { if (this._floatingWindow) { this._floatingWindow.close(); this._floatingWindow = null; } } catch(_) {}
+                this._close();
             }
         } catch (e) {
             console.error('NewAppForm onSubmit error', e);
