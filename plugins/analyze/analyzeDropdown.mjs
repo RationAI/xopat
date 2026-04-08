@@ -1,6 +1,5 @@
 import { Dropdown } from "../../ui/classes/elements/dropdown.mjs";
 import { NewAppForm } from "./newAppForm.mjs";
-import { SidePanel } from "../../ui/classes/components/sidePanel.mjs";
 
 addPlugin('analyze', class extends XOpatPlugin {
     constructor(id, params) {
@@ -64,25 +63,57 @@ addPlugin('analyze', class extends XOpatPlugin {
                 onClick: () => false,
             });
 
-            const side = new SidePanel({ id: `${this.id}-recent-panel`, width: 'auto', maxHeight: '70vh' });
+            // Use Dropdown as a standalone flyout panel — reuses its item rendering and styling
+            // without wiring up a trigger button. Only _contentEl is appended to the DOM.
+            const recentPanel = new Dropdown({ id: `${this.id}-recent-panel`, parentId: this.id });
+            recentPanel.create();
+            const panelEl = recentPanel._contentEl;
+            panelEl.style.display = 'none';
+            panelEl.style.maxHeight = '70vh';
+            panelEl.style.overflow = 'auto';
+            document.body.appendChild(panelEl);
+
+            let _hideTimer = null;
+            const cancelHide = () => { clearTimeout(_hideTimer); _hideTimer = null; };
+            const scheduleHide = () => { cancelHide(); _hideTimer = setTimeout(() => { panelEl.style.display = 'none'; }, 250); };
+            panelEl.addEventListener('mouseenter', cancelHide);
+            panelEl.addEventListener('mouseleave', scheduleHide);
+
             const content = tab._contentEl;
             if (content) {
                 content.addEventListener('mouseover', (e) => {
                     const hit = e.target.closest?.('[data-item-id]');
                     if (hit?.dataset?.itemId === 'run-recent') {
-                        side.cancelHide?.();
+                        cancelHide();
                         const jobs = this.recentJobs.length ? this.recentJobs : ['Recent Job 1', 'Recent Job 2', 'Recent Job 3'];
-                        side.setMenu(jobs, (it, idx) => {
-                            if (typeof this.onJobClick === 'function') {
-                                this.onJobClick({ index: idx, label: typeof it === 'string' ? it : it?.label });
-                            }
+                        recentPanel.clear();
+                        jobs.forEach((job, idx) => {
+                            const label = typeof job === 'string' ? job : job?.label;
+                            recentPanel.addItem({
+                                id: `recent-job-${idx}`,
+                                label,
+                                onClick: () => {
+                                    if (typeof this.onJobClick === 'function') this.onJobClick({ index: idx, label });
+                                }
+                            });
                         });
-                        side.showNear(hit, { nudge: 1 });
-                        tab.hideRecent = () => side.hide();
+                        panelEl.style.display = '';
+                        requestAnimationFrame(() => {
+                            const rect = hit.getBoundingClientRect();
+                            const pw = panelEl.offsetWidth || 160;
+                            const ph = panelEl.offsetHeight || 0;
+                            let left = rect.right - 1;
+                            if (left + pw > window.innerWidth - 8) left = Math.max(8, rect.left - pw);
+                            let top = Math.max(8, rect.top);
+                            if (ph && top + ph > window.innerHeight - 8) top = Math.max(8, window.innerHeight - ph - 8);
+                            panelEl.style.left = `${left}px`;
+                            panelEl.style.top = `${top}px`;
+                        });
+                        tab.hideRecent = () => { cancelHide(); panelEl.style.display = 'none'; };
                     }
                 });
                 content.addEventListener('mouseout', (e) => {
-                    if (!e.relatedTarget?.closest?.(`#${side.id}`)) side.scheduleHide();
+                    if (!panelEl.contains(e.relatedTarget)) scheduleHide();
                 });
             }
 
