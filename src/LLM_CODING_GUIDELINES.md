@@ -125,17 +125,17 @@ Crucial singletons control layouts. Do not spawn multiple instances of them:
 For a specific and more detailed understanding of each subsystem, read the following repository READMEs:
 
 - **Root & Architecture**: 
-  - [`src/README.md`](src/README.md) (General App Config and Init logic)
-  - [`src/NPM_MODULES_PLUGINS.md`](src/NPM_MODULES_PLUGINS.md) (Node Package integrations)
+  - [`src/README.md`](README.md) (General App Config and Init logic)
+  - [`src/NPM_MODULES_PLUGINS.md`](NPM_MODULES_PLUGINS.md) (Node Package integrations)
 - **Plugin & Module Design**: 
-  - [`plugins/README.md`](plugins/README.md)
-  - [`modules/README.md`](modules/README.md)
+  - [`plugins/README.md`](../plugins/README.md)
+  - [`modules/README.md`](../modules/README.md)
 - **Core APIs & Communication**:
-  - [`src/EVENTS.md`](src/EVENTS.md) (Lifecycle events and system broadcasts)
-  - [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
+  - [`src/EVENTS.md`](EVENTS.md) (Lifecycle events and system broadcasts)
+  - [`src/HTTP_CLIENT.md`](HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
 - **UI Architecture**:
-  - [`ui/README.md`](ui/README.md) (Design system setup)
-  - [`ui/classes/README.md`](ui/classes/README.md) (Developing via Van.js and `BaseComponent`)
-  - [`ui/services/README.md`](ui/services/README.md) (Singletons controlling layout regions like `AppBar`)
+  - [`ui/README.md`](../ui/README.md) (Design system setup)
+  - [`ui/classes/README.md`](../ui/classes/README.md) (Developing via Van.js and `BaseComponent`)
+  - [`ui/services/README.md`](../ui/services/README.md) (Singletons controlling layout regions like `AppBar`)
 - **Advanced State Management**:
-  - [`src/MULTI_VIEWPORTS.md`](src/MULTI_VIEWPORTS.md) (How to design plugins not to break when multi-view instances are running)
+  - [`src/MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md) (How to design plugins not to break when multi-view instances are running)

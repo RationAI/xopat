@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-05
+//! Built on 2026-04-09
 //! Git commit: --cf6b830-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -223,16 +223,7 @@
          * @memberof FlexRenderer
          */
         firstPassProcessData(source) {
-            if (!Array.isArray(source) || source.length === 0) {
-                this.__firstPassResult = null;
-                return null;
-            }
-
             const program = this._programImplementations[this.webglContext.firstPassProgramKey];
-            if (!program) {
-                this.__firstPassResult = null;
-                return null;
-            }
 
             if (this.useProgram(program, "first-pass")) {
                 program.load();
@@ -240,12 +231,12 @@
 
             const result = program.use(this.__firstPassResult, source, undefined);
 
-            if (this.debug && result) {
-                this._showOffscreenMatrix(result, { scale: 0.5, pad: 8 });
+            if (this.debug) {
+                this._showOffscreenMatrix(result, {scale: 0.5, pad: 8});
             }
 
-            this.__firstPassResult = result || null;
-            return this.__firstPassResult;
+            this.__firstPassResult = result;
+            return result;
         }
 
         /**
@@ -255,25 +246,13 @@
          * @return {RenderOutput}
          */
         secondPassProcessData(renderArray, options = undefined) {
-            if (!Array.isArray(renderArray) || renderArray.length === 0) {
-                return this.__firstPassResult;
-            }
-
-            const fp = this.__firstPassResult;
-            if (!fp || !fp.texture || !fp.stencil) {
-                return null;
-            }
-
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
-            if (!program) {
-                return null;
-            }
 
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
 
-            return program.use(fp, renderArray, options);
+            return program.use(this.__firstPassResult, renderArray, options);
         }
 
         /**
@@ -586,6 +565,51 @@
             } else {
                 this.gl.disable(this.gl.BLEND);
             }
+        }
+
+        /**
+         * Build a stable JSON-safe snapshot of the current visualization state.
+         * Includes shader order and full shader configs, including params and cache.
+         * Runtime/private fields are filtered out using FlexRenderer.jsonReplacer.
+         *
+         * @returns {{
+         *   order: string[],
+         *   shaders: Object<string, ShaderConfig>
+         * }}
+         */
+        getVisualizationSnapshot() {
+            const snapshot = {
+                order: this.getShaderLayerOrder().slice(),
+                shaders: {}
+            };
+
+            for (const [shaderId, shader] of Object.entries(this.getAllShaders())) {
+                snapshot.shaders[shaderId] = JSON.parse(
+                    JSON.stringify(shader.getConfig(), $.FlexRenderer.jsonReplacer)
+                );
+            }
+
+            return snapshot;
+        }
+
+        /**
+         * Alias that makes intent explicit when used by application code.
+         * @returns {{order: string[], shaders: Object<string, ShaderConfig>}}
+         */
+        exportVisualization() {
+            return this.getVisualizationSnapshot();
+        }
+
+        /**
+         * Notify observers that visualization state changed.
+         * This is the canonical event to listen to.
+         *
+         * @param {object} payload
+         */
+        notifyVisualizationChanged(payload = {}) {
+            this.raiseEvent('visualization-change', $.extend(true, {
+                snapshot: this.getVisualizationSnapshot()
+            }, payload));
         }
 
         destroy() {
@@ -1934,11 +1958,11 @@
             // Default init respects cached value, manual usage overrides.
 
             // set up the color channel(s) for texture sampling
-            this.resetChannel(this._customControls, false);
+            this.resetChannel(this._customControls, false, false);
             // set up the blending mode
-            this.resetMode(this._customControls, false);
+            this.resetMode(this._customControls, false, false);
             // set up the filters to be applied to sampled data from the texture
-            this.resetFilters(this._customControls, false);
+            this.resetFilters(this._customControls, false, false);
             // build the ShaderLayer's controls
             this._buildControls();
         }
@@ -2236,7 +2260,7 @@
          * @param {String} options.use_channel[X] "r", "g" or "b" channel to sample index X, default "r"
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetChannel(options = {}, force = true) {
+        resetChannel(options = {}, force = true, evented = true) {
             if (Object.keys(options) === 0) {
                 options = this._customControls;
             }
@@ -2320,6 +2344,14 @@
             const sources = this.constructor.sources();
             for (let i = 0; i < sources.length; i++) {
                 parseChannel("r", sources[i], i);
+            }
+
+            if (evented) {
+                this.webglContext.renderer.notifyVisualizationChanged({
+                    reason: "channel-change",
+                    shaderId: this.id,
+                    shaderType: this.constructor.type()
+                });
             }
         }
 
@@ -2423,9 +2455,19 @@
          * @param {String} options.use_blend blending mode to use: one of standard supported blending modes (+ "mask")
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetMode(options = {}, force = true) {
+        resetMode(options = {}, force = true, evented = true) {
             this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options, force);
             this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options, force);
+
+            if (evented) {
+                this.webglContext.renderer.notifyVisualizationChanged({
+                    reason: "mode-change",
+                    shaderId: this.id,
+                    shaderType: this.constructor.type(),
+                    mode: this._mode,
+                    blend: this._blend
+                });
+            }
         }
 
         /**
@@ -2560,7 +2602,7 @@ ${code}
          * @param {Object} options contains filters to apply, currently supported are "use_gamma", "use_exposure", "use_logscale"
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetFilters(options = {}, force = true) {
+        resetFilters(options = {}, force = true, evented = true) {
             if (Object.keys(options) === 0) {
                 options = this._customControls;
             }
@@ -2586,6 +2628,14 @@ ${code}
             }
             this.__scalePrefix = this.__scalePrefix.join("");
             this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
+
+            if (evented) {
+                this.webglContext.renderer.notifyVisualizationChanged({
+                    reason: "filter-change",
+                    shaderId: this.id,
+                    shaderType: this.constructor.type()
+                });
+            }
         }
 
         /**
@@ -3066,7 +3116,7 @@ $.FlexRenderer.UIControls._impls = {
 /**
  * @interface
  */
-$.FlexRenderer.UIControls.IControl = class {
+$.FlexRenderer.UIControls.IControl = class IControl {
 
     /**
      * Sets common properties needed to create the controls:
@@ -3230,7 +3280,8 @@ $.FlexRenderer.UIControls.IControl = class {
     /**
      * TODO: improve overall setter API
      * Allows to set the control value programatically.
-     * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
+     * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate()).
+     * You should raise the 'change' event when the value is changed.
      * @param encodedValue any value the given control can support, encoded
      *  (e.g. as the control acts on the GUI - for input number of
      *    values between 5 and 42, the value can be '6' or 6 or 6.15
@@ -3412,6 +3463,7 @@ $.FlexRenderer.UIControls.IControl = class {
      *  - most controls support "default" event - change of default value
      *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
      * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
+     * TODO: use openseadragon event system directly here too
      */
     on(event, clbck) {
         this.__onchange[event] = clbck; //only one possible event -> rewrite?
@@ -3445,6 +3497,16 @@ $.FlexRenderer.UIControls.IControl = class {
         if (typeof this.__onchange[event] === "function") {
             this.__onchange[event](value, encodedValue, context);
         }
+
+        this.owner.webglContext.renderer.notifyVisualizationChanged({
+            reason: "control-change",
+            shaderId: this.owner.id,
+            shaderType: this.owner.constructor.type(),
+            controlName: this.name,
+            controlVariableName: event,  // we use here event for names of the control vars like 'default', 'breaks'
+            encodedValue: this.encodedValue,
+            value: this.value
+        });
     }
 
     /**
@@ -5014,7 +5076,6 @@ $.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image
 
     init() {
         this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
-        this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
 
         const countryIcon = new Image();
         countryIcon.src = "/icons/place/country-icon.png";
@@ -5033,6 +5094,8 @@ $.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image
         villageIcon.onload = () => {
             this.firstAtlas.addImage(villageIcon);
         };
+
+        this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
 
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
@@ -5334,20 +5397,19 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
 
-        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo[0]");
+        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
         this.vao = gl.createVertexArray();
     }
 
     /**
      * Load program. No arguments.
      */
-    load(renderArray = []) {
+    load(renderArray) {
         const gl = this.gl;
-
+        // ShaderLayers' controls
         for (const renderInfo of renderArray) {
             renderInfo.shader.glLoaded(this.webGLProgram, gl);
         }
-
         this.atlas.load(this.webGLProgram);
 
         const renderer = this.context.renderer;
@@ -5357,45 +5419,31 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         const packCount = layout.packCount || [];
         const channelCount = packInfo.channelCount || [];
 
-        const maxTI = this._tiledImageCount || 0;
+        const maxTI = this._tiledImageCount;
         const tiInfo = new Int32Array(maxTI * 3);
-
         for (let i = 0; i < maxTI; i++) {
-            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
+            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
             const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
-
-            tiInfo[i * 3 + 0] = base;
+            tiInfo[i * 3] = base;
             tiInfo[i * 3 + 1] = pc;
             tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
         }
 
-        // Uniform can be optimized out by GL. Upload only if it exists and we have data.
-        if (this._tiInfoLoc && tiInfo.length > 0) {
-            gl.uniform3iv(this._tiInfoLoc, tiInfo);
-        }
+        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
     }
 
     /**
      * Use program. Arbitrary arguments.
      */
-    use(renderOutput, renderArray = [], options) {
+    use(renderOutput, renderArray, options) {
+        //todo flatten render array :/
         const gl = this.gl;
-
-        if (!renderOutput || !renderOutput.texture || !renderOutput.stencil) {
-            return renderOutput;
-        }
-
-        if (!Array.isArray(renderArray) || renderArray.length === 0) {
-            return renderOutput;
-        }
-
         gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
         gl.bindVertexArray(this.vao);
 
         const shaderVariables = [];
         const instanceOffsets = [];
         const instanceTextureIndexes = [];
-
         for (const renderInfo of renderArray) {
             renderInfo.shader.glDrawing(this.webGLProgram, gl);
 
@@ -5405,32 +5453,25 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
             instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
         }
 
-        if (this._instanceOffsets) {
-            gl.uniform1iv(this._instanceOffsets, instanceOffsets);
-        }
-        if (this._instanceTextureIndexes) {
-            gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
-        }
-        if (this._shaderVariables) {
-            gl.uniform3fv(this._shaderVariables, shaderVariables);
-        }
+        // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
+        gl.uniform1iv(this._instanceOffsets, instanceOffsets);
+        gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
+        gl.uniform3fv(this._shaderVariables, shaderVariables);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
-        if (this._texturesLocation) {
-            gl.uniform1i(this._texturesLocation, 0);
-        }
+        gl.uniform1i(this._texturesLocation, 0);
 
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
-        if (this._stencilLocation) {
-            gl.uniform1i(this._stencilLocation, 1);
-        }
+        gl.uniform1i(this._stencilLocation, 1);
 
         this.atlas.bind(gl.TEXTURE2, 2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
+        // Unbinding textures removes feedback loop when we write to it in the first pass
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
         gl.activeTexture(gl.TEXTURE1);
@@ -6690,6 +6731,12 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             }
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
+
+            this.renderer.notifyVisualizationChanged({
+                reason: "external-config",
+                external: true
+            });
+
             return this._requestRebuild(0);
         }
 
@@ -6740,6 +6787,11 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                     $.console.warn("Could not find corresponding tiled image for the navigator!");
                 }
             }
+
+            this.renderer.notifyVisualizationChanged({
+                reason: "configure-tiled-image",
+                shaderId: shader.id
+            });
 
             return shader;
         }
@@ -7206,16 +7258,11 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
 
             // todo flatten render data
 
-            if (!TI_PAYLOAD.length) {
-                this.renderer.__firstPassResult = null;
-                return false;
-            }
-
             this.renderer.gl.clearColor(1.0, 1.0, 1.0, 1.0);
-            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT);
+            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
 
-            const fp = this.renderer.firstPassProcessData(TI_PAYLOAD);
-            return !!(fp && fp.texture && fp.stencil);
+            this.renderer.firstPassProcessData(TI_PAYLOAD);
+            return true;
         }
 
         /**
@@ -7224,11 +7271,6 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
          * @param {Object} viewport has bounds, center, rotation, zoom
          */
         _drawTwoPassSecond(viewport) {
-            const fp = this.renderer.__firstPassResult;
-            if (!fp || !fp.texture || !fp.stencil) {
-                return false;
-            }
-
             const sources = [];
             const shaders = this.renderer.getAllShaders();
 
@@ -7236,6 +7278,8 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 const shader = shaders[shaderID];
                 const config = shader.getConfig();
 
+                // TODO Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+                // also when rendering offscreen, the tiled image might be detached
                 const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
                 sources.push({
                     zoom: viewport.zoom,
@@ -7246,6 +7290,7 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             }
 
             if (!sources.length) {
+                this.viewer.forceRedraw();
                 return false;
             }
 
@@ -11087,7 +11132,7 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-05
+//! Built on 2026-04-09
 //! Git commit: --cf6b830-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -11375,7 +11420,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-05
+//! Built on 2026-04-09
 //! Git commit: --cf6b830-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

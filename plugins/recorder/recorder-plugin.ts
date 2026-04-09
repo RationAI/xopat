@@ -8,9 +8,10 @@ type AnnCanvas={forEachObject(cb:(o:AnnObj)=>void):void;renderAll():void};
 type AnnWrap={canvas?:AnnCanvas;loadObjects(input:{objects:Record<string,unknown>[]}):Promise<void>};
 type AnnModule={forceExportsProp?:string;fabric?:AnnWrap|{canvas?:AnnCanvas};wrapper?:AnnWrap;canvas?:AnnCanvas;fabricCanvas?:AnnCanvas;initPostIO?():Promise<unknown>;getFabric?(viewer:OpenSeadragon.Viewer):AnnWrap|undefined;trimExportJSON?(data:Record<string,unknown>[],key?:string):unknown;addFabricHandler(event:string,handler:(e:any)=>void):void;enableAnnotations(v:boolean):void};
 type Viewer=OpenSeadragon.Viewer&{uniqueId:UniqueViewerId;tools?:RecorderViewerTools};
+type RendererWithVisualization=OpenSeadragon.EventSource&{exportVisualization?:()=>RecorderVisualizationSnapshot;getVisualizationSnapshot?:()=>RecorderVisualizationSnapshot;};
 type ViewerContextMeta={viewer?:Viewer;index:number;uniqueId?:string;title?:string;label?:string;fileName?:string};
 type StepNode=(HTMLCanvasElement|HTMLSpanElement)&{dataset:DOMStringMap};
-type NavSession={viewer:Viewer;viewerId:UniqueViewerId;startedAt:number;samples:RecorderNavigationSample[];sampleHandler:()=>void;rafPending:boolean;lastSignature:string|null};
+type NavSession={viewer:Viewer;viewerId:UniqueViewerId;startedAt:number;samples:RecorderNavigationSample[];visualizationSamples:RecorderVisualizationTimedSample[];sampleHandler:()=>void;visualizationHandler?:()=>void;rafPending:boolean;lastSignature:string|null;lastVisualizationSignature:string|null};
 const DELAY_PX_PER_SECOND=2;
 const DURATION_PX_PER_SECOND=4;
 const MIN_DURATION_WIDTH=6;
@@ -119,23 +120,30 @@ class RecorderPlugin extends XOpatPlugin{
     private startNavigationRecording():void{
         if(this.isPlaying) return;
         const viewer=this._getActiveViewer(); if(!viewer) return void Dialogs.show("No active viewer is available for path recording.",2500,Dialogs.MSG_WARN);
-        const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:performance.now(),samples:[],rafPending:false,lastSignature:null,sampleHandler:()=>{if(s.rafPending) return; s.rafPending=true; window.requestAnimationFrame(()=>{s.rafPending=false; this._captureNavigationSample(s);});}};
+        const renderer=this._getRenderer(viewer);
+        const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:performance.now(),samples:[],visualizationSamples:[],rafPending:false,lastSignature:null,lastVisualizationSignature:null,sampleHandler:()=>{if(s.rafPending) return; s.rafPending=true; window.requestAnimationFrame(()=>{s.rafPending=false; this._captureNavigationSample(s);});}};
+        if(renderer&&this.recorder.capturesVisualization){
+            s.visualizationHandler=()=>this._captureNavigationVisualizationSample(s);
+        }
         this.navSession=s; this._captureNavigationSample(s);
         viewer.addHandler("pan",s.sampleHandler);
         viewer.addHandler("zoom",s.sampleHandler);
         viewer.addHandler("animation",s.sampleHandler);
+        if(renderer&&s.visualizationHandler) renderer.addHandler("visualization-change",s.visualizationHandler);
         this._syncRecordPathButton();
     }
 
     private stopNavigationRecording(save:boolean):void{
         const s=this.navSession; if(!s) return;
+        const renderer=this._getRenderer(s.viewer);
         s.viewer.removeHandler("pan",s.sampleHandler);
         s.viewer.removeHandler("zoom",s.sampleHandler);
         s.viewer.removeHandler("animation",s.sampleHandler);
+        if(renderer&&s.visualizationHandler) renderer.removeHandler("visualization-change",s.visualizationHandler);
         this._captureNavigationSample(s); this.navSession=null; this._syncRecordPathButton();
         if(!save) return;
         if(s.samples.length<2) return void Dialogs.show("Recorded path is too short.",2000,Dialogs.MSG_WARN);
-        this.recorder.createNavigation(s.viewerId,s.samples,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
+        this.recorder.createNavigation(s.viewerId,s.samples,s.visualizationSamples,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
     }
 
     private _captureNavigationSample(s:NavSession):void{
@@ -143,6 +151,35 @@ class RecorderPlugin extends XOpatPlugin{
         const sample:RecorderNavigationSample={at:performance.now()-s.startedAt,rotation,point:new OpenSeadragon.Point(center.x,center.y),zoomLevel:zoom,bounds:new OpenSeadragon.Rect(bounds.x,bounds.y,bounds.width,bounds.height)};
         const sig=`${sample.point?.x.toFixed(5)}:${sample.point?.y.toFixed(5)}:${zoom.toFixed(5)}:${rotation.toFixed(3)}:${sample.bounds?.width.toFixed(5)}:${sample.bounds?.height.toFixed(5)}`;
         if(sig===s.lastSignature) return; s.lastSignature=sig; s.samples.push(sample);
+    }
+
+    private _getRenderer(viewer:Viewer):RendererWithVisualization|undefined{
+        return (viewer as Viewer&{drawer?:{renderer?:RendererWithVisualization}}).drawer?.renderer;
+    }
+
+    private _cloneRecorderValue<T>(value:T):T{
+        if(Array.isArray(value)) return $.extend(true, [], value) as T;
+        if(value&&typeof value==="object") return $.extend(true, {}, value) as T;
+        return value;
+    }
+
+    private _captureNavigationVisualizationSample(s:NavSession):void{
+        const renderer=this._getRenderer(s.viewer);
+        const snapshot=renderer?.exportVisualization?.()||renderer?.getVisualizationSnapshot?.();
+        if(!snapshot) return;
+        const signature=JSON.stringify(snapshot);
+        if(signature===s.lastVisualizationSignature) return;
+        s.lastVisualizationSignature=signature;
+        s.visualizationSamples.push({
+            at: performance.now()-s.startedAt,
+            visualization: {
+                backgrounds: this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.background)?APPLICATION_CONTEXT.config.background:[]) as BackgroundItem[],
+                activeBackgroundIndex: this._cloneRecorderValue(APPLICATION_CONTEXT.getOption("activeBackgroundIndex",undefined,true,true)) as number|number[]|undefined,
+                visualizations: this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.visualizations)?APPLICATION_CONTEXT.config.visualizations:[]) as VisualizationItem[],
+                activeVisualizationIndex: this._cloneRecorderValue(APPLICATION_CONTEXT.getOption("activeVisualizationIndex",undefined,true,true)) as number|number[]|undefined,
+                renderer: this._cloneRecorderValue(snapshot) as RecorderVisualizationSnapshot,
+            },
+        });
     }
 
     private _syncRecordPathButton():void{
@@ -447,7 +484,7 @@ class RecorderPlugin extends XOpatPlugin{
         this.track.querySelectorAll<HTMLElement>("[data-slide-row='true']").forEach(node=>node.remove());
         const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
         const rowHeight=this._viewerRowHeight();
-        this.track.style.height=`${rowHeight*Math.max(1,viewers.length)}px`;
+        this.track.style.minHeight=`${rowHeight*Math.min(3, Math.max(1,viewers.length))}px`;
         viewers.forEach((viewer,index)=>{
             const row=document.createElement("div");
             row.dataset.slideRow="true";

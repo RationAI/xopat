@@ -52,14 +52,18 @@ was not opened with a session spec. You can use this flag to monitor whether the
 was properly opened, or just shows cached session and possibly replace it with more relevant one.
 Note that exception thrown in this event is considered as a signal for aborting the viewer loading.
 
-#### async `before-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], bgSpec: [number|number[]|undefined|null], vizSpec: [number|number[]|undefined|null]}
-Unlike `before-first-open`, this event is invoked for each viewer that is opened. It is meant primarily
-as a place where you can also override the application rendering configuration,
-as the viewer is still loading. For example, if the application rendering
-is missing all the data, you can provide default values for the rendering. This data can be set
-to the respective elements: data / background / visualization arrays.
-Spec objects define what are active indexes to open. They are sometimes undefined - in that case,
-the initialization parses this information from the session information.
+#### async `before-refresh` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], bgSpec: [number|number[]|undefined|null], vizSpec: [number|number[]|undefined|null], changeKind: ["noop"|"content"|"visualization"], changesViewerNature: boolean, changesViewerCount: boolean}
+Generic hook fired before the viewer refresh cycle starts. Use this for coarse session-level
+coordination, especially if you only need to know whether the call is a full content change or
+just a visualization-only refresh.
+
+#### async `before-open` | e: {viewer: OpenSeadragon.Viewer, viewerIndex: number, entry: object, backgroundIndex?: number, visualizationIndex?: number, background?: BackgroundItem, visualization?: VisualizationItem, data: [DataSpecification], dataIndexes: [number], changeKind: ["noop"|"content"|"visualization"]}
+Viewer-scoped hook fired before a particular viewer is recreated or refreshed. Use this when you
+need to adjust one viewer only. This event is not raised for viewers that are detected as unchanged
+and skipped entirely. Since the event is fired before the viewer initialization, 
+it is not fired on the actual instance, but on the manager instead. The viewer reference is
+passed as the ``viewer`` property. Mutating `background`, `visualization`, or entries inside `data` updates the real session state that is used to open
+that viewer. You should touch only parts of the session that relate to the viewer, marked by ``backgroundIndex``, ``visualizationIndex``, and ``dataIndexes``.
 
 #### async `after-open` | e: {}
 This event is fired once all viewers are opened and set up. There is no data since
@@ -267,7 +271,3 @@ Fired when a component (like HttpClient) encounters an authentication failure an
 
 #### `user-select` | e: `{userId: string, userName: string}`
 Fired when the user interacts with the user panel/icon in the application interface.
-
-
-
-

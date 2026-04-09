@@ -52,3 +52,9 @@ Please, visit <https://xopat.readthedocs.io/>.
 Please, see <https://rationai.github.io/xopat/>.
 
 <!--Icon finder: https://awes0mem4n.github.io/-->
+
+## Sponsors
+
+We are grateful for the (development or financial) contribution to the OpenSeadragon project.
+
+<a href="https://www.bbmri-eric.eu"><img alt="BBMRI ERIC Logo" src="assets/logos/bbmri-logo.png" height="70" /></a>

@@ -84,7 +84,7 @@ addPlugin('dicom', class extends XOpatPlugin {
 
         // === PRE-OPEN LOGIC ===
         // We decide what to fetch/prepare *before first open* based on provided defaults.
-        VIEWER_MANAGER.addHandler('before-first-open', async (evt) => {
+        VIEWER_MANAGER.addHandler('before-app-init', async (evt) => {
             const token = XOpatUser.instance().getSecret();
 
             // todo test throw here, not stable
@@ -161,33 +161,33 @@ addPlugin('dicom', class extends XOpatPlugin {
         }, null, -1);
 
         VIEWER_MANAGER.addHandler('before-open', (evt) => {
-            for (let i = 0; i < (evt.background || []).length; i++) {
-                let bg = evt.background[i];
+            let bg = evt.background;
+            if (!bg) return;
 
-                const dataRef = bg.dataReferences ? bg.dataReferences[0] : bg.dataReference;
-                const data = evt.data?.[dataRef] || dataRef;
+            const dataRef = bg.dataReferences ? bg.dataReferences[0] : bg.dataReference;
+            const localDataIndex = evt.dataIndexes?.indexOf(dataRef);
+            const data = localDataIndex >= 0 ? evt.data?.[localDataIndex] : dataRef;
 
-                if (typeof data === "object" && data.studyUID && data.seriesUID) {
-                    evt.data[dataRef] = {
-                        dataID: data,
-                        tileSource: new DICOMWebTileSource({
-                            baseUrl: this.serviceUrl,
-                            studyUID: data.studyUID,
-                            seriesUID: data.seriesUID,
-                            useRendered: this.useRendered,
-                            patientDetails: this.state.activePatientDetails,
-                            ...this.frameOrder
-                        })
-                    }
+            if (typeof data === "object" && data.studyUID && data.seriesUID && localDataIndex >= 0) {
+                evt.data[localDataIndex] = {
+                    dataID: data,
+                    tileSource: new DICOMWebTileSource({
+                        baseUrl: this.serviceUrl,
+                        studyUID: data.studyUID,
+                        seriesUID: data.seriesUID,
+                        useRendered: this.useRendered,
+                        patientDetails: this.state.activePatientDetails,
+                        ...this.frameOrder
+                    })
+                };
 
-                    // Keep identity stable and aligned with the browser:
-                    bg.id = bg.id || data.seriesUID;
-                    bg.name = bg.name || data.seriesUID;
-                }
-
-                // Ensure BackgroundConfig instance
-                evt.background[i] = window.APPLICATION_CONTEXT.registerConfig(bg);
+                // Keep identity stable and aligned with the browser:
+                bg.id = bg.id || data.seriesUID;
+                bg.name = bg.name || data.seriesUID;
             }
+
+            // Ensure BackgroundConfig instance
+            evt.background = window.APPLICATION_CONTEXT.registerConfig(bg);
         });
 
         this.integrateWithPlugin('slide-info', async info => {

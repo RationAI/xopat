@@ -148,23 +148,52 @@ interface BeforeFirstOpenEvent {
 }
 
 /**
- * Raised before any open/reload cycle. Handlers may inspect or modify the
- * incoming data.  Awaitable via `raiseEventAwaiting`.
+ * Raised before any open/reload cycle begins, after the target session has been
+ * resolved but before viewer refresh work starts. This is the generic hook for
+ * broad coordination and should not be used for per-viewer customization.
  *
- * @event before-open
+ * @event before-refresh
  * @memberof VIEWER_MANAGER
- * @property {DataID[]} data - Global data identifiers array.
- * @property {BackgroundItem[]} background - Background configuration array.
- * @property {VisualizationItem[]} visualizations - Visualization configuration array.
- * @property {number | number[] | null} [bgSpec] - Requested background index selection.
- * @property {number | number[] | null} [vizSpec] - Requested visualization index selection.
  */
-interface BeforeOpenEvent {
+interface BeforeRefreshEvent {
     data: DataID[];
     background: BackgroundItem[];
     visualizations: VisualizationItem[];
     bgSpec?: number | number[] | null;
     vizSpec?: number | number[] | null;
+    opts?: Record<string, any>;
+    historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
+    changeKind: "noop" | "content" | "visualization";
+    changesViewerNature: boolean;
+    changesViewerCount: boolean;
+    anythingVisibleChanged: boolean;
+    anythingChanged: boolean;
+    backgroundChanged: boolean;
+}
+
+/**
+ * Raised before an individual viewer is recreated or surgically refreshed.
+ * Handlers may adjust the incoming viewer-scoped entry or session arrays before
+ * that viewer update is executed.
+ *
+ * @event before-open
+ * @memberof VIEWER_MANAGER
+ */
+interface BeforeOpenEvent {
+    viewer: OpenSeadragon.Viewer;
+    viewerIndex: number;
+    entry: { type: string; bgIndices: number[]; [key: string]: any };
+    backgroundIndex?: number;
+    visualizationIndex?: number;
+    background?: BackgroundItem | BackgroundConfig;
+    visualization?: VisualizationItem;
+    data: DataSpecification[];
+    dataIndexes: number[];
+    opts?: Record<string, any>;
+    changeKind: "noop" | "content" | "visualization";
+    changesViewerNature: boolean;
+    changesViewerCount: boolean;
+    isNewViewer: boolean;
 }
 
 /**

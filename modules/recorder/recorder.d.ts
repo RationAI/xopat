@@ -25,8 +25,14 @@ declare global {
         bounds?: OpenSeadragon.Rect;
     }
 
+    interface RecorderVisualizationTimedSample {
+        at: number;
+        visualization: RecorderVisualizationStateSnapshot;
+    }
+
     interface RecorderNavigationTrack {
         samples: RecorderNavigationSample[];
+        visualizationSamples?: RecorderVisualizationTimedSample[];
     }
 
     interface RecorderViewerTools {
@@ -40,6 +46,8 @@ declare global {
     }
 
     interface RecorderVisualizationStateSnapshot {
+        backgrounds: BackgroundItem[];
+        activeBackgroundIndex?: number | number[];
         visualizations: VisualizationItem[];
         activeVisualizationIndex?: number | number[];
         renderer?: RecorderVisualizationSnapshot;
@@ -94,6 +102,7 @@ declare global {
         createNavigation(
             viewerId: UniqueViewerId,
             samples: RecorderNavigationSample[],
+            visualizationSamples?: RecorderVisualizationTimedSample[],
             delay?: number,
             duration?: number,
             transition?: number,

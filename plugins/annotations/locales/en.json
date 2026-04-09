@@ -113,6 +113,25 @@
       "deleteSelection": "Delete selection",
       "refresh": "Refresh list",
       "area": "Area"
+    },
+    "filters": {
+      "title": "Filtering",
+      "button": "Filter",
+      "modalTitle": "Annotation Filtering",
+      "apply": "Apply",
+      "clear": "Clear filters",
+      "remove": "Remove filter",
+      "empty": "No active filters",
+      "noneAvailable": "No values available",
+      "selectPlaceholder": "Choose values",
+      "searchPlaceholder": "Search values",
+      "fields": {
+        "instanceId": "Instance ID",
+        "author": "Author",
+        "presetName": "Preset name",
+        "factoryType": "Annotation type",
+        "boundingRect": "Bounding rect"
+      }
     }
   },
   "common": {

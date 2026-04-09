@@ -143,6 +143,10 @@ declare global {
         }
 
         interface ViewerManagerEventMap {
+            "before-first-open": BeforeFirstOpenEvent;
+            "before-refresh": BeforeRefreshEvent;
+            "before-open": BeforeOpenEvent;
+            "after-open": AfterOpenEvent;
             "plugin-loaded": PluginLoadedEvent;
             "plugin-failed": PluginFailedEvent;
             "module-singleton-created": ModuleSingletonCreatedEvent;

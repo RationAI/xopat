@@ -274,6 +274,9 @@ interface ApplicationContext {
             preserveHistoryOnBackgroundChange?: boolean;
             warnOnHistoryBoundary?: boolean;
             historyLabel?: string;
+            strictVisualization?: boolean;
+            skipVisualizationCapabilityCheck?: boolean;
+            suppressDialogsOnVisualizationFailure?: boolean;
         }
     ): Promise<boolean>;
     updateVisualization(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
@@ -326,7 +329,17 @@ interface ApplicationContext {
         visualizations?: VisualizationItem[],
         bgSpec?: number | number[] | null,
         vizSpec?: number | number[] | null,
-        opts?: { deriveOverlayFromBackgroundGoals?: boolean }
+        opts?: {
+            deriveOverlayFromBackgroundGoals?: boolean;
+            historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
+            fromHistory?: boolean;
+            preserveHistoryOnBackgroundChange?: boolean;
+            warnOnHistoryBoundary?: boolean;
+            historyLabel?: string;
+            strictVisualization?: boolean;
+            skipVisualizationCapabilityCheck?: boolean;
+            suppressDialogsOnVisualizationFailure?: boolean;
+        }
     ): Promise<boolean>;
     updateVisualization(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
     _dangerouslyAccessConfig(): any;

@@ -1509,6 +1509,93 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
         const loadSnapshotsEqual = (a: any, b: any) => safeStringify(a) === safeStringify(b);
         const visibleLoadChanged = (a: any, b: any) => buildVisibleLoadFingerprint(a) !== buildVisibleLoadFingerprint(b);
+        const selectionAt = (value: any, viewerIndex: number): number | undefined => {
+            const selected = normalizeHistorySelection(value) || [];
+            return selected[viewerIndex] ?? selected[0];
+        };
+        const dataSpecFromRef = (dataSet: any[], ref: any) => typeof ref === "number" ? dataSet?.[ref] : ref;
+        const dataIdFromSpec = (spec: any) => {
+            if (spec == null) return undefined;
+            return spec && typeof spec === "object" && spec.dataID ? spec.dataID : spec;
+        };
+        const collectViewerReferencedData = (snapshot: any, viewerIndex: number) => {
+            const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
+            const visualizations = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
+            const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
+            const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
+            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+            const refs = new Set<any>();
+            const bgEntry = Number.isInteger(bgIndex) ? backgrounds[bgIndex as number] : undefined;
+            const vizEntry = Number.isInteger(vizIndex) ? visualizations[vizIndex as number] : undefined;
+
+            if (bgEntry?.dataReference !== undefined) {
+                refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, bgEntry.dataReference)));
+            }
+            if (Array.isArray(bgEntry?.shaders)) {
+                for (const shader of bgEntry.shaders) {
+                    for (const ref of shader?.dataReferences || []) {
+                        refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, ref)));
+                    }
+                }
+            }
+            if (vizEntry?.shaders) {
+                for (const shader of Object.values(vizEntry.shaders as Record<string, any>)) {
+                    for (const ref of shader?.dataReferences || []) {
+                        refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, ref)));
+                    }
+                }
+            }
+            return Array.from(refs);
+        };
+        const buildViewerNatureFingerprint = (snapshot: any, viewerIndex: number) => {
+            const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
+            const visualizations = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
+            const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
+            const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
+            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+            const bgEntry = Number.isInteger(bgIndex) ? backgrounds[bgIndex as number] : undefined;
+            const vizEntry = Number.isInteger(vizIndex) ? visualizations[vizIndex as number] : undefined;
+
+            return safeStringify({
+                viewerIndex,
+                background: bgEntry ? {
+                    id: bgEntry.id,
+                    protocol: bgEntry.protocol,
+                    dataReference: dataIdFromSpec(dataSpecFromRef(dataSet, bgEntry.dataReference)),
+                    shaders: Array.isArray(bgEntry.shaders) ? bgEntry.shaders.map((shader: any) => ({
+                        id: shader?.id,
+                        type: shader?.type,
+                        dataReferences: Array.isArray(shader?.dataReferences)
+                            ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
+                            : [],
+                    })) : [],
+                } : null,
+                visualization: vizEntry ? {
+                    protocol: vizEntry.protocol,
+                    shaders: Object.entries(vizEntry.shaders || {}).map(([shaderId, shader]: [string, any]) => ({
+                        id: shader?.id || shaderId,
+                        type: shader?.type,
+                        dataReferences: Array.isArray(shader?.dataReferences)
+                            ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
+                            : [],
+                    })),
+                } : null,
+            });
+        };
+        const buildViewerRenderFingerprint = (snapshot: any, viewerIndex: number) => {
+            const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
+            const visualizations = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
+            const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
+            const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
+            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+
+            return safeStringify({
+                viewerIndex,
+                background: Number.isInteger(bgIndex) ? backgrounds[bgIndex as number] : null,
+                visualization: Number.isInteger(vizIndex) ? visualizations[vizIndex as number] : null,
+                data: collectViewerReferencedData(snapshot, viewerIndex),
+            });
+        };
 
         const restoreLoadSnapshot = async (snapshot: any) => {
             if (!snapshot) return false;
@@ -1533,15 +1620,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (value === true || value === "true") return true;
             return Boolean(value);
         };
-
-        USER_INTERFACE.Loading.show(true);
-
-        await VIEWER_MANAGER.raiseEventAwaiting(
-            'before-open', { data, background, visualizations, bgSpec, vizSpec, opts }
-        ).catch((e: any) => console.warn("Exception in 'before-open' event handler: ", e));
-
-        //todo consider return false if some dialog refuses the reload
-        await Dialogs.awaitHidden();
 
         const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
         const previousSnapshot = captureLoadSnapshotFromConfig(config);
@@ -1647,7 +1725,8 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             true
         );
 
-        let historyMode = opts.historyMode || "auto";
+        let historyMode = opts.historyMode || "auto"
+        // todo: consider sanitizing historyMode for wrong user options
         if (historyMode === "auto") {
             if (!anythingVisibleChanged) {
                 historyMode = "skip";
@@ -1657,6 +1736,21 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 historyMode = "visualization-step";
             }
         }
+
+
+        let maybeLoadingTimeout: any = undefined;
+        if (backgroundChanged) {
+            USER_INTERFACE.Loading.show(true);
+        } else {
+            // likely it will be very short,we don't want to block the UI - give it a chance to don't bother user with loading
+            maybeLoadingTimeout = setTimeout(() => {
+                USER_INTERFACE.Loading.show(true);
+                maybeLoadingTimeout = undefined;
+            }, 1000);
+        }
+
+        //todo consider return false if some dialog refuses the reload
+        await Dialogs.awaitHidden();
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
         if (!opts.fromHistory && backgroundChanged && historyMode === "reset-history" && hasCommittedHistory) {
@@ -1700,8 +1794,31 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
         // 2) Ensure we have a ViewerManager and correct number of viewers (>= 1)
         const VM = VIEWER_MANAGER;
-
         const desiredCount = Math.max(1, bgPlan.length);
+        const previousDesiredCount = Math.max(
+            1,
+            (normalizeHistorySelection(previousSnapshot?.activeBackgroundIndex) || []).length || 1
+        );
+        const changesViewerCount = desiredCount !== previousDesiredCount;
+        const changesViewerNature = changesViewerCount || backgroundChanged;
+        const refreshChangeKind = !anythingVisibleChanged ? "noop" : (changesViewerNature ? "content" : "visualization");
+
+        await VIEWER_MANAGER.raiseEventAwaiting('before-refresh', {
+            data: config.data,
+            background: config.background,
+            visualizations: config.visualizations,
+            bgSpec,
+            vizSpec,
+            opts,
+            historyMode,
+            changeKind: refreshChangeKind,
+            changesViewerNature,
+            changesViewerCount,
+            anythingVisibleChanged,
+            anythingChanged,
+            backgroundChanged,
+        }).catch((e: any) => console.warn("Exception in 'before-refresh' event handler: ", e));
+
         // Add missing viewers
         for (let i = 0; i < desiredCount; i++) {
             if (!VM.viewers[i]) VM.add(i);
@@ -1836,6 +1953,100 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             return deriveLoadKey(dataSpec, item.source?.url || item.source, fallbackIndex);
         };
 
+        const collectViewerDataIndexes = (backgroundIndex: number | undefined, visualizationIndex: number | undefined) => {
+            const refs = new Set<number>();
+            const bgEntry = Number.isInteger(backgroundIndex) ? cfg.background[backgroundIndex as number] : undefined;
+            const vizEntry = Number.isInteger(visualizationIndex) ? cfg.visualizations[visualizationIndex as number] : undefined;
+
+            if (bgEntry && typeof bgEntry.dataReference === "number") {
+                refs.add(bgEntry.dataReference);
+            }
+            for (const shader of bgEntry?.shaders || []) {
+                for (const ref of shader?.dataReferences || []) {
+                    if (Number.isInteger(ref)) refs.add(ref);
+                }
+            }
+            if (vizEntry?.shaders) {
+                for (const shader of Object.values(vizEntry.shaders as Record<string, any>)) {
+                    for (const ref of shader?.dataReferences || []) {
+                        if (Number.isInteger(ref)) refs.add(ref);
+                    }
+                }
+            }
+            return Array.from(refs.values());
+        };
+        const applyBeforeOpenMutations = async () => {
+            for (let viewerIndex = 0; viewerIndex < bgPlan.length; viewerIndex += 1) {
+                const entry = bgPlan[viewerIndex];
+                const viewer = VM.viewers[viewerIndex];
+                let backgroundIndex = entry.bgIndices[0];
+                let visualizationIndex = Array.isArray(activeViz)
+                    ? activeViz[viewerIndex]
+                    : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
+                let dataIndexes = collectViewerDataIndexes(backgroundIndex, visualizationIndex);
+
+                const event = {
+                    viewer,
+                    viewerIndex,
+                    entry,
+                    backgroundIndex,
+                    visualizationIndex,
+                    background: Number.isInteger(backgroundIndex) ? config.background[backgroundIndex as number] : undefined,
+                    visualization: Number.isInteger(visualizationIndex) ? config.visualizations[visualizationIndex as number] : undefined,
+                    data: dataIndexes.map((index: number) => config.data[index]),
+                    dataIndexes: [...dataIndexes],
+                    opts,
+                    changeKind: changesViewerCount || backgroundChanged ? "content" : "visualization",
+                    changesViewerNature: changesViewerCount || backgroundChanged,
+                    changesViewerCount,
+                    isNewViewer: !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1,
+                };
+
+                await VIEWER_MANAGER.raiseEventAwaiting('before-open', event)
+                    .catch((e: any) => console.warn("Exception in 'before-open' event handler: ", e));
+
+                if (Number.isInteger(event.backgroundIndex)) {
+                    backgroundIndex = event.backgroundIndex as number;
+                    entry.bgIndices = [backgroundIndex];
+                }
+                if (Array.isArray(activeBg)) {
+                    activeBg[viewerIndex] = backgroundIndex;
+                } else if (Number.isInteger(backgroundIndex)) {
+                    activeBg = [backgroundIndex];
+                }
+
+                if (Number.isInteger(event.visualizationIndex)) {
+                    visualizationIndex = event.visualizationIndex as number;
+                }
+                if (Array.isArray(activeViz)) {
+                    activeViz[viewerIndex] = visualizationIndex;
+                } else if (Number.isInteger(visualizationIndex)) {
+                    activeViz = [visualizationIndex];
+                }
+
+                dataIndexes = Array.isArray(event.dataIndexes)
+                    ? [...event.dataIndexes]
+                    : collectViewerDataIndexes(backgroundIndex, visualizationIndex);
+
+                if (Number.isInteger(backgroundIndex) && event.background && !Array.isArray(event.background)) {
+                    config.background[backgroundIndex as number] = BackgroundConfig.from(event.background as BackgroundItem | BackgroundConfig);
+                }
+                if (Number.isInteger(visualizationIndex) && event.visualization) {
+                    config.visualizations[visualizationIndex as number] = event.visualization;
+                }
+                if (Array.isArray(event.data)) {
+                    dataIndexes.forEach((dataIndex: number, index: number) => {
+                        if (index in event.data) {
+                            config.data[dataIndex] = event.data[index];
+                        }
+                    });
+                }
+            }
+
+            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", activeBg);
+            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", activeViz);
+        };
+
         const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
             // First create a tile source class
             const originalSource = source.source || source;
@@ -1877,10 +2088,44 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             });
         };
 
-        // Helper: configure shaders/rendering for a viewer + open its images
-        const openIntoViewer = async (entry: any, viewerIndex: number) => {
+        await applyBeforeOpenMutations();
+
+        const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
+        const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = VM.viewers[viewerIndex];
-            const canSurgicallyDiff = viewer.isOpen() && viewer.world.getItemCount() > 0;
+            const previousNatureFingerprint = buildViewerNatureFingerprint(previousSnapshot, viewerIndex);
+            const nextNatureFingerprint = buildViewerNatureFingerprint(effectiveSnapshot, viewerIndex);
+            const previousRenderFingerprint = buildViewerRenderFingerprint(previousSnapshot, viewerIndex);
+            const nextRenderFingerprint = buildViewerRenderFingerprint(effectiveSnapshot, viewerIndex);
+            const isNewViewer = !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1;
+
+            let changeKind: "noop" | "content" | "visualization";
+            if (isNewViewer) {
+                changeKind = "content";
+            } else if (previousRenderFingerprint === nextRenderFingerprint) {
+                changeKind = "noop";
+            } else if (previousNatureFingerprint !== nextNatureFingerprint || changesViewerCount) {
+                changeKind = "content";
+            } else {
+                changeKind = "visualization";
+            }
+
+            return {
+                entry,
+                viewerIndex,
+                changeKind,
+            };
+        });
+
+        // Helper: configure shaders/rendering for a viewer + open its images
+        const openIntoViewer = async (plan: any) => {
+            const { entry, viewerIndex } = plan;
+            const viewer = VM.viewers[viewerIndex];
+            if (plan.changeKind === "noop" && viewer.isOpen() && viewer.world.getItemCount() > 0) {
+                return { skipped: true, viewerIndex };
+            }
+
+            const canSurgicallyDiff = plan.changeKind !== "content" && viewer.isOpen() && viewer.world.getItemCount() > 0;
             const viewerSupportsFlexRendering = !!(
                 viewer?.drawer &&
                 typeof viewer.drawer.getType === "function" &&
@@ -2157,7 +2402,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         );
 
         let openSucceeded = true;
-        await Promise.allSettled(bgPlan.map(openIntoViewer)).then(e => {
+        await Promise.allSettled(viewerUpdatePlans.map(openIntoViewer)).then(e => {
             let hadRejectedOpen = false;
             for (let promise of e) {
                 if (promise.status === "rejected") {
@@ -2168,13 +2413,20 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 }
             }
 
-            // Initialize plugins now
-            runLoader();
+            // Initialize plugins now, but only initially
+            if (runLoader) {
+                runLoader();
+                runLoader = null;
+            }
 
             if (hadRejectedOpen && strictVisualization) {
                 throw new Error("Failed to apply one or more visualization updates.");
             }
 
+            if (maybeLoadingTimeout) {
+                clearTimeout(maybeLoadingTimeout);
+                maybeLoadingTimeout = undefined;
+            }
             clearTimeout(loadTooLongTimeout);
             // Keep the manager-selected viewer unless nothing is active yet.
             if (!VM.get() && VM.viewers.length > 0) {

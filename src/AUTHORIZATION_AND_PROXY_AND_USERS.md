@@ -87,11 +87,11 @@ xOpat allows **contextual** authentication so different backend services (e.g., 
 
 Typical pattern:
 
-1. On startup (e.g., in a `before-first-open` handler), ensure the user is logged in and populate the relevant secrets—either generic or per-context.
+1. On startup (e.g., in a `before-app-init` handler), ensure the user is logged in and populate the relevant secrets—either generic or per-context.
 2. Initialize HTTP clients with the `auth.contextId` that matches where the secret is stored.
 
 ```js
-VIEWER_MANAGER.addHandler('before-first-open', async () => {
+VIEWER_MANAGER.addHandler('before-app-init', async () => {
   const user = XOpatUser.instance();
   if (!user.isLogged) {
     await ensureUserLoggedIn(); // your own routine
@@ -178,7 +178,7 @@ try {
 ```js
 // 1) Startup: make sure the user is logged in and set a JWT for the "mlflow" context
 const user = XOpatUser.instance();
-VIEWER_MANAGER.addHandler('before-first-open', async () => {
+VIEWER_MANAGER.addHandler('before-app-init', async () => {
   if (!user.isLogged) await ensureUserLoggedIn();
 
   const jwt = await acquireJwtFor("mlflow");
@@ -205,6 +205,6 @@ const data = await client.request('/experiments/list');
 - Keep `types` ordered by preference (e.g., try `jwt` first, then fall back to `basic`).
 - Treat `logout()` as a destructive operation that clears **all** secrets unless context ID is specified; handle session UI accordingly.
 - If you introduce a new secret type, **register a handler** early during app startup.
-- In multi-auth setups, assign **event priorities** (e.g., on `before-first-open`) so only the first successful login path wins.
+- In multi-auth setups, assign **event priorities** (e.g., on `before-app-init`) so only the first successful login path wins.
 
 
