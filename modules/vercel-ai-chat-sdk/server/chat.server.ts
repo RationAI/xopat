@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { ChatServerRegistry, ensureBuiltinAdapters as ensureRegistryBuiltinAdapters } from './chatRegistry.server';
+import { ChatServerRegistry } from './chatRegistry.server';
 
 const LLM_DEBUG = true;
 
@@ -334,94 +334,9 @@ function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined): boo
     return !!bytes && bytes.byteLength > CHAT_MAX_INLINE_ATTACHMENT_BYTES;
 }
 
-function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
-    const headers: Record<string, string> = {};
-    const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : '';
-    const headerName = typeof config.apiKeyHeader === 'string' && config.apiKeyHeader ? String(config.apiKeyHeader) : 'Authorization';
-    if (apiKey) {
-        headers[headerName] = headerName.toLowerCase() === 'authorization' ? `Bearer ${apiKey}` : apiKey;
-    }
-    const headersJson = typeof config.headersJson === 'string' ? config.headersJson.trim() : '';
-    if (headersJson) {
-        try {
-            const extra = JSON.parse(headersJson);
-            if (extra && typeof extra === 'object') {
-                for (const [key, value] of Object.entries(extra)) {
-                    if (value != null) headers[key] = String(value);
-                }
-            }
-        } catch (_error) {
-            throw new Error('Invalid headersJson. Expected a JSON object.');
-        }
-    }
-    return headers;
-}
-
-function parseModelList(raw: unknown): Array<{ id: string; label?: string; description?: string }> {
-    if (Array.isArray(raw)) {
-        return raw
-            .map((item) => {
-                if (typeof item === 'string' && item.trim()) return { id: item.trim() };
-                if (item && typeof item === 'object' && typeof (item as any).id === 'string' && (item as any).id.trim()) {
-                    return {
-                        id: String((item as any).id).trim(),
-                        label: typeof (item as any).label === 'string' ? (item as any).label : undefined,
-                        description: typeof (item as any).description === 'string' ? (item as any).description : undefined,
-                    };
-                }
-                return null;
-            })
-            .filter(Boolean) as Array<{ id: string; label?: string; description?: string }>;
-    }
-
-    if (typeof raw === 'string' && raw.trim()) {
-        try {
-            return parseModelList(JSON.parse(raw));
-        } catch {
-            return raw
-                .split(/[,\r\n]+/)
-                .map((item) => item.trim())
-                .filter(Boolean)
-                .map((id) => ({ id }));
-        }
-    }
-
-    return [];
-}
-
-function buildAnthropicHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
-    const headers: Record<string, string> = {};
-    const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : '';
-    const anthropicVersion = typeof config.anthropicVersion === 'string' && config.anthropicVersion
-        ? String(config.anthropicVersion)
-        : '2023-06-01';
-
-    if (apiKey) {
-        headers['x-api-key'] = apiKey;
-    }
-    if (anthropicVersion) {
-        headers['anthropic-version'] = anthropicVersion;
-    }
-
-    const headersJson = typeof config.headersJson === 'string' ? config.headersJson.trim() : '';
-    if (headersJson) {
-        try {
-            const extra = JSON.parse(headersJson);
-            if (extra && typeof extra === 'object') {
-                for (const [key, value] of Object.entries(extra)) {
-                    if (value != null) headers[key] = String(value);
-                }
-            }
-        } catch (_error) {
-            throw new Error('Invalid headersJson. Expected a JSON object.');
-        }
-    }
-
-    return headers;
-}
-
 function ensureBuiltinAdapters() {
-    ensureRegistryBuiltinAdapters();
+    // No built-in provider adapters are registered by core.
+    // Provider plugins are responsible for registering their own adapter implementations.
 }
 
 function scriptSystemContent(

@@ -9,7 +9,7 @@ This document serves as a comprehensive guide for Large Language Models (and hum
   - `window.VIEWER_MANAGER` (manager for OSD viewers)
   - `window.USER_INTERFACE` (core generic UI operations)
   - `window.UTILITIES` (system utilities)
-  - Modules and Plugins instances: accessible via `window.xmodule.<name>` and `window.xplugin.<name>`, or safer by using `plugin('id')` and `singletonModule('id')` and `viewerSingletonModule('className', 'viewerLikeRef')`.
+  - Modules and Plugins instances: accessible via `window.xmodule.<name>` and `window.xplugin.<name>`, or safer by using `plugin('id')` and `singletonModule('id')` and `viewerSingletonModule('className', 'viewerLikeRef')` if possible.
 - **CSS / Styling**: Rely heavily on **DaisyUI + TailwindCSS**. Do not write custom CSS unless absolutely necessary. Do not use Tailwind's dark mode selectors directly; the application relies on DaisyUI's data-theme mechanism. Deprecate the usage of old `Primer CSS` or direct Bootstrap where possible.
 
 > Keep best programming practices in mind - separate responsibilities, design clean interfaces, and avoid unnecessary coupling.

@@ -2164,15 +2164,28 @@ ${await UTILITIES.getForm()}
                 return;
             }
 
-            let ctx = Dialogs.getModalContext('synchronized-view');
+            let ctx = UI.FloatingWindow.getExternal('synchronized-view');
             if (ctx) {
-                ctx.window.focus();
+                ctx.focus();
                 return;
             }
             let x = window.innerWidth / 2, y = window.innerHeight;
             window.resizeTo(x, y);
-            Dialogs._showCustomModalImpl('synchronized-view', "Loading...",
-                await UTILITIES.getForm(), `width=${x},height=${y}`);
+            const result = UI.FloatingWindow.openExternal({
+                id: 'synchronized-view',
+                title: "Loading...",
+                width: x,
+                height: y,
+                externalProps: {
+                    content: await UTILITIES.getForm(),
+                }
+            });
+            if (!result?.context) {
+                Dialogs.show($.t('messages.modalWindowBlocked', {
+                    title: "Loading...",
+                    action: "UTILITIES.clone(); Dialogs.hide();"
+                }), 15000, Dialogs.MSG_WARN);
+            }
         },
 
         setDirty: () => APPLICATION_CONTEXT.__cache.dirty = true,
@@ -2256,19 +2269,27 @@ ${await UTILITIES.getForm()}
          * @returns {Window|null} Window object of the debugging modal, or null if failed.
          */
         openDebuggingWindow: function (html: string = '') {
-            let ctx = Dialogs.getModalContext('__xopat__debug__window__');
+            let ctx = UI.FloatingWindow.getExternal('__xopat__debug__window__');
             if (ctx) {
-                ctx.window.focus();
-                return ctx.window;
+                ctx.focus();
+                return ctx.context?.window || null;
             }
 
-            Dialogs.showCustomModal('__xopat__debug__window__', 'Debugging Window', 'Debugging Window', html);
-            const window = Dialogs.getModalContext('__xopat__debug__window__')?.window;
-            if (!window) {
+            const result = UI.FloatingWindow.openExternal({
+                id: '__xopat__debug__window__',
+                title: 'Debugging Window',
+                width: 450,
+                height: 250,
+                externalProps: {
+                    content: html,
+                }
+            });
+            const childWindow = result.context?.window;
+            if (!childWindow) {
                 return null;
             }
 
-            return window;
+            return childWindow;
         },
 
         /**

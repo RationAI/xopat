@@ -66,7 +66,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         );
 
         this.visibilityManager = {
-            is: () => !!this.window?.isVisible?.(),
+            is: () => !!(this._dockable?.visibilityManager?.is?.() ?? this.window?.visibilityManager?.is?.()),
             on: () => this.open(),
             off: () => this.close(),
             set: next => next ? this.open() : this.close(),
@@ -92,7 +92,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             title: this.title,
             iconName: "fa-images",
             body: [this._body],
-            visibilityManager: this.visibilityManager,
             floating: {
                 width: this.w,
                 height: this.h,
@@ -117,13 +116,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         // todo avoid this manual private method call
         this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
 
-        const layout = this.layout || globalThis.LAYOUT || null;
-        return layout?.showTab?.(this.windowId) ?? false;
+        this._dockable?.open?.();
+        return true;
     }
 
     close() {
-        const layout = this.layout || globalThis.LAYOUT || null;
-        return layout?.hideTab?.(this.windowId) ?? false;
+        this._dockable?.hide?.();
+        return true;
     }
 
     refresh(newConfig) {

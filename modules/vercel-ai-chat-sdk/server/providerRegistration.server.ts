@@ -1,4 +1,14 @@
-import { ChatServerRegistry, ensureBuiltinAdapters, type ChatProviderAdapter } from './chatRegistry.server';
+import { ChatServerRegistry, type ChatProviderAdapter } from './chatRegistry.server';
+
+export function buildProviderTypeRecord(input: CreateProviderTypeInput | UpdateProviderTypeInput) {
+    return {
+        ...input,
+        configSchema: Array.isArray(input?.configSchema) ? input.configSchema.map((field) => ({ ...field })) : [],
+        fixedConfig: input?.fixedConfig ? { ...input.fixedConfig } : undefined,
+        fixedSecrets: input?.fixedSecrets ? { ...input.fixedSecrets } : undefined,
+        metadata: input?.metadata ? { ...input.metadata } : undefined,
+    };
+}
 
 export async function ensureManagedPluginProvider(ctx: any, input: {
     pluginId: string;
@@ -10,14 +20,13 @@ export async function ensureManagedPluginProvider(ctx: any, input: {
     const pluginId = String(input?.pluginId || '').trim();
     if (!pluginId) throw new Error('ensureManagedPluginProvider: missing pluginId.');
 
-    ensureBuiltinAdapters();
     const registry = ChatServerRegistry.instance();
 
     if (input.adapter) {
         registry.registerAdapter(input.adapter);
     }
 
-    const providerType = registry.upsertProviderType(input.providerType);
+    const providerType = registry.upsertProviderType(buildProviderTypeRecord(input.providerType));
     const typeId = String(input.provider?.typeId || providerType.id || '').trim();
     if (!typeId) throw new Error('ensureManagedPluginProvider: missing provider type id.');
 

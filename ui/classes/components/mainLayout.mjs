@@ -54,10 +54,13 @@ export class MainLayout extends BaseComponent {
         options = super(options, ...children).options;
 
         this.position = (options.position || "right").toLowerCase();
-        this.widthPx = options.initialWidth ?? 360;
         this.minWidth = options.minWidth ?? 220;
         this.maxWidth = options.maxWidth ?? 640;
         this.collapseBreakpointPx = options.collapseBreakpointPx ?? 900;
+        this._widthCacheKey = `${this.id}-dock-width`;
+        this.widthPx = this._clampDockWidth(
+            APPLICATION_CONTEXT.AppCache.get(this._widthCacheKey, options.initialWidth ?? 360)
+        );
         this.collapsed = false;
 
         // fullscreen-on-narrow state
@@ -320,23 +323,35 @@ export class MainLayout extends BaseComponent {
 
     showTab(id) {
         const tab = this._menu?.tabs?.[id];
-        if (!tab?.visibilityManager) return false;
+        if (!tab) return false;
 
-        tab.visibilityManager.on();
+        this._setTabVisibleState(tab, true);
+
+        if (this._menu && typeof this._menu.focus === "function") {
+            this._menu.focus(id);
+        }
+        USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
         return this.showGlobalMenu();
     }
 
     hideTab(id) {
         const tab = this._menu?.tabs?.[id];
-        if (!tab?.visibilityManager) return false;
+        if (!tab) return false;
 
-        tab.visibilityManager.off();
+        this._setTabVisibleState(tab, false);
 
         if (!this._hasVisibleTabs()) {
+            USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
             return this.hideGlobalMenu();
         }
 
+        const nextVisible = this._getMenuTabs().find(menuTab => menuTab.id !== id && this._isTabVisible(menuTab));
+        if (nextVisible?.id && typeof this._menu?.focus === "function") {
+            this._menu.focus(nextVisible.id);
+        }
+
         this._applyDockVisibility();
+        USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
         return true;
     }
 
@@ -576,12 +591,41 @@ export class MainLayout extends BaseComponent {
 
     _isTabVisible(tab) {
         if (!tab) return false;
-        if (typeof tab.visibilityManager?.is === "function") {
-            return !!tab.visibilityManager.is();
-        }
         if (typeof tab.hidden === "boolean") {
             return !tab.hidden;
         }
+        if (typeof tab.visibilityManager?.is === "function") {
+            return !!tab.visibilityManager.is();
+        }
+        return true;
+    }
+
+    _setTabVisibleState(tab, visible) {
+        if (!tab?.id) return false;
+
+        tab.hidden = !visible;
+        APPLICATION_CONTEXT.AppCache.set(`v::${tab.id}`, !!visible);
+
+        if (tab.headerButton?.setClass) {
+            tab.headerButton.setClass("display", visible ? "" : "hidden");
+        } else {
+            const headerNode = tab.headerButton?.id ? document.getElementById(tab.headerButton.id) : null;
+            if (headerNode) {
+                headerNode.classList.toggle("hidden", !visible);
+            }
+        }
+
+        if (tab.contentDiv?.setClass) {
+            const shouldShowContent = visible && this._menu?._focused === tab.id;
+            tab.contentDiv.setClass("display", shouldShowContent ? "" : "display-none");
+        } else {
+            const contentNode = tab.contentDiv?.id ? document.getElementById(tab.contentDiv.id) : null;
+            if (contentNode) {
+                const shouldShowContent = visible && this._menu?._focused === tab.id;
+                contentNode.classList.toggle("display-none", !shouldShowContent);
+            }
+        }
+
         return true;
     }
 
@@ -628,6 +672,27 @@ export class MainLayout extends BaseComponent {
         this._applyDockVisibility();
     }
 
+    _getDockWidthLimit() {
+        if (typeof window === "undefined") {
+            return this.maxWidth;
+        }
+
+        const viewportWidth = Math.max(window.innerWidth || 0, this.minWidth);
+        const safeViewportLimit = Math.max(this.minWidth, viewportWidth - 24);
+        return Math.max(this.minWidth, Math.min(this.maxWidth, safeViewportLimit));
+    }
+
+    _clampDockWidth(width) {
+        const parsed = Number(width);
+        const fallback = Number.isFinite(parsed) ? parsed : this.minWidth;
+        return Math.max(this.minWidth, Math.min(this._getDockWidthLimit(), fallback));
+    }
+
+    _persistDockWidth() {
+        this.widthPx = this._clampDockWidth(this.widthPx);
+        APPLICATION_CONTEXT.AppCache.set(this._widthCacheKey, this.widthPx);
+    }
+
     /** @private */
     _applyVisibility() {
         if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
@@ -637,6 +702,7 @@ export class MainLayout extends BaseComponent {
             this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
         } else {
+            this.widthPx = this._clampDockWidth(this.widthPx);
             this._dockEl.style.width = `${this.widthPx}px`;
             this._dockEl.style.height = "";
             this._handleEl.style.display = "";
@@ -647,6 +713,8 @@ export class MainLayout extends BaseComponent {
     _applyResponsiveLayout() {
         if (!this._shellEl) return;
         const narrow = window.innerWidth < this.collapseBreakpointPx;
+
+        this.widthPx = this._clampDockWidth(this.widthPx);
 
         this._shellEl.classList.toggle("flex-col", narrow);
         this._shellEl.classList.toggle("flex-row", !narrow);
@@ -1115,9 +1183,31 @@ export class MainLayout extends BaseComponent {
         if (!this._menu) return;
         this._registerDockInView();
         for (const tab of this._getMenuTabs()) {
+            this._setTabVisibleState(tab, this._isTabVisible(tab));
             this._attachCloseButton(tab);
             this._registerTabInView(tab);
         }
+        this._ensureFocusedVisibleTab();
+        USER_INTERFACE?.AppBar?.View && (USER_INTERFACE.AppBar.View._visualMenuNeedsRefresh = true);
+    }
+
+    _ensureFocusedVisibleTab() {
+        if (!this._menu || typeof this._menu.focus !== "function") return;
+
+        const focusedId = this._menu._focused;
+        const focusedTab = focusedId ? this._menu.tabs?.[focusedId] : null;
+        if (focusedTab && this._isTabVisible(focusedTab)) {
+            return;
+        }
+
+        const nextVisible = this._getMenuTabs().find(tab => this._isTabVisible(tab));
+        if (nextVisible?.id) {
+            this._menu.focus(nextVisible.id);
+            this._setTabVisibleState(nextVisible, true);
+            return;
+        }
+
+        this._menu.unfocusAll?.();
     }
 
     _attachCloseButton(tab) {
@@ -1146,13 +1236,7 @@ export class MainLayout extends BaseComponent {
         closeButton.addEventListener("click", event => {
             event.preventDefault();
             event.stopPropagation();
-            const wrapper = this._resolveDockable(tab);
-            if (wrapper) {
-                wrapper.hide?.();
-            } else {
-                tab.visibilityManager?.off?.();
-            }
-            this._applyDockVisibility();
+            this.hideTab(tab.id);
         });
 
         headerEl.append(closeButton);
@@ -1167,7 +1251,7 @@ export class MainLayout extends BaseComponent {
             if (!drag) return;
             const dx = e.clientX - startX;
             const newW = this.position === "left" ? startW + dx : startW - dx;
-            this.widthPx = Math.max(this.minWidth, Math.min(this.maxWidth, newW));
+            this.widthPx = this._clampDockWidth(newW);
             this._dockEl.style.width = `${this.widthPx}px`;
             e.preventDefault();
         };
@@ -1175,6 +1259,7 @@ export class MainLayout extends BaseComponent {
             drag = false;
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
+            this._persistDockWidth();
         };
 
         this._handleEl.addEventListener("mousedown", e => {

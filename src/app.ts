@@ -464,6 +464,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         id: "viewer-container",
         position: "right",
         initialWidth: 360,
+        maxWidth:  APPLICATION_CONTEXT.getOption("globalMenuMaxWidth", undefined, false, true),
         collapseBreakpointPx: APPLICATION_CONTEXT.getOption("maxMobileWidthPx", undefined, false, true),
         toolbarEmbeddingWide: false,
         toolbarEmbeddingPosition: "below",

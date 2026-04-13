@@ -18,7 +18,7 @@ class TabsMenu extends Menu {
 
         // TODO why is there join-horizontal???
         this.header = new Div({ id: this.id + "-header", extraClasses: { tabs: "tabs", style: "tabs-boxed" }});
-        this.body = new Div({ id: this.id + "-body", extraClasses: { flex: "flex-1", minHeight: "min-h-0", width: "w-full", style: "boxed", margin: "m-0" } });
+        this.body = new Div({ id: this.id + "-body", extraClasses: { flex: "flex-1", minHeight: "min-h-0", width: "w-full", style: "boxed", margin: "m-0", "scroll": "overflow-y-auto" } });
 
         for (let i of this._children) {
             this.addTab(i);
@@ -86,7 +86,16 @@ class TabsMenu extends Menu {
         if (content){
             c = new Div({ id: this.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
         };
-        return {headerButton: b, contentDiv: c};
+        return {
+            id: item.id,
+            title: item.title,
+            icon: item.icon,
+            iconName: typeof item.icon === "string" ? item.icon : item.iconName,
+            visibilityManager: item.visibilityManager,
+            __dockableWindow: item.__dockableWindow,
+            headerButton: b,
+            contentDiv: c
+        };
     }
 
     /**

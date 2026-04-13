@@ -1,5 +1,4 @@
 import type { LanguageModel } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 export interface ServerProviderRuntimeContext {
     ctx: any;
@@ -48,56 +47,6 @@ function normalizeField(field: ChatProviderConfigField): ChatProviderConfigField
 function clone(value: Record<string, unknown> | undefined | null): Record<string, unknown> {
     return value ? { ...value } : {};
 }
-
-function ensureSlash(url: string): string {
-    return url.endsWith('/') ? url : `${url}/`;
-}
-
-function resolveEndpointUrl(baseURL: string, endpoint: string): string {
-    const normalizedBaseURL = String(baseURL || '').trim();
-    const normalizedEndpoint = String(endpoint || '').trim();
-
-    if (!normalizedBaseURL) return normalizedEndpoint;
-    if (!normalizedEndpoint) return normalizedBaseURL;
-    if (/^https?:\/\//i.test(normalizedEndpoint)) return normalizedEndpoint;
-
-    return new URL(normalizedEndpoint.replace(/^\/+/, ''), ensureSlash(normalizedBaseURL)).toString();
-}
-
-function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
-    const modalities = Array.isArray(item?.modalities)
-        ? item.modalities.map((value: any) => String(value || '').toLowerCase())
-        : [];
-    const supportsVision = modalities.includes('image') || modalities.includes('vision');
-    const supportsFiles = modalities.includes('file');
-
-    return {
-        text: 'supported',
-        images: supportsVision ? 'supported' : 'unsupported',
-        files: supportsFiles ? 'supported' : 'unsupported',
-        source: 'provider',
-    };
-}
-
-function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
-    const headers: Record<string, string> = {};
-    const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : '';
-    const headerName = typeof config.apiKeyHeader === 'string' && config.apiKeyHeader ? String(config.apiKeyHeader) : 'Authorization';
-    if (apiKey) {
-        headers[headerName] = headerName.toLowerCase() === 'authorization' ? `Bearer ${apiKey}` : apiKey;
-    }
-    const headersJson = typeof config.headersJson === 'string' ? config.headersJson.trim() : '';
-    if (headersJson) {
-        const extra = JSON.parse(headersJson);
-        if (extra && typeof extra === 'object') {
-            for (const [key, value] of Object.entries(extra)) {
-                if (value != null) headers[key] = String(value);
-            }
-        }
-    }
-    return headers;
-}
-
 
 function normalizeSecretsPatch(current: Record<string, unknown>, patch?: Record<string, unknown>): Record<string, unknown> {
     if (!patch) return { ...current };
@@ -607,46 +556,4 @@ class ChatServerRegistry {
     }
 }
 
-// OpenAI-compatible adapters are adapters registered by core, most adapters are registered externally by plugins.
-function ensureBuiltinAdapters() {
-    const registry = ChatServerRegistry.instance();
-
-    if (!registry.getAdapter('openai-compatible')) {
-        registry.registerAdapter({
-            id: 'openai-compatible',
-            async listModels({ ctx, config, secrets, type }) {
-                const baseURL = String(config.baseUrl || config.baseURL || '').trim();
-                if (!baseURL) return [];
-                const modelsPath = String(config.modelsPath || '/models');
-                const url = resolveEndpointUrl(baseURL, modelsPath);
-                const headers = buildOpenAICompatibleHeaders(config, secrets);
-                const res = await fetch(url, { method: 'GET', headers, signal: ctx?.signal });
-                if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);
-                const json = await res.json();
-                const data = Array.isArray(json?.data) ? json.data : [];
-                return data.map((item: any) => {
-                    const capabilities = inferCapabilitiesFromModelItem(item);
-                    return {
-                        id: String(item.id),
-                        label: item?.name || String(item.id),
-                        description: item?.description || undefined,
-                        multimodal: capabilities.images === 'supported' || capabilities.files === 'supported',
-                        supportsFiles: capabilities.files === 'supported',
-                        supportsImages: capabilities.images === 'supported',
-                        supportsToolCalls: type.supportsToolCalls,
-                        capabilities,
-                    };
-                });
-            },
-            resolveModel({ instance, modelId, config, secrets }) {
-                const baseURL = String(config.baseUrl || config.baseURL || '').trim();
-                if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
-                const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : undefined;
-                const headers = buildOpenAICompatibleHeaders(config, secrets);
-                return createOpenAICompatible({ name: instance.id, baseURL, apiKey, headers })(modelId);
-            },
-        });
-    }
-}
-
-export { ChatServerRegistry, InMemoryChatSessionStore, ensureBuiltinAdapters };
+export { ChatServerRegistry, InMemoryChatSessionStore };

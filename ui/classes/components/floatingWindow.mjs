@@ -1,4 +1,3 @@
-// ui/classes/components/floatingWindow.mjs
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
 import {Div} from "../elements/div.mjs";
@@ -8,33 +7,69 @@ import {FAIcon} from "../elements/fa-icon.mjs";
 const { div, span } = van.tags;
 
 const registeredWindows = {};
+const registeredInstances = {};
+
 globalThis.window.addEventListener("beforeunload", () => {
-    if (registeredWindows) {
-        for (const key in registeredWindows) {
-            const ctx = registeredWindows[key];
-            destroyWindow(key, ctx);
-        }
-    }
+    FloatingWindow.closeAllExternal();
 });
 
 function destroyWindow(key, win) {
     if (isWindowOpened(win)) {
-        win.document.body.innerHTML = "";
+        try {
+            win.document.body.innerHTML = "";
+        } catch {}
         win.close();
-        delete registeredWindows[key];
     }
+    delete registeredWindows[key];
 }
 
 function isWindowOpened(win) {
-    return win && !win.closed && win.opener && win.self;
+    return !!(win && !win.closed && win.self);
 }
 
 function registerWindow(key, win) {
     const existing = registeredWindows[key];
-    if (existing) {
+    if (existing && existing !== win) {
         destroyWindow(key, existing);
     }
     registeredWindows[key] = win;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function serializeDomLike(value) {
+    if (value == null) return "";
+    if (Array.isArray(value)) return value.map(item => serializeDomLike(item)).join("");
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (value.jquery?.length) return value[0]?.outerHTML || "";
+    if (value.outerHTML) return value.outerHTML;
+    if (value.nodeType) {
+        const wrapper = document.createElement("div");
+        wrapper.appendChild(value.cloneNode(true));
+        return wrapper.innerHTML;
+    }
+    if (value?.create) {
+        const rendered = value.create();
+        return rendered?.outerHTML || "";
+    }
+    return String(value);
+}
+
+function parseDimension(value, fallback) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return fallback;
 }
 
 /**
@@ -48,19 +83,79 @@ function registerWindow(key, win) {
  *  - startTop?: number (px)
  *  - onClose?: () => void
  *  - closable?: boolean (default true)
- *  - onPopout?: (childWindow: Window) => void
  *  - external?: boolean (default false)
  *  - externalProps?: {
  *      - headTags?: string[]
  *      - onRender?: (childWindow: Window) => void
- *      - withTailwind?: boolean (default true)
+ *      - content?: any
+ *      - mode?: "content" | "editor"
+ *      - editor?: { value?: string, language?: string, theme?: string }
+ *      - onSave?: (value: string) => void
  *  }
  */
 export class FloatingWindow extends BaseComponent {
+    static getExternal(id) {
+        const instance = registeredInstances[id];
+        if (!instance) return null;
+        if (!instance.isOpened()) {
+            delete registeredInstances[id];
+            delete registeredWindows[id];
+            return null;
+        }
+        return instance;
+    }
+
+    static closeAllExternal() {
+        for (const id of Object.keys(registeredInstances)) {
+            try {
+                registeredInstances[id]?.close();
+            } catch (error) {
+                console.warn(`Failed to close external window "${id}".`, error);
+            }
+        }
+    }
+
+    static openExternal(options = undefined, ...bodyChildren) {
+        const id = options?.id;
+        if (id) {
+            const existing = this.getExternal(id);
+            if (existing) {
+                existing.options = {
+                    ...existing.options,
+                    ...(options || {}),
+                    external: true,
+                };
+                if (options?.title !== undefined) existing.title = options.title;
+                if (options?.width !== undefined) existing._w = parseDimension(options.width, existing._w);
+                if (options?.height !== undefined) existing._h = parseDimension(options.height, existing._h);
+                if (options?.startLeft !== undefined) existing._l = parseDimension(options.startLeft, existing._l);
+                if (options?.startTop !== undefined) existing._t = parseDimension(options.startTop, existing._t);
+                if (options?.resizable !== undefined) existing.resizable = options.resizable !== false;
+                if (options?.closable !== undefined) existing.closable = options.closable;
+                existing._applyExternalOptions(options);
+                if (bodyChildren.length) {
+                    existing._children = bodyChildren;
+                    existing._renderedChildren = null;
+                }
+                if (existing.context?.window) {
+                    existing._mountExternalWindow(existing.context.window);
+                }
+                existing.focus();
+                return existing;
+            }
+        }
+
+        const instance = new FloatingWindow({
+            ...(options || {}),
+            external: true,
+        }, ...bodyChildren);
+        instance.open();
+        return instance;
+    }
+
     constructor(options = undefined, ...bodyChildren) {
         options = super(options, ...bodyChildren).options;
 
-        // --- base CSS (similar to your other components’ style system) ---
         this.classMap.base = "card bg-base-200 shadow-xl border border-base-300";
         this.classMap.positioning = "fixed";
         this.classMap.rounded = "rounded-box";
@@ -71,25 +166,27 @@ export class FloatingWindow extends BaseComponent {
         this.resizable = options.resizable !== false;
         this.closable = options.closable ?? true;
 
-        // Persisted position/size keys
         this._cacheKey = (k) => `${this.id}:${k}`;
 
-        // todo, floating manager also stores position, store on single place...
         this._w = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("w"), options.width ?? 360);
         this._h = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("h"), options.height ?? 240);
         this._l = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("l"), options.startLeft ?? 64);
         this._t = APPLICATION_CONTEXT.AppCache.get(this._cacheKey("t"), options.startTop ?? 64);
 
-        // Externalization
-        this._external = false;
+        this._external = options.external === true;
         this._childWindow = null;
+        this._externalBodyEl = null;
+        this._externalEditor = null;
+        this._externalEditorInitialValue = "";
+        this._externalEditorSaveHandler = null;
 
-        // Internal refs
         this._rootEl = null;
         this._bodyEl = null;
         this._dragging = false;
         this._dragOffX = 0;
         this._dragOffY = 0;
+
+        this._applyExternalOptions(options);
 
         const btnClose = this.closable || options.onClose ? [
             (this._btnClose = new Button({
@@ -110,16 +207,7 @@ export class FloatingWindow extends BaseComponent {
                 new FAIcon({ name: "fa-up-down-left-right" }).create(),
                 span({ class: "font-semibold truncate" }, this.title),
             ),
-            div({ class: "ml-auto flex items-center gap-1" },
-                // btns: DaisyUI ghost, tiny, square TODO: external window not tested properly, not working
-                // (this._btnPop = new Button({
-                //     size: Button.SIZE.TINY,
-                //     type: Button.TYPE.NONE,
-                //     extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
-                //     onClick: () => this._toggleExternal(),
-                // }, new FAIcon({ name: "fa-up-right-from-square" }))).create(),
-                ...btnClose,
-            )
+            div({ class: "ml-auto flex items-center gap-1" }, ...btnClose)
         );
 
         this._content = new Div({
@@ -129,41 +217,66 @@ export class FloatingWindow extends BaseComponent {
             extraProperties: { style: "width:100%; height:100%;" }
         }, ...this._children);
 
-        // Resize handle
         this._resizeHandle = this.resizable ? div({
             class: "absolute right-1 bottom-1 w-3 h-3 cursor-se-resize opacity-50 " +
                 "border-r-2 border-b-2 border-base-content/50"
         }) : null;
 
-        if (this.options.external) {
-            this._toggleExternal();
+        if (this._external) {
+            this._openExternalWindow();
         }
     }
 
-    // ---------- public API ----------
+    get context() {
+        return this._childWindow ? {
+            window: this._childWindow,
+            opener: window,
+            self: this._childWindow,
+        } : null;
+    }
+
+    _applyExternalOptions(options = {}) {
+        const externalProps = options.externalProps || {};
+        this._externalProps = externalProps;
+        this._externalMode = externalProps.mode || "content";
+        this._externalHeadTags = externalProps.headTags || [];
+        this._externalRenderCallback = externalProps.onRender;
+        this._externalContent = externalProps.content;
+        this._externalSaveCallback = externalProps.onSave;
+        this._externalEditorOptions = {
+            value: externalProps.editor?.value ?? "",
+            language: externalProps.editor?.language || "javascript",
+            theme: externalProps.editor?.theme || "hc-black",
+        };
+    }
+
     focus() {
         if (this._external) {
             if (!isWindowOpened(this._childWindow)) {
-                this._toggleExternal();
+                this._openExternalWindow();
             } else {
                 this._childWindow.focus();
             }
-        } else {
-            if (!this._rootEl) return;
-            this._rootEl.style.zIndex = "10000";
-            this._rootEl.classList.add("ring-2","ring-primary","ring-offset-2","ring-offset-base-100");
-            setTimeout(() => this._rootEl?.classList.remove("ring-2","ring-primary","ring-offset-2","ring-offset-base-100"), 200);
+            return;
         }
+
+        if (!this._rootEl) return;
+        this._rootEl.style.zIndex = "10000";
+        this._rootEl.classList.add("ring-2", "ring-primary", "ring-offset-2", "ring-offset-base-100");
+        setTimeout(() => this._rootEl?.classList.remove("ring-2", "ring-primary", "ring-offset-2", "ring-offset-base-100"), 200);
     }
 
-    // --- add to class FloatingWindow ---
-    /** Returns the DOM element that holds the window body. */
     getBodyEl() {
-        return this._bodyEl || null;
+        return this._bodyEl || this._externalBodyEl || null;
     }
 
-    /** Replace the whole body node (accepts a Node or an HTML string). */
     setBody(content) {
+        if (this._external) {
+            this._externalContent = content;
+            this._renderExternalBody();
+            return;
+        }
+
         if (!this._bodyEl) return;
         let newNode = null;
         if (content instanceof Node) {
@@ -173,7 +286,6 @@ export class FloatingWindow extends BaseComponent {
             wrap.innerHTML = content;
             newNode = wrap.firstElementChild || wrap;
         } else if (content?.create) {
-            // support BaseComponent-like children
             newNode = content.create();
         } else {
             newNode = document.createElement("div");
@@ -182,8 +294,11 @@ export class FloatingWindow extends BaseComponent {
         this._bodyEl = newNode;
     }
 
-    /** Clear body content (keep body node). */
     clearBody() {
+        if (this._external && this._externalBodyEl) {
+            this._externalBodyEl.innerHTML = "";
+            return;
+        }
         if (this._bodyEl) this._bodyEl.innerHTML = "";
     }
 
@@ -195,6 +310,11 @@ export class FloatingWindow extends BaseComponent {
     }
 
     open() {
+        if (this._external) {
+            this._openExternalWindow();
+            return;
+        }
+
         if (!this._bodyEl) {
             this.attachTo(document.body);
         } else {
@@ -207,15 +327,25 @@ export class FloatingWindow extends BaseComponent {
             this.options.onClose?.();
             return;
         }
-        if (this._external && !this._childWindow?.closed) {
-            destroyWindow(this.id, this._childWindow);
+
+        if (this._external) {
+            this._saveExternalEditor();
+            this._teardownExternalEditor();
+            if (isWindowOpened(this._childWindow)) {
+                destroyWindow(this.id, this._childWindow);
+            }
+            this._childWindow = null;
+            this._externalBodyEl = null;
+            delete registeredInstances[this.id];
+            delete registeredWindows[this.id];
+            this.options.onClose?.();
+            return;
         }
-        this._childWindow = null;
+
         this.options.onClose?.();
         this.remove();
     }
 
-    // ---------- internal ----------
     _applyBounds() {
         if (!this._rootEl) return;
         const vw = window.innerWidth;
@@ -230,7 +360,6 @@ export class FloatingWindow extends BaseComponent {
         let l = Math.min(Math.max(0, this._l), Math.max(0, vw - w));
         let t = Math.min(Math.max(0, this._t), Math.max(0, vh - h));
 
-        // Save normalized values
         this._w = w; this._h = h; this._l = l; this._t = t;
 
         this._rootEl.style.width = `${w}px`;
@@ -247,7 +376,7 @@ export class FloatingWindow extends BaseComponent {
     }
 
     _onDragStart = (e) => {
-        if (this._external) return; // ignore when popped out
+        if (this._external) return;
         this._dragging = true;
         const rect = this._rootEl.getBoundingClientRect();
         const startX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -310,154 +439,350 @@ export class FloatingWindow extends BaseComponent {
         window.addEventListener("touchend", end);
     };
 
-    _toggleExternal(switchState=false) {
-        if (this._external) {
-            // TODO: try to support going both directions
-            // if (switchState) {
-            //     this.close();
-            // }
-            // this._external = false;
+    _buildExternalFeatures() {
+        return [
+            "popup=yes",
+            "menubar=no",
+            "toolbar=no",
+            "location=no",
+            "status=no",
+            `resizable=${this.resizable ? "yes" : "no"}`,
+            "scrollbars=yes",
+            `width=${this._w}`,
+            `height=${this._h}`,
+            `left=${this._l}`,
+            `top=${this._t}`,
+        ].join(",");
+    }
 
-            if (isWindowOpened(this._childWindow)) {
-                // Already external; try to focus
-                this._childWindow?.focus();
-                return;
-            }
+    _openExternalWindow() {
+        if (isWindowOpened(this._childWindow)) {
+            this._childWindow.focus();
+            return this._childWindow;
         }
 
-        // Pop out: open a child window (chromeless-ish)
-        const features = `popup=yes,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes,width=${this._w},height=${this._h},left=${this._l},top=${this._t}`;
-        const child = window.open("", `${this.id}-popup`, features);
+        const child = window.open("", `${this.id}-popup`, this._buildExternalFeatures());
         if (!child) {
-            USER_INTERFACE.Dialogs.show($.t('messages.windowBlocked', {title: this.title}), 15000, this.MSG_WARN, {
+            Dialogs.show($.t("messages.windowBlocked", { title: this.title }), 15000, Dialogs.MSG_WARN, {
                 buttons: {
-                    "Open": () => this._toggleExternal()
+                    Open: () => this._openExternalWindow()
                 }
             });
-            return;
+            return null;
         }
 
-        this._external = true;
         this._childWindow = child;
+        this._external = true;
+        registerWindow(this.id, child);
+        registeredInstances[this.id] = this;
 
-        let internal_css = "";
-        if (this.options?.externalProps.withTailwind) {
-            internal_css = `<link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
-        <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/tailwind.min.css">`;
+        this._renderExternalDocument(child);
+        child.focus();
+        return child;
+    }
+
+    _toggleExternal() {
+        return this._openExternalWindow();
+    }
+
+    _collectExternalStyles() {
+        const nodes = document.head?.querySelectorAll?.('link[rel="stylesheet"], style') || [];
+        return Array.from(nodes).map(node => node.outerHTML).join("\n");
+    }
+
+    _serializeHtmlAttributes(element) {
+        if (!element) return 'lang="en"';
+        const parts = [];
+        for (const attr of Array.from(element.attributes || [])) {
+            parts.push(`${attr.name}="${escapeHtml(attr.value)}"`);
+        }
+        if (!parts.some(part => part.startsWith("lang="))) {
+            parts.push('lang="en"');
+        }
+        return parts.join(" ");
+    }
+
+    _buildExternalBootstrap() {
+        return `
+(() => {
+    const openerRef = window.opener;
+    if (!openerRef) return;
+
+    window.UI = openerRef.UI;
+    window.UTILITIES = openerRef.UTILITIES;
+    window.APPLICATION_CONTEXT = openerRef.APPLICATION_CONTEXT;
+    window.USER_INTERFACE = openerRef.USER_INTERFACE;
+    window.VIEWER = openerRef.VIEWER;
+    window.VIEWER_MANAGER = openerRef.VIEWER_MANAGER;
+    window.OpenSeadragon = openerRef.OpenSeadragon;
+    window.XOpatUser = openerRef.XOpatUser;
+
+    window.confirm = function(message) {
+        openerRef.focus?.();
+        return openerRef.confirm(message);
+    };
+
+    if (openerRef.$) {
+        window.$ = openerRef.$;
+        window.jQuery = openerRef.jQuery || openerRef.$;
+        window.$.t = openerRef.$.t;
+        window.$.i18n = openerRef.$.i18n;
+        if (window.$.prototype) {
+            window.$.prototype.localize = () => console.error("localize() not supported in child window!");
+        }
+    }
+
+    window.Dialogs = {
+        show: (...args) => openerRef.Dialogs?.show?.(...args),
+        hide: (...args) => openerRef.Dialogs?.hide?.(...args),
+        awaitHidden: (...args) => openerRef.Dialogs?.awaitHidden?.(...args),
+        MSG_INFO: openerRef.Dialogs?.MSG_INFO,
+        MSG_WARN: openerRef.Dialogs?.MSG_WARN,
+        MSG_ERR: openerRef.Dialogs?.MSG_ERR,
+        MSG_SUCCESS: openerRef.Dialogs?.MSG_SUCCESS,
+    };
+})();
+        `.trim();
+    }
+
+    _renderExternalDocument(child) {
+        const doc = child.document;
+        const htmlAttrs = this._serializeHtmlAttributes(document.documentElement);
+        const bodyClass = document.body?.className || "";
+        const styles = this._collectExternalStyles();
+
+        doc.open();
+        doc.write(`<!DOCTYPE html>
+<html ${htmlAttrs}>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <base href="${escapeHtml(document.baseURI)}">
+    <title>${escapeHtml(this.title)}</title>
+    ${styles}
+    ${this._externalHeadTags.join("\n")}
+    <script>${this._buildExternalBootstrap()}<\/script>
+    <style>
+        html, body { min-height: 100vh; height: 100%; }
+        body { margin: 0; overflow: hidden; }
+        #xopat-external-window-root { height: 100vh; width: 100vw; overflow: hidden; }
+        #xopat-external-window-shell { height: 100%; width: 100%; display: flex; flex-direction: column; }
+    </style>
+</head>
+<body class="${escapeHtml(bodyClass)}">
+    <div id="xopat-external-window-root"></div>
+</body>
+</html>`);
+        doc.close();
+
+        const render = () => {
+            if (!isWindowOpened(child)) return;
+            this._mountExternalWindow(child);
+        };
+
+        if (doc.readyState === "complete" || doc.readyState === "interactive") {
+            setTimeout(render, 0);
+        } else {
+            child.addEventListener("load", render, { once: true });
         }
 
-        // Basic doc + style mirror; you said you'll wire libs, so here's a placeholder:
-        const currentTheme = document.documentElement.getAttribute("data-theme") || "light";
-        const doc = child.document;
-        doc.open();
-        doc.write(`
-  <!doctype html>
-  <html data-theme="${currentTheme}">
-    <head>
-      <meta charset="utf-8"/>
-      <title>${this.title}</title>
-      <style>
-        html,body{height:100%;margin:0}
-        body{background:var(--b2);color:var(--bc);font-family:ui-sans-serif,system-ui;}
-      </style>
-        <!--TODO dirty hardcoded path-->
-        ${internal_css}
-        <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
-        <script src="https://code.jquery.com/jquery-3.5.1.min.js"
-            integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
-            crossorigin="anonymous"></script>
-        <script type="text/javascript">
-            //route to the parent context
-            window.confirm = function(message) {
-                window.opener.focus();
-                window.opener.confirm(message);
-            };
-            $.t = window.opener.$.t;
-            $.i18n = window.opener.$.i18n;
-            $.prototype.localize = () => {console.error("localize() not supported in child window!")};
-        <\/script>
-        <!-- todo better system -->
-        ${this.options.externalProps?.headTags?.join("") || ""}
-    </head>
-    <body>
+        child.addEventListener("resize", () => {
+            try {
+                this._w = child.outerWidth || child.innerWidth || this._w;
+                this._h = child.outerHeight || child.innerHeight || this._h;
+                this._persist();
+            } catch {}
+        });
 
-    </body>
-  </html>
-`);
-        doc.close();
-        registerWindow(this.id, child);
-
-        child.addEventListener("load", () => {
-            // Bridge: forward all "functionality traffic" to parent
-            this._installBridge(child);
-
-            // Render the window content into the popup – but events/actions go through the bridge.
-            // We simply clone the body node; you can replace this with a proper re-mount if desired.
-            const host = child.document.body;
-            const placeholder = child.document.createElement("div");
-            host.appendChild(placeholder);
-
-            // We’ll send a request to parent to (re)render the content in the child.
-            // Parent listens and responds with DOM HTML. You can replace with your own hydration.
-            child.opener.postMessage({ __fw: true, type: "request-render", id: this.id }, "*");
-
-            // Keep size/position in sync if user resizes/moves the popup window
-            const syncSize = () => {
-                try {
-                    const h = child.innerHeight;
-                    this._w = child.innerWidth; this._h = h;
-                    this._persist();
-                } catch {}
-            };
-            child.addEventListener("resize", syncSize);
-            child.addEventListener("beforeunload", () => {
-                this._childWindow = null;
-            });
+        child.addEventListener("beforeunload", () => {
+            this._saveExternalEditor();
+            this._teardownExternalEditor();
+            this._childWindow = null;
+            this._externalBodyEl = null;
+            delete registeredInstances[this.id];
+            delete registeredWindows[this.id];
         }, { once: true });
     }
 
-    _installBridge(child) {
-        // Parent side receiver for child's messages.
-        // Replace internals with your app’s routing; we provide a safe default.
-        const parentHandler = (ev) => {
-            const msg = ev.data;
-            if (!msg || !msg.__fw) return;
+    _mountExternalWindow(child) {
+        const doc = child.document;
+        doc.title = this.title;
 
-            if (msg.type === "request-render" && msg.id === this.id) {
-                // Minimal render: dump current innerHTML of our content into the child
-                // (You can replace with your proper renderer that reuses libs from parent)
-                const html = (this._bodyEl?.innerHTML || this._content.create().innerHTML || "");
-                child.postMessage({ __fw: true, type: "render-html", id: this.id, html }, "*");
-            }
+        const mount = doc.getElementById("xopat-external-window-root");
+        if (!mount) return;
 
-            if (msg.type === "event") {
-                // Example event forward to parent app (placeholder)
-                // routeToParentFeature(msg.payload)
-                // console.log("Child->Parent event:", msg.payload);
+        mount.innerHTML = "";
+
+        const shell = doc.createElement("div");
+        shell.id = "xopat-external-window-shell";
+        shell.className = "card bg-base-200 shadow-xl border border-base-300 rounded-none flex flex-col h-full w-full";
+
+        const header = doc.createElement("div");
+        header.className = "navbar min-h-0 h-9 bg-base-300/70 px-2 select-none";
+        header.innerHTML = `
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-up-down-left-right"></i>
+                <span class="font-semibold truncate">${escapeHtml(this.title)}</span>
+            </div>
+            <div class="ml-auto flex items-center gap-1">
+                ${this.closable ? `<button type="button" class="btn btn-ghost btn-xs btn-square" data-window-close="true"><i class="fa-solid fa-close"></i></button>` : ""}
+            </div>
+        `;
+
+        const body = doc.createElement("div");
+        body.className = "card-body p-2 gap-2 overflow-auto flex-1 min-h-0";
+        body.style.width = "100%";
+        body.style.height = "100%";
+        body.id = `${this.id}-external-body`;
+        this._externalBodyEl = body;
+
+        shell.appendChild(header);
+        shell.appendChild(body);
+        mount.appendChild(shell);
+
+        const closeButton = header.querySelector("[data-window-close='true']");
+        if (closeButton) {
+            closeButton.addEventListener("click", () => this.close());
+        }
+
+        this._renderExternalBody();
+        this._externalRenderCallback?.(child);
+    }
+
+    _getExternalContentHtml() {
+        if (this._externalContent != null) {
+            return serializeDomLike(this._externalContent);
+        }
+        if (this._bodyEl) {
+            return this._bodyEl.innerHTML;
+        }
+        return this._children.map(child => serializeDomLike(child)).join("");
+    }
+
+    _renderExternalBody() {
+        if (!this._externalBodyEl || !isWindowOpened(this._childWindow)) return;
+
+        this._teardownExternalEditor();
+        this._externalBodyEl.innerHTML = "";
+
+        if (this._externalMode === "editor") {
+            this._renderExternalEditor();
+            return;
+        }
+
+        this._externalBodyEl.classList.add("overflow-auto");
+        this._externalBodyEl.innerHTML = this._getExternalContentHtml();
+    }
+
+    _renderExternalEditor() {
+        if (!this._externalBodyEl || !isWindowOpened(this._childWindow)) return;
+
+        const doc = this._childWindow.document;
+        this._externalBodyEl.classList.remove("overflow-auto");
+        this._externalBodyEl.classList.add("overflow-hidden");
+        this._externalBodyEl.innerHTML = `
+            <div class="flex h-full min-h-0 flex-col bg-base-200">
+                <div class="flex items-center justify-between gap-3 border-b border-base-300 bg-base-100 px-4 py-3">
+                    <h1 class="m-0 flex-1 text-lg font-semibold">${escapeHtml(this.title)}</h1>
+                    <button type="button" class="btn btn-sm" data-editor-save="true">Save</button>
+                </div>
+                <div id="${this.id}-external-editor" class="min-h-0 flex-1"></div>
+            </div>
+        `;
+
+        const saveButton = this._externalBodyEl.querySelector("[data-editor-save='true']");
+        saveButton?.addEventListener("click", () => this._saveExternalEditor());
+
+        this._externalEditorInitialValue = this._externalEditorOptions.value ?? "";
+        this._externalEditorSaveHandler = (event) => {
+            if ((event.ctrlKey || event.metaKey) && String(event.code || event.key) === "KeyS") {
+                event.preventDefault();
+                this._saveExternalEditor();
             }
         };
-        window.addEventListener("message", parentHandler);
+        doc.addEventListener("keydown", this._externalEditorSaveHandler);
 
-        const childHandler = (ev) => {
-            const msg = ev.data;
-            if (!msg || !msg.__fw) return;
-            if (msg.type === "render-html" && msg.id === this.id) {
-                const host = child.document.body;
-                host.innerHTML = msg.html || "";
-                // Attach a click/mutation listener that forwards interactions to parent as needed:
-                host.addEventListener("click", (e) => {
-                    const data = { path: e.composedPath().map(n => n.id || n.className || n.nodeName) };
-                    child.opener?.postMessage({ __fw: true, type: "event", id: this.id, payload: { kind: "click", data } }, "*");
-                }, { capture: true });
-                this.options.externalProps?.onRender?.(child);
+        this._ensureMonacoLoader(doc).then(() => {
+            if (!isWindowOpened(this._childWindow)) return;
+            const monacoBase = `${APPLICATION_CONTEXT.url}${APPLICATION_CONTEXT.env.monaco}`;
+            const editorHost = doc.getElementById(`${this.id}-external-editor`);
+            if (!editorHost || !doc.defaultView?.require) return;
+
+            doc.defaultView.require.config({ paths: { vs: monacoBase } });
+            doc.defaultView.require(["vs/editor/editor.main"], () => {
+                if (!editorHost || !doc.defaultView?.monaco) return;
+                this._externalEditor = doc.defaultView.monaco.editor.create(editorHost, {
+                    value: this._externalEditorInitialValue,
+                    lineNumbers: "on",
+                    roundedSelection: false,
+                    ariaLabel: this.title,
+                    readOnly: false,
+                    theme: this._externalEditorOptions.theme,
+                    language: this._externalEditorOptions.language,
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                });
+            });
+        }).catch(error => {
+            console.error(`Failed to initialize editor window "${this.id}".`, error);
+            Dialogs.show($.t?.("monaco.saveError") || "Failed to initialize editor.", 3500, Dialogs.MSG_ERR);
+        });
+    }
+
+    _ensureMonacoLoader(doc) {
+        const childWindow = doc.defaultView;
+        if (childWindow?.require) {
+            return Promise.resolve();
+        }
+
+        return new Promise((resolve, reject) => {
+            const loaderId = "xopat-external-monaco-loader";
+            const existing = doc.getElementById(loaderId);
+            if (existing) {
+                existing.addEventListener("load", () => resolve(), { once: true });
+                existing.addEventListener("error", reject, { once: true });
+                return;
             }
-        };
-        child.addEventListener("message", childHandler);
+
+            const script = doc.createElement("script");
+            script.id = loaderId;
+            script.src = `${APPLICATION_CONTEXT.url}${APPLICATION_CONTEXT.env.monaco}loader.js`;
+            script.onload = () => resolve();
+            script.onerror = reject;
+            doc.head.appendChild(script);
+        });
+    }
+
+    _saveExternalEditor() {
+        if (this._externalMode !== "editor") return;
+        const value = this._externalEditor?.getValue?.() ?? this._externalEditorInitialValue;
+        if (!this._externalSaveCallback) return;
+
+        try {
+            this._externalSaveCallback(value);
+        } catch (error) {
+            console.error(`External editor save callback failed for "${this.id}".`, error);
+            Dialogs.show(
+                $.t?.("monaco.saveError") || "Failed to save editor contents.",
+                3500,
+                Dialogs.MSG_ERR
+            );
+        }
+    }
+
+    _teardownExternalEditor() {
+        if (this._childWindow?.document && this._externalEditorSaveHandler) {
+            this._childWindow.document.removeEventListener("keydown", this._externalEditorSaveHandler);
+        }
+        this._externalEditorSaveHandler = null;
+
+        try {
+            this._externalEditor?.dispose?.();
+        } catch {}
+        this._externalEditor = null;
     }
 
     create() {
-        // Root element with inline position/size (persisted)
         const root = div({
                 ...this.commonProperties,
                 style: `
@@ -467,26 +792,21 @@ export class FloatingWindow extends BaseComponent {
       `,
                 onmousedown: () => this.focus()
             },
-            // header (drag handle)
             this._header.create(),
-            // body
             (this._bodyEl = this._content.create()),
-            // resize corner
             this._resizeHandle
         );
 
-        // after mounting ids exist
         queueMicrotask(() => {
             this._rootEl = document.getElementById(this.id);
             const headerEl = document.getElementById(this._header.id) || this._rootEl.firstChild;
             if (headerEl && headerEl.style) headerEl.style.touchAction = "none";
             const resizeEl = this._resizeHandle || null;
 
-            // access the instance, not the class -> use global UI
             this._fmToken = UI.Services.FloatingManager.register({
                 el: this._rootEl,
                 owner: this,
-                onOutsideClick: () => this.focus(),   // or "close" if you want clicks to dismiss
+                onOutsideClick: () => this.focus(),
                 onEscape: "close",
                 clamp: {
                     margin: 6,
@@ -524,7 +844,6 @@ export class FloatingWindow extends BaseComponent {
         return root;
     }
 
-    // todo keep only close or remove
     remove() {
         try { this._rootEl?.__fw_cleanup?.(); } catch {}
         super.remove();

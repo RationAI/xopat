@@ -156,7 +156,8 @@
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
         "isStaticPreview": false,
         "historySize": 50,
-        "maxMobileWidthPx": 900
+        "maxMobileWidthPx": 900,
+        "globalMenuMaxWidth": 1200
     },
     /**
      * The Server configuration. This object is here just for the reference and
@@ -296,7 +297,7 @@
         "src": {
             //"env": "",
             "loader": ["dist/store.js", "dist/loader.js"],
-            "deps": ["ui-components.js"],
+            "deps": [],
             "app": [
               "dist/classes/user.js",
               "parse-input.js",

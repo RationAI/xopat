@@ -203,6 +203,8 @@ class DockableWindow extends BaseComponent {
      *  - in tab mode, focuses the MainLayout tab (if possible).
      */
     open() {
+        this.visibilityManager?.set?.(true);
+
         if (this.isFloating()) {
             const fw = this._ensureFloating();
             fw.open();
@@ -224,9 +226,23 @@ class DockableWindow extends BaseComponent {
      * In tab mode this is a no-op by default (you probably want the tab to stay).
      */
     close() {
-        if (this.isFloating() && this._floating) {
-            this._floating.close();
-        }
+        this.visibilityManager?.set?.(false);
+    }
+
+    /**
+     * Hide the dockable window regardless of current mode.
+     * @returns {void}
+     */
+    hide() {
+        this.visibilityManager?.set?.(false);
+    }
+
+    /**
+     * Show the dockable window regardless of current mode.
+     * @returns {void}
+     */
+    show() {
+        this.visibilityManager?.set?.(true);
     }
 
     // ---------- BaseComponent override ----------
@@ -293,12 +309,13 @@ class DockableWindow extends BaseComponent {
     getViewRegistration() {
         return {
             id: this._tabId,
-            title: this.getViewTitle(),
-            icon: this.getViewIcon(),
+            title: this._tabTitle || this.title || this._tabId,
+            icon: this._tabIcon || this.icon || "fa-window-maximize",
             visibilityManager: {
                 is: () => this.visibilityManager.is(),
                 set: next => {
-                    next ? this.visibilityManager.on() : this.visibilityManager.off();
+                    this.visibilityManager.set?.(Boolean(next))
+                        ?? (next ? this.visibilityManager.on?.() : this.visibilityManager.off?.());
                     return true;
                 }
             }
