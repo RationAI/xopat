@@ -50,15 +50,41 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return REGISTERED_PLUGINS === undefined;
     }
 
+    function setPluginLoadStatus(id: string, status: "idle" | "loading" | "loaded" | "failed") {
+        const buttonContainer = $(`#load-plugin-${id}`);
+        if (!buttonContainer.length) return;
+
+        if (status === "idle") {
+            buttonContainer.html(`<button class="btn btn-sm" onclick="UTILITIES.loadPlugin('${id}'); return false;">${$.t('common.Load')}</button>`);
+            return;
+        }
+
+        if (status === "loading") {
+            buttonContainer.html(
+                `<button disabled class="btn btn-sm">` +
+                `<span class="loading loading-spinner loading-xs"></span>${$.t('common.Loading')}` +
+                `</button>`
+            );
+            return;
+        }
+
+        if (status === "loaded") {
+            buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Loaded')}</button>`);
+            return;
+        }
+
+        buttonContainer.html(`<button disabled class="btn btn-sm">${$.t('common.Failed')}</button>`);
+    }
+
     const showPluginError = (window as any).showPluginError = function (id: string, e: unknown, loaded: boolean | undefined = undefined) {
         // todo should access vanjs component instead
         if (!e) {
             $(`#error-plugin-${id}`).html("");
-            if (loaded) $(`#load-plugin-${id}`).html("");
+            setPluginLoadStatus(id, loaded ? "loaded" : "idle");
             return;
         }
         $(`#error-plugin-${id}`).html(`<div class="p-1 rounded-2 error-container">${$.t('messages.pluginRemoved')}<br><code>[${e}]</code></div>`);
-        $(`#load-plugin-${id}`).html(`<button disabled class="btn">${$.t('common.Failed')}</button>`);
+        setPluginLoadStatus(id, "failed");
     }
 
     function cleanUpScripts(id: string) {
@@ -1884,6 +1910,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 meta.includes = [];
             }
 
+            setPluginLoadStatus(id, "loading");
+            $(`#error-plugin-${id}`).html("");
+
             if (pluginsWereInitialized()) {
                 /**
                  * Before a request to plugin loading is processed at runtime.
@@ -1902,6 +1931,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                         $('head').append(`<link rel='stylesheet' href='${meta.styleSheet}' type='text/css'/>`);
                     }
                     if (meta) meta.loaded = true;
+                    showPluginError(id, null, true);
                     if (APPLICATION_CONTEXT.getOption("permaLoadPlugins") && !APPLICATION_CONTEXT.getOption("bypassCookies")) {
                         let plugins = [];
                         for (let p in PLUGINS) {

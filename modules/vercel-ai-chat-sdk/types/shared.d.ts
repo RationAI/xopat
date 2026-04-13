@@ -243,6 +243,7 @@ interface SendTurnInput {
     allowedScriptApi?: AllowedScriptApiManifest;
     personalityId?: string | null;
     personalityPrompt?: string | null;
+    executionMode?: 'host' | 'viewer-script' | 'plain';
     maxRecentMessages?: number;
     maxInputMessages?: number;
 }

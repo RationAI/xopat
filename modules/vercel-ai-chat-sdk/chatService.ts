@@ -7,6 +7,9 @@ export interface ChatServiceOptions {
     personalities?: ChatPersonality[];
     defaultPersonalityId?: string | null;
     providers?: ChatProviderClientRegistration[];
+    rpcTimeoutMs?: number;
+    sessionOwnerKey?: string | null;
+    legacySessionSource?: string | null;
 }
 
 function ensureDate(value?: Date | string): Date {
@@ -30,6 +33,10 @@ export class ChatService {
     }>;
     _modelCatalog: Map<string, ChatProviderModelInfo[]>;
     _activeTurnAbortController: AbortController | null;
+    _rpcTimeoutMs: number;
+    _rpcHttpClient: any | null;
+    _sessionOwnerKey: string | null;
+    _legacySessionSource: string | null;
 
     constructor(opts: ChatServiceOptions = {}) {
         this._providers = new Map();
@@ -43,6 +50,14 @@ export class ChatService {
         this._sessionState = new Map();
         this._modelCatalog = new Map();
         this._activeTurnAbortController = null;
+        this._rpcTimeoutMs = Math.max(30_000, Number(opts.rpcTimeoutMs) || 180_000);
+        this._rpcHttpClient = null;
+        this._sessionOwnerKey = typeof opts.sessionOwnerKey === 'string' && opts.sessionOwnerKey.trim()
+            ? opts.sessionOwnerKey.trim()
+            : null;
+        this._legacySessionSource = typeof opts.legacySessionSource === 'string' && opts.legacySessionSource.trim()
+            ? opts.legacySessionSource.trim()
+            : null;
 
         (opts.providers || []).forEach((provider) => this._providers.set(provider.id, { ...provider }));
         (opts.personalities || []).forEach((personality) => this.registerPersonality(personality));
@@ -60,6 +75,27 @@ export class ChatService {
         const scope = this._serverFactory?.() || (window as any)?.xserver?.module?.["vercel-ai-chat-sdk"];
         if (!scope) throw new Error('ChatService: server RPC scope for module "chat" is not available.');
         return scope;
+    }
+
+    _getRpcHttpClient(): any {
+        if (this._rpcHttpClient) return this._rpcHttpClient;
+
+        const app = (window as any)?.APPLICATION_CONTEXT;
+        const current = app?.httpClient;
+        const HttpClientCtor = (window as any)?.HttpClient;
+        if (!HttpClientCtor || !current) return current || null;
+
+        try {
+            this._rpcHttpClient = new HttpClientCtor({
+                baseURL: current.baseURL || app?.url,
+                timeoutMs: this._rpcTimeoutMs,
+                maxRetries: current.maxRetries || 3,
+            });
+        } catch (_error) {
+            this._rpcHttpClient = current;
+        }
+
+        return this._rpcHttpClient;
     }
 
     _clearActiveTurnAbortController(controller?: AbortController | null): void {
@@ -232,7 +268,29 @@ export class ChatService {
 
     async listSessions(providerId?: string): Promise<ChatSession[]> {
         const result = await this._server().listSessions!({ providerId: providerId || null });
-        return result?.sessions || [];
+        return (result?.sessions || []).filter((session: ChatSession) => this._ownsSession(session));
+    }
+
+    _ownsSession(session: ChatSession | null | undefined): boolean {
+        if (!session) return false;
+
+        const metadata: Record<string, unknown> = session.metadata || {};
+        const ownerKey = this._normalizeContextId(metadata.sessionOwnerKey);
+        const source = this._normalizeContextId(metadata.source);
+
+        if (ownerKey) {
+            return ownerKey === this._sessionOwnerKey;
+        }
+
+        if (this._legacySessionSource && source) {
+            return source === this._legacySessionSource;
+        }
+
+        if (this._sessionOwnerKey === 'vercel-ai-chat-sdk') {
+            return source !== 'chat-based-tester';
+        }
+
+        return true;
     }
 
     async renameSession(sessionId: string, title: string): Promise<ChatSession> {
@@ -332,6 +390,9 @@ export class ChatService {
         sessionId?: string | null;
         providerId?: string | null;
         allowedScriptApi?: AllowedScriptApiManifest;
+        personalityId?: string | null;
+        personalityPrompt?: string | null;
+        executionMode?: 'host' | 'viewer-script' | 'plain';
         signal?: AbortSignal;
     }): Promise<ChatMessage> {
         let sessionId = options?.sessionId || this._activeSessionId;
@@ -349,17 +410,24 @@ export class ChatService {
             sessionId = session.id;
         }
 
-        const personality = this.getCurrentPersonality();
+        const hasAllowedScriptApi = !!options && Object.prototype.hasOwnProperty.call(options, 'allowedScriptApi');
+        const hasPersonalityId = !!options && Object.prototype.hasOwnProperty.call(options, 'personalityId');
+        const hasPersonalityPrompt = !!options && Object.prototype.hasOwnProperty.call(options, 'personalityPrompt');
+        const personality = hasPersonalityId
+            ? (options?.personalityId ? this.getPersonality(options.personalityId) : undefined)
+            : this.getCurrentPersonality();
         const controller = this._createActiveTurnAbortController(options?.signal);
 
         let result: any;
         try {
             result = await this._server().sendTurn!({
                 sessionId,
-                allowedScriptApi: options?.allowedScriptApi || this.getAllowedScriptApi(),
-                personalityId: this._currentPersonalityId,
-                personalityPrompt: personality?.systemPrompt || null,
+                allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
+                personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
+                personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
+                executionMode: options?.executionMode,
             }, {
+                httpClient: this._getRpcHttpClient(),
                 signal: controller.signal,
             });
         } finally {
@@ -529,7 +597,7 @@ export class ChatService {
     }
 
     getActiveViewerContextId(): string | null {
-        return this.getSessionViewerContextId(this._activeSessionId);
+        return null;
     }
 
     setSessionViewerContextId(sessionId: string, viewerContextId: string | null): void {
@@ -543,11 +611,21 @@ export class ChatService {
     }
 
     async createSession(input: CreateSessionInput): Promise<ChatSession> {
-        const personality = input.personalityId ? this._personalities.get(input.personalityId) : this.getCurrentPersonality();
+        const hasPersonalityId = Object.prototype.hasOwnProperty.call(input, 'personalityId');
+        const hasPersonalityPrompt = Object.prototype.hasOwnProperty.call(input, 'personalityPrompt');
+        const personality = hasPersonalityId
+            ? (input.personalityId ? this._personalities.get(input.personalityId) : undefined)
+            : this.getCurrentPersonality();
+        const metadata = {
+            ...(input.metadata || {}),
+            sessionOwnerKey: this._normalizeContextId((input.metadata as any)?.sessionOwnerKey) || this._sessionOwnerKey,
+            source: this._normalizeContextId((input.metadata as any)?.source) || this._legacySessionSource || undefined,
+        };
         const session = await this._server().createSession!({
             ...input,
-            personalityId: input.personalityId ?? this._currentPersonalityId,
-            personalityPrompt: input.personalityPrompt ?? personality?.systemPrompt ?? null,
+            metadata,
+            personalityId: hasPersonalityId ? input.personalityId ?? null : (this._currentPersonalityId ?? null),
+            personalityPrompt: hasPersonalityPrompt ? input.personalityPrompt ?? null : (personality?.systemPrompt ?? null),
         });
 
         if (session.providerId && session.modelId) {

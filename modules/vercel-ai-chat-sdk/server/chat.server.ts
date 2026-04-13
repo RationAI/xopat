@@ -1,6 +1,5 @@
 import { generateText } from 'ai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { ChatServerRegistry, type ChatProviderAdapter } from './chatRegistry.server';
+import { ChatServerRegistry, ensureBuiltinAdapters as ensureRegistryBuiltinAdapters } from './chatRegistry.server';
 
 const LLM_DEBUG = true;
 
@@ -25,6 +24,14 @@ const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
         'XOPAT_CHAT_TURN_TIMEOUT_MS',
         readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 180_000)
     )
+);
+const CHAT_MAX_INLINE_ATTACHMENT_BYTES = Math.max(
+    16 * 1024,
+    readPositiveEnvInt('XOPAT_CHAT_MAX_INLINE_ATTACHMENT_BYTES', 512 * 1024)
+);
+const CHAT_MAX_OUTPUT_TOKENS = Math.max(
+    256,
+    readPositiveEnvInt('XOPAT_CHAT_MAX_OUTPUT_TOKENS', 4096)
 );
 
 export const policy = {
@@ -167,6 +174,52 @@ function summarizeModelMessage(msg: any) {
     return { role: msg?.role, contentType: typeof msg?.content };
 }
 
+function isContextWindowError(error: any): boolean {
+    const message = String(error?.message || error || '');
+    return /context length|context window|ContextWindowExceeded|Requested token count exceeds/i.test(message);
+}
+
+function isInvalidImageInputError(error: any): boolean {
+    const message = String(error?.message || error || '');
+    return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(message);
+}
+
+function buildContextWindowGuidance(error: any, attemptedMessageCount: number): string {
+    const message = String(error?.message || error || '').trim();
+    return [
+        'The chat request exceeded the model context limit.',
+        `The runtime attempted to send ${attemptedMessageCount} message(s), but the provider rejected the prompt as too large.`,
+        'Typical causes:',
+        '- long accumulated session history',
+        '- large returned objects or logs',
+        '- screenshot or file data embedded into message text',
+        '',
+        'Recommended action:',
+        '- start a fresh session',
+        '- avoid returning raw data URLs or large blobs as plain text',
+        '- keep logs and workspace file reads targeted',
+        '- ask the harness to continue from a concise summary of findings',
+        '',
+        `Provider error: ${message}`,
+    ].join('\n');
+}
+
+function buildInvalidImageInputGuidance(error: any): string {
+    const message = String(error?.message || error || '').trim();
+    return [
+        'The model could not read one of the attached images for this turn.',
+        'This usually happens when an invalid or truncated image data URL was added to the chat history.',
+        '',
+        'Recommended action:',
+        '- start a fresh session or retry after removing the broken image-producing turn',
+        '- avoid returning image prefixes such as `screenshot.substring(...)` as structured data',
+        '- return the full screenshot value or a non-image textual summary instead',
+        '- if you need multimodal analysis, attach the full image or screenshot as an image attachment',
+        '',
+        `Provider error: ${message}`,
+    ].join('\n');
+}
+
 function builtinPersonalities(): ChatPersonality[] {
     return [
         {
@@ -277,6 +330,10 @@ function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array |
     return { bytes: new Uint8Array(buf), mediaType };
 }
 
+function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined): boolean {
+    return !!bytes && bytes.byteLength > CHAT_MAX_INLINE_ATTACHMENT_BYTES;
+}
+
 function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
     const headers: Record<string, string> = {};
     const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : '';
@@ -300,81 +357,90 @@ function buildOpenAICompatibleHeaders(config: Record<string, unknown>, secrets: 
     return headers;
 }
 
-function ensureBuiltinAdapters() {
-    const registry = getRegistry();
-
-    if (!registry.getAdapter('openai-compatible')) {
-        const adapter: ChatProviderAdapter = {
-            id: 'openai-compatible',
-            async listModels({ ctx, config, secrets, type }) {
-                const baseURL = String(config.baseUrl || config.baseURL || '').trim();
-                if (!baseURL) return [];
-                const modelsPath = String(config.modelsPath || '/models');
-                const url = new URL(modelsPath, ensureSlash(baseURL)).toString();
-                const headers = buildOpenAICompatibleHeaders(config, secrets);
-                const res = await fetch(url, {
-                    method: 'GET',
-                    headers,
-                    signal: ctx?.signal,
-                });
-                if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);
-                const json = await res.json();
-                const data = Array.isArray(json?.data) ? json.data : [];
-                return data.map((item: any): ChatProviderModelInfo => {
-                    const capabilities = inferCapabilitiesFromModelItem(item);
-
+function parseModelList(raw: unknown): Array<{ id: string; label?: string; description?: string }> {
+    if (Array.isArray(raw)) {
+        return raw
+            .map((item) => {
+                if (typeof item === 'string' && item.trim()) return { id: item.trim() };
+                if (item && typeof item === 'object' && typeof (item as any).id === 'string' && (item as any).id.trim()) {
                     return {
-                        id: String(item.id),
-                        label: item?.name || String(item.id),
-                        description: item?.description || undefined,
-                        multimodal: capabilities.images === 'supported' || capabilities.files === 'supported',
-                        supportsFiles: capabilities.files === 'supported',
-                        supportsImages: capabilities.images === 'supported',
-                        supportsToolCalls: type.supportsToolCalls,
-                        capabilities,
+                        id: String((item as any).id).trim(),
+                        label: typeof (item as any).label === 'string' ? (item as any).label : undefined,
+                        description: typeof (item as any).description === 'string' ? (item as any).description : undefined,
                     };
-                });
-            },
-            resolveModel({ instance, modelId, config, secrets }) {
-                const baseURL = String(config.baseUrl || config.baseURL || '').trim();
-                if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
-                const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : undefined;
-                const headers = buildOpenAICompatibleHeaders(config, secrets);
-                const provider = createOpenAICompatible({
-                    name: instance.id,
-                    baseURL,
-                    apiKey,
-                    headers,
-                });
-                return provider(modelId);
-            },
-        };
-        registry.registerAdapter(adapter);
+                }
+                return null;
+            })
+            .filter(Boolean) as Array<{ id: string; label?: string; description?: string }>;
     }
 
-    if (!registry.getProviderType('openai-compatible')) {
-        registry.upsertProviderType({
-            id: 'openai-compatible',
-            label: 'OpenAI-compatible',
-            description: 'Generic OpenAI-compatible endpoint. Plugin defaults may provide a visible default URL and hidden default token. Users may override both; secret values stay server-side.',
-            adapter: 'openai-compatible',
-            supportsUploads: true,
-            supportsFiles: false,
-            supportsImages: false,
-            supportsToolCalls: false,
-            configSchema: [
-                { key: 'baseUrl', label: 'Base URL', input: 'url', required: true, placeholder: 'https://example.invalid/v1', description: 'OpenAI-compatible base URL, usually ending with /v1.' },
-                { key: 'modelsPath', label: 'Models path', input: 'text', defaultValue: '/models', description: 'Relative or absolute path for model discovery.' },
-                { key: 'apiKey', label: 'API key', input: 'password', secret: true, description: 'Optional static API key. Hidden in the UI after save and stored server-side only.' },
-                { key: 'apiKeyHeader', label: 'API key header', input: 'text', defaultValue: 'Authorization' },
-                { key: 'headersJson', label: 'Extra headers JSON', input: 'textarea', description: 'Optional JSON object with additional non-secret headers.' },
-            ],
-            source: 'builtin',
-        });
+    if (typeof raw === 'string' && raw.trim()) {
+        try {
+            return parseModelList(JSON.parse(raw));
+        } catch {
+            return raw
+                .split(/[,\r\n]+/)
+                .map((item) => item.trim())
+                .filter(Boolean)
+                .map((id) => ({ id }));
+        }
     }
+
+    return [];
 }
 
-function scriptSystemContent(allowedScriptApi?: AllowedScriptApiManifest): string {
+function buildAnthropicHeaders(config: Record<string, unknown>, secrets: Record<string, unknown>): Record<string, string> {
+    const headers: Record<string, string> = {};
+    const apiKey = typeof secrets.apiKey === 'string' && secrets.apiKey ? String(secrets.apiKey) : '';
+    const anthropicVersion = typeof config.anthropicVersion === 'string' && config.anthropicVersion
+        ? String(config.anthropicVersion)
+        : '2023-06-01';
+
+    if (apiKey) {
+        headers['x-api-key'] = apiKey;
+    }
+    if (anthropicVersion) {
+        headers['anthropic-version'] = anthropicVersion;
+    }
+
+    const headersJson = typeof config.headersJson === 'string' ? config.headersJson.trim() : '';
+    if (headersJson) {
+        try {
+            const extra = JSON.parse(headersJson);
+            if (extra && typeof extra === 'object') {
+                for (const [key, value] of Object.entries(extra)) {
+                    if (value != null) headers[key] = String(value);
+                }
+            }
+        } catch (_error) {
+            throw new Error('Invalid headersJson. Expected a JSON object.');
+        }
+    }
+
+    return headers;
+}
+
+function ensureBuiltinAdapters() {
+    ensureRegistryBuiltinAdapters();
+}
+
+function scriptSystemContent(
+    allowedScriptApi?: AllowedScriptApiManifest,
+    options: { executionMode?: string | null } = {}
+): string {
+    if (options.executionMode === 'host') {
+        return `Dev host execution is available.
+
+Host automation rules:
+- Prefer exactly one fenced code block tagged xopat-host-script whenever execution is needed.
+- The xopat-host-script body runs as unrestricted async JavaScript in the page context.
+- You may access normal page globals directly, including window, document, globalThis, APPLICATION_CONTEXT, VIEWER_MANAGER, VIEWER, USER_INTERFACE, UTILITIES, xserver, singletonModule, and chatModule.
+- Host helper functions are injected both as direct globals and under the host object: getServerStatus(), getServerLogs(), readWorkspaceFiles(), getDevSessionBootstrap(), captureViewerScreenshotDataUrl().
+- Always explicitly return the final value from xopat-host-script.
+- Do not emit xopat-script unless the harness explicitly switches to viewer-script mode.
+- Do not claim host helpers are unavailable unless a runtime error explicitly says so.`;
+    }
+
     if (!allowedScriptApi?.namespaces?.length) {
         return [
             'Scripting API access is currently disabled.',
@@ -428,6 +494,7 @@ Critical output rules:
 - Never invent namespaces or methods.
 - The script must be using plain JavaScript + the allowed scripting API only. Do NOT use TypeScript syntax.
 - Do not wrap explanations inside the code block.
+- If you need to both explain and execute, put the explanation outside the code block and keep the executable block as the only fenced block.
 - After successful tool execution, read the returned host feedback carefully. Host feedback and script-result parts are authoritative observations from the runtime.
 - After successful tool execution, if the result contains numbers, measurements, coordinates, zoom values, ratios, or metadata, quote them directly and explain them briefly.
 
@@ -444,8 +511,21 @@ Allowed scripting API:
 ${namespacesText}`;
 }
 
-function sessionPreamble(providerId: string, allowedScriptApi?: AllowedScriptApiManifest): string {
+function sessionPreamble(
+    providerId: string,
+    allowedScriptApi?: AllowedScriptApiManifest,
+    options: { executionMode?: string | null } = {}
+): string {
     const scriptNamespaces = allowedScriptApi?.namespaces?.map((n) => n.namespace).join(', ') || 'none';
+    const executionLines = options.executionMode === 'host'
+        ? [
+            'Current execution mode:',
+            '- Host JavaScript execution is enabled for this dev session.',
+            '- Viewer scripting namespaces are not the primary execution path.',
+        ].join('\n')
+        : `Current session:
+- Provider: ${providerId}
+- Allowed scripting namespaces: ${scriptNamespaces}`;
     return `You are an assistant integrated into a pathology slide viewer's Chat tab.
 Behave as a helpful, professional assistant for this application.
 Your users include pathologists, clinicians, students and researchers including IT specialists.
@@ -458,9 +538,7 @@ Integration notes:
 - Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
 - If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 
-Current session:
-- Provider: ${providerId}
-- Allowed scripting namespaces: ${scriptNamespaces}
+${executionLines}
 
 When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
 If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
@@ -561,6 +639,14 @@ function toModelMessage(
                 const inline = dataUrlToBytes(resolved.source);
 
                 if (inline.bytes) {
+                    if (attachmentExceedsInlineLimit(inline.bytes)) {
+                        return {
+                            type: 'text',
+                            text: resolved.name
+                                ? `[Image omitted because it exceeds the inline prompt budget: ${resolved.name}]`
+                                : '[Image omitted because it exceeds the inline prompt budget]',
+                        } as const;
+                    }
                     return {
                         type: 'image',
                         image: inline.bytes,
@@ -593,6 +679,14 @@ function toModelMessage(
                 const inline = dataUrlToBytes(resolved.source);
 
                 if (inline.bytes) {
+                    if (attachmentExceedsInlineLimit(inline.bytes)) {
+                        return {
+                            type: 'text',
+                            text: resolved.name
+                                ? `[File omitted because it exceeds the inline prompt budget: ${resolved.name}]`
+                                : '[File omitted because it exceeds the inline prompt budget]',
+                        } as const;
+                    }
                     return {
                         type: 'file',
                         data: inline.bytes,
@@ -620,7 +714,6 @@ function toModelMessage(
                 return { type: 'text', text: '' } as const;
         }
     });
-
     if (content.length === 1 && content[0]!.type === 'text') {
         return { role, content: content[0]!.text } as any;
     }
@@ -874,6 +967,77 @@ export async function createProvider(ctx: any, input: CreateProviderInstanceInpu
     return getRegistry().createProviderInstance(input, ctx?.user?.id ?? null);
 }
 
+export async function ensureManagedProvider(ctx: any, input: {
+    pluginId: string;
+    providerType: CreateProviderTypeInput | UpdateProviderTypeInput;
+    provider: Omit<CreateProviderInstanceInput, 'typeId'> & { typeId?: string | null };
+    managedKey?: string | null;
+}): Promise<{
+    ok: true;
+    providerTypeId: string;
+    providerId: string | null;
+    providerCreated: boolean;
+    providerUpdated: boolean;
+}> {
+    ensureBuiltinAdapters();
+
+    const pluginId = String(input?.pluginId || '').trim();
+    if (!pluginId) throw new Error('ensureManagedProvider: missing pluginId.');
+
+    const providerType = registerProviderTypeServer(input.providerType);
+    const typeId = String(input.provider?.typeId || providerType.id || '').trim();
+    if (!typeId) throw new Error('ensureManagedProvider: missing provider type id.');
+
+    const managedKey = String(input?.managedKey || `${pluginId}:${typeId}:default`).trim();
+    const providerPayload = {
+        ...input.provider,
+        typeId,
+        metadata: {
+            managedByPlugin: pluginId,
+            managedKey,
+            autoCreated: true,
+            role: 'default-provider',
+            ...(input.provider?.metadata || {}),
+        },
+    };
+
+    const listed = await listProviders(ctx, { typeId });
+    const providers = Array.isArray(listed?.providers) ? listed.providers : [];
+    const existing = providers.find((provider: any) => {
+        const meta = provider?.metadata || {};
+        return (
+            provider?.typeId === typeId &&
+            (
+                meta.managedKey === managedKey ||
+                (meta.managedByPlugin === pluginId && meta.autoCreated === true)
+            )
+        );
+    });
+
+    let provider: any;
+    let providerCreated = false;
+    let providerUpdated = false;
+
+    if (!existing) {
+        provider = await createProvider(ctx, providerPayload as CreateProviderInstanceInput);
+        providerCreated = true;
+    } else {
+        provider = await updateProvider(ctx, {
+            id: existing.id,
+            ...(providerPayload as Omit<UpdateProviderInstanceInput, 'id'>),
+        });
+        providerUpdated = true;
+    }
+
+    return {
+        ok: true,
+        providerTypeId: typeId,
+        providerId: provider?.id || existing?.id || null,
+        providerCreated,
+        providerUpdated,
+    };
+}
+
 export async function listProviders(ctx: any, input?: { typeId?: string | null }): Promise<ProviderListResult> {
     ensureBuiltinAdapters();
     const providers = await getRegistry().listProviderInstances({ userId: ctx?.user?.id ?? null, typeId: input?.typeId || null });
@@ -1073,6 +1237,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const runtime = await registry.getProviderRuntime(session.providerId);
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
+    const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
 
     const personality = (input.personalityId ? registry.getPersonality(input.personalityId) : registry.getPersonality(session.personalityId)) || defaultPersonality();
     const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
@@ -1088,11 +1253,11 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         contextId: session.contextId || null,
     });
     const mergedSystemContent = [
-        sessionPreamble(runtime.instance.label, input.allowedScriptApi),
+        sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
-        scriptSystemContent(input.allowedScriptApi),
+        scriptSystemContent(input.allowedScriptApi, { executionMode }),
     ]
         .map((x) => String(x || '').trim())
         .filter(Boolean)
@@ -1107,7 +1272,10 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         } as ChatMessage, attachmentIndex)]
         : [];
 
-    const conversation = recentMessages.map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
+    const buildConversation = (count: number) => recentMessages
+        .slice(-Math.max(1, count))
+        .map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
+    let conversation = buildConversation(recentMessages.length);
 
     const model = await adapter.resolveModel({
         ctx,
@@ -1181,10 +1349,85 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         }))
     });
 
-    const result = await generateText({
-        model,
-        messages: [...systemMessages, ...conversation],
-    });
+    let result: any = null;
+    let lastContextError: any = null;
+    const retryCounts = Array.from(new Set([
+        recentMessages.length,
+        Math.min(recentMessages.length, 10),
+        Math.min(recentMessages.length, 8),
+        Math.min(recentMessages.length, 6),
+        Math.min(recentMessages.length, 4),
+        2,
+        1,
+    ].filter((value) => value > 0))).sort((a, b) => b - a);
+
+    for (const count of retryCounts) {
+        conversation = buildConversation(count);
+        try {
+            result = await generateText({
+                model,
+                messages: [...systemMessages, ...conversation],
+                maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            });
+            lastContextError = null;
+            break;
+        } catch (error) {
+            if (isInvalidImageInputError(error)) {
+                const text = buildInvalidImageInputGuidance(error);
+                const message: ChatMessage = {
+                    id: registry.newId('msg'),
+                    sessionId: session.id,
+                    role: 'assistant',
+                    content: text,
+                    parts: [{ type: 'text', text }],
+                    createdAt: new Date().toISOString(),
+                    metadata: {
+                        uiVariant: 'error',
+                        reason: 'invalid-image-input',
+                    } as any,
+                };
+
+                await sessionStore.appendMessages(session.id, [message]);
+                const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+                const updatedSession = await sessionStore.updateSession(session.id, { title });
+
+                return {
+                    message,
+                    session: updatedSession,
+                    capabilities: modelCaps.capabilities,
+                };
+            }
+
+            if (!isContextWindowError(error)) throw error;
+            lastContextError = error;
+        }
+    }
+
+    if (!result && lastContextError) {
+        const text = buildContextWindowGuidance(lastContextError, recentMessages.length);
+        const message: ChatMessage = {
+            id: registry.newId('msg'),
+            sessionId: session.id,
+            role: 'assistant',
+            content: text,
+            parts: [{ type: 'text', text }],
+            createdAt: new Date().toISOString(),
+            metadata: {
+                uiVariant: 'error',
+                reason: 'context-window-exceeded',
+            } as any,
+        };
+
+        await sessionStore.appendMessages(session.id, [message]);
+        const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+        const updatedSession = await sessionStore.updateSession(session.id, { title });
+
+        return {
+            message,
+            session: updatedSession,
+            capabilities: modelCaps.capabilities,
+        };
+    }
 
     const text = typeof result.text === 'string' ? result.text : '';
     const message: ChatMessage = {

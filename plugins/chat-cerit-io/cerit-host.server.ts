@@ -22,25 +22,10 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
-    const registerProviderTypeServer = await XS.importServerExport(
+    const ensureManagedPluginProvider = await XS.importServerExport(
         ctx,
-        "module:vercel-ai-chat-sdk/server/chat.server.ts",
-        "registerProviderTypeServer"
-    );
-    const createProvider = await XS.importServerExport(
-        ctx,
-        "module:vercel-ai-chat-sdk/server/chat.server.ts",
-        "createProvider"
-    );
-    const updateProvider = await XS.importServerExport(
-        ctx,
-        "module:vercel-ai-chat-sdk/server/chat.server.ts",
-        "updateProvider"
-    );
-    const listProviders = await XS.importServerExport(
-        ctx,
-        "module:vercel-ai-chat-sdk/server/chat.server.ts",
-        "listProviders"
+        "module:vercel-ai-chat-sdk/server/providerRegistration.server.ts",
+        "ensureManagedPluginProvider"
     );
     const buildOpenAICompatibleProviderType = await XS.importServerExport(
         ctx,
@@ -60,30 +45,25 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     const requiresLogin = pick(defaults.requiresLogin, input.requiresLogin, true)!;
     const baseUrl = pick(defaults.baseUrl, input.baseUrl, "")!;
     const modelsPath = pick(defaults.modelsPath, input.modelsPath, "/models")!;
-    const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "coder")!;
+    const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
 
-    registerProviderTypeServer(
-        buildOpenAICompatibleProviderType({
-            id: typeId,
-            label,
-            description,
-            contextId,
-            authType,
-            requiresLogin,
-            fixedConfig: {
-                baseUrl,
-                modelsPath,
-                defaultModelId,
-            },
-            fixedSecrets: {
-                apiKey,
-            },
-        })
-    );
-
-    const managedKey = `${pluginId}:${typeId}:default`;
-
+    const providerType = buildOpenAICompatibleProviderType({
+        id: typeId,
+        label,
+        description,
+        contextId,
+        authType,
+        requiresLogin,
+        fixedConfig: {
+            baseUrl,
+            modelsPath,
+            defaultModelId,
+        },
+        fixedSecrets: {
+            apiKey,
+        },
+    });
     const providerPayload = {
         typeId,
         label,
@@ -99,48 +79,13 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
             ...(input.secrets || {}),
         },
         metadata: {
-            managedByPlugin: pluginId,
-            managedKey,
-            autoCreated: true,
-            role: "default-provider",
             ...(input.metadata || {}),
         },
     };
 
-    const listed = await listProviders(ctx, { typeId });
-    const providers = Array.isArray(listed?.providers) ? listed.providers : [];
-
-    const existing = providers.find((provider: any) => {
-        const meta = provider?.metadata || {};
-        return (
-            provider?.typeId === typeId &&
-            (
-                meta.managedKey === managedKey ||
-                (meta.managedByPlugin === pluginId && meta.autoCreated === true)
-            )
-        );
+    return ensureManagedPluginProvider(ctx, {
+        pluginId,
+        providerType,
+        provider: providerPayload,
     });
-
-    let provider: any;
-    let providerCreated = false;
-    let providerUpdated = false;
-
-    if (!existing) {
-        provider = await createProvider(ctx, providerPayload);
-        providerCreated = true;
-    } else {
-        provider = await updateProvider(ctx, {
-            id: existing.id,
-            ...providerPayload,
-        });
-        providerUpdated = true;
-    }
-
-    return {
-        ok: true,
-        providerTypeId: typeId,
-        providerId: provider?.id || existing?.id || null,
-        providerCreated,
-        providerUpdated,
-    };
 }

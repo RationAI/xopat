@@ -17,6 +17,8 @@ export class FullscreenMenus {
         this._initialized = false;
         this._initializing = false;
         this._pluginMenus = {};
+        this._visibilityCacheKey = "v::fullscreen-menu-service";
+        this._focusedCacheKey = "fullscreen-menu-service-focused";
     }
 
     init(context = undefined) {
@@ -37,7 +39,9 @@ export class FullscreenMenus {
                 rounded: Menu.ROUNDED.ENABLE,
             });
             this.menu.attachTo(mount);
+            this._bindStatePersistence();
             this._registerDefaults();
+            this._restoreState();
             this._initialized = true;
             return this;
         } finally {
@@ -67,6 +71,24 @@ export class FullscreenMenus {
             icon: "fa-puzzle-piece",
             body: () => this.getPluginsBody
         }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
+    }
+
+    _bindStatePersistence() {
+        if (!this.menu?.modal || this.menu.modal.__statePersistenceBound) return;
+
+        const modal = this.menu.modal;
+        const originalOpen = modal.open.bind(modal);
+        const originalClose = modal.close.bind(modal);
+
+        modal.open = () => {
+            this._setVisible(true);
+            return originalOpen();
+        };
+        modal.close = () => {
+            this._setVisible(false);
+            return originalClose();
+        };
+        modal.__statePersistenceBound = true;
     }
 
     _normalizeBody(body) {
@@ -103,7 +125,12 @@ export class FullscreenMenus {
 
     focus(id) {
         this._ensureInit();
-        return this.menu.focus(id);
+        const focused = this.menu.focus(id);
+        if (focused) {
+            this._setVisible(true);
+            this._storeFocused(id);
+        }
+        return focused;
     }
 
     open(id = undefined) {
@@ -112,11 +139,13 @@ export class FullscreenMenus {
             return this.focus(id);
         }
         this.menu.open();
+        this._setVisible(true);
         return true;
     }
 
     close() {
         this.menu?.close();
+        this._setVisible(false);
         return this;
     }
 
@@ -129,6 +158,34 @@ export class FullscreenMenus {
         this._ensureInit();
         this.menu.setOrientation(orientation);
         return this;
+    }
+
+    _setVisible(visible) {
+        APPLICATION_CONTEXT?.AppCache?.set?.(this._visibilityCacheKey, !!visible);
+    }
+
+    _storeFocused(id) {
+        if (!id) return;
+        APPLICATION_CONTEXT?.AppCache?.set?.(this._focusedCacheKey, id);
+    }
+
+    _restoreState() {
+        const cache = APPLICATION_CONTEXT?.AppCache;
+        if (!cache || !this.menu) return;
+
+        const wasVisible = cache.get(this._visibilityCacheKey, false);
+        if (!wasVisible) {
+            this.menu.close();
+            return;
+        }
+
+        const focusedId = cache.get(this._focusedCacheKey, undefined);
+        if (focusedId && this.menu.getTab?.(focusedId)) {
+            this.menu.focus(focusedId);
+            return;
+        }
+
+        this.menu.open();
     }
 
     _focusSubmenu(menu, id) {
@@ -213,6 +270,7 @@ export class FullscreenMenus {
     openSubmenu(ownerPluginId, atSubId = undefined) {
         const { menu, id } = this.ensurePluginMenu(ownerPluginId);
         this.focus(id);
+        this._storeFocused(id);
 
         if (atSubId && menu.tabs?.[atSubId]) {
             this._focusSubmenu(menu, atSubId);

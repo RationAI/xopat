@@ -18,6 +18,8 @@ class ChatModule extends XOpatModuleSingleton {
             personalities: cfg.personalities,
             defaultPersonalityId: cfg.defaultPersonalityId,
             serverFactory: () => this.server(),
+            sessionOwnerKey: 'vercel-ai-chat-sdk',
+            legacySessionSource: 'vercel-ai-chat-sdk',
         });
 
         this.chatPanel = new ChatPanel({
@@ -136,13 +138,8 @@ class ChatModule extends XOpatModuleSingleton {
         return manager.getAllowedApiManifest() || { namespaces: [] };
     }
 
-    _resolveLiveViewerContextId(preferred?: string | null): string | null {
+    _resolveLiveViewerContextId(): string | null {
         const viewers = (globalThis as any).VIEWER_MANAGER?.viewers || [];
-        const normalizedPreferred = typeof preferred === 'string' ? preferred.trim() : '';
-
-        if (normalizedPreferred && viewers.some((viewer: any) => viewer?.uniqueId === normalizedPreferred)) {
-            return normalizedPreferred;
-        }
 
         const activeViewerId = (globalThis as any).VIEWER_MANAGER?.activeViewer?.uniqueId;
         if (typeof activeViewerId === 'string' && activeViewerId.trim()) {
@@ -157,8 +154,7 @@ class ChatModule extends XOpatModuleSingleton {
     }
 
     getActiveChatContextId(): string | null {
-        const preferred = this.chatService?.getActiveViewerContextId?.() || null;
-        return this._resolveLiveViewerContextId(preferred);
+        return this._resolveLiveViewerContextId();
     }
 
     _getScriptExecutionContext(): any | null {
@@ -174,10 +170,6 @@ class ChatModule extends XOpatModuleSingleton {
 
         if (viewerContextId && typeof context?.setActiveViewerContextId === 'function') {
             context.setActiveViewerContextId(viewerContextId);
-        }
-
-        if (viewerContextId && activeSessionId) {
-            this.chatService?.setSessionViewerContextId?.(activeSessionId, viewerContextId);
         }
 
         context?.setLabel?.(`Chat: ${contextId}`);
@@ -262,6 +254,9 @@ class ChatModule extends XOpatModuleSingleton {
         const fallback = content.match(/```(?:javascript|js|typescript|ts)\s*([\s\S]*?)```/i);
         if (fallback?.[1]?.trim()) return fallback[1].trim();
 
+        const pseudoToolCall = this._extractScriptFromToolEnvelope(content);
+        if (pseudoToolCall) return pseudoToolCall;
+
         return undefined;
     }
 
@@ -272,9 +267,69 @@ class ChatModule extends XOpatModuleSingleton {
         const stripped = content
             .replace(/```xopat-script\s*[\s\S]*?```/gi, "")
             .replace(/```(?:javascript|js|typescript|ts)\s*[\s\S]*?```/gi, "")
+            .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, "")
+            .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+/gi, "")
             .trim();
 
         return stripped || undefined;
+    }
+
+    _extractScriptFromToolEnvelope(content: string): string | undefined {
+        const normalized = String(content || "");
+        if (!normalized) return undefined;
+
+        const jsonArgMatches = Array.from(
+            normalized.matchAll(
+                /functions\.(xopat-(?:host-)?script)\s*:\s*\d+\s*<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*<\|tool_call_end\|>/gi
+            )
+        );
+
+        for (const match of jsonArgMatches) {
+            const toolName = String(match[1] || "").toLowerCase();
+            const payloadText = String(match[2] || "").trim();
+            const code = this._readCodeFromToolPayload(payloadText);
+            if (!code) continue;
+
+            if (toolName === "xopat-host-script") return code;
+            return code;
+        }
+
+        const looseJsonMatches = Array.from(
+            normalized.matchAll(/<\|tool_call_argument_begin\|>\s*({[\s\S]*?})\s*(?:<\|tool_call_end\|>|$)/gi)
+        );
+        for (const match of looseJsonMatches) {
+            const code = this._readCodeFromToolPayload(String(match[1] || "").trim());
+            if (code) return code;
+        }
+
+        return undefined;
+    }
+
+    _readCodeFromToolPayload(payloadText: string): string | undefined {
+        if (!payloadText) return undefined;
+
+        try {
+            const parsed = JSON.parse(payloadText);
+            if (typeof parsed?.code === "string" && parsed.code.trim()) {
+                return parsed.code.trim();
+            }
+        } catch (_) {
+            const codeMatch = payloadText.match(/"code"\s*:\s*"([\s\S]*?)"\s*(?:,|})/i);
+            if (!codeMatch?.[1]) return undefined;
+
+            try {
+                return JSON.parse(`"${codeMatch[1]}"`).trim();
+            } catch {
+                return codeMatch[1]
+                    .replace(/\\"/g, '"')
+                    .replace(/\\n/g, "\n")
+                    .replace(/\\r/g, "\r")
+                    .replace(/\\t/g, "\t")
+                    .trim();
+            }
+        }
+
+        return undefined;
     }
 
     _getChatConfig(): {
@@ -331,6 +386,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
 
     async _normalizeScriptResultToMessage(result: any): Promise<ChatMessage> {
         const UTILITIES = (globalThis as any).UTILITIES || {};
+        const MAX_RESULT_TEXT_CHARS = 8_000;
         const isImageLike = typeof UTILITIES.isImageLike === 'function'
             ? UTILITIES.isImageLike.bind(UTILITIES)
             : () => false;
@@ -338,15 +394,43 @@ When scripting is not available or insufficient, explain the limitation clearly.
             ? UTILITIES.imageLikeToDataUrl.bind(UTILITIES)
             : null;
 
+        const parseDataUrl = (value: unknown): { mediaType?: string; base64: string; raw: string } | null => {
+            if (typeof value !== 'string') return null;
+            const raw = value.trim();
+            const match = raw.match(/^data:([^;,]+)(?:;charset=[^;,]+)?;base64,([A-Za-z0-9+/=\s]+)$/i);
+            if (!match) return null;
+            const base64 = String(match[2] || '').replace(/\s+/g, '');
+            if (!base64 || base64.length < 64) return null;
+            if (base64.length % 4 === 1) return null;
+
+            try {
+                if (typeof atob === 'function') {
+                    atob(base64);
+                }
+            } catch {
+                return null;
+            }
+
+            return {
+                mediaType: match[1] || undefined,
+                base64,
+                raw,
+            };
+        };
+
         const isDataUrl = (value: unknown): value is string =>
-            typeof value === 'string' && /^data:[^;]+;base64,/i.test(value.trim());
+            !!parseDataUrl(value);
 
         const isImageDataUrl = (value: unknown): value is string =>
-            isDataUrl(value) && /^data:image\//i.test(String(value).trim());
+            !!parseDataUrl(value)?.mediaType?.match(/^image\//i);
 
         const inferMimeType = (value: string, fallback = 'application/octet-stream') => {
             const match = value.match(/^data:([^;,]+)(?:;charset=[^;,]+)?;base64,/i);
             return match?.[1] || fallback;
+        };
+        const truncateText = (value: string, label = 'text') => {
+            if (value.length <= MAX_RESULT_TEXT_CHARS) return value;
+            return `${value.slice(0, MAX_RESULT_TEXT_CHARS)}\n\n[${label} truncated to ${MAX_RESULT_TEXT_CHARS} characters by vercel-ai-chat-sdk]`;
         };
 
         const withInternalMetadata = (message: ChatMessage): ChatMessage => ({
@@ -369,6 +453,84 @@ When scripting is not available or insufficient, explain the limitation clearly.
             'Script execution finished without a returned value. The runtime only feeds back the explicit return value. Correct the previous script by returning the final string, object, array, or attachment-producing value.',
             false
         );
+        const attachmentParts: ChatMessagePart[] = [];
+        const uploadEmbeddedDataUrl = async (dataUrl: string, path: string) => {
+            const isImage = isImageDataUrl(dataUrl);
+            const uploaded = await this._storeScriptAttachment({
+                kind: isImage ? 'image' : 'file',
+                dataUrl,
+                mimeType: inferMimeType(dataUrl, isImage ? 'image/png' : 'application/octet-stream'),
+                name: isImage ? `${path || 'script-image'}.png` : `${path || 'script-file'}`,
+                metadata: { sourcePath: path || 'result' },
+            });
+
+            attachmentParts.push((isImage ? {
+                type: 'image',
+                attachmentId: uploaded.id,
+                mimeType: uploaded.mimeType,
+                name: uploaded.name,
+                dataUrl: uploaded.dataUrl,
+                metadata: uploaded.metadata,
+            } : {
+                type: 'file',
+                attachmentId: uploaded.id,
+                mimeType: uploaded.mimeType,
+                name: uploaded.name || path || 'script-file',
+                dataUrl: uploaded.dataUrl,
+                metadata: uploaded.metadata,
+            }) as any);
+
+            return isImage
+                ? `[Image attachment stored at ${path || 'result'}: ${uploaded.name || 'image'}]`
+                : `[File attachment stored at ${path || 'result'}: ${uploaded.name || 'file'}]`;
+        };
+        const sanitizeStructuredValue = async (value: any, path = 'result', depth = 0): Promise<any> => {
+            if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (isDataUrl(trimmed)) {
+                    return await uploadEmbeddedDataUrl(trimmed, path);
+                }
+                return truncateText(value, path);
+            }
+
+            if (isImageLike(value) && imageLikeToDataUrl) {
+                const dataUrl = await imageLikeToDataUrl(value);
+                return await uploadEmbeddedDataUrl(dataUrl, path);
+            }
+
+            if (depth >= 4) {
+                return '[Object truncated: maximum serialization depth reached]';
+            }
+
+            if (Array.isArray(value)) {
+                const items = [];
+                const capped = value.slice(0, 50);
+                for (let index = 0; index < capped.length; index++) {
+                    items.push(await sanitizeStructuredValue(capped[index], `${path}[${index}]`, depth + 1));
+                }
+                if (value.length > capped.length) {
+                    items.push(`[Array truncated: ${value.length - capped.length} more item(s)]`);
+                }
+                return items;
+            }
+
+            if (typeof value === 'object') {
+                const entries = Object.entries(value);
+                const capped = entries.slice(0, 50);
+                const output: Record<string, unknown> = {};
+                for (const [key, item] of capped) {
+                    output[key] = await sanitizeStructuredValue(item, `${path}.${key}`, depth + 1);
+                }
+                if (entries.length > capped.length) {
+                    output.__truncated__ = `${entries.length - capped.length} more key(s) omitted`;
+                }
+                return output;
+            }
+
+            return truncateText(String(value), path);
+        };
 
         const asImageMessage = async (dataUrl: string, name = 'script-image.png'): Promise<ChatMessage> => {
             const uploaded = await this._storeScriptAttachment({
@@ -446,117 +608,45 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 return await asFileMessage(value);
             }
 
-            return asFeedbackMessage(value || '');
+            return asFeedbackMessage(truncateText(value || ''));
         }
 
         if (isImageLike(result) && imageLikeToDataUrl) {
             const dataUrl = await imageLikeToDataUrl(result);
             return await asImageMessage(dataUrl);
         }
+        const sanitized = await sanitizeStructuredValue(result);
+        const text = typeof sanitized === 'string'
+            ? sanitized
+            : truncateText(JSON.stringify(sanitized, null, 2), 'script-result');
+        const parts: ChatMessagePart[] = [];
 
-        if (Array.isArray(result)) {
-            const parts: ChatMessagePart[] = [];
-            const textChunks: string[] = [];
+        if (text.trim()) {
+            parts.push({
+                ok: true,
+                type: 'script-result',
+                text,
+            } as any);
+        }
 
-            for (const item of result) {
-                if (typeof item === 'string' && isImageDataUrl(item)) {
-                    const uploaded = await this._storeScriptAttachment({
-                        kind: 'image',
-                        dataUrl: item,
-                        mimeType: inferMimeType(item, 'image/png'),
-                        name: 'script-image.png',
-                    });
+        if (attachmentParts.length) {
+            parts.push(...attachmentParts);
+            parts.push({
+                type: 'host-feedback',
+                text: 'Script produced attachment output. Read the attachment placeholders and any related metadata to answer the user.',
+            } as any);
+        }
 
-                    parts.push({
-                        type: 'image',
-                        attachmentId: uploaded.id,
-                        mimeType: uploaded.mimeType,
-                        name: uploaded.name,
-                        dataUrl: uploaded.dataUrl,
-                        metadata: uploaded.metadata,
-                    } as any);
-                    continue;
-                }
-
-                if (isImageLike(item) && imageLikeToDataUrl) {
-                    const dataUrl = await imageLikeToDataUrl(item);
-                    const uploaded = await this._storeScriptAttachment({
-                        kind: 'image',
-                        dataUrl,
-                        mimeType: inferMimeType(dataUrl, 'image/png'),
-                        name: 'script-image.png',
-                    });
-
-                    parts.push({
-                        type: 'image',
-                        attachmentId: uploaded.id,
-                        mimeType: uploaded.mimeType,
-                        name: uploaded.name,
-                        dataUrl: uploaded.dataUrl,
-                        metadata: uploaded.metadata,
-                    } as any);
-                    continue;
-                }
-
-                if (typeof item === 'string' && isDataUrl(item)) {
-                    const uploaded = await this._storeScriptAttachment({
-                        kind: 'file',
-                        dataUrl: item,
-                        mimeType: inferMimeType(item),
-                        name: 'script-file',
-                    });
-
-                    parts.push({
-                        type: 'file',
-                        attachmentId: uploaded.id,
-                        mimeType: uploaded.mimeType,
-                        name: uploaded.name || 'script-file',
-                        dataUrl: uploaded.dataUrl,
-                        metadata: uploaded.metadata,
-                    } as any);
-                    continue;
-                }
-
-                if (typeof item === 'string' && item.trim()) {
-                    textChunks.push(item.trim());
-                    continue;
-                }
-
-                if (item != null) {
-                    textChunks.push(JSON.stringify(item, null, 2));
-                }
-            }
-
-            if (textChunks.length) {
-                parts.unshift({
-                    ok: true,
-                    type: 'script-result',
-                    text: textChunks.join('\n\n'),
-                } as any);
-            }
-
-            if (!textChunks.length && parts.length) {
-                parts.unshift({
-                    type: 'host-feedback',
-                    text: 'Script produced attachment output. Read the attachment and any related metadata to answer the user.',
-                } as any);
-            }
-
-            if (parts.length) {
-                return withInternalMetadata({
-                    role: 'user',
-                    parts,
-                    content: textChunks.join('\n\n') || 'Script produced non-text output.',
-                    createdAt: new Date(),
-                });
-            }
-
+        if (!parts.length) {
             return asGuidanceForMissingReturn();
         }
 
-        return asFeedbackMessage(
-            typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)
-        );
+        return withInternalMetadata({
+            role: 'user',
+            parts,
+            content: text || 'Script produced non-text output.',
+            createdAt: new Date(),
+        });
     }
 
     async _storeScriptAttachment(input: {

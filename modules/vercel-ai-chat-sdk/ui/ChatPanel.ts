@@ -1248,20 +1248,16 @@ export class ChatPanel extends BaseComponent {
     }
 
     async _captureViewerScreenshotBlob(): Promise<Blob> {
-        const manager = (globalThis as any).VIEWER_MANAGER;
-        const viewers = Array.isArray(manager?.viewers) ? manager.viewers : [];
+        const manager = globalThis.VIEWER_MANAGER;
+        const viewers = manager.viewers;
         const preferredViewerId = this._getCurrentViewerContextId();
 
         let viewer = preferredViewerId
             ? viewers.find((item: any) => item?.uniqueId === preferredViewerId)
             : null;
 
-        if (!viewer && manager?.activeViewer) {
-            viewer = manager.activeViewer;
-        }
-
-        if (!viewer && viewers.length === 1) {
-            viewer = viewers[0];
+        if (!viewer) {
+            viewer = globalThis.VIEWER;
         }
 
         const canvas: HTMLCanvasElement | undefined = viewer?.drawer?.canvas || viewer?.canvas;
@@ -1372,6 +1368,8 @@ export class ChatPanel extends BaseComponent {
         let allowedSteps = Math.max(1, Number(maxSteps || this.MAX_SCRIPT_STEPS || 12));
         let extensionsUsed = 0;
         let consecutiveSuccessfulScriptSteps = 0;
+        let consecutiveFailedScriptSteps = 0;
+        const maxConsecutiveFailedScriptSteps = 3;
 
         this._messageList?.showProgress("Understanding your request…");
 
@@ -1443,12 +1441,40 @@ export class ChatPanel extends BaseComponent {
 
                 if (failedScript) {
                     consecutiveSuccessfulScriptSteps = 0;
+                    consecutiveFailedScriptSteps += 1;
                 } else {
                     consecutiveSuccessfulScriptSteps += 1;
+                    consecutiveFailedScriptSteps = 0;
                 }
 
                 this._pushInternalMessage(executionMessage);
                 this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
+
+                if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
+                    const terminalError = String(executionMessage.content || "Repeated script execution failures.");
+                    const visibleMessage: ChatMessage = {
+                        role: "assistant",
+                        content:
+                            "The assistant stopped after repeated script execution failures.\n\n" +
+                            terminalError +
+                            "\n\nStart a new turn after narrowing the request or first inspect the exact API payload shape that the action requires.",
+                        parts: [{
+                            type: "text",
+                            text:
+                                "The assistant stopped after repeated script execution failures.\n\n" +
+                                terminalError +
+                                "\n\nStart a new turn after narrowing the request or first inspect the exact API payload shape that the action requires.",
+                        }],
+                        metadata: { uiVariant: "error", reason: "repeated-script-failures" } as any,
+                        createdAt: new Date(),
+                    };
+
+                    this._messages.push(visibleMessage);
+                    this._messageList?.removeProgress();
+                    this._messageList?.addMessage(visibleMessage);
+                    this._setStatus("Stopped after repeated script failures.");
+                    return;
+                }
 
                 const isLastAllowedStep = step >= allowedSteps - 1;
                 const canExtend = extensionsUsed < this.MAX_SCRIPT_STEP_EXTENSIONS;
@@ -1481,6 +1507,29 @@ export class ChatPanel extends BaseComponent {
 
             const finalReply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
             if (this._shouldStopAssistantLoop()) return;
+
+            if (chatModule.extractScriptFromAssistantMessage?.(finalReply)) {
+                const visibleMessage: ChatMessage = {
+                    role: "assistant",
+                    content:
+                        "The assistant reached the scripting step limit and did not produce a final user-facing answer.\n\n" +
+                        "Start a new turn and ask it to summarize what it found so far without further scripting.",
+                    parts: [{
+                        type: "text",
+                        text:
+                            "The assistant reached the scripting step limit and did not produce a final user-facing answer.\n\n" +
+                            "Start a new turn and ask it to summarize what it found so far without further scripting.",
+                    }],
+                    metadata: { uiVariant: "error", reason: "script-step-limit-without-final-answer" } as any,
+                    createdAt: new Date(),
+                };
+
+                this._messages.push(visibleMessage);
+                this._messageList?.removeProgress();
+                this._messageList?.addMessage(visibleMessage);
+                this._setStatus("No final answer was produced.");
+                return;
+            }
 
             this._messages.push(finalReply);
             this._messageList?.removeProgress();

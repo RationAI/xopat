@@ -141,6 +141,11 @@ export type AnnotationCreateInput = {
      *  - point: { x, y }
      *  - line / ruler: [x1, y1, x2, y2]
      *  - polygon / polyline: [{x, y}, ...]
+     *
+     * Important:
+     *  - pass the geometry payload itself, not a wrapper object unless the factory explicitly requires one
+     *  - for polygon / polyline use `parameters: [{ x, y }, ...]`, not `parameters: { points: [...] }`
+     *  - for line / ruler use the raw coordinate array, not `{ points: [...] }`
      */
     parameters: unknown;
 
@@ -199,11 +204,19 @@ export type AnnotationCreateLimit = {
 export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
      * Creates one annotation using the given factory-specific parameters.
+     *
+     * Example:
+     * `await annotationsWrite.createAnnotation({
+     *   factoryID: "polygon",
+     *   presetID,
+     *   parameters: [{ x: 10, y: 20 }, { x: 30, y: 20 }, { x: 30, y: 40 }]
+     * })`
      */
     createAnnotation(input: AnnotationCreateInput): Promise<AnnotationRecord>;
 
     /**
      * Creates multiple annotations, subject to the interactive guard.
+     * Each item follows the same factory-specific `parameters` shape as `createAnnotation()`.
      */
     createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
 

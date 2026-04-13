@@ -1242,4 +1242,4 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 }
 
 window.OpenSeadragon.Recorder = Recorder as typeof OpenSeadragon.Recorder;
-addModule("recorder", Recorder);
+addModule("recorder-module", Recorder);

@@ -84,8 +84,7 @@ module.exports = function(grunt) {
                 const content = grunt.file.read(workspaceFile).toString().trim();
                 const packageData = parse(content);
 
-                // TODO: do not require this if custom build exists
-                if (!packageData["buildEntry"]) {
+                if (!packageData["buildEntry"] && !grunt.file.isFile(`${itemDirectory}/index.workspace.js`)) {
                     grunt.log.errorlns(`${contextName} ${item} has no buildEntry entry! package.json must define buildEntry file to compile!`);
                     data = null;
                 } else {
