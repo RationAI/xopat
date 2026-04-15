@@ -22,6 +22,16 @@ jobs:
 
   build-and-publish:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - server: php
+            dockerfile: ./docker/php/Dockerfile
+            image_name: ghcr.io/rationai/xopat-php
+          - server: node
+            dockerfile: ./docker/node/Dockerfile
+            image_name: ghcr.io/rationai/xopat-node
     
     steps:
     - uses: actions/checkout@v4
@@ -40,19 +50,19 @@ jobs:
       if: github.event_name == 'release'
       uses: docker/build-push-action@v6
       with:
-        file: ./docker/php/Dockerfile
+        file: ${{ matrix.dockerfile }}
         context: .
         push: true
         tags: |
-          ghcr.io/rationai/xopat:${{ env.TAG_NAME }}
-          ghcr.io/rationai/xopat:latest
+          ${{ matrix.image_name }}:${{ env.TAG_NAME }}
+          ${{ matrix.image_name }}:latest
 
     - name: Build and push on dispatch
       if: github.event_name != 'release'
       uses: docker/build-push-action@v6
       with:
-        file: ./docker/php/Dockerfile
+        file: ${{ matrix.dockerfile }}
         context: .
         push: true
         tags: |
-          ghcr.io/rationai/xopat:${{ env.TAG_NAME }}
+          ${{ matrix.image_name }}:${{ env.TAG_NAME }}

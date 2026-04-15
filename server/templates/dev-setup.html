@@ -78,6 +78,208 @@
 <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
 
 <script type="text/javascript">
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function renderKeyValueTable(title, rows) {
+        if (!rows || rows.length < 1) {
+            return "";
+        }
+        return `
+            <div class="mt-4">
+                <div class="mb-2 font-semibold">${escapeHtml(title)}</div>
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead><tr><th>Key</th><th>Type</th><th>Required</th><th>Default</th><th>Usage</th></tr></thead>
+                        <tbody>
+                            ${rows.map(row => `
+                                <tr>
+                                    <td><code>${escapeHtml(row.key || "")}</code></td>
+                                    <td>${escapeHtml(row.type || "")}</td>
+                                    <td>${escapeHtml(row.required ? "yes" : "no")}</td>
+                                    <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(row.defaultText || "")}</pre></td>
+                                    <td>${escapeHtml(row.usage || "")}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    function normalizeSchemaRows(items, defaultKey = "default") {
+        return (items || []).map(item => ({
+            key: item.key,
+            type: item.type || item.kind || "",
+            required: !!item.required,
+            defaultText: item[defaultKey] !== undefined && item[defaultKey] !== null
+                ? JSON.stringify(item[defaultKey], null, 2)
+                : "",
+            usage: item.usage || ""
+        }));
+    }
+
+    function renderControlTable(controls) {
+        if (!controls || controls.length < 1) {
+            return "";
+        }
+        return `
+            <div class="mt-4">
+                <div class="mb-2 font-semibold">UI Controls In <code>params</code></div>
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead><tr><th>Key</th><th>Supported UI types</th><th>Default</th><th>Required</th><th>Usage</th></tr></thead>
+                        <tbody>
+                            ${controls.map(control => `
+                                <tr>
+                                    <td><code>${escapeHtml(control.key || "")}</code></td>
+                                    <td>${escapeHtml((control.supportedUiTypes || []).join(", "))}</td>
+                                    <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(control.defaultControlConfig !== null && control.defaultControlConfig !== undefined ? JSON.stringify(control.defaultControlConfig, null, 2) : "")}</pre></td>
+                                    <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(control.requiredControlConfig !== null && control.requiredControlConfig !== undefined ? JSON.stringify(control.requiredControlConfig, null, 2) : "")}</pre></td>
+                                    <td>${escapeHtml(control.usage || "")}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderAvailableControlsSection(docsNode, docsModel) {
+        const controlsByGlType = docsModel?.controls || {};
+        const glTypes = Object.keys(controlsByGlType);
+        if (glTypes.length < 1) {
+            return;
+        }
+
+        const section = document.createElement("section");
+        section.className = "card bg-base-100 border border-base-300 shadow-sm mt-4";
+        section.innerHTML = `
+            <div class="card-body gap-4">
+                <h2 class="card-title">Available UI Controls</h2>
+                <div class="text-sm opacity-80">
+                    These are renderer UI-control definitions grouped by GLSL type. They can back shader <code>params</code> entries where supported by a shader.
+                </div>
+            </div>
+        `;
+
+        const body = section.querySelector(".card-body");
+        for (const glType of glTypes) {
+            const controls = controlsByGlType[glType] || [];
+            const block = document.createElement("div");
+            block.className = "mt-2";
+            block.innerHTML = `
+                <div class="mb-2 font-semibold">GL Type: <code>${escapeHtml(glType)}</code></div>
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead><tr><th>Name</th><th>UI Type</th><th>Supports</th><th>Summary</th></tr></thead>
+                        <tbody>
+                            ${controls.map(ctrl => `
+                                <tr>
+                                    <td><code>${escapeHtml(ctrl.name || "")}</code></td>
+                                    <td>${escapeHtml(ctrl.uiType || "")}</td>
+                                    <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(ctrl.supports || {}, null, 2))}</pre></td>
+                                    <td>${escapeHtml(ctrl.classDocs?.summary || ctrl.classDocs?.description || "")}</td>
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            body.appendChild(block);
+        }
+
+        docsNode.appendChild(section);
+    }
+
+    function renderShaderConfigDocs(docsNode, configModel, docsModel, shaderConfigurator) {
+        const previewByType = new Map((docsModel?.shaders || []).map(shader => [shader.type, shader.preview]));
+        docsNode.innerHTML = `
+            <section class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                    <h2 class="card-title">Session Structure</h2>
+                    <div class="text-sm opacity-80">
+                        The JSON editor below posts a viewer session under the <code>visualization</code> field.
+                        Top-level session keys are <code>params</code>, <code>data</code>, <code>background</code>, <code>visualizations</code>, and <code>plugins</code>.
+                    </div>
+                    <div class="overflow-x-auto mt-4">
+                        <table class="table table-sm">
+                            <thead><tr><th>Key</th><th>Type</th><th>Required</th><th>Usage</th></tr></thead>
+                            <tbody>
+                                <tr><td><code>params</code></td><td>object</td><td>no</td><td>Viewer parameters and defaults.</td></tr>
+                                <tr><td><code>data</code></td><td>array</td><td>yes</td><td>Data specifications referenced by backgrounds and shader layers.</td></tr>
+                                <tr><td><code>background</code></td><td>array</td><td>no</td><td>Image-group entries with <code>dataReference</code> and optional background shader stack.</td></tr>
+                                <tr><td><code>visualizations</code></td><td>array</td><td>no</td><td>Visualization goals. Each item must define a <code>shaders</code> map.</td></tr>
+                                <tr><td><code>plugins</code></td><td>object</td><td>no</td><td>Plugin id to plugin-specific configuration object.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        `;
+
+        for (const shader of configModel?.shaders || []) {
+            const preview = previewByType.get(shader.type);
+            const previewMarkup = preview
+                ? shaderConfigurator._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")
+                : "";
+            const rootRows = normalizeSchemaRows(shader.rootConfig?.properties || []);
+            const builtInRows = normalizeSchemaRows(shader.params?.builtIn || []);
+            const customRows = normalizeSchemaRows(shader.params?.customParams || []);
+
+            const card = document.createElement("section");
+            card.className = "card bg-base-100 border border-base-300 shadow-sm";
+            card.innerHTML = `
+                <div class="card-body gap-4">
+                    <div class="flex flex-wrap items-start justify-between gap-4">
+                        <div class="min-w-[220px] flex-1">
+                            <div class="card-title">${escapeHtml(shader.name || shader.type)}</div>
+                            <div class="badge badge-outline mt-1">${escapeHtml(shader.type || "")}</div>
+                            <div class="mt-2 text-sm opacity-80">${escapeHtml(shader.description || "")}</div>
+                        </div>
+                        ${previewMarkup ? `<div>${previewMarkup}</div>` : ""}
+                    </div>
+
+                    ${shader.sources?.length ? `
+                        <div class="mt-2">
+                            <div class="mb-2 font-semibold">Sources</div>
+                            <div class="overflow-x-auto">
+                                <table class="table table-sm">
+                                    <thead><tr><th>#</th><th>Description</th><th>Accepted channels</th></tr></thead>
+                                    <tbody>
+                                        ${shader.sources.map(src => `
+                                            <tr>
+                                                <td>${escapeHtml(src.index)}</td>
+                                                <td>${escapeHtml(src.description || "")}</td>
+                                                <td>${escapeHtml(Array.isArray(src.acceptedChannelCounts) ? src.acceptedChannelCounts.join(", ") : "any")}</td>
+                                            </tr>
+                                        `).join("")}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    ` : ""}
+
+                    ${renderKeyValueTable("Layer Object Fields", rootRows)}
+                    ${renderKeyValueTable("Built-in Params", builtInRows)}
+                    ${renderControlTable(shader.params?.controls || [])}
+                    ${renderKeyValueTable("Custom Params", customRows)}
+                </div>
+            `;
+            docsNode.appendChild(card);
+        }
+
+        renderAvailableControlsSection(docsNode, docsModel);
+    }
+
     // --- App Logic ---
     const app = {
         storageKey: 'viz-dev-tabs-v1',
@@ -301,7 +503,13 @@
             docsNode.classList.remove('prose');
             docsNode.classList.add('flex', 'flex-col', 'gap-6');
 
-            if (typeof shaderConfigurator.compileDocsModel === 'function'
+            if (typeof shaderConfigurator.compileConfigSchemaModel === 'function') {
+                const configModel = shaderConfigurator.compileConfigSchemaModel();
+                const docsModel = typeof shaderConfigurator.compileDocsModel === 'function'
+                    ? shaderConfigurator.compileDocsModel()
+                    : null;
+                renderShaderConfigDocs(docsNode, configModel, docsModel, shaderConfigurator);
+            } else if (typeof shaderConfigurator.compileDocsModel === 'function'
                 && typeof shaderConfigurator.renderDocsPage === 'function') {
                 const docsModel = shaderConfigurator.compileDocsModel();
                 shaderConfigurator.renderDocsPage(docsNode, docsModel);
