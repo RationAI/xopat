@@ -15,6 +15,16 @@ on:
       TAG_NAME:
         description: 'Tag name for test version'
         required: true
+      BUILD_PHP:
+        description: 'Build PHP server image'
+        required: false
+        type: boolean
+        default: true
+      BUILD_NODE:
+        description: 'Build Node server image'
+        required: false
+        type: boolean
+        default: true
 env:
   TAG_NAME: ${{ github.event.inputs.TAG_NAME || github.event.release.tag_name }}
 
@@ -29,17 +39,21 @@ jobs:
           - server: php
             dockerfile: ./docker/php/Dockerfile
             image_name: ghcr.io/rationai/xopat-php
+            enabled: ${{ github.event_name == 'release' || inputs.BUILD_PHP }}
           - server: node
             dockerfile: ./docker/node/Dockerfile
             image_name: ghcr.io/rationai/xopat-node
+            enabled: ${{ github.event_name == 'release' || inputs.BUILD_NODE }}
     
     steps:
     - uses: actions/checkout@v4
     
     - name: Set up Docker Buildx
+      if: matrix.enabled
       uses: docker/setup-buildx-action@v3
       
     - name: Login to GitHub Packages
+      if: matrix.enabled
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -47,7 +61,7 @@ jobs:
         password: ${{ secrets.DOCKER_ACTION_TOKEN }}
         
     - name: Build and push on release
-      if: github.event_name == 'release'
+      if: matrix.enabled && github.event_name == 'release'
       uses: docker/build-push-action@v6
       with:
         file: ${{ matrix.dockerfile }}
@@ -58,7 +72,7 @@ jobs:
           ${{ matrix.image_name }}:latest
 
     - name: Build and push on dispatch
-      if: github.event_name != 'release'
+      if: matrix.enabled && github.event_name != 'release'
       uses: docker/build-push-action@v6
       with:
         file: ${{ matrix.dockerfile }}

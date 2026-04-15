@@ -21,6 +21,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         locales \
         tzdata \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -128,6 +130,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         vim \
         nano \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*

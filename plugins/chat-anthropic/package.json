@@ -3,5 +3,8 @@
   "version": "1.0.0",
   "description": "Anthropic Claude Model provider integration.",
   "keywords": [],
-  "author": "Aiosa"
+  "author": "Aiosa",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.0"
+  }
 }

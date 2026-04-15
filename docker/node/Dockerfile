@@ -31,6 +31,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         nano \
         tini \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -52,6 +54,6 @@ WORKDIR /app
 FROM viewer-git AS viewer-standalone
 ENV XO_REPO_ROOT=/app
 COPY --chown=node:1000 . /app
-RUN cd /app && npm install && npm run build
+RUN cd /app && npm ci && npm run build
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
