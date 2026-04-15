@@ -70,7 +70,7 @@ interface TileSourceMetadata {
  */
 interface BackgroundItem {
     dataReference: number | DataSpecification;
-    shaders?: VisualizationShaderLayer[];
+    shaders?: VisualizationShaderGroupOrLayer[];
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -96,7 +96,7 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
  */
 interface VisualizationItem {
-    shaders?: Record<string, VisualizationShaderLayer>;
+    shaders?: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -113,6 +113,16 @@ interface VisualizationShaderLayer {
     name?: string;
     [key: string]: any;
 }
+
+interface VisualizationShaderGroup extends VisualizationShaderLayer {
+    type: "group";
+    // Group layers can nest additional shader layers
+    shaders?: Record<string, VisualizationShaderGroupOrLayer>;
+    // Group layers can override child execution order
+    order?: string[];
+}
+
+type VisualizationShaderGroupOrLayer = VisualizationShaderLayer | VisualizationShaderGroup;
 
 // ── BackgroundConfig ─────────────────────────────────────────────────────────
 interface BackgroundConfigConstructor {

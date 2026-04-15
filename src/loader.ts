@@ -298,7 +298,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
     /**
      * Get a viewer module singleton reference if instantiated or instantiate it if available.
-     * @param className module className, name of the class as a string, e.g. "MyViewerModule"
+     * @param className module className, name of the class as a string, e.g. "MyViewerModule" if default, or custom name if registered as such
      * @param viewer which viewer-context-dependent instance (XOpatViewerSingleton) is fetched
      */
     const viewerSingletonModule = (window as any).viewerSingletonModule = function (className: string, viewer: ViewerLikeItem) {
@@ -338,7 +338,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * @param id module id
      * @param ModuleClass class/class-like-function to register (not an instance!)
      */
-    const addModule = (window as any).addModule = function (id: string, ModuleClass: any) {
+    (window as any).addModule = function addModule(id: string, ModuleClass: any) {
         if (!id || !ModuleClass) return;
         ModuleClass.$id = id;
         let xmods = (window as any).xmodules = (window as any).xmodules || {};
@@ -348,11 +348,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     /**
      * Register viewer singleton globally.
      * @param SingletonClass The viewer singleton class
-     * @param className The class name representing this viewer singleton, optional, can override the default 'SingletonClass'
+     * @param className The class name representing this viewer singleton, optional, can override the default usage of
+     *   the name of the class as a string, e.g. "MyViewerModule"
      */
     const registerViewerSingleton = (window as any).registerViewerSingleton = function (SingletonClass: any, className?: string) {
         if (!SingletonClass) return;
-        const id = "ViewerInstance::" + (String(SingletonClass) || className);
+        const id = "ViewerInstance::" + (className || SingletonClass.name || String(SingletonClass));
         SingletonClass.$className = className;
         SingletonClass.$id = id;
         let xmods = (window as any).xmodules = (window as any).xmodules || {};
@@ -933,6 +934,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Integrate conditionally with a singleton module object.
+         * @param moduleId the module id, must be known
+         * @param callback function to call with the module object
          * TODO: this does not wait once module is fully loaded!
          */
         integrateWithSingletonModule(moduleId: string, callback: (module: IXOpatModuleSingleton) => void) {
@@ -948,6 +952,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
+         * Integrate conditionally with a viewer singleton object.
+         * @param className name of the class as a string, e.g. "MyViewerModule" if default, or custom name if registered as such
+         * @param viewer the viewer the singleton exists for (if it exists)
+         * @param callback function to call with the module object
          * TODO: this does not wait once module is fully loaded!
          */
         integrateWithViewerSingletonModule(className: string, viewer: ViewerLikeItem, callback: (module: IXOpatViewerSingletonModule) => void) {
@@ -3178,8 +3186,8 @@ form.submit();
                 backgroundColor: APPLICATION_CONTEXT.getOption("background"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 interactive: true,
-                htmlHandler: (shaderLayer, shaderConfig) => {
-                    viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig);
+                htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
+                    viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
                 },
                 htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
             };

@@ -1,4 +1,5 @@
 import type {ScriptApiObject} from "../scripting-manager";
+import type {VisualizationShaderGroupOrLayer} from "./visualization-api.scripts";
 
 export type ViewerContextId = string;
 
@@ -20,13 +21,7 @@ export interface GlobalContextInfo {
         index?: number | null;
         name?: string | null;
         goalIndex?: number | null;
-        shaders?: Array<{
-            id?: string;
-            name?: string;
-            type?: string;
-            dataReferences?: number[];
-            tiledImages?: number[];
-        }>;
+        shaders?: Record<string, VisualizationShaderGroupOrLayer>;
     } | null;
 
     worldItems?: Array<{

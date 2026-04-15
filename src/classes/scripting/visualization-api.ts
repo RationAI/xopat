@@ -7,6 +7,7 @@ import type {
     VisualizationViewportPixelsResult,
     VisualizationFirstPassExtractOptions,
     VisualizationLayerSource,
+    VisualizationShaderGroupOrLayer,
 } from "./visualization-api.scripts";
 
 import { XOpatScriptingApi } from "./abstract-api";
@@ -196,6 +197,116 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         return "script_layer_" + String(index);
     }
 
+    protected normalizeShaderMap(
+        sourceShaders: any,
+        path: string[] = []
+    ): { shaders: Record<string, VisualizationShaderGroupOrLayer>; aliases: Map<string, string>; } {
+        if (!sourceShaders || typeof sourceShaders !== "object" || Array.isArray(sourceShaders)) {
+            return {
+                shaders: {},
+                aliases: new Map<string, string>()
+            };
+        }
+
+        const normalizedShaders: Record<string, VisualizationShaderGroupOrLayer> = {};
+        const keyAliases = new Map<string, string>();
+        let index = 0;
+
+        for (const key in sourceShaders) {
+            if (!Object.prototype.hasOwnProperty.call(sourceShaders, key)) {
+                continue;
+            }
+
+            const layer = cloneJson(sourceShaders[key]);
+            if (!layer || typeof layer !== "object") {
+                continue;
+            }
+
+            const hasNestedShaders = layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders);
+            if ((!layer.type || typeof layer.type !== "string") && hasNestedShaders) {
+                layer.type = "group";
+            }
+            if (!layer.type || typeof layer.type !== "string") {
+                throw new Error(
+                    "Every visualization shader layer must define a valid 'type'" +
+                    (path.length ? " at '" + path.concat([key]).join("/") + "'" : "") +
+                    "."
+                );
+            }
+
+            if (!layer.id || typeof layer.id !== "string") {
+                layer.id = this.createLayerId(layer.name || key || layer.type, index);
+            }
+
+            if (!layer.name || typeof layer.name !== "string") {
+                layer.name = key || layer.type;
+            }
+
+            if (layer.shaders !== undefined) {
+                const nested = this.normalizeShaderMap(layer.shaders, path.concat([layer.id]));
+                layer.shaders = nested.shaders;
+
+                if (Array.isArray(layer.order)) {
+                    const seenOrder = new Set<string>();
+                    const normalizedOrder: string[] = [];
+
+                    for (const entry of layer.order) {
+                        if (typeof entry !== "string" || !entry) {
+                            continue;
+                        }
+
+                        const mapped = nested.aliases.get(entry) || entry;
+                        if (layer.shaders?.[mapped] && !seenOrder.has(mapped)) {
+                            normalizedOrder.push(mapped);
+                            seenOrder.add(mapped);
+                        }
+                    }
+
+                    for (const childId of Object.keys(layer.shaders)) {
+                        if (!seenOrder.has(childId)) {
+                            normalizedOrder.push(childId);
+                        }
+                    }
+
+                    layer.order = normalizedOrder;
+                }
+            }
+
+            normalizedShaders[layer.id] = layer;
+            keyAliases.set(key, layer.id);
+            keyAliases.set(layer.id, layer.id);
+            index++;
+        }
+
+        return {
+            shaders: normalizedShaders,
+            aliases: keyAliases
+        };
+    }
+
+    protected forEachShaderLayer(
+        shaderMap: Record<string, VisualizationShaderGroupOrLayer> | undefined,
+        callback: (layer: VisualizationShaderGroupOrLayer, layerId: string, path: string[]) => void,
+        path: string[] = []
+    ): void {
+        if (!shaderMap || typeof shaderMap !== "object") {
+            return;
+        }
+
+        for (const [layerId, layer] of Object.entries(shaderMap)) {
+            if (!layer || typeof layer !== "object") {
+                continue;
+            }
+
+            const nextPath = path.concat([layerId]);
+            callback(layer, layerId, nextPath);
+
+            if (layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders)) {
+                this.forEachShaderLayer(layer.shaders, callback, nextPath);
+            }
+        }
+    }
+
     protected normalizeVisualizationInput(input: VisualizationLayerSource): VisualizationItem {
         let visualization: any;
 
@@ -218,36 +329,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             visualization.shaders = {};
         }
 
-        const normalizedShaders: Record<string, VisualizationShaderLayer> = {};
-        let index = 0;
-
-        for (const key in visualization.shaders) {
-            if (!Object.prototype.hasOwnProperty.call(visualization.shaders, key)) {
-                continue;
-            }
-
-            const layer = cloneJson(visualization.shaders[key]);
-            if (!layer || typeof layer !== "object") {
-                continue;
-            }
-
-            if (!layer.type || typeof layer.type !== "string") {
-                throw new Error("Every visualization shader layer must define a valid 'type'.");
-            }
-
-            if (!layer.id || typeof layer.id !== "string") {
-                layer.id = this.createLayerId(layer.name || key || layer.type, index);
-            }
-
-            if (!layer.name || typeof layer.name !== "string") {
-                layer.name = key || layer.type;
-            }
-
-            normalizedShaders[layer.id] = layer;
-            index++;
-        }
-
-        visualization.shaders = normalizedShaders;
+        visualization.shaders = this.normalizeShaderMap(visualization.shaders).shaders;
         return visualization as VisualizationItem;
     }
 
@@ -273,16 +355,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         for (const visualization of visualizations) {
             const shaders = visualization && visualization.shaders ? visualization.shaders : {};
-            for (const shaderId in shaders) {
-                if (!Object.prototype.hasOwnProperty.call(shaders, shaderId)) {
-                    continue;
-                }
-
-                const layer = shaders[shaderId];
-                if (!layer) {
-                    continue;
-                }
-
+            this.forEachShaderLayer(shaders, (layer) => {
                 const dataReferences = sanitizeArrayOfIntegers(layer.dataReferences);
                 const tiledImages = sanitizeArrayOfIntegers(layer.tiledImages);
                 const max = Math.min(dataReferences.length, tiledImages.length);
@@ -290,24 +363,25 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 for (let i = 0; i < max; i++) {
                     out.set(dataReferences[i], tiledImages[i]);
                 }
-            }
+            });
         }
 
         return out;
     }
 
-    protected resolveStandaloneConfiguration(input: VisualizationLayerSource): Record<string, VisualizationShaderLayer> {
-        const viewer = this.activeViewer;
-        const visualization = this.normalizeVisualizationInput(input);
-        const dataReferenceMap = this.getResolvedDataReferenceMap(viewer);
-        const configuration: Record<string, VisualizationShaderLayer> = {};
+    protected resolveStandaloneShaderMap(
+        shaderMap: Record<string, VisualizationShaderGroupOrLayer>,
+        dataReferenceMap: Map<number, number>,
+        viewer: OpenSeadragon.Viewer
+    ): Record<string, VisualizationShaderGroupOrLayer> {
+        const configuration: Record<string, VisualizationShaderGroupOrLayer> = {};
 
-        for (const shaderId in visualization.shaders) {
-            if (!Object.prototype.hasOwnProperty.call(visualization.shaders, shaderId)) {
+        for (const [shaderId, sourceLayer] of Object.entries(shaderMap)) {
+            const layer = cloneJson(sourceLayer);
+            if (!layer || typeof layer !== "object") {
                 continue;
             }
 
-            const layer = cloneJson(visualization.shaders[shaderId]);
             const resolvedTiledImages = sanitizeArrayOfIntegers(layer.tiledImages);
 
             if (resolvedTiledImages.length < 1) {
@@ -325,7 +399,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 }
             }
 
-            if (resolvedTiledImages.length < 1) {
+            if (resolvedTiledImages.length < 1 && layer.type !== "group") {
                 if (viewer.world && viewer.world.getItemCount && viewer.world.getItemCount() > 0) {
                     resolvedTiledImages.push(0);
                 } else {
@@ -334,10 +408,25 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             }
 
             layer.tiledImages = resolvedTiledImages;
+
+            if (layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders)) {
+                layer.shaders = this.resolveStandaloneShaderMap(layer.shaders, dataReferenceMap, viewer);
+                if (!Array.isArray(layer.order)) {
+                    layer.order = Object.keys(layer.shaders);
+                }
+            }
+
             configuration[layer.id || shaderId] = layer;
         }
 
         return configuration;
+    }
+
+    protected resolveStandaloneConfiguration(input: VisualizationLayerSource): Record<string, VisualizationShaderGroupOrLayer> {
+        const viewer = this.activeViewer;
+        const visualization = this.normalizeVisualizationInput(input);
+        const dataReferenceMap = this.getResolvedDataReferenceMap(viewer);
+        return this.resolveStandaloneShaderMap(visualization.shaders || {}, dataReferenceMap, viewer);
     }
 
     protected cropAndScaleCanvas(sourceCanvas: HTMLCanvasElement, options: VisualizationViewportRenderOptions = {}): HTMLCanvasElement {

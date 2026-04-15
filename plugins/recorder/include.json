@@ -1,5 +1,5 @@
 {
     "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
-    "modules": ["recorder", "annotations"],
+    "modules": ["recorder-module", "annotations"],
     "permaLoad": true
 }

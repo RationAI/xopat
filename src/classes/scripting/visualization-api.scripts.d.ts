@@ -61,7 +61,7 @@ export interface SlideSourceOptions {
  */
 export interface BackgroundItem {
     dataReference: number | DataSpecification;
-    shaders?: VisualizationShaderLayer[];
+    shaders?: VisualizationShaderGroupOrLayer[];
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -87,7 +87,7 @@ export interface StandaloneBackgroundItem extends BackgroundItem {
  * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
  */
 export interface VisualizationItem {
-    shaders?: Record<string, VisualizationShaderLayer>;
+    shaders?: Record<string, VisualizationShaderGroupOrLayer>;
     protocol?: string;
     name?: string;
     goalIndex?: number;
@@ -104,6 +104,16 @@ export interface VisualizationShaderLayer {
     name?: string;
     [key: string]: any;
 }
+
+export interface VisualizationShaderGroup extends VisualizationShaderLayer {
+    type: "group";
+    // Group layers can nest additional shader layers
+    shaders?: Record<string, VisualizationShaderGroupOrLayer>;
+    // Group layers can override child execution order
+    order?: string[];
+}
+
+export type VisualizationShaderGroupOrLayer = VisualizationShaderGroup | VisualizationShaderLayer;
 
 export type VisualizationDocsControl = {
     name: string;
@@ -171,7 +181,7 @@ export type VisualizationFirstPassExtractOptions = {
 
 export type VisualizationLayerSource =
     | VisualizationItem
-    | Record<string, VisualizationShaderLayer>;
+    | Record<string, VisualizationShaderGroupOrLayer>;
 
 export interface VisualizationScriptApi extends ScriptApiObject {
     /**

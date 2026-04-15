@@ -1357,67 +1357,119 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 issues.push(`Visualization #${vizIndex} had an invalid shaders definition and was reset.`);
             }
 
-            const sanitizedShaders: Record<string, any> = {};
-            const seenIds = new Set<string>();
-            let layerIndex = 0;
-            for (const shaderKey in sourceShaders) {
-                if (!Object.prototype.hasOwnProperty.call(sourceShaders, shaderKey)) {
-                    continue;
-                }
-                const sourceLayer: any = sourceShaders[shaderKey];
-                if (!sourceLayer || typeof sourceLayer !== "object") {
-                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' is not an object.`);
-                    continue;
-                }
+            const sanitizeShaderMap = (
+                shaderMap: Record<string, any>,
+                siblingPath: string[] = []
+            ): { shaders: Record<string, any>; aliases: Map<string, string>; } => {
+                const sanitizedShaders: Record<string, any> = {};
+                const seenIds = new Set<string>();
+                const aliases = new Map<string, string>();
+                let layerIndex = 0;
 
-                const layer: any = $.extend(true, {}, sourceLayer);
-                if (typeof layer.type !== "string" || !layer.type) {
-                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' is missing a shader type.`);
-                    continue;
-                }
-                if (shaderMediator && typeof shaderMediator.getClass === "function" && !shaderMediator.getClass(layer.type)) {
-                    issues.push(`Visualization #${vizIndex} layer '${shaderKey}' uses unknown shader type '${layer.type}'.`);
-                    continue;
-                }
-
-                const layerId = sanitizeKey(layer.id || shaderKey || `layer_${vizIndex}_${layerIndex}`, `layer_${vizIndex}_${layerIndex}`);
-                if (seenIds.has(layerId)) {
-                    issues.push(`Visualization #${vizIndex} defines duplicate layer id '${layerId}'.`);
-                    continue;
-                }
-                seenIds.add(layerId);
-
-                if (typeof layer.name !== "string" || !layer.name) {
-                    layer.name = shaderKey || layer.type;
-                }
-
-                if (layer.dataReferences !== undefined) {
-                    if (!Array.isArray(layer.dataReferences)) {
-                        issues.push(`Visualization #${vizIndex} layer '${layerId}' has invalid dataReferences.`);
+                for (const shaderKey in shaderMap) {
+                    if (!Object.prototype.hasOwnProperty.call(shaderMap, shaderKey)) {
+                        continue;
+                    }
+                    const sourceLayer: any = shaderMap[shaderKey];
+                    const layerPath = siblingPath.concat([shaderKey]).join("/");
+                    if (!sourceLayer || typeof sourceLayer !== "object") {
+                        issues.push(`Visualization #${vizIndex} layer '${layerPath}' is not an object.`);
                         continue;
                     }
 
-                    const refs = layer.dataReferences.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
-                    if (refs.length !== layer.dataReferences.length) {
-                        issues.push(`Visualization #${vizIndex} layer '${layerId}' had non-integer dataReferences.`);
+                    const layer: any = $.extend(true, {}, sourceLayer);
+                    const hasNestedShaders = layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders);
+                    if ((!layer.type || typeof layer.type !== "string") && hasNestedShaders) {
+                        layer.type = "group";
                     }
-                    if (refs.some((entry: number) => entry >= data.length)) {
-                        issues.push(`Visualization #${vizIndex} layer '${layerId}' references unavailable data.`);
+                    if (typeof layer.type !== "string" || !layer.type) {
+                        issues.push(`Visualization #${vizIndex} layer '${layerPath}' is missing a shader type.`);
                         continue;
                     }
-                    layer.dataReferences = refs;
+                    if (shaderMediator && typeof shaderMediator.getClass === "function" && !shaderMediator.getClass(layer.type)) {
+                        issues.push(`Visualization #${vizIndex} layer '${layerPath}' uses unknown shader type '${layer.type}'.`);
+                        continue;
+                    }
+
+                    const fallbackId = `layer_${vizIndex}_${layerIndex}`;
+                    const layerId = sanitizeKey(layer.id || shaderKey || fallbackId, fallbackId);
+                    if (seenIds.has(layerId)) {
+                        issues.push(`Visualization #${vizIndex} defines duplicate layer id '${siblingPath.concat([layerId]).join("/")}'.`);
+                        continue;
+                    }
+                    seenIds.add(layerId);
+                    aliases.set(shaderKey, layerId);
+                    aliases.set(layerId, layerId);
+
+                    if (typeof layer.name !== "string" || !layer.name) {
+                        layer.name = shaderKey || layer.type;
+                    }
+
+                    if (layer.dataReferences !== undefined) {
+                        if (!Array.isArray(layer.dataReferences)) {
+                            issues.push(`Visualization #${vizIndex} layer '${siblingPath.concat([layerId]).join("/")}' has invalid dataReferences.`);
+                            continue;
+                        }
+
+                        const refs = layer.dataReferences.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
+                        if (refs.length !== layer.dataReferences.length) {
+                            issues.push(`Visualization #${vizIndex} layer '${siblingPath.concat([layerId]).join("/")}' had non-integer dataReferences.`);
+                        }
+                        if (refs.some((entry: number) => entry >= data.length)) {
+                            issues.push(`Visualization #${vizIndex} layer '${siblingPath.concat([layerId]).join("/")}' references unavailable data.`);
+                            continue;
+                        }
+                        layer.dataReferences = refs;
+                    }
+
+                    if (Array.isArray(layer.tiledImages)) {
+                        layer.tiledImages = layer.tiledImages.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
+                    }
+
+                    if (layer.shaders !== undefined) {
+                        const nestedShaders = layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders)
+                            ? layer.shaders
+                            : {};
+                        if (nestedShaders !== layer.shaders) {
+                            issues.push(`Visualization #${vizIndex} group '${siblingPath.concat([layerId]).join("/")}' had an invalid nested shaders definition and was reset.`);
+                        }
+                        const nestedResult = sanitizeShaderMap(nestedShaders, siblingPath.concat([layerId]));
+                        layer.shaders = nestedResult.shaders;
+
+                        if (Array.isArray(layer.order)) {
+                            const seenOrder = new Set<string>();
+                            const normalizedOrder: string[] = [];
+                            for (const entry of layer.order) {
+                                if (typeof entry !== "string" || !entry) {
+                                    continue;
+                                }
+                                const mapped = nestedResult.aliases.get(entry) || sanitizeKey(entry, entry);
+                                if (layer.shaders?.[mapped] && !seenOrder.has(mapped)) {
+                                    normalizedOrder.push(mapped);
+                                    seenOrder.add(mapped);
+                                }
+                            }
+                            for (const childId of Object.keys(layer.shaders)) {
+                                if (!seenOrder.has(childId)) {
+                                    normalizedOrder.push(childId);
+                                }
+                            }
+                            layer.order = normalizedOrder;
+                        }
+                    }
+
+                    layer.id = layerId;
+                    sanitizedShaders[layerId] = layer;
+                    layerIndex++;
                 }
 
-                if (Array.isArray(layer.tiledImages)) {
-                    layer.tiledImages = layer.tiledImages.filter((entry: any) => Number.isInteger(entry) && entry >= 0);
-                }
+                return {
+                    shaders: sanitizedShaders,
+                    aliases,
+                };
+            };
 
-                layer.id = layerId;
-                sanitizedShaders[layerId] = layer;
-                layerIndex++;
-            }
-
-            visualization.shaders = sanitizedShaders;
+            visualization.shaders = sanitizeShaderMap(sourceShaders).shaders;
             sanitizedVisualizations.push(visualization as VisualizationItem);
         }
 
@@ -1519,6 +1571,40 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (spec == null) return undefined;
             return spec && typeof spec === "object" && spec.dataID ? spec.dataID : spec;
         };
+        const forEachVisualizationShader = (
+            shaderMap: Record<string, any> | undefined,
+            callback: (shader: any, shaderId: string, path: string[]) => void,
+            path: string[] = []
+        ) => {
+            if (!shaderMap || typeof shaderMap !== "object") {
+                return;
+            }
+            for (const [shaderId, shader] of Object.entries(shaderMap)) {
+                if (!shader || typeof shader !== "object") {
+                    continue;
+                }
+                const nextPath = path.concat([shaderId]);
+                callback(shader, shaderId, nextPath);
+                if (shader.shaders && typeof shader.shaders === "object" && !Array.isArray(shader.shaders)) {
+                    forEachVisualizationShader(shader.shaders, callback, nextPath);
+                }
+            }
+        };
+        const forEachNestedShaderLayer = (
+            layer: any,
+            callback: (shader: any, path: string[]) => void,
+            path: string[] = []
+        ) => {
+            if (!layer || typeof layer !== "object") {
+                return;
+            }
+            callback(layer, path);
+            if (layer.shaders && typeof layer.shaders === "object" && !Array.isArray(layer.shaders)) {
+                for (const [childId, child] of Object.entries(layer.shaders)) {
+                    forEachNestedShaderLayer(child, callback, path.concat([childId]));
+                }
+            }
+        };
         const collectViewerReferencedData = (snapshot: any, viewerIndex: number) => {
             const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
             const visualizations = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
@@ -1534,17 +1620,19 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
             if (Array.isArray(bgEntry?.shaders)) {
                 for (const shader of bgEntry.shaders) {
-                    for (const ref of shader?.dataReferences || []) {
-                        refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, ref)));
-                    }
+                    forEachNestedShaderLayer(shader, (entry) => {
+                        for (const ref of entry?.dataReferences || []) {
+                            refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, ref)));
+                        }
+                    });
                 }
             }
             if (vizEntry?.shaders) {
-                for (const shader of Object.values(vizEntry.shaders as Record<string, any>)) {
+                forEachVisualizationShader(vizEntry.shaders as Record<string, any>, (shader) => {
                     for (const ref of shader?.dataReferences || []) {
                         refs.add(dataIdFromSpec(dataSpecFromRef(dataSet, ref)));
                     }
-                }
+                });
             }
             return Array.from(refs);
         };
@@ -1563,23 +1651,37 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     id: bgEntry.id,
                     protocol: bgEntry.protocol,
                     dataReference: dataIdFromSpec(dataSpecFromRef(dataSet, bgEntry.dataReference)),
-                    shaders: Array.isArray(bgEntry.shaders) ? bgEntry.shaders.map((shader: any) => ({
-                        id: shader?.id,
-                        type: shader?.type,
-                        dataReferences: Array.isArray(shader?.dataReferences)
-                            ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
-                            : [],
-                    })) : [],
+                    shaders: Array.isArray(bgEntry.shaders) ? bgEntry.shaders.flatMap((shader: any, index: number) => {
+                        const layers: Array<{ id: any; type: any; dataReferences: any[]; path: string[]; }> = [];
+                        forEachNestedShaderLayer(shader, (entry, path) => {
+                            layers.push({
+                                id: entry?.id,
+                                type: entry?.type,
+                                dataReferences: Array.isArray(entry?.dataReferences)
+                                    ? entry.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
+                                    : [],
+                                path: path.length ? path : [String(index)],
+                            });
+                        }, [String(index)]);
+                        return layers;
+                    }) : [],
                 } : null,
                 visualization: vizEntry ? {
                     protocol: vizEntry.protocol,
-                    shaders: Object.entries(vizEntry.shaders || {}).map(([shaderId, shader]: [string, any]) => ({
-                        id: shader?.id || shaderId,
-                        type: shader?.type,
-                        dataReferences: Array.isArray(shader?.dataReferences)
-                            ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
-                            : [],
-                    })),
+                    shaders: (() => {
+                        const layers: Array<{ id: string; type: any; dataReferences: any[]; path: string[]; }> = [];
+                        forEachVisualizationShader(vizEntry.shaders || {}, (shader, shaderId, path) => {
+                            layers.push({
+                                id: shader?.id || shaderId,
+                                type: shader?.type,
+                                dataReferences: Array.isArray(shader?.dataReferences)
+                                    ? shader.dataReferences.map((ref: number) => dataIdFromSpec(dataSpecFromRef(dataSet, ref)))
+                                    : [],
+                                path,
+                            });
+                        });
+                        return layers;
+                    })(),
                 } : null,
             });
         };
@@ -1963,16 +2065,18 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 refs.add(bgEntry.dataReference);
             }
             for (const shader of bgEntry?.shaders || []) {
-                for (const ref of shader?.dataReferences || []) {
-                    if (Number.isInteger(ref)) refs.add(ref);
-                }
+                forEachNestedShaderLayer(shader, (entry) => {
+                    for (const ref of entry?.dataReferences || []) {
+                        if (Number.isInteger(ref)) refs.add(ref);
+                    }
+                });
             }
             if (vizEntry?.shaders) {
-                for (const shader of Object.values(vizEntry.shaders as Record<string, any>)) {
+                forEachVisualizationShader(vizEntry.shaders as Record<string, any>, (shader) => {
                     for (const ref of shader?.dataReferences || []) {
                         if (Number.isInteger(ref)) refs.add(ref);
                     }
-                }
+                });
             }
             return Array.from(refs.values());
         };
@@ -2187,47 +2291,46 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
             // (C1) Background shaders, including possible extra dataReferences
             openedBase.forEach((bgRef: BackgroundConfig, bgIndex: number) => {
-                let bgShaders: VisualizationShaderLayer[] | undefined = bgRef.shaders;
+                let bgShaders: VisualizationShaderGroupOrLayer[] | undefined = bgRef.shaders;
                 if (!bgShaders) {
                     bgShaders = [{ type: "identity" }];
                 } else if (!Array.isArray(bgShaders)) {
                     console.warn("Invalid shaders for background: array required.", bgIndex, bgRef, bgShaders);
-                    bgShaders = [bgShaders as VisualizationShaderLayer];
+                    bgShaders = [bgShaders as VisualizationShaderGroupOrLayer];
                 }
 
                 let count = 0;
-                // todo bg shaders are not syntactically validated, add checks at the open top level
-                for (const shaderCfg of bgShaders) {
-                    shaderCfg.id = count < 1 ? bgRef.id : `${bgRef.id}-${count}`;
-
+                const resolveBackgroundShaderLayer = (shaderCfg: any) => {
                     const hasExplicitRefs = Array.isArray(shaderCfg.dataReferences) && shaderCfg.dataReferences.length > 0;
 
                     if (!hasExplicitRefs) {
-                        // DEFAULT:
-                        //  - No dataReferences specified on shader
-                        //  - Use the base background pyramid as the only tiled image
-                        //  - And expose the numeric reference if available
                         const dataIndex = bgRef.dataReference as number;
                         shaderCfg.tiledImages = [uniqueOsdWorldIndexes.get(dataIndex) ?? -1];
                         shaderCfg.name = shaderCfg.name || bgRef.name || BackgroundConfig.data(bgRef);
-
                     } else {
-                        // ADVANCED:
-                        //  - Background shader has its own dataReferences
-                        //  - Each dataReference is opened exactly once (shared with other shaders)
                         shaderCfg.tiledImages = [];
                         shaderCfg.name = shaderCfg.name || UTILITIES.nameFromBGOrIndex(shaderCfg.dataReferences![0]);
 
                         for (const dataIndex of shaderCfg.dataReferences!) {
                             if (!uniqueOsdWorldIndexes.has(dataIndex)) {
                                 uniqueOsdWorldIndexes.set(dataIndex, toOpen.length);
-                                // todo multi support?
                                 toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex]));
                                 openedSpecOrder.push(cfg.data[dataIndex]);
                             }
                             shaderCfg.tiledImages.push(uniqueOsdWorldIndexes.get(dataIndex) ?? -1);
                         }
                     }
+
+                    if (shaderCfg.shaders && typeof shaderCfg.shaders === "object" && !Array.isArray(shaderCfg.shaders)) {
+                        for (const childShaderCfg of Object.values(shaderCfg.shaders)) {
+                            resolveBackgroundShaderLayer(childShaderCfg);
+                        }
+                    }
+                };
+                // todo bg shaders are not syntactically validated, add checks at the open top level
+                for (const shaderCfg of bgShaders) {
+                    shaderCfg.id = count < 1 ? bgRef.id : `${bgRef.id}-${count}`;
+                    resolveBackgroundShaderLayer(shaderCfg);
                     renderOutput[shaderCfg.id] = shaderCfg;
                     count++;
                 }
@@ -2236,15 +2339,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             const firstVizIndex = toOpen.length;
 
             // (C2) Visualization shaders and their dataReferences
-            let shaderConfigMap: Record<string, VisualizationShaderLayer> = {};
+            let shaderConfigMap: Record<string, VisualizationShaderGroupOrLayer> = {};
 
             if (renderingWithWebGL && activeV) {
                 APPLICATION_CONTEXT.prepareRendering();
                 shaderConfigMap = activeV.shaders || {};
 
-                for (const shaderId in shaderConfigMap) {
-                    const vizShaderCfg = shaderConfigMap[shaderId];
-                    if (!vizShaderCfg) continue;
+                forEachVisualizationShader(shaderConfigMap as Record<string, any>, (vizShaderCfg, shaderId) => {
                     vizShaderCfg.tiledImages = [];
 
                     const dataRefs = vizShaderCfg.dataReferences || [];
@@ -2263,7 +2364,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
                         vizShaderCfg.tiledImages.push(uniqueOsdWorldIndexes.get(dataIndex) ?? -1);
                     }
-                }
+                });
 
                 Object.assign(renderOutput, shaderConfigMap);
             }

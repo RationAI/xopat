@@ -41,14 +41,20 @@ export class ShaderLayer extends BaseComponent {
         options = super(options).options;
         this.cfg = options.shaderConfig;
         this.layer = options.shaderLayer;
+        this.htmlContext = options.htmlContext || {};
         this.availableShaders = options.availableShaders || [];
         this.cb = options.callbacks || {};
 
+        this.hasChildren = !!(this.htmlContext.hasChildren || (this.cfg?.type === "group" && this.cfg?.shaders));
+        this.isGroup = this.cfg?.type === "group" || this.hasChildren;
+        this.depth = Number.isInteger(this.htmlContext.depth) ? this.htmlContext.depth : 0;
+        this.isGroupChild = !!this.htmlContext.isGroupChild;
+        this.groupOpen = this.cfg._uiGroupOpen ?? true;
         this.fixed = !!this.cfg.fixed;
         this.visible = this.cfg.visible !== false;
         this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "blend" | "clip"
         this.blendMode = this.cfg.params?.use_blend
-            || (OpenSeadragon.WebGLModule?.BLEND_MODE?.[0] ?? "normal");
+            || (OpenSeadragon.WebGLModule?.BLEND_MODE?.[0] ?? "mask");
         this.availableBlendModes = OpenSeadragon.FlexRenderer.BLEND_MODE;
         // todo dirty attachment to the config, but it's the only way to persist the state for now
         //    (underscore props do not export at least)
@@ -59,16 +65,22 @@ export class ShaderLayer extends BaseComponent {
         this.shortTitle = this._shortenMiddle(this.title, 32);
         this.filters = options.availableFilters || {};
         this.cacheApplied = this.cfg._cacheApplied;
+        this.childrenContainerId = this.id + "-children";
+        this.bodyContainerId = this.id + "-body";
+        this.blendSelectId = this.id + "-blend-select";
+        this.compactIndent = Math.min(this.depth, 4) * 8;
 
         // card styling
         this.classMap.base =
-            "relative shader-part card bg-base-200/90 shadow-sm mb-2 pt-1 pb-2 border border-base-300";
+            "relative shader-part card bg-base-200/90 shadow-sm mb-2 pt-1 border border-base-300";
         this.classMap.resizable = "resizable";
         this.classMap.dim = this.visible ? "" : "brightness-50";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[6px]" : "";
         this.classMap.clipActive = this.mode === "clip"
             ? "ring-2 ring-offset-1 ring-accent/60"
             : "";
+        this.classMap.group = this.isGroup ? "shader-part-group bg-base-100/95" : "";
+        this.classMap.groupChild = this.isGroupChild ? "ml-2" : "";
     }
 
     // ---- small helpers
@@ -116,7 +128,7 @@ export class ShaderLayer extends BaseComponent {
     }
 
     _buildRenderTypeSelector() {
-        if (this.fixed) return null;  // no shader selection when fixed
+        if (this.fixed || this.isGroup) return null;  // group type is structural, not user-switchable
 
         this.renderTypeSelect = new Select({
             id: this.id + "-change-render-type",
@@ -209,6 +221,41 @@ export class ShaderLayer extends BaseComponent {
         );
     }
 
+    _toggleGroupBody() {
+        if (!this.hasChildren) return;
+        this.groupOpen = !this.groupOpen;
+        this.cfg._uiGroupOpen = this.groupOpen;
+
+        const body = document.getElementById(this.bodyContainerId);
+        if (body) {
+            body.classList.toggle("hidden", !this.groupOpen);
+        }
+
+        const btn = document.getElementById(this.id + "-group-toggle");
+        if (btn) {
+            btn.classList.toggle("rotate-90", this.groupOpen);
+        }
+    }
+
+    _buildGroupToggle() {
+        if (!this.hasChildren) return null;
+
+        return button(
+            {
+                id: this.id + "-group-toggle",
+                type: "button",
+                class:
+                    "btn btn-ghost btn-xs min-h-0 h-5 px-1 transition-transform " +
+                    (this.groupOpen ? "rotate-90" : ""),
+                title: this.groupOpen
+                    ? ($.t("common.Collapse") || "Collapse")
+                    : ($.t("common.Expand") || "Expand"),
+                onclick: () => this._toggleGroupBody()
+            },
+            new FAIcon({ name: "fa-chevron-right" }).create()
+        );
+    }
+
     _buildHeader() {
         const clipHint = this.mode === "clip"
             ? span(
@@ -225,6 +272,7 @@ export class ShaderLayer extends BaseComponent {
             { class: "px-2 pb-1 flex flex-col gap-0.5 truncate max-w-full select-none" },
             div(
                 { class: "flex items-center gap-2" },
+                this._buildGroupToggle(),
                 this._buildHeaderLeft(),
                 this._buildHeaderBadges(),
             ),
@@ -286,6 +334,13 @@ export class ShaderLayer extends BaseComponent {
     _setBlendMode(blend) {
         this.blendMode = blend;
         this.cb.onChangeBlend?.(this.mode, blend);
+    }
+
+    _syncBlendSelect() {
+        const selectEl = document.getElementById(this.blendSelectId);
+        if (selectEl) {
+            selectEl.value = this.blendMode;
+        }
     }
 
     // ---- advanced / blending section
@@ -362,6 +417,7 @@ export class ShaderLayer extends BaseComponent {
                 modeButtons,
                 select(
                     {
+                        id: this.blendSelectId,
                         class: "select select-bordered select-xs w-full max-w-xs",
                         value: this.blendMode,
                         disabled: blendDisabled ? "disabled" : undefined,
@@ -492,6 +548,52 @@ export class ShaderLayer extends BaseComponent {
         );
     }
 
+    _buildMainControls() {
+        const htmlControls = this.layer?.htmlControls
+            ? this.layer.htmlControls(html =>
+                `<div class="shader-controls-row w-full px-2 pb-1">${html}</div>`
+            )
+            : "";
+
+        const hasHtmlControls = typeof htmlControls === "string"
+            ? htmlControls.trim().length > 0
+            : !!htmlControls;
+        const hasFilters = Object.keys(this.filters || {}).length > 0;
+
+        if (!hasHtmlControls && !hasFilters) {
+            return null;
+        }
+
+        return div(
+            { class: "flex flex-col flex-grow min-w-0" },
+            hasHtmlControls
+                ? new RawHtml(
+                    { extraClasses: { flex: "flex-1 min-w-0" } },
+                    htmlControls
+                ).create()
+                : null,
+            hasFilters ? this._buildFilters() : null,
+        );
+    }
+
+    _buildChildrenContainer() {
+        if (!this.hasChildren) return null;
+
+        return div(
+            {
+                id: this.childrenContainerId,
+                "data-parent-id": this.layer.id,
+                "data-reverse-order": "true",
+                class:
+                    "shader-group-children flex flex-col"
+            }
+        );
+    }
+
+    getChildrenContainerId() {
+        return this.childrenContainerId;
+    }
+
     // ---- main render
 
     create() {
@@ -527,41 +629,61 @@ export class ShaderLayer extends BaseComponent {
             new FAIcon({ name: "fa-chevron-down" }).create()
         );
 
-        const mainControls = div(
-            { class: "flex flex-col flex-grow" },
-            new RawHtml(
-                { extraClasses: { flex: "flex-1" } },
-                this.layer.htmlControls(html =>
-                    `<div class="shader-controls-row w-full px-2 pb-1">${html}</div>`
+        const mainControls = this._buildMainControls();
+        const hasUtilityRail = !this.hasChildren;
+        const bodyContent = [];
+
+        if (mainControls || hasUtilityRail) {
+            bodyContent.push(
+                div(
+                    {
+                        class:
+                            "non-draggable flex flex-row items-stretch border-t border-base-300/60 pt-1 mt-1 min-w-0"
+                    },
+                    hasUtilityRail
+                        ? div(
+                            {
+                                class:
+                                    "non-draggable flex justify-between flex-col items-center gap-1 pt-1 pb-1 px-1 mb-2"
+                            },
+                            moveUpBtn,
+                            moveDownBtn,
+                            this._buildCacheIcon(),
+                            this._buildCachePopup()
+                        )
+                        : div(
+                            {
+                                class:
+                                    "non-draggable flex flex-col items-center gap-1 pt-1 pb-1 px-1"
+                            },
+                            this._buildCacheIcon(),
+                            this._buildCachePopup()
+                        ),
+                    mainControls
                 )
-            ).create(),
-            this._buildFilters(),
-        );
+            );
+        }
+
+        if (this.hasChildren) {
+            bodyContent.push(this._buildChildrenContainer());
+        }
 
         return div(
             {
                 ...this.commonProperties,
                 "data-id": this.layer.id,
-                class: `${this.classState.val}`
+                "data-depth": String(this.depth),
+                class: `${this.classState.val}`,
+                style: this.compactIndent > 0 ? `margin-left:${this.compactIndent}px;` : undefined
             },
             this._buildHeader(),
             this._buildBlendControls(),
             div(
                 {
-                    class:
-                        "non-draggable flex flex-row items-stretch border-t border-base-300/60 pt-1 mt-1"
+                    id: this.bodyContainerId,
+                    class: this.groupOpen || !this.hasChildren ? "" : "hidden"
                 },
-                div(
-                    {
-                        class:
-                            "non-draggable flex justify-between flex-col items-center gap-1 pt-1 pb-1 px-1 mb-2"
-                    },
-                    moveUpBtn,
-                    moveDownBtn,
-                    this._buildCacheIcon(),
-                    this._buildCachePopup()
-                ),
-                mainControls
+                ...bodyContent
             ),
         );
     }
@@ -577,6 +699,7 @@ export class ShaderLayer extends BaseComponent {
         if (this.renderTypeSelect) {
             this.renderTypeSelect.setExtraProperty("value", this.type);
         }
+        this._syncBlendSelect();
 
         this.setClass(
             "clipNudge",

@@ -4,7 +4,6 @@ import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptPro
 import {XOpatScriptingApi} from "./abstract-api";
 
 export class XOpatApplicationScriptApi extends XOpatScriptingApi implements ApplicationScriptApi {
-
     static ScriptApiMetadata: ScriptApiMetadata<XOpatApplicationScriptApi> = {
         dtypesSource: {
             kind: "resolve",
@@ -119,13 +118,7 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
                     index: activeVizIndex,
                     name: activeViz.name ?? null,
                     goalIndex: activeViz.goalIndex,
-                    shaders: Object.entries(activeViz.shaders || {}).map(([id, shader]: [string, any]) => ({
-                        id: shader?.id ?? id,
-                        name: shader?.name,
-                        type: shader?.type,
-                        dataReferences: shader?.dataReferences,
-                        tiledImages: shader?.tiledImages,
-                    })),
+                    shaders: activeViz.shaders || {},
                 } : null,
                 worldItems,
             };

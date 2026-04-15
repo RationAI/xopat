@@ -13,7 +13,7 @@ export class BackgroundConfig implements BackgroundItem {
     // TS Fails to infer from BackgroundItem and the Object.assign(...) call below.
     declare dataReference: number | DataID;
     declare id: string;
-    shaders?: VisualizationShaderLayer[];
+    shaders?: VisualizationShaderGroupOrLayer[];
     protocol?: string;
     name?: string;
     goalIndex?: number;

@@ -495,19 +495,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
-        return `${x}_${y}/${level}/${this.tilesUrl}`;
-    }
-
-    getTileCacheDataAsContext2D(cacheObject) {
-        //hotfix: in case the cacheObject._data object arrives as array, fix it (webgl drawing did not get called)
-        //todo will be replaced by the cache overhaul in OpenSeadragon
-        if (!cacheObject._renderedContext) {
-            if (Array.isArray(cacheObject._data)) {
-                cacheObject._data = cacheObject._data[0];
-            } else if (Array.isArray(cacheObject.data)) {
-                cacheObject.data = cacheObject.data[0];
-            }
-        }
-        return super.getTileCacheDataAsContext2D(cacheObject);
+        return `${x}_${y}/${level}/${this.fileId}`;
     }
 };

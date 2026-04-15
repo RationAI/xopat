@@ -28,6 +28,7 @@ export class ShaderSideMenu extends BaseComponent {
         this.visualizationSelect = null;
         this.selectedVisualization = "";
         this.shaderNodeCells = {};
+        this.shaderChildrenContainers = {};
         this.opacity = typeof opts.opacity === "number" ? opts.opacity : 1;
         this.classMap["base"] = "p-0 flex flex-col max-h-full"
 
@@ -98,9 +99,25 @@ export class ShaderSideMenu extends BaseComponent {
 
         this._refreshOrder = (node) => {
             const listItems = Array.prototype.map.call(node.children, child => child.dataset.id);
-            listItems.reverse();
-            // todo no change on the navigator...
-            viewer.drawer.renderer.setShaderLayerOrder(listItems);
+            const shouldReverse = node.dataset.reverseOrder !== "false";
+            if (shouldReverse) {
+                listItems.reverse();
+            }
+
+            const parentShaderId = node.dataset.parentId;
+            if (parentShaderId) {
+                const parentShader = viewer.drawer.renderer.getShaderLayer(parentShaderId);
+                const parentConfig = parentShader?.getConfig?.();
+                if (!parentConfig) {
+                    console.error(`Invalid parent group id '${parentShaderId}' in _refreshOrder`);
+                    return;
+                }
+                parentConfig.order = listItems;
+                parentShader.shaderLayerOrder = [...listItems];
+            } else {
+                // todo no change on the navigator...
+                viewer.drawer.renderer.setShaderLayerOrder(listItems);
+            }
             viewer.drawer.rebuild();
         };
     }
@@ -209,7 +226,7 @@ export class ShaderSideMenu extends BaseComponent {
         const panelImages = div({ id: this.options.id + "-panel-images", class: "mt-2" });
 
         const header = this._buildHeaderRow();
-        this.layerContainer = div({ class: "clear-both mt-2" });
+        this.layerContainer = div({ class: "clear-both mt-2", "data-reverse-order": "true" });
         const blendingEq = div({ id: this.options.id + "-blending-equation" });
         const content = div(
             { class: "select-none" },
@@ -226,15 +243,38 @@ export class ShaderSideMenu extends BaseComponent {
     }
 
     // ----- external API -----
+    _normalizeVisualizationEntry(item, index) {
+        if (item && (item.value !== undefined || item.label !== undefined)) {
+            return {
+                value: String(item.value ?? index),
+                label: String(item.label ?? item.name ?? item.value ?? $.t('main.shaders.defaultTitle'))
+            };
+        }
+
+        if (item && typeof item === "object") {
+            return {
+                value: String(item.index ?? index),
+                label: String(item.name ?? item.label ?? $.t('main.shaders.defaultTitle'))
+            };
+        }
+
+        return {
+            value: String(index),
+            label: String(item ?? $.t('main.shaders.defaultTitle'))
+        };
+    }
+
     updateVisualizationList(shaders, selectedValue) {
-        this.visualizations = shaders || [];
-        this.selectedVisualization = selectedValue ?? (this.visualizations[0]?.value ?? "");
+        this.visualizations = (shaders || []).map((shader, index) => this._normalizeVisualizationEntry(shader, index));
+        this.selectedVisualization = selectedValue !== undefined && selectedValue !== null
+            ? String(selectedValue)
+            : (this.visualizations[0]?.value ?? "");
         const sel = this.visualizationSelect;
         if (sel) {
             sel.innerHTML = "";
             this.visualizations.forEach((s) => {
                 const opt = document.createElement("option");
-                opt.value = s.value;
+                opt.value = String(s.value);
                 opt.textContent = s.label;
                 sel.appendChild(opt);
             });
@@ -250,7 +290,7 @@ export class ShaderSideMenu extends BaseComponent {
      * Modified by Jiří
      */
     _enableDragSort(viewer) {
-        draggable(this.layerContainer, item => {
+        const bindContainer = (container) => draggable(container, item => {
             const id = item.dataset.id;
             window.DropDown.bind(item, () => {
                 const currentMask = viewer.drawer.getOverriddenShaderConfig(id)?.params.use_mode;
@@ -283,6 +323,11 @@ export class ShaderSideMenu extends BaseComponent {
         }, undefined, e => {
             this._refreshOrder(e.target.parentNode);
         });
+
+        bindContainer(this.layerContainer);
+        this.layerContainer
+            .querySelectorAll(".shader-group-children")
+            .forEach(container => bindContainer(container));
     }
 
     /**
@@ -298,9 +343,79 @@ export class ShaderSideMenu extends BaseComponent {
     clearLayers() {
         this.layerContainer.innerHTML = "";
         this.shaderNodeCells = {};
+        this.shaderChildrenContainers = {};
+    }
+
+    _findShaderLayerById(shaderMap, shaderId) {
+        if (!shaderMap || !shaderId) {
+            return null;
+        }
+
+        for (const [id, shader] of Object.entries(shaderMap)) {
+            if (!shader) {
+                continue;
+            }
+
+            if (id === shaderId || shader.id === shaderId) {
+                return shader;
+            }
+
+            const nested = this._findShaderLayerById(shader.shaderLayers, shaderId);
+            if (nested) {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
+    _resolveShaderLayer(viewer, shaderLayer, htmlContext = {}) {
+        const renderer = viewer?.drawer?.renderer;
+        if (!renderer || !shaderLayer?.id) {
+            return null;
+        }
+
+        const allShaders = renderer.getAllShaders?.() || {};
+
+        if (!htmlContext.parentShaderId) {
+            return renderer.getShaderLayer(shaderLayer.id)
+                || this._findShaderLayerById(allShaders, shaderLayer.id);
+        }
+
+        const parentShader = this._findShaderLayerById(allShaders, htmlContext.parentShaderId);
+        if (!parentShader?.shaderLayers) {
+            return this._findShaderLayerById(allShaders, shaderLayer.id);
+        }
+
+        return parentShader.shaderLayers[shaderLayer.id]
+            || this._findShaderLayerById(parentShader.shaderLayers, shaderLayer.id)
+            || this._findShaderLayerById(allShaders, shaderLayer.id);
+    }
+
+    _resolveShaderConfig(shader, shaderLayer) {
+        if (!shader?.getConfig) {
+            return null;
+        }
+
+        let cfg = null;
+        try {
+            cfg = shader.getConfig(shaderLayer?.id);
+        } catch (e) {
+            cfg = null;
+        }
+
+        if (!cfg) {
+            try {
+                cfg = shader.getConfig();
+            } catch (e) {
+                cfg = null;
+            }
+        }
+
+        return cfg;
     }
     
-    createLayer(viewer, shaderLayer, shaderConfig) {
+    createLayer(viewer, shaderLayer, shaderConfig, htmlContext = {}) {
         // map the mediator list to [{type, name}]
         const availableShaders = OpenSeadragon
             .FlexRenderer
@@ -310,6 +425,7 @@ export class ShaderSideMenu extends BaseComponent {
 
         // map filters if you want editable rows (optional)
         const filters = {};
+        shaderConfig.params = shaderConfig.params || {};
         for (let key in OpenSeadragon.FlexRenderer.ShaderLayer.filters) {
             if (shaderConfig.params.hasOwnProperty(key)) {
                 filters[key] = {
@@ -323,6 +439,7 @@ export class ShaderSideMenu extends BaseComponent {
             id: `${shaderLayer.id}-shader`,
             shaderLayer,
             shaderConfig: shaderConfig,
+            htmlContext,
             availableFilters: filters,
             availableShaders,
             callbacks: {
@@ -338,12 +455,16 @@ export class ShaderSideMenu extends BaseComponent {
 
                 // NEW: explicit mode change (no toggle, and we also keep blend mode)
                 onChangeMode: (mode, blend) => {
-                    const shader = viewer.drawer.renderer.getShaderLayer(shaderLayer.id);
+                    const shader = this._resolveShaderLayer(viewer, shaderLayer, htmlContext);
                     if (!shader) {
                         console.error(`Invalid layer id '${shaderLayer.id}' in onChangeMode`);
                         return;
                     }
-                    const cfg = shader.getConfig(shaderLayer.id);
+                    const cfg = this._resolveShaderConfig(shader, shaderLayer);
+                    if (!cfg) {
+                        console.error(`Invalid config for layer id '${shaderLayer.id}' in onChangeMode`);
+                        return;
+                    }
 
                     cfg.params = cfg.params || {};
                     cfg.params.use_mode = mode;
@@ -357,12 +478,16 @@ export class ShaderSideMenu extends BaseComponent {
 
                 // NEW: explicit blend change; keep current mode
                 onChangeBlend: (mode, blend) => {
-                    const shader = viewer.drawer.renderer.getShaderLayer(shaderLayer.id);
+                    const shader = this._resolveShaderLayer(viewer, shaderLayer, htmlContext);
                     if (!shader) {
                         console.error(`Invalid layer id '${shaderLayer.id}' in onChangeBlend`);
                         return;
                     }
-                    const cfg = shader.getConfig(shaderLayer.id);
+                    const cfg = this._resolveShaderConfig(shader, shaderLayer);
+                    if (!cfg) {
+                        console.error(`Invalid config for layer id '${shaderLayer.id}' in onChangeBlend`);
+                        return;
+                    }
 
                     cfg.params = cfg.params || {};
                     if (mode) {
@@ -379,8 +504,8 @@ export class ShaderSideMenu extends BaseComponent {
                 onClearCache: () =>
                     UTILITIES.clearShaderCache(shaderLayer.id),
                 onReorder: (dir) => {
-                    const parent = this.layerContainer;
                     const node = this.shaderNodeCells[shaderLayer.id];
+                    const parent = node?.parentElement;
                     if (!parent || !node) return;
 
                     if (dir === "up") {
@@ -397,8 +522,24 @@ export class ShaderSideMenu extends BaseComponent {
         });
 
         const node = uiLayer.create();
-        this.layerContainer.prepend(node);
-        //uiLayer.prependedTo(this.layerContainer);
+        const parentContainer = htmlContext.parentShaderId
+            ? this.shaderChildrenContainers[htmlContext.parentShaderId]
+            : this.layerContainer;
+
+        if (parentContainer) {
+            if (htmlContext.parentShaderId) {
+                parentContainer.prepend(node);
+            } else {
+                this.layerContainer.prepend(node);
+            }
+        } else {
+            this.layerContainer.prepend(node);
+        }
+
+        if (htmlContext.hasChildren) {
+            this.shaderChildrenContainers[shaderLayer.id] = document.getElementById(uiLayer.getChildrenContainerId());
+        }
+
         this.shaderNodeCells[shaderLayer.id] = node;
     }
 
