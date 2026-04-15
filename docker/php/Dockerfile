@@ -45,7 +45,6 @@ FROM viewer-build-deps AS viewer-build
 RUN cd /tmp \
     && git clone https://github.com/RationAI/openseadragon.git \
     && cd openseadragon \
-    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
     && npm ci
 
 ENV XO_REPO_ROOT=/tmp/xopat

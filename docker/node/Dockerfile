@@ -5,7 +5,6 @@ FROM node:20 AS viewer-build
 WORKDIR /tmp
 RUN git clone https://github.com/RationAI/openseadragon.git \
     && cd openseadragon \
-    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
     && npm i \
     && cd ..
 
