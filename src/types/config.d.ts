@@ -16,8 +16,8 @@ type XOpatClientConfig = {
 };
 
 type ViewportSetup = {
-    zoomLevel?: number;
-    point?: { x: number; y: number };
+    zoomLevel: number;
+    point: { x: number; y: number };
     rotation?: number;
 }
 
@@ -32,8 +32,8 @@ type XOpatSetup = {
     statusBar?: boolean | null;
     background?: string | null;
     viewport?: ViewportSetup | ViewportSetup[] | null;
-    activeBackgroundIndex?: number | null;
-    activeVisualizationIndex?: number | null;
+    activeBackgroundIndex?: number | number[] | null;
+    activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
@@ -45,6 +45,7 @@ type XOpatSetup = {
     maxImageCacheCount?: number | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;
+    fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;

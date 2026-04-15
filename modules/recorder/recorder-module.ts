@@ -980,7 +980,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     private _mergeRecordedBackgroundShaders(
         currentBackground: BackgroundItem,
         recordedBackground: BackgroundItem,
-    ): VisualizationShaderLayer[] | undefined {
+    ): VisualizationShaderGroupOrLayer[] | undefined {
         const currentShaders = Array.isArray(currentBackground.shaders) ? currentBackground.shaders : [];
         const recordedShaders = Array.isArray(recordedBackground.shaders) ? recordedBackground.shaders : [];
         if (!recordedShaders.length) return currentShaders.length ? cloneValue(currentShaders) : undefined;

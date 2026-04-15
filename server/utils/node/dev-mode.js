@@ -12,7 +12,7 @@ function run(name, cmd, args) {
 
 let serverProc;
 function startServer() {
-    serverProc = run("SERVER", "node", ["index.js"]);
+    serverProc = run("SERVER", "node", ["index.js", "--dev"]);
 }
 function restartServer() {
     if (serverProc && !serverProc.killed) serverProc.kill();

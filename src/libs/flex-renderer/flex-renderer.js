@@ -2172,6 +2172,17 @@
         }
 
         /**
+         * Optional machine-readable documentation descriptor.
+         * External shader registrations can override this as either:
+         *  - static docs() { return {...}; }
+         *  - static docs = {...}
+         * @returns {object|null}
+         */
+        static docs() {
+            return null;
+        }
+
+        /**
          * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
          * @returns {[channelSettings]}
          */
@@ -3051,6 +3062,7 @@ $.FlexRenderer.UIControls = class {
         decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
                                                 gl[glUniformFunName()](...) can pass to GPU
         glType: //what's the type of this parameter wrt. GLSL: int? vec3?
+        docs: object|function // optional machine-readable docs descriptor
      * @param type the identifier under which is this control used: lookup made against params.type
      * @param uiElement the object to register, fulfilling the above-described contract
      */
@@ -3083,6 +3095,7 @@ $.FlexRenderer.UIControls = class {
     /**
      * Register class as a UI control
      * @param {string} type unique control name / identifier
+     *  The class may optionally expose machine-readable docs as either static docs() or static docs = {...}.
      * @param {OpenSeadragon.FlexRenderer.UIControls.IControl} cls to register, implementation class of the controls
      */
     static registerClass(type, cls) {
@@ -3126,7 +3139,21 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             return name;
         },
         glType: "float",
-        uiType: "number"
+        uiType: "number",
+        docs: {
+            summary: "Numeric float input control.",
+            description: "Renders an HTML number input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        }
     },
 
     range: {
@@ -3151,7 +3178,21 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return name;
         },
         glType: "float",
-        uiType: "range"
+        uiType: "range",
+        docs: {
+            summary: "Slider control for float uniforms.",
+            description: "Renders an HTML range input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        }
     },
 
     color: {
@@ -3184,7 +3225,18 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return name;
         },
         glType: "vec3",
-        uiType: "color"
+        uiType: "color",
+        docs: {
+            summary: "RGB color picker control.",
+            description: "Renders an HTML color input, decodes a hex color string into three normalized float components, and exposes a vec3 GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "string" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "vec3"
+        }
     },
 
     bool: {
@@ -3211,7 +3263,18 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             return name;
         },
         glType: "bool",
-        uiType: "bool"
+        uiType: "bool",
+        docs: {
+            summary: "Boolean toggle control.",
+            description: "Renders an HTML checkbox, decodes the checked state into 0 or 1, and exposes a bool-compatible GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "boolean" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "bool"
+        }
     },
 
     select: {
@@ -3267,7 +3330,19 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             return name;
         },
         glType: "int",
-        uiType: "select_int"
+        uiType: "select_int",
+        docs: {
+            summary: "Integer select control.",
+            description: "Renders an HTML select element, decodes the selected option value into an integer, and exposes an int GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "options", type: "array|object" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "int"
+        }
     }
 };
 
@@ -3280,6 +3355,17 @@ $.FlexRenderer.UIControls._impls = {
  * @interface
  */
 $.FlexRenderer.UIControls.IControl = class IControl {
+
+    /**
+     * Optional machine-readable documentation descriptor.
+     * External control registrations can override this as either:
+     *  - static docs() { return {...}; }
+     *  - static docs = {...}
+     * @returns {object|null}
+     */
+    static docs() {
+        return null;
+    }
 
     /**
      * Sets common properties needed to create the controls:
@@ -3838,6 +3924,23 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
 };
 
 $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Compound float control composed of a range slider and number input.",
+            description: "Creates two synchronized SimpleUIControl instances, one range and one number input, and uses the range control for GLSL definition and loading.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
@@ -3919,6 +4022,23 @@ $.FlexRenderer.UIControls.registerClass("range_input", $.FlexRenderer.UIControls
  * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
  */
 $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Named colormap control producing vec3 samples from a float ratio.",
+            description: "Loads a palette by name from the configured scheme group, uploads palette colors and step boundaries as uniforms, and samples colors through generated GLSL helper code. Supports discrete and continuous rendering modes.",
+            kind: "ui-control",
+            parameters: [
+                { name: "steps", type: "number|array", default: 3 },
+                { name: "default", type: "string", default: "YlOrRd" },
+                { name: "mode", type: "string", default: "sequential" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Colormap" },
+                { name: "continuous", type: "boolean", default: false }
+            ],
+            glType: "vec3"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.prepare();
@@ -4159,6 +4279,23 @@ $.FlexRenderer.UIControls.registerClass("colormap", $.FlexRenderer.UIControls.Co
 
 
 $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexRenderer.UIControls.ColorMap {
+    static docs() {
+        return {
+            summary: "Editable custom colormap control.",
+            description: "Variant of the colormap control that uses user-provided color arrays instead of named palettes and expands the maximum sample count to 32.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "array", default: ["#000000", "#888888", "#ffffff"] },
+                { name: "steps", type: "number|array", default: 3 },
+                { name: "mode", type: "string", default: "sequential" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Colormap:" },
+                { name: "continuous", type: "boolean", default: false }
+            ],
+            glType: "vec3"
+        };
+    }
+
     prepare() {
         this.MAX_SAMPLES = 32;
         this.GLOBAL_GLSL_KEY = 'custom_colormap';
@@ -4258,6 +4395,29 @@ style="width: 60%;"></span></div>`;
  * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
  */
 $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Multi-breakpoint slider with per-interval mask values.",
+            description: "Stores ordered breakpoints and interval masks, uploads both arrays to GLSL, and samples either the active mask or a masked interval ratio through generated helper code. Interactive mode depends on noUiSlider being present.",
+            kind: "ui-control",
+            parameters: [
+                { name: "breaks", type: "array", default: [0.2, 0.8] },
+                { name: "mask", type: "array", default: [1, 0, 1] },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "inverted", type: "boolean", default: true },
+                { name: "maskOnly", type: "boolean", default: true },
+                { name: "toggleMask", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Threshold" },
+                { name: "min", type: "number", default: 0 },
+                { name: "max", type: "number", default: 1 },
+                { name: "minGap", type: "number", default: 0.05 },
+                { name: "step", type: "null|number", default: null },
+                { name: "pips", type: "object" }
+            ],
+            glType: "float"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.MAX_SLIDERS = 12;
@@ -4537,6 +4697,21 @@ $.FlexRenderer.UIControls.registerClass("advanced_slider", $.FlexRenderer.UICont
  * @class WebGLModule.UIControls.TextArea
  */
 $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Textarea control for free-form text values.",
+            description: "Renders a textarea, stores string values, and does not define or upload any GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "string", default: "" },
+                { name: "placeholder", type: "string", default: "" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Text" }
+            ],
+            glType: "text"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
     }
@@ -4616,6 +4791,20 @@ $.FlexRenderer.UIControls.registerClass("text_area", $.FlexRenderer.UIControls.T
  * @class OpenSeadragon.FlexRenderer.UIControls.Button
  */
 $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Button control that counts clicks.",
+            description: "Renders a button, increments an internal counter on click, and does not define or upload any GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number", default: 0 },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Button" }
+            ],
+            glType: "action"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
     }
@@ -4688,6 +4877,20 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
 
 $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Atlas-backed image sampling control.",
+            description: "Stores an integer texture id for the second-pass atlas, optionally allows adding PNG images through a file input, and samples atlas textures when given vec2 texture coordinates.",
+            kind: "ui-control",
+            parameters: [
+                { name: "title", type: "string", default: "Images" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "default", type: "number", default: -1 }
+            ],
+            glType: "vec4"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.atlas = owner.webglContext.secondAtlas;
@@ -8633,6 +8836,27 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             return "Local adaptive thresholding with mean or Gaussian-weighted neighborhood.";
         }
 
+        static docs() {
+            return {
+                summary: "Adaptive threshold shader for a single scalar input channel.",
+                description: "Computes a local statistic over a square neighborhood and compares the center sample against localStat - C. The neighborhood may be uniformly weighted or approximately Gaussian weighted.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Single scalar channel / derived scalar field"
+                }],
+                controls: [
+                    { name: "block_size", ui: "range_input", valueType: "float", default: 5, min: 3, max: 11, step: 2 },
+                    { name: "c_value", ui: "range_input", valueType: "float", default: 0.03, min: -0.5, max: 0.5, step: 0.001 },
+                    { name: "gaussian", ui: "bool", valueType: "bool", default: false },
+                    { name: "invert", ui: "bool", valueType: "bool", default: false },
+                    { name: "fg_color", ui: "color", valueType: "vec3", default: "#ffffff" },
+                    { name: "bg_color", ui: "color", valueType: "vec3", default: "#000000" }
+                ]
+            };
+        }
+
         static sources() {
             return [{
                 acceptsChannelCount: (n) => n === 1,
@@ -8796,9 +9020,7 @@ float ${fnWeight}(in float dx, in float dy, in float radius, in bool gaussianMod
  * Bi-colors shader
  * data reference must contain one index to the data to render using bipolar heatmap strategy
  *
- * $_GET/$_POST expected parameters:
- *  index - unique number in the compiled shader
- * $_GET/$_POST supported parameters:
+ * supported parameters:
  *  colorHigh - color to fill-in areas with high values (-->255), url encoded '#ffffff' format or digits only 'ffffff', default "#ff0000"
  *  colorLow - color to fill-in areas with low values (-->0), url encoded '#ffffff' format or digits only 'ffffff', default "#7cfc00"
  *  ctrlColor - whether to allow color modification, true or false, default true
@@ -8821,6 +9043,24 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "values are of two categories, smallest considered in the middle";
+    }
+
+    static docs() {
+        return {
+            summary: "Diverging heatmap shader for a single scalar input channel.",
+            description: "Treats values around 0.5 as insignificant and maps values below and above 0.5 to separate colors. Opacity is derived from the distance from the midpoint after filtering and threshold comparison.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D diverging data encoded in opacity"
+            }],
+            controls: [
+                { name: "colorHigh", ui: "color", valueType: "vec3", default: "#ff1000" },
+                { name: "colorLow", ui: "color", valueType: "vec3", default: "#01ff00" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 1, min: 1, max: 100, step: 1 }
+            ]
+        };
     }
 
     static sources() {
@@ -8902,6 +9142,46 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "data values encoded in color scale";
+    }
+
+    static docs() {
+        return {
+            summary: "Colormap shader for one scalar channel.",
+            description: "Samples a scalar value, maps it through a colormap control, and uses an advanced slider control as the visibility mask. The optional connect control synchronizes colormap step boundaries with slider breaks when a colormap control is active.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D data mapped to color map"
+            }],
+            controls: [
+                {
+                    name: "color",
+                    ui: "colormap",
+                    valueType: "vec3",
+                    default: {
+                        default: "Viridis",
+                        steps: 3,
+                        mode: "sequential",
+                        continuous: false
+                    }
+                },
+                {
+                    name: "threshold",
+                    ui: "advanced_slider",
+                    valueType: "float",
+                    default: {
+                        default: [0.25, 0.75],
+                        mask: [1, 0, 1]
+                    },
+                    required: {
+                        type: "advanced_slider",
+                        inverted: false
+                    }
+                },
+                { name: "connect", ui: "bool", valueType: "bool", default: false }
+            ]
+        };
     }
 
     static sources() {
@@ -9036,6 +9316,22 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "shows the data AS-IS";
     }
 
+    static docs() {
+        return {
+            summary: "Identity shader for four-channel input.",
+            description: "Samples the input texture directly and returns the sampled RGBA value unchanged.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [4],
+                description: "4d texture to render AS-IS"
+            }],
+            controls: [
+                { name: "use_channel0", required: "rgba", description: "Required RGBA swizzle for direct passthrough sampling." }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 4,
@@ -9075,6 +9371,24 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "highlights edges at threshold values";
+    }
+
+    static docs() {
+        return {
+            summary: "Edge-highlighting shader for one scalar input channel.",
+            description: "Detects threshold crossings in the four cardinal directions around each sample and renders edge and inner-edge colors based on neighborhood comparisons.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D data to detect edges on threshold value"
+            }],
+            controls: [
+                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 50, min: 1, max: 100, step: 1 },
+                { name: "edgeThickness", ui: "range", valueType: "float", default: 1, min: 0.5, max: 3, step: 0.1 }
+            ]
+        };
     }
 
     static sources() {
@@ -9175,6 +9489,23 @@ int clipToThresholdi_${this.uid}(float value) {
 
             static description() {
                 return "Group shader layers.";
+            }
+
+            static docs() {
+                return {
+                    summary: "Composite shader that evaluates child shader layers in group order.",
+                    description: "Instantiates nested shader configurations from the group's shaders map, evaluates them in the configured order, and combines their outputs using each child shader's blend or clip mode.",
+                    kind: "shader",
+                    inputs: [],
+                    config: {
+                        shaders: "Map of child shader id to child ShaderConfig.",
+                        order: "Optional ordered list of child shader ids."
+                    },
+                    notes: [
+                        "The group shader itself does not declare renderer-native controls.",
+                        "Child shaders are initialized, loaded, drawn, and destroyed through the group."
+                    ]
+                };
             }
 
             static sources() {
@@ -9413,6 +9744,25 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "encode data values in opacity";
     }
 
+    static docs() {
+        return {
+            summary: "Heatmap shader for one scalar channel.",
+            description: "Uses the sampled scalar value as alpha and colors visible pixels with a configurable RGB control once the sampled value passes the threshold. In inverted mode, values below the threshold are shown with full alpha while values above the threshold are inverted.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "The value to map to opacity"
+            }],
+            controls: [
+                { name: "use_channel0", default: "r" },
+                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 1, min: 1, max: 100, step: 1 },
+                { name: "inverse", ui: "bool", valueType: "bool", default: false }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 1,
@@ -9474,6 +9824,22 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "sobel edge detector";
+    }
+
+    static docs() {
+        return {
+            summary: "Sobel edge detector for RGB input.",
+            description: "Samples a 3x3 neighborhood, applies Sobel X and Y kernels independently to RGB data, and returns grayscale edge strength with alpha fixed to 1.0.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [3],
+                description: "Data to detect edges on"
+            }],
+            controls: [
+                { name: "use_channel0", default: "rgb" }
+            ]
+        };
     }
 
     static sources() {
@@ -9542,6 +9908,23 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "use a texture via texture atlas";
     }
 
+    static docs() {
+        return {
+            summary: "Texture compositing shader using the second-pass atlas.",
+            description: "Samples the primary RGBA input and a texture selected by the image control, then blends them with blendAlpha using the minimum RGB of both samples as the blend mask.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [4],
+                description: "first pass colors"
+            }],
+            controls: [
+                { name: "use_channel0", default: "rgba" },
+                { name: "texture", ui: "image", valueType: "vec4", default: { type: "image" } }
+            ]
+        };
+    }
+
     static sources() {
         return [
             {
@@ -9589,6 +9972,39 @@ return blendAlpha(chan, tex, min(chan.rgb, tex.rgb));
 
         static description() {
             return "Global threshold preview with OpenCV-like threshold modes.";
+        }
+
+        static docs() {
+            return {
+                summary: "Global threshold shader for a single scalar input channel.",
+                description: "Implements five threshold modes analogous to binary, binary inverse, truncation, to-zero, and to-zero inverse. Binary modes can optionally be colorized with foreground and background colors.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Single scalar channel / derived scalar field"
+                }],
+                controls: [
+                    { name: "threshold", ui: "range", valueType: "float", default: 0.5, min: 0, max: 1, step: 0.005 },
+                    { name: "max_value", ui: "range", valueType: "float", default: 1, min: 0, max: 1, step: 0.005 },
+                    {
+                        name: "version",
+                        ui: "select",
+                        valueType: "int",
+                        default: 0,
+                        options: [
+                            { value: 0, label: "Binary" },
+                            { value: 1, label: "Binary inv" },
+                            { value: 2, label: "Trunc" },
+                            { value: 3, label: "To zero" },
+                            { value: 4, label: "To zero inv" }
+                        ]
+                    },
+                    { name: "colorize_binary", ui: "bool", valueType: "bool", default: true },
+                    { name: "fg_color", ui: "color", valueType: "vec3", default: "#ffffff" },
+                    { name: "bg_color", ui: "color", valueType: "vec3", default: "#000000" }
+                ]
+            };
         }
 
         static sources() {
@@ -9777,6 +10193,42 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "internally use different shader to render one of chosen elements";
     }
 
+        static docs() {
+        return {
+            summary: "Wrapper shader that delegates rendering to another shader over a selectable series.",
+            description: "Builds an internal renderer selected by seriesRenderer and switches the active data reference through the timeline control. Timeline changes trigger refetch with the selected series item.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: null,
+                description: "render selected data source by underlying shader"
+            }],
+            customParams: [
+                {
+                    name: "seriesRenderer",
+                    default: "identity",
+                    description: "Shader type used internally for rendering the selected series element."
+                },
+                {
+                    name: "series",
+                    description: "Array of data indexes addressable through the timeline control."
+                }
+            ],
+            controls: [
+                {
+                    name: "timeline",
+                    ui: "range_input",
+                    valueType: "float",
+                    required: { type: "range_input" }
+                }
+            ],
+            notes: [
+                "Opacity is disabled on this wrapper shader.",
+                "The delegated renderer contributes fragment shader definition, execution, GL loading, drawing, and HTML controls."
+            ]
+        };
+    }
+
     static get customParams() {
         return {
             seriesRenderer: {
@@ -9879,6 +10331,23 @@ ${this._renderer.htmlControls()}`;
 
         static description() {
             return "Render one selected TIFF channel with a custom color.";
+        }
+
+        static docs() {
+            return {
+                summary: "Single-channel shader that colors one logical scalar channel.",
+                description: "Samples one selected scalar channel and multiplies that scalar value by a configurable RGB color. Alpha is set to the sampled scalar value.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Multi-channel TIFF/GeoTIFF (scalar channels)"
+                }],
+                controls: [
+                    { name: "use_channel0", default: "r", description: "Single-channel swizzle used for sampling." },
+                    { name: "color", ui: "color", valueType: "vec3", default: "#ff00ff" }
+                ]
+            };
         }
 
         // One source: multi-channel TIFF/GeoTIFF scalar channels
@@ -10505,6 +10974,15 @@ function makeWorker() {
         return JSON.parse(JSON.stringify(value));
     }
 
+    function firstDefined(...values) {
+        for (const value of values) {
+            if (value !== undefined) {
+                return value;
+            }
+        }
+        return undefined;
+    }
+
     function escapeHtml(v) {
         return String(v || "")
             .replaceAll("&", "&amp;")
@@ -10800,6 +11278,8 @@ function makeWorker() {
                 const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
                 const controls = this._compileControlDescriptors(Shader);
                 const customParams = Shader.customParams || {};
+                const configNotes = this._compileSpecialConfigNotes(Shader);
+                const classDocs = this._getShaderClassDocs(Shader);
 
                 return {
                     type: Shader.type(),
@@ -10815,14 +11295,16 @@ function makeWorker() {
                     customParams: Object.entries(customParams).map(([name, meta]) => ({
                         name,
                         usage: (meta && meta.usage) || ""
-                    }))
+                    })),
+                    configNotes,
+                    classDocs
                 };
             });
 
             const controls = this._compileAvailableControls();
 
             const model = {
-                version: 3,
+                version: 6,
                 generatedAt: new Date().toISOString(),
                 shaders,
                 controls
@@ -10830,6 +11312,63 @@ function makeWorker() {
 
             this._docsModel = model;
             return model;
+        },
+
+        compileConfigSchemaModel() {
+            const controlTypedefs = this._compileControlTypedefs();
+            const shaders = $.FlexRenderer.ShaderMediator.availableShaders().map(Shader => {
+                const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
+                return {
+                    type: Shader.type(),
+                    name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
+                    description: typeof Shader.description === "function" ? Shader.description() : "",
+                    rootConfig: this._compileShaderRootConfigSchema(Shader),
+                    params: this._compileShaderParamsSchema(Shader, sources),
+                    sources: sources.map((src, index) => ({
+                        index,
+                        description: src.description || "",
+                        acceptedChannelCounts: this._probeAcceptedChannelCounts(src)
+                    }))
+                };
+            });
+
+            return {
+                version: 1,
+                generatedAt: new Date().toISOString(),
+                rendererConfig: {
+                    type: "object",
+                    usage: "Renderer configuration snapshot with explicit shader order and shader definitions.",
+                    properties: [
+                        {
+                            key: "order",
+                            type: "string[]",
+                            required: false,
+                            usage: "Optional top-level render order override. When omitted, the renderer falls back to Object.keys(shaders).",
+                            overridesDefaultOrder: true,
+                            targets: "top-level",
+                            defaultBehavior: "Object.keys(shaders)"
+                        },
+                        {
+                            key: "shaders",
+                            type: "Object<string, ShaderConfig>",
+                            required: true,
+                            usage: "Map of shader id -> shader configuration object."
+                        }
+                    ]
+                },
+                shaderConfigBase: this._compileBaseShaderConfigSchema(),
+                controlTypedefs,
+                uiControls: this._compileControlSchemas(),
+                shaders
+            };
+        },
+
+        async compileConfigSchemaModelAsync() {
+            return this.compileConfigSchemaModel();
+        },
+
+        async compileDocsModelAsync() {
+            return this.compileDocsModel();
         },
 
         serializeDocs(mode = "json", model = this._docsModel || this.compileDocsModel()) {
@@ -11113,10 +11652,48 @@ function makeWorker() {
                     name: ctrl.name,
                     glType: ctrl.type,
                     uiType: ctrl.uiControlType,
-                    supports: deepClone(ctrl.supports || {})
+                    supports: deepClone(ctrl.supports || {}),
+                    classDocs: this._getControlClassDocs(ctrl)
                 }));
             }
             return out;
+        },
+
+        _compileControlSchemas() {
+            const built = this._buildControls();
+            const out = {};
+            for (const [glType, controls] of Object.entries(built)) {
+                out[glType] = controls.map(ctrl => ({
+                    name: ctrl.name,
+                    glType: ctrl.type,
+                    uiType: ctrl.uiControlType,
+                    typedef: this._getControlTypedefId(ctrl),
+                    config: this._compileControlConfigShape(ctrl)
+                }));
+            }
+            return out;
+        },
+
+        _compileControlTypedefs() {
+            const built = this._buildControls();
+            const typedefs = {};
+
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    const typedefId = this._getControlTypedefId(control);
+                    if (!typedefs[typedefId]) {
+                        typedefs[typedefId] = {
+                            id: typedefId,
+                            name: control.name,
+                            uiType: control.uiControlType,
+                            glType: control.type,
+                            config: this._compileControlConfigShape(control)
+                        };
+                    }
+                }
+            }
+
+            return typedefs;
         },
 
         _probeAcceptedChannelCounts(src) {
@@ -11134,6 +11711,357 @@ function makeWorker() {
                 }
             }
             return accepted;
+        },
+
+        _compileBaseShaderConfigSchema() {
+            return {
+                type: "object",
+                usage: "Base JSON object accepted by renderer shader-layer configuration.",
+                properties: [
+                    {
+                        key: "id",
+                        type: "string",
+                        required: true,
+                        usage: "Unique shader identifier used by the renderer."
+                    },
+                    {
+                        key: "name",
+                        type: "string",
+                        required: false,
+                        usage: "Optional human-readable layer name."
+                    },
+                    {
+                        key: "type",
+                        type: "string",
+                        required: true,
+                        usage: "Registered shader type resolved through ShaderMediator."
+                    },
+                    {
+                        key: "visible",
+                        type: "number|boolean",
+                        required: false,
+                        usage: "Layer visibility flag. Renderer examples use 1 or 0."
+                    },
+                    {
+                        key: "fixed",
+                        type: "boolean",
+                        required: false,
+                        usage: "Renderer flag stored on ShaderConfig."
+                    },
+                    {
+                        key: "tiledImages",
+                        type: "number[]|OpenSeadragon.TiledImage[]",
+                        required: false,
+                        usage: "Data sources consumed by the shader. Entries are indexed by source position."
+                    },
+                    {
+                        key: "params",
+                        type: "object",
+                        required: false,
+                        usage: "Shader-specific settings, built-in use_* options, UI-control configs, and custom parameters."
+                    },
+                    {
+                        key: "_controls",
+                        type: "object",
+                        required: false,
+                        usage: "Renderer-managed control storage present on ShaderConfig."
+                    },
+                    {
+                        key: "cache",
+                        type: "object",
+                        required: false,
+                        usage: "Persistent runtime state used by controls and reset* helpers."
+                    }
+                ]
+            };
+        },
+
+        _compileShaderRootConfigSchema(Shader) {
+            const base = this._compileBaseShaderConfigSchema().properties.map(item => deepClone(item));
+            const byKey = new Map(base.map(item => [item.key, item]));
+
+            for (const note of this._compileSpecialConfigNotes(Shader)) {
+                byKey.set(note.key, {
+                    ...(byKey.get(note.key) || {}),
+                    key: note.key,
+                    type: note.kind || "special",
+                    required: false,
+                    usage: note.usage || ""
+                });
+            }
+
+            return {
+                type: "object",
+                properties: [...byKey.values()]
+            };
+        },
+
+        _compileShaderParamsSchema(Shader, sources = []) {
+            const defs = Shader.defaultControls || {};
+            const controls = this._compileControlDescriptors(Shader).map(control => ({
+                key: control.name,
+                kind: "ui-control",
+                usage: `Shader param for UI control '${control.name}'.`,
+                supportedUiTypes: control.supportedUiTypes,
+                defaultControlConfig: control.default !== null ? deepClone(control.default) : null,
+                requiredControlConfig: control.required !== null ? deepClone(control.required) : null,
+                supportedControlSchemas: this._expandSupportedUiSchemas(control.supportedUiTypes)
+            }));
+
+            const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
+                key: name,
+                kind: "custom-param",
+                usage: (meta && meta.usage) || "",
+                default: meta && meta.default !== undefined ? deepClone(meta.default) : null,
+                required: meta && meta.required !== undefined ? deepClone(meta.required) : null
+            }));
+
+            return {
+                type: "object",
+                usage: "Configuration object assigned to ShaderConfig.params.",
+                builtIn: [
+                    ...this._compileUseChannelSchemas(Shader, sources, defs),
+                    this._compileUseModeSchema(defs),
+                    this._compileUseBlendSchema(defs),
+                    ...this._compileUseFilterSchemas(defs)
+                ],
+                controls,
+                customParams
+            };
+        },
+
+        _compileUseChannelSchemas(_Shader, sources = [], defs = {}) {
+            return sources.flatMap((src, index) => {
+                const accepted = this._probeAcceptedChannelCounts(src);
+                const defaultControl = defs[`use_channel${index}`] || {};
+                const baseControl = defs[`use_channel_base${index}`] || {};
+
+                return [
+                    {
+                        key: `use_channel${index}`,
+                        kind: "built-in",
+                        type: "string",
+                        usage: "Channel pattern used for sampling this source. Accepts swizzles like 'r', 'rg', 'rgba' and inline base form 'N:pattern'.",
+                        acceptedChannelCounts: accepted,
+                        default: firstDefined(defaultControl.required, defaultControl.default, "r"),
+                        required: firstDefined(defaultControl.required, null)
+                    },
+                    {
+                        key: `use_channel_base${index}`,
+                        kind: "built-in",
+                        type: "number",
+                        usage: "Explicit flattened base-channel offset for this source. Overrides the optional N prefix from use_channel.",
+                        default: firstDefined(baseControl.required, baseControl.default, 0),
+                        required: firstDefined(baseControl.required, null)
+                    }
+                ];
+            });
+        },
+
+        _compileUseModeSchema(defs = {}) {
+            const spec = defs.use_mode || {};
+            return {
+                key: "use_mode",
+                kind: "built-in",
+                type: "string",
+                usage: "Rendering mode resolved by resetMode(). Supported values come from renderer WebGL context.",
+                allowedValues: ["show", "blend", "clip", "mask", "clip_mask"],
+                default: firstDefined(spec.required, spec.default, "show"),
+                required: firstDefined(spec.required, null)
+            };
+        },
+
+        _compileUseBlendSchema(defs = {}) {
+            const spec = defs.use_blend || {};
+            return {
+                key: "use_blend",
+                kind: "built-in",
+                type: "string",
+                usage: "Blend function used when the current use_mode applies blending.",
+                allowedValues: deepClone($.FlexRenderer.BLEND_MODE || []),
+                default: firstDefined(spec.required, spec.default, ($.FlexRenderer.BLEND_MODE || [])[0], null),
+                required: firstDefined(spec.required, null)
+            };
+        },
+
+        _compileUseFilterSchemas(defs = {}) {
+            const names = $.FlexRenderer.ShaderLayer.filterNames || {};
+            return Object.keys($.FlexRenderer.ShaderLayer.filters || {}).map(key => {
+                const spec = defs[key] || {};
+                const label = names[key] || key;
+                return {
+                    key,
+                    kind: "built-in",
+                    type: "number",
+                    usage: `${label} filter parameter applied by resetFilters().`,
+                    default: firstDefined(spec.required, spec.default, null),
+                    required: firstDefined(spec.required, null)
+                };
+            });
+        },
+
+        _expandSupportedUiSchemas(names = []) {
+            const built = this._buildControls();
+            const seen = new Set();
+            const out = [];
+
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    if (!names.includes(control.name) || seen.has(control.name)) {
+                        continue;
+                    }
+                    seen.add(control.name);
+                    out.push({
+                        name: control.name,
+                        glType: control.type,
+                        uiType: control.uiControlType,
+                        typedef: this._getControlTypedefId(control),
+                        config: this._compileControlConfigShape(control)
+                    });
+                }
+            }
+
+            return out;
+        },
+
+        _getControlTypedefId(control) {
+            const uiType = control && control.uiControlType ? control.uiControlType : "unknown";
+            const glType = control && control.type ? control.type : "unknown";
+            return `control:${uiType}:${glType}`;
+        },
+
+        _compileControlConfigShape(control) {
+            const docs = this._getControlClassDocs(control);
+            const docParams = new Map(((docs && docs.parameters) || []).map(param => [param.name, param]));
+            const supports = deepClone(this._safeReadControlProp(control, "supports", {}) || {});
+            const supportsAll = deepClone(this._safeReadControlProp(control, "supportsAll", {}) || {});
+            const keys = [...new Set([
+                ...Object.keys(supports),
+                ...Object.keys(supportsAll),
+                ...docParams.keys()
+            ])];
+
+            const config = {};
+            for (const key of keys) {
+                config[key] = this._compileControlConfigPropertySchema(
+                    key,
+                    supports[key],
+                    supportsAll[key],
+                    docParams.get(key) || null
+                );
+            }
+            return config;
+        },
+
+        _safeReadControlProp(control, prop, fallback = undefined) {
+            if (!control) {
+                return fallback;
+            }
+            try {
+                const value = control[prop];
+                return value === undefined ? fallback : value;
+            } catch (_) {
+                return fallback;
+            }
+        },
+
+        _compileControlConfigPropertySchema(name, sampleValue, variantsValue, docParam) {
+            const schema = {
+                type: this._inferSchemaType(sampleValue, variantsValue, docParam)
+            };
+
+            if (sampleValue !== undefined) {
+                schema.default = deepClone(sampleValue);
+            } else if (docParam && docParam.default !== undefined) {
+                schema.default = deepClone(docParam.default);
+            }
+
+            if (variantsValue !== undefined) {
+                schema.examples = deepClone(Array.isArray(variantsValue) ? variantsValue : [variantsValue]);
+            }
+
+            if (docParam && docParam.usage) {
+                schema.usage = docParam.usage;
+            }
+
+            return schema;
+        },
+
+        _inferSchemaType(sampleValue, variantsValue, docParam) {
+            if (docParam && docParam.type) {
+                return docParam.type;
+            }
+
+            if (variantsValue !== undefined) {
+                return this._inferValueType(variantsValue);
+            }
+
+            return this._inferValueType(sampleValue);
+        },
+
+        _inferValueType(value) {
+            if (value === null) {
+                return "null";
+            }
+            if (Array.isArray(value)) {
+                if (value.length === 0) {
+                    return "array";
+                }
+                const itemTypes = [...new Set(value.map(item => this._inferValueType(item)))];
+                if (itemTypes.length === 1) {
+                    return `${itemTypes[0]}[]`;
+                }
+                return `array<${itemTypes.join("|")}>`;
+            }
+            if (typeof value === "string") {
+                return "string";
+            }
+            if (typeof value === "number") {
+                return "number";
+            }
+            if (typeof value === "boolean") {
+                return "boolean";
+            }
+            if (value && typeof value === "object") {
+                return "object";
+            }
+            return "unknown";
+        },
+
+        _compileSpecialConfigNotes(Shader) {
+            if (!Shader || typeof Shader.type !== "function") {
+                return [];
+            }
+
+            if (Shader.type() === "group") {
+                return [
+                    {
+                        key: "shaders",
+                        kind: "map",
+                        usage: "Map of child shader id -> ShaderConfig. This is the nested layer collection rendered by the group."
+                    },
+                    {
+                        key: "order",
+                        kind: "string[]",
+                        usage: "Optional child render order override inside the group. When omitted, the group falls back to Object.keys(shaders).",
+                        overridesDefaultOrder: true,
+                        targets: "group-children",
+                        defaultBehavior: "Object.keys(shaders)"
+                    },
+                    {
+                        key: "tiledImages",
+                        kind: "special",
+                        usage: "Unlike regular shader layers, the group shader does not usually consume tiled images directly. Child shaders define and use their own tiledImages."
+                    },
+                    {
+                        key: "controls",
+                        kind: "special",
+                        usage: "Renderer-native controls are created for child shaders. The group shader itself is mainly a container and blend/composition stage."
+                    }
+                ];
+            }
+
+            return [];
         },
 
         _serializeDocsText(model) {
@@ -11171,10 +12099,149 @@ function makeWorker() {
                     }
                 }
 
+                if (shader.classDocs && shader.classDocs.summary) {
+                    out.push(`Class docs: ${shader.classDocs.summary}`);
+                }
+
+                if (shader.configNotes && shader.configNotes.length) {
+                    out.push(`Configuration notes:`);
+                    for (const note of shader.configNotes) {
+                        out.push(`- ${note.key}${note.kind ? ` (${note.kind})` : ""}: ${note.usage}`);
+                    }
+                }
+
                 out.push("");
             }
 
             return out.join("\n");
+        },
+
+        _normalizeClassDocs(rawDocs, fallback = {}) {
+            if (!rawDocs) {
+                return null;
+            }
+
+            if (typeof rawDocs === "function") {
+                rawDocs = rawDocs(fallback);
+            }
+
+            if (!rawDocs) {
+                return null;
+            }
+
+            if (typeof rawDocs === "string") {
+                return {
+                    summary: rawDocs,
+                    description: rawDocs
+                };
+            }
+
+            if (typeof rawDocs !== "object") {
+                return null;
+            }
+
+            const normalized = deepClone(rawDocs);
+            if (!normalized.summary && normalized.description) {
+                normalized.summary = String(normalized.description).split(/\n\s*\n/)[0].trim();
+            }
+            if (!normalized.description && normalized.summary) {
+                normalized.description = normalized.summary;
+            }
+
+            if (fallback.type && normalized.type === undefined) {
+                normalized.type = fallback.type;
+            }
+            if (fallback.name && normalized.name === undefined) {
+                normalized.name = fallback.name;
+            }
+            if (fallback.kind && normalized.kind === undefined) {
+                normalized.kind = fallback.kind;
+            }
+
+            return normalized;
+        },
+
+        _extractDocsProvider(subject, fallback = {}) {
+            if (!subject) {
+                return null;
+            }
+
+            if (typeof subject.docs === "function") {
+                return this._normalizeClassDocs(subject.docs(subject, fallback), fallback);
+            }
+
+            if (typeof subject.docs === "object" || typeof subject.docs === "string") {
+                return this._normalizeClassDocs(subject.docs, fallback);
+            }
+
+            if (typeof subject.getDocs === "function") {
+                return this._normalizeClassDocs(subject.getDocs(subject, fallback), fallback);
+            }
+
+            return null;
+        },
+
+        _getShaderClassDocs(Shader) {
+            if (!Shader || typeof Shader.type !== "function") {
+                return null;
+            }
+
+            const fallback = {
+                kind: "shader",
+                type: Shader.type(),
+                name: typeof Shader.name === "function" ? Shader.name() : Shader.type()
+            };
+
+            const explicit = this._extractDocsProvider(Shader, fallback);
+            if (explicit) {
+                return explicit;
+            }
+
+            const description = typeof Shader.description === "function" ? Shader.description() : "";
+            return this._normalizeClassDocs({
+                ...fallback,
+                summary: description || `${fallback.name} shader`,
+                description: description || `${fallback.name} shader.`,
+                api: {
+                    hasSources: typeof Shader.sources === "function",
+                    hasDefaultControls: !!Shader.defaultControls,
+                    hasCustomParams: !!Shader.customParams
+                }
+            }, fallback);
+        },
+
+        _getControlClassDocs(control) {
+            if (!control) {
+                return null;
+            }
+
+            const fallback = {
+                kind: "ui-control",
+                type: control.uiControlType || control.name,
+                name: control.name || control.uiControlType
+            };
+
+            if (control.component) {
+                const docs = this._extractDocsProvider(control.component, fallback);
+                if (docs) {
+                    return docs;
+                }
+            }
+
+            const explicit = this._extractDocsProvider(control.constructor, fallback);
+            if (explicit) {
+                return explicit;
+            }
+
+            return this._normalizeClassDocs({
+                ...fallback,
+                summary: `${fallback.name || fallback.type} UI control`,
+                description: `${fallback.name || fallback.type} UI control for GLSL type ${control.type}.`,
+                api: {
+                    glType: control.type,
+                    supports: deepClone(control.supports || {})
+                }
+            }, fallback);
         },
 
         _renderDefaultShaderDoc(shader) {
@@ -11223,6 +12290,24 @@ function makeWorker() {
                         <td><code>${escapeHtml(ctrl.name)}</code></td>
                         <td>${escapeHtml(ctrl.supportedUiTypes.join(", "))}</td>
                         <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(ctrl.default || ctrl.required || {}, null, 2))}</pre></td>
+                    </tr>`).join("")}
+                </tbody>
+            </table>
+        </div>
+    </div>` : ""}
+
+    ${shader.configNotes && shader.configNotes.length ? `
+    <div class="mt-4">
+        <div class="mb-2 font-semibold">Configuration notes</div>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead><tr><th>Key</th><th>Kind</th><th>Usage</th></tr></thead>
+                <tbody>
+                    ${shader.configNotes.map(note => `
+                    <tr>
+                        <td><code>${escapeHtml(note.key)}</code></td>
+                        <td>${escapeHtml(note.kind || "")}</td>
+                        <td>${escapeHtml(note.usage || "")}</td>
                     </tr>`).join("")}
                 </tbody>
             </table>

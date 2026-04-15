@@ -99,12 +99,13 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
     - [O]`statusBar` - whether to show user action and system status hints, default `true`
-    - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can be an array of indices (multiple views)
-    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can be an array
+    - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can also be an array of indices for multi-view mode
+    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can also be an array for multi-view mode
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
-    - [O]`viewport` - where to focus on load, default `undefined`
+    - [O]`viewport` - where to focus on load, default `undefined`; can be a single viewport object applied to all viewers or an array of viewport objects in multi-view mode
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom
+        - [O]`rotation` - rotation in degrees
     - [O]`scaleBar` - show scale, does not show if microns not defined, default `true`,
     - [O]`grayscale` - enforce grayscale transfer, default `false`,
     - [O]`tileCache` - use tile caching, default `true`,
@@ -114,7 +115,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`stackedBackground` - removed, not supported anymore - use shaders config map on background item to render multiple overlays within single BG item
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
-    - [O]`fetchAsync` - deprecated
+    - [O]`fetchAsync` - deprecated, kept only for backward compatibility
     - [O]`bypassCache` - do not allow using cached values for the user, default `false`
     - [O]`bypassCacheLoadTime` - at viewer initial loading, ignore cache - this can avoid pulling cached content into foreign session 
     - [O]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
@@ -133,7 +134,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
     - [O]`goalIndex` - preferred visualization index for this background, overrides `activeVisualizationIndex`
-- [O]`visualization` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
+- [O]`visualizations` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
 it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
     - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
@@ -145,7 +146,7 @@ it is an inherited configuration interface of the WebGL module extended by optio
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
     - [O]`name` - visualization goal name
-    - [O]`lossless` - deprecated
+    - [O]`lossless` - deprecated, kept only for backward compatibility
     - [O]`protocol` - deprecated, moved to `DataOverride`
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
 

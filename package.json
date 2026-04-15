@@ -15,7 +15,7 @@
     "build-docs-api": "grunt jsdoc",
     "s-static": "grunt html",
     "s-node": "node index.js",
-    "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js",
+    "s-node-test": "cross-env XOPAT_ENV=test/viewer.env.wsi-service.json node index.js --dev",
     "docker-node": "docker-compose -f docker/node/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
     "docker-php": "docker-compose -f docker/php/docker-compose.yml -f docker/wsi-service/docker-compose.yml up -d",
     "create-module": "grunt generate:module",

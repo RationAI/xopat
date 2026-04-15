@@ -17,6 +17,7 @@ const constants = require("./constants");
 const {rawReqToString} = require("./utils");
 const {verifyProxyAuth, verifyRpcAuth} = require("./auth");
 const { XopatServerRuntime } = require("./server-runtime");
+const { DevLogBuffer, installDevConsoleCapture } = require("./dev-log-buffer");
 
 
 const PROJECT_PATH = "";
@@ -39,12 +40,33 @@ function readStartupVersion(defaultVersion = "dev") {
 }
 
 const STARTUP_VERSION = readStartupVersion();
+const DEV_MODE = constants.SERVER.DEV_MODE === true;
+const devLogBuffer = DEV_MODE
+    ? new DevLogBuffer({ maxEntries: constants.SERVER.DEV_LOG_MAX_ENTRIES })
+    : null;
+const logger = DEV_MODE
+    ? installDevConsoleCapture(console, devLogBuffer, { source: "server" })
+    : console;
+
+if (DEV_MODE) {
+    logger.info(`[dev-mode] enabled (log buffer size: ${constants.SERVER.DEV_LOG_MAX_ENTRIES})`);
+    process.on('unhandledRejection', error => {
+        logger.error('[process] unhandledRejection', error);
+    });
+    process.on('uncaughtException', error => {
+        logger.error('[process] uncaughtException', error);
+    });
+}
 
 const sessions = new Map();
 const serverRuntime = new XopatServerRuntime({
     root: constants._ABSPATH_NO_SLASH || constants.ABSPATH,
     auth: { verifyRpcAuth },
-    logger: console,
+    logger,
+    devMode: DEV_MODE,
+    devLogBuffer,
+    version: STARTUP_VERSION,
+    startedAt: new Date(),
 });
 
 function parseCookies(cookieHeader) {
@@ -116,6 +138,7 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the CORE initialization!", core.exception)) return null;
     core.CORE.server.name = "node";
     core.CORE.server.supportsPost = true;
+    core.CORE.server.devMode = DEV_MODE;
 
     if (serverOnly) {
         return core;
@@ -134,6 +157,46 @@ const initViewerCoreAndPlugins = (req, res, serverOnly=false) => {
     if (throwFatalErrorIf(core, res, core.exception, "Failed to parse the MODULES or PLUGINS initialization!", core.exception)) return null;
 
     return core;
+}
+
+function normalizeSchemePluginRecords(plugins) {
+    const result = {};
+    const manifestKeys = new Set([
+        'id', 'name', 'author', 'version', 'description', 'icon',
+        'includes', 'modules', 'requires', 'permaLoad', 'enabled',
+        'loaded', 'error', 'directory', 'path', 'styleSheet'
+    ]);
+
+    for (const [id, plugin] of Object.entries(plugins || {})) {
+        if (!plugin || typeof plugin !== "object") {
+            continue;
+        }
+
+        const meta = {};
+        for (const key of [
+            'id', 'name', 'author', 'version', 'description', 'icon',
+            'modules', 'requires', 'permaLoad', 'enabled', 'loaded',
+            'directory'
+        ]) {
+            if (Object.prototype.hasOwnProperty.call(plugin, key)) {
+                meta[key] = plugin[key];
+            }
+        }
+
+        const defaults = {};
+        for (const [key, value] of Object.entries(plugin)) {
+            if (!manifestKeys.has(key)) {
+                defaults[key] = value;
+            }
+        }
+
+        result[id] = {
+            meta,
+            defaults
+        };
+    }
+
+    return result;
 }
 
 function getI18NData(language) {
@@ -242,7 +305,7 @@ async function responseProxy(req, res, requestUrl) {
         res.end(Buffer.from(arrayBuffer));
 
     } catch (e) {
-        console.error(`Proxy error routing to ${alias}:`, e);
+        logger.error(`Proxy error routing to ${alias}:`, e);
         res.writeHead(502, { 'Content-Type': 'text/plain' });
         res.end("Bad Gateway: Error communicating with the proxied service.");
     }
@@ -299,7 +362,7 @@ async function responseViewer(req, res, session) {
     } catch (e) {
         //be silent for now
         //todo: maybe notify the user somehow through the session set error prop or something
-        console.warn(e);
+        logger.warn(e);
         postData = {};
     }
     const core = initViewerCoreAndPlugins(req, res);
@@ -321,6 +384,7 @@ ${core.requireCore("env")}
 <script src="${constants.SERVER_ROOT}client-rpc.js"></script>
 <script>
 window.XOPAT_CSRF_TOKEN = '${session ? session.csrfToken : ''}';
+window.XOPAT_DEV_MODE = ${JSON.stringify(DEV_MODE)};
 window.xserver = window.xserver || XOpatServerRPC.createClient({
   getViewerId: () => window.VIEWER?.id || undefined
 });
@@ -408,6 +472,71 @@ ${core.requireCore("deps")}`;
     res.end();
 }
 
+async function responseScheme(req, res, templateName="scheme.html") {
+    const core = initViewerCoreAndPlugins(req, res);
+    if (!core) return;
+
+    const payload = {
+        viewer: {
+            name: core.CORE?.name || "xOpat",
+            version: core.VERSION || STARTUP_VERSION,
+        },
+        paramsDefaults: core.CORE?.setup || {},
+        clientDefaults: {
+            image_group_server: core.CORE?.client?.image_group_server ?? null,
+            image_group_protocol: core.CORE?.client?.image_group_protocol ?? null,
+            data_group_server: core.CORE?.client?.data_group_server ?? null,
+            data_group_protocol: core.CORE?.client?.data_group_protocol ?? null,
+        },
+        plugins: normalizeSchemePluginRecords(core.PLUGINS),
+        typesSource: fs.readFileSync(
+            path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "src/types/app.d.ts"),
+            { encoding: "utf8", flag: "r" }
+        ),
+        configTypesSource: fs.readFileSync(
+            path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "src/types/config.d.ts"),
+            { encoding: "utf8", flag: "r" }
+        )
+    };
+
+    const replacer = function (match, p1) {
+        try {
+            switch (p1) {
+                case "head":
+                    return `
+${core.requireOpenseadragon()}
+${core.requireLibs()}
+${core.requireCore("env")}`;
+                case "page-init":
+                    return `
+    <script type="text/javascript">
+    window.schemeInit = ${JSON.stringify(payload)};
+    </script>`;
+                case "shared-scheme-script":
+                    return `
+    <script type="text/javascript">
+${fs.readFileSync(
+    path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, "server/static/scheme.js"),
+    { encoding: "utf8", flag: "r" }
+)}
+    </script>`;
+                default:
+                    return "";
+            }
+        } catch (e) {
+            throw e;
+        }
+    };
+
+    const html = fs.readFileSync(
+        path.join(constants._ABSPATH_NO_SLASH || constants.ABSPATH, `server/templates/${templateName}`),
+        { encoding: "utf8", flag: "r" }
+    ).replace(constants.TEMPLATE_PATTERN, replacer);
+
+    res.write(html);
+    res.end();
+}
+
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
@@ -466,6 +595,18 @@ const server = http.createServer(async (req, res) => {
             return responseDeveloperSetup(req, res);
         }
 
+        if (urlObj.pathname.startsWith("/scheme_raw_extended")) {
+            return responseScheme(req, res, "scheme-raw-extended.html");
+        }
+
+        if (urlObj.pathname.startsWith("/scheme_raw")) {
+            return responseScheme(req, res, "scheme-raw.html");
+        }
+
+        if (urlObj.pathname.startsWith("/scheme")) {
+            return responseScheme(req, res);
+        }
+
         let session = getSession(req);
         if (!session) {
             session = createSession(res);
@@ -473,7 +614,7 @@ const server = http.createServer(async (req, res) => {
 
         return responseViewer(req, res, session);
     } catch (e) {
-        console.error(e);
+        logger.error(e);
         res.statusCode = 500;
         res.write(String(e));
         res.end();
@@ -483,22 +624,25 @@ server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     const ENV = process.env.XOPAT_ENV;
     const existsDefaultLocation = fs.existsSync(`${ABSPATH}env${path.sep}env.json`);
     if (!ENV && existsDefaultLocation) {
-        console.log("Using env/env.json..");
+        logger.info("Using env/env.json..");
     } else if (ENV) {
-        if (fs.existsSync(ENV)) console.log("Using static ENV from ", ENV);
-        else console.log("Using configuration from XOPAT_ENV: ", ENV.substring(0, 31) + "...");
+        if (fs.existsSync(ENV)) logger.info("Using static ENV from ", ENV);
+        else logger.info("Using configuration from XOPAT_ENV: ", ENV.substring(0, 31) + "...");
     } else {
-        console.log("Using default ENV (no overrides).");
+        logger.info("Using default ENV (no overrides).");
     }
 
     const port = constants.SERVER.PORT;
     const scheme = port === 443 ? "https" : "http";
     const host = constants.SERVER.HOST === "0.0.0.0" ? "localhost" : constants.SERVER.HOST;
     const url = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
-    console.log(`The server is listening on ${url} ...`);
-    console.log(`  To manually create and run a session, open ${url}/dev_setup`);
-    console.log(`  To open using GET, provide ${url}?slides=slide,list&masks=mask,list`);
-    console.log(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
-    console.log(`                                      or sent the data using HTTP POST`);
-    console.log(`  The session description is available in src/README.md`);
+    logger.info(`The server is listening on ${url} ...`);
+    logger.info(`  To manually create and run a session, open ${url}/dev_setup`);
+    logger.info(`  To inspect the deployment-aware session schema, open ${url}/scheme`);
+    logger.info(`  To inspect the raw machine-readable schema output, open ${url}/scheme_raw`);
+    logger.info(`  To inspect the raw extended schema output, open ${url}/scheme_raw_extended`);
+    logger.info(`  To open using GET, provide ${url}?slides=slide,list&masks=mask,list`);
+    logger.info(`  To open using JSON session, provide ${url}#urlEncodedSessionJSONHere`);
+    logger.info(`                                      or sent the data using HTTP POST`);
+    logger.info(`  The session description is available in src/README.md`);
 });

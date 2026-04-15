@@ -21,6 +21,15 @@ if ($directive) {
         case "dev_setup":
             require_once ABSPATH . "server/php/dev_setup.php";
             exit;
+        case "scheme":
+            require_once ABSPATH . "server/php/scheme.php";
+            exit;
+        case "scheme_raw":
+            require_once ABSPATH . "server/php/scheme_raw.php";
+            exit;
+        case "scheme_raw_extended":
+            require_once ABSPATH . "server/php/scheme_raw_extended.php";
+            exit;
         case "user_setup":
             require_once ABSPATH . "server/php/user_setup.php";
             exit;

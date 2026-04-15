@@ -65,14 +65,20 @@ interface TileSourceMetadata {
  * @property shaders array of optional rendering specification
  * @property protocol deprecated, use DataOverride instead
  * @property name custom tissue name, default the tissue path
+ * @property sessionName overrides the global params.sessionName for this background
  * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
  * @property id unique ID for the background, created automatically from data path if not defined
  */
 interface BackgroundItem {
     dataReference: number | DataSpecification;
     shaders?: VisualizationShaderGroupOrLayer[];
+    lossless?: boolean;
     protocol?: string;
+    microns?: number;
+    micronsX?: number;
+    micronsY?: number;
     name?: string;
+    sessionName?: string;
     goalIndex?: number;
     id?: string;
     options?: SlideSourceOptions;
@@ -93,10 +99,11 @@ interface StandaloneBackgroundItem extends BackgroundItem {
  * @property shaders array of shader specifications
  * @property protocol deprecated, use DataOverride instead
  * @property name custom tissue name, default the tissue path
- * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ * @property goalIndex preferred visualization index when this item is selected
  */
 interface VisualizationItem {
-    shaders?: Record<string, VisualizationShaderGroupOrLayer>;
+    shaders: Record<string, VisualizationShaderGroupOrLayer>;
+    lossless?: boolean;
     protocol?: string;
     name?: string;
     goalIndex?: number;

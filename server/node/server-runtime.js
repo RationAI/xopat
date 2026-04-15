@@ -98,6 +98,10 @@ class XopatServerRuntime {
         this.serverBuildDirName = options.serverBuildDirName || SERVER_BUILD_DIR;
         this.logger = options.logger || console;
         this.auth = options.auth || {};
+        this.devMode = options.devMode === true;
+        this.devLogBuffer = options.devLogBuffer || null;
+        this.version = options.version || "dev";
+        this.startedAt = options.startedAt || new Date();
         fs.mkdirSync(this.cacheDir, { recursive: true });
         this.registry = { plugin: Object.create(null), module: Object.create(null) };
         this.scan();
@@ -234,7 +238,8 @@ class XopatServerRuntime {
     createClient: function(opts){
       return {
         plugin: new Proxy({}, { get: function(_, id){ return makeScope("plugin", id, opts); } }),
-        module: new Proxy({}, { get: function(_, id){ return makeScope("module", id, opts); } })
+        module: new Proxy({}, { get: function(_, id){ return makeScope("module", id, opts); } }),
+        server: new Proxy({}, { get: function(_, id){ return makeScope("server", id, opts); } })
       };
     }
   };
@@ -246,7 +251,7 @@ class XopatServerRuntime {
         const parts = urlObj.pathname.split("/").filter(Boolean);
         const [, kindRaw, idRaw, methodRaw] = parts;
 
-        if (!["plugin", "module"].includes(kindRaw) || !idRaw || !methodRaw) {
+        if (!["plugin", "module", "server"].includes(kindRaw) || !idRaw || !methodRaw) {
             return this.#writeJson(res, 404, {
                 error: "RPC target not found",
                 code: "RPC_NOT_FOUND"
@@ -257,17 +262,31 @@ class XopatServerRuntime {
         const id = decodeURIComponent(idRaw);
         const method = decodeURIComponent(methodRaw);
 
-        let item = this.registry[kind] && this.registry[kind][id];
-        if (!item) {
-            this.scan();
-            item = this.registry[kind] && this.registry[kind][id];
-        }
+        let item = null;
+        let target = null;
 
-        if (!item) {
-            return this.#writeJson(res, 404, {
-                error: `${kind} '${id}' not found`,
-                code: "RPC_UNKNOWN_TARGET"
-            });
+        if (kind === "server") {
+            item = { id, kind, name: id, rootDir: this.root };
+            target = this.#getBuiltinRpcTarget(id, method);
+            if (!target) {
+                return this.#writeJson(res, 404, {
+                    error: `${kind} '${id}' not found`,
+                    code: "RPC_UNKNOWN_TARGET"
+                });
+            }
+        } else {
+            item = this.registry[kind] && this.registry[kind][id];
+            if (!item) {
+                this.scan();
+                item = this.registry[kind] && this.registry[kind][id];
+            }
+
+            if (!item) {
+                return this.#writeJson(res, 404, {
+                    error: `${kind} '${id}' not found`,
+                    code: "RPC_UNKNOWN_TARGET"
+                });
+            }
         }
 
         let body;
@@ -280,42 +299,43 @@ class XopatServerRuntime {
             });
         }
 
-        let loaded = await this.#loadItem(item);
+        if (kind !== "server") {
+            let loaded = await this.#loadItem(item);
 
-
-        if (loaded.duplicates.length) {
-            return this.#writeJson(res, 500, {
-                error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
-                code: "RPC_DUPLICATE_EXPORT"
-            });
-        }
-
-        let target = loaded.methods[method];
-
-// re-scan once in case a new .server.* file appeared after startup
-        if (!target) {
-            this.scan();
-            item = this.registry[kind] && this.registry[kind][id];
-
-            if (item) {
-                loaded = await this.#loadItem(item);
-
-                if (loaded.duplicates.length) {
-                    return this.#writeJson(res, 500, {
-                        error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
-                        code: "RPC_DUPLICATE_EXPORT"
-                    });
-                }
-
-                target = loaded.methods[method];
+            if (loaded.duplicates.length) {
+                return this.#writeJson(res, 500, {
+                    error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
+                    code: "RPC_DUPLICATE_EXPORT"
+                });
             }
-        }
 
-        if (!target) {
-            return this.#writeJson(res, 404, {
-                error: `Method '${method}' not found`,
-                code: "RPC_UNKNOWN_METHOD"
-            });
+            target = loaded.methods[method];
+
+            // re-scan once in case a new .server.* file appeared after startup
+            if (!target) {
+                this.scan();
+                item = this.registry[kind] && this.registry[kind][id];
+
+                if (item) {
+                    loaded = await this.#loadItem(item);
+
+                    if (loaded.duplicates.length) {
+                        return this.#writeJson(res, 500, {
+                            error: `Duplicate server exports: ${loaded.duplicates.join(", ")}`,
+                            code: "RPC_DUPLICATE_EXPORT"
+                        });
+                    }
+
+                    target = loaded.methods[method];
+                }
+            }
+
+            if (!target) {
+                return this.#writeJson(res, 404, {
+                    error: `Method '${method}' not found`,
+                    code: "RPC_UNKNOWN_METHOD"
+                });
+            }
         }
 
         const rawPolicy = target.methodPolicy || {};
@@ -392,6 +412,106 @@ class XopatServerRuntime {
                 code: aborted ? "RPC_TIMEOUT" : "RPC_INTERNAL_ERROR",
             });
         }
+    }
+
+
+    #getBuiltinRpcTarget(scopeId, methodName) {
+        if (!this.devMode) return null;
+        const builtinTarget = this.#resolveBuiltinDevTarget(scopeId, methodName);
+        if (!builtinTarget) return null;
+
+        return {
+            file: `[builtin]/server/${scopeId}`,
+            fn: builtinTarget.fn,
+            methodPolicy: {
+                auth: { requireSession: true },
+                runtime: { timeoutMs: 2_000 }
+            },
+        };
+    }
+
+    #resolveBuiltinDevTarget(scopeId, methodName) {
+        const sharedTargets = {
+            getLogs: {
+                fn: (ctx, payload) => this.#readDevLogs(ctx, payload),
+            },
+        };
+
+        if (scopeId === "core") {
+            return {
+                getStatus: {
+                    fn: (ctx, payload) => this.#readDevStatus(ctx, payload),
+                },
+                ...sharedTargets,
+            }[methodName] || null;
+        }
+
+        if (scopeId === "dev") {
+            return sharedTargets[methodName] || null;
+        }
+
+        return null;
+    }
+
+    #readDevLogs(_ctx, payload = {}) {
+        if (!this.devMode || !this.devLogBuffer) {
+            const error = new Error("Server logs are only available in dev mode");
+            error.code = "RPC_DEV_MODE_REQUIRED";
+            throw error;
+        }
+
+        const snapshot = this.devLogBuffer.getEntries(payload || {});
+        return {
+            devMode: true,
+            scope: "server/core/getLogs",
+            ...snapshot,
+        };
+    }
+
+    #readDevStatus(_ctx, payload = {}) {
+        if (!this.devMode) {
+            const error = new Error("Server status is only available in dev mode");
+            error.code = "RPC_DEV_MODE_REQUIRED";
+            throw error;
+        }
+
+        const includeRegistry = payload?.includeRegistry !== false;
+        const now = new Date();
+        const pluginIds = Object.keys(this.registry.plugin || {}).sort();
+        const moduleIds = Object.keys(this.registry.module || {}).sort();
+
+        return {
+            devMode: true,
+            scope: "server/core/getStatus",
+            version: this.version,
+            pid: process.pid,
+            node: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            uptimeMs: Math.max(0, now.getTime() - this.startedAt.getTime()),
+            startedAt: this.startedAt.toISOString(),
+            now: now.toISOString(),
+            cacheDir: this.cacheDir,
+            root: this.root,
+            logBuffer: this.devLogBuffer ? {
+                available: true,
+                totalBuffered: this.devLogBuffer.entries.length,
+                maxEntries: this.devLogBuffer.maxEntries,
+            } : {
+                available: false,
+                totalBuffered: 0,
+                maxEntries: 0,
+            },
+            registry: includeRegistry ? {
+                pluginCount: pluginIds.length,
+                moduleCount: moduleIds.length,
+                plugins: pluginIds,
+                modules: moduleIds,
+            } : {
+                pluginCount: pluginIds.length,
+                moduleCount: moduleIds.length,
+            },
+        };
     }
 
     #rpcSessionWarned = new Set();

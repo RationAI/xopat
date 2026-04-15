@@ -434,7 +434,7 @@ node cluster-index.js
 Optional worker count: `XOPAT_WORKERS=4 node cluster-index.js`
 
 
-## Development - Logs
+## Development - Core RPC
 Start server with: `--dev / XOPAT_DEV_MODE=1 flag`
 
 
@@ -444,4 +444,12 @@ or:
 XOPAT_DEV_MODE=1 node server/node/index.js
 
 Browser example:
-window.xserver.server.dev.getLogs({ afterId: 0, limit: 200 })
+window.xserver.server.core.getStatus()
+window.xserver.server.core.getLogs({ afterId: 0, limit: 200 })
+
+These built-in server RPC routes are available only in dev mode:
+
+- `window.xserver.server.core.getStatus(payload?)`
+- `window.xserver.server.core.getLogs(payload?)`
+
+`window.xserver.server.dev.getLogs(...)` remains available as a compatibility alias.
