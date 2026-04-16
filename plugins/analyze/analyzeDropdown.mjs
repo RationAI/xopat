@@ -294,7 +294,7 @@ addPlugin('analyze', class extends XOpatPlugin {
         container.className = 'p-2 space-y-3';
 
         for (const [idx, app] of items.entries()) {
-            const card = this._createAppCard(app, idx, tOr);
+            const card = this._createAppCard(app, idx, tOr, fw);
             container.appendChild(card);
         }
 
@@ -309,7 +309,7 @@ addPlugin('analyze', class extends XOpatPlugin {
         fw.focus();
     }
 
-    _createAppCard(app, idx, tOr) {
+    _createAppCard(app, idx, tOr, fw) {
         const appId = app?.id || app?.app_id;
         const wrap = document.createElement('div');
         wrap.className = 'p-3 rounded-box bg-base-200 border border-base-300';
