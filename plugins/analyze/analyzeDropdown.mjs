@@ -264,12 +264,17 @@ addPlugin('analyze', class extends XOpatPlugin {
             if (prevModeId !== undefined) annot.setModeById(prevModeId);
             if (annot.presets.left) annot.presets.left.objectFactory = prevFactory;
             if (!wasEnabled) annot.enableInteraction(false);
-            if (fw._rootEl) fw._rootEl.style.display = '';
+            // Restore window on cancel/error immediately; success path restores after ID polling
+            if (!annotObj && fw._rootEl) fw._rootEl.style.display = '';
         }
 
-        const id = await this._waitForAnnotationId(annotObj);
-        if (!id) throw new Error('Annotation ID not assigned within timeout');
-        return id;
+        try {
+            const id = await this._waitForAnnotationId(annotObj);
+            if (!id) throw new Error('Annotation ID not assigned within timeout');
+            return id;
+        } finally {
+            if (fw._rootEl) fw._rootEl.style.display = '';
+        }
     }
 
     async _showAppsWindow(tOr) {
@@ -352,7 +357,6 @@ addPlugin('analyze', class extends XOpatPlugin {
         configBtn.addEventListener('click', async () => {
             inputsSection.classList.toggle('hidden');
             if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
-                inputsLoaded = true;
                 try {
                     const api = EmpationAPI.V3.get();
                     const caseId = await this._resolveCaseId();
@@ -362,6 +366,7 @@ addPlugin('analyze', class extends XOpatPlugin {
                     inputsForm = await this._buildInputsForm(appId, scope, onCapture);
                     inputsSection.innerHTML = '';
                     inputsSection.appendChild(inputsForm.container);
+                    inputsLoaded = true;
                 } catch (e) {
                     inputsSection.innerHTML = `<div class="text-xs text-error">Failed to load inputs: ${e?.message || String(e)}</div>`;
                 }
@@ -449,8 +454,7 @@ addPlugin('analyze', class extends XOpatPlugin {
                     if (el.type === 'checkbox') {
                         result[key] = el.checked ? 'true' : 'false';
                     } else {
-                        const val = el.value?.trim();
-                        if (val) result[key] = val;
+                        result[key] = el.value?.trim() ?? '';
                     }
                 }
                 return result;
