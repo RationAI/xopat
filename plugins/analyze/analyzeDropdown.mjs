@@ -173,8 +173,23 @@ addPlugin('analyze', class extends XOpatPlugin {
     //  (EmpaiaStandaloneJobs, EmpationAPI, Empaia-specific app/case/EAD models).
     //  Future work should generalize to support other backends (DICOM, HuggingFace, generic REST)
     //  via an adapter/provider pattern, with the plugin only depending on an abstract interface.
-    get _caseId() {
-        return this.getOption('caseId') || this.params.caseId;
+
+    /**
+     * Resolve the case ID for the currently open slide.
+     * Priority: current slide lookup → static config → empaia active scope.
+     */
+    async _resolveCaseId() {
+        const slideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId();
+        if (slideId) {
+            const api = EmpationAPI.V3.get();
+            const cases = await api.cases.list();
+            for (const c of cases.items) {
+                const slides = await api.cases.slides(c.id);
+                if (slides.items.some(s => s.id === slideId)) return c.id;
+            }
+        }
+
+        return this.getOption('caseId') || this.params.caseId || plugin('empaia')?.scopeAPI?.activeCaseId || null;
     }
 
     _collapseDropdown(tab) {
@@ -185,6 +200,76 @@ addPlugin('analyze', class extends XOpatPlugin {
             wrapper?.classList.remove('dropdown-open');
             try { tab.hideRecent?.(); } catch(_) {}
         } catch(_) {}
+    }
+
+    /**
+     * Poll obj.id until the empaia plugin assigns it asynchronously (after API POST).
+     * @param {object} obj annotation object reference from annotation-create event
+     * @param {number} timeout max wait in ms
+     * @returns {Promise<string|null>} annotation ID or null on timeout
+     */
+    async _waitForAnnotationId(obj, timeout = 5000) {
+        const start = Date.now();
+        while (!obj.id && Date.now() - start < timeout) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+        return obj.id || null;
+    }
+
+    /**
+     * Hide the FloatingWindow, activate rectangle drawing mode, wait for the user
+     * to draw one annotation, then restore everything and return the annotation ID.
+     *
+     * State restored in finally: mode, left-preset factory, enabled state, window visibility.
+     * Escape key cancels and rejects with Error('cancelled').
+     *
+     * @param {FloatingWindow} fw the apps FloatingWindow to hide during drawing
+     * @returns {Promise<string>} Empaia annotation ID
+     */
+    async _captureAnnotation(fw) {
+        const annot = singletonModule('annotations');
+        if (!annot) throw new Error('Annotations module not available');
+        if (!annot.presets.left) throw new Error('No active annotation preset configured');
+
+        const rectFactory = annot.getAnnotationObjectFactory('rect');
+        if (!rectFactory) throw new Error('Rectangle annotation factory not available');
+
+        const prevModeId = annot.mode?.getId?.();
+        const prevFactory = annot.presets.left.objectFactory;
+        const wasEnabled = !annot.disabledInteraction;
+
+        annot.enableInteraction(true);
+        annot.setModeById('custom');
+        annot.presets.left.objectFactory = rectFactory;
+        if (fw._rootEl) fw._rootEl.style.display = 'none';
+
+        let annotObj;
+        try {
+            annotObj = await new Promise((resolve, reject) => {
+                const onCreate = (ev) => {
+                    annot.removeHandler('annotation-create', onCreate);
+                    document.removeEventListener('keydown', onEscape, true);
+                    resolve(ev.object);
+                };
+                const onEscape = (e) => {
+                    if (e.key !== 'Escape') return;
+                    annot.removeHandler('annotation-create', onCreate);
+                    document.removeEventListener('keydown', onEscape, true);
+                    reject(new Error('cancelled'));
+                };
+                annot.addHandler('annotation-create', onCreate);
+                document.addEventListener('keydown', onEscape, true);
+            });
+        } finally {
+            if (prevModeId) annot.setModeById(prevModeId);
+            if (annot.presets.left) annot.presets.left.objectFactory = prevFactory;
+            if (!wasEnabled) annot.enableInteraction(false);
+            if (fw._rootEl) fw._rootEl.style.display = '';
+        }
+
+        const id = await this._waitForAnnotationId(annotObj);
+        if (!id) throw new Error('Annotation ID not assigned within timeout');
+        return id;
     }
 
     async _showAppsWindow(tOr) {
@@ -268,13 +353,15 @@ addPlugin('analyze', class extends XOpatPlugin {
                 inputsLoaded = true;
                 try {
                     const api = EmpationAPI.V3.get();
-                    const examination = await api.examinations.create(this._caseId, appId);
+                    const caseId = await this._resolveCaseId();
+                    if (!caseId) throw new Error('No active case found');
+                    const examination = await api.examinations.create(caseId, appId);
                     const scope = await api.getScopeFrom(examination);
                     inputsForm = await this._buildInputsForm(appId, scope);
                     inputsSection.innerHTML = '';
                     inputsSection.appendChild(inputsForm.container);
                 } catch (e) {
-                    inputsSection.innerHTML = `<div class="text-xs text-error">Failed to load inputs: ${e.message}</div>`;
+                    inputsSection.innerHTML = `<div class="text-xs text-error">Failed to load inputs: ${e?.message || String(e)}</div>`;
                 }
             }
         });
@@ -300,9 +387,11 @@ addPlugin('analyze', class extends XOpatPlugin {
                 const inputs = inputsForm?.getInputs?.() || {};
                 console.log('[analyze] Running job with inputs:', inputs);
 
+                const caseId = await this._resolveCaseId();
+                if (!caseId) throw new Error('No active case found');
                 const res = await window.EmpaiaStandaloneJobs?.createAndRunJob?.({
                     appId,
-                    caseId: this._caseId,
+                    caseId,
                     mode: 'STANDALONE',
                     inputs
                 });
@@ -344,18 +433,34 @@ addPlugin('analyze', class extends XOpatPlugin {
                 return { container, getInputs: () => ({}) };
             }
 
-            let slides = [];
+            const currentSlideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId() || '';
+            let rois = [];
             try {
-                slides = await window.EmpaiaStandaloneJobs?.getCaseSlides?.(this._caseId) || [];
+                const slideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId();
+                console.log('[analyze] Querying ROIs for slideId:', slideId, 'scope:', scope);
+                // ROIs are annotations with class value "org.empaia.global.v1.classes.roi"
+                // API requires at least one of: creators, jobs, or annotations in the body
+                const roiList = await scope.annotations.query(
+                    {
+                        creators: [scope.id],
+                        ...(slideId ? { references: [slideId] } : {}),
+                    },
+                    true, // with_classes=true so we can filter by ROI class
+                );
+                console.log('[analyze] ROI query result:', roiList);
+                const ROI_CLASS = 'org.empaia.global.v1.classes.roi';
+                rois = (roiList?.items || []).filter(a =>
+                    a.classes?.some(c => c.value === ROI_CLASS)
+                );
             } catch (e) {
-                console.warn('[analyze] Failed to fetch slides', e);
+                console.warn('[analyze] Failed to fetch ROIs', e, 'payload:', e?.payload);
             }
 
             const inputFields = {};
 
             for (const input of requiredInputs) {
-                const row = this._createInputRow(input, slides, inputFields);
-                container.appendChild(row);
+                const row = this._createInputRow(input, currentSlideId, rois, inputFields);
+                if (row) container.appendChild(row);
             }
 
             const getInputs = () => {
@@ -379,7 +484,16 @@ addPlugin('analyze', class extends XOpatPlugin {
         }
     }
 
-    _createInputRow(input, slides, inputFields) {
+    _createInputRow(input, currentSlideId, rois, inputFields) {
+        if (input.type === 'wsi') {
+            // Auto-fill with current slide — no UI row needed
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.value = currentSlideId;
+            inputFields[input.key] = hidden;
+            return null;
+        }
+
         const row = document.createElement('div');
         row.className = 'flex items-center gap-2';
 
@@ -390,14 +504,14 @@ addPlugin('analyze', class extends XOpatPlugin {
 
         let fieldEl;
 
-        if (input.type === 'wsi') {
+        if (input.type === 'roi') {
             fieldEl = document.createElement('select');
             fieldEl.className = 'select select-xs select-bordered flex-1';
-            fieldEl.innerHTML = '<option value="">-- Select slide --</option>';
-            slides.forEach(slide => {
+            fieldEl.innerHTML = '<option value="">-- Select ROI --</option>';
+            rois.forEach(roi => {
                 const opt = document.createElement('option');
-                opt.value = slide.id;
-                opt.textContent = slide.local_id || slide.id;
+                opt.value = roi.id;
+                opt.textContent = roi.name || roi.description || roi.id;
                 fieldEl.appendChild(opt);
             });
         } else if (input.type === 'bool') {
