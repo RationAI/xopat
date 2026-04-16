@@ -347,6 +347,8 @@ addPlugin('analyze', class extends XOpatPlugin {
         let inputsForm = null;
         let inputsLoaded = false;
 
+        const onCapture = () => this._captureAnnotation(fw);
+
         configBtn.addEventListener('click', async () => {
             inputsSection.classList.toggle('hidden');
             if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
@@ -357,7 +359,7 @@ addPlugin('analyze', class extends XOpatPlugin {
                     if (!caseId) throw new Error('No active case found');
                     const examination = await api.examinations.create(caseId, appId);
                     const scope = await api.getScopeFrom(examination);
-                    inputsForm = await this._buildInputsForm(appId, scope);
+                    inputsForm = await this._buildInputsForm(appId, scope, onCapture);
                     inputsSection.innerHTML = '';
                     inputsSection.appendChild(inputsForm.container);
                 } catch (e) {
@@ -416,7 +418,7 @@ addPlugin('analyze', class extends XOpatPlugin {
         return wrap;
     }
 
-    async _buildInputsForm(appId, scope, mode = 'STANDALONE') {
+    async _buildInputsForm(appId, scope, onCapture, mode = 'STANDALONE') {
         const container = document.createElement('div');
         container.className = 'space-y-2 mt-2';
 
