@@ -464,13 +464,10 @@ addPlugin('analyze', class extends XOpatPlugin {
         }
     }
 
-    _createInputRow(input, currentSlideId, rois, inputFields) {
+    _createInputRow(input, currentSlideId, inputFields, onCapture) {
         if (input.type === 'wsi') {
             // Auto-fill with current slide — no UI row needed
-            const hidden = document.createElement('input');
-            hidden.type = 'hidden';
-            hidden.value = currentSlideId;
-            inputFields[input.key] = hidden;
+            inputFields[input.key] = { value: currentSlideId };
             return null;
         }
 
@@ -482,19 +479,45 @@ addPlugin('analyze', class extends XOpatPlugin {
         label.textContent = `${input.key} (${input.type})`;
         row.appendChild(label);
 
+        if (input.type === 'roi') {
+            const valueHolder = { value: '' };
+            inputFields[input.key] = valueHolder;
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-xs btn-ghost';
+            btn.textContent = 'Create annotation';
+
+            const statusEl = document.createElement('span');
+            statusEl.className = 'text-xs opacity-70 ml-1';
+
+            btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                btn.textContent = 'Drawing\u2026';
+                statusEl.textContent = '';
+                try {
+                    const id = await onCapture();
+                    valueHolder.value = id;
+                    btn.textContent = 'Redraw';
+                    statusEl.textContent = id.slice(0, 8) + '\u2026';
+                } catch (e) {
+                    btn.textContent = 'Create annotation';
+                    if (e.message !== 'cancelled') {
+                        statusEl.textContent = '\u26a0 ' + e.message;
+                    }
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+
+            row.appendChild(btn);
+            row.appendChild(statusEl);
+            return row;
+        }
+
         let fieldEl;
 
-        if (input.type === 'roi') {
-            fieldEl = document.createElement('select');
-            fieldEl.className = 'select select-xs select-bordered flex-1';
-            fieldEl.innerHTML = '<option value="">-- Select ROI --</option>';
-            rois.forEach(roi => {
-                const opt = document.createElement('option');
-                opt.value = roi.id;
-                opt.textContent = roi.name || roi.description || roi.id;
-                fieldEl.appendChild(opt);
-            });
-        } else if (input.type === 'bool') {
+        if (input.type === 'bool') {
             fieldEl = document.createElement('input');
             fieldEl.type = 'checkbox';
             fieldEl.className = 'checkbox checkbox-xs';
