@@ -261,6 +261,30 @@
         };
     }
 
+    function buildShaderGroupSchema(childRef) {
+        return {
+            type: "object",
+            properties: {
+                id: { type: "string" },
+                type: { const: "group" },
+                name: { type: "string" },
+                visible: { anyOf: [{ type: "integer", enum: [0, 1] }, { type: "boolean" }] },
+                shaders: {
+                    type: "object",
+                    additionalProperties: { $ref: childRef },
+                    description: "Map of child shader id to child shader or group configuration."
+                },
+                order: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Optional ordered list of child shader ids."
+                }
+            },
+            required: ["type", "shaders"],
+            additionalProperties: true
+        };
+    }
+
     function buildPluginSchemas(plugins) {
         const properties = {};
         for (const [pluginId, pluginRecord] of Object.entries(plugins || {})) {
@@ -317,51 +341,9 @@
                 anyOf: [{ $ref: "#/$defs/DataID" }, { $ref: "#/$defs/DataOverride" }]
             },
             BackgroundShaderLayer: backgroundLayerBaseSchema,
-            BackgroundShaderGroup: {
-                allOf: [
-                    {
-                        ...backgroundLayerBaseSchema,
-                        properties: {
-                            ...backgroundLayerBaseSchema.properties,
-                            type: { const: "group" }
-                        },
-                        required: ["type"]
-                    },
-                    {
-                        type: "object",
-                        properties: {
-                            shaders: {
-                                type: "object",
-                                additionalProperties: { $ref: "#/$defs/BackgroundShaderGroupOrLayer" }
-                            },
-                            order: { type: "array", items: { type: "string" } }
-                        }
-                    }
-                ]
-            },
+            BackgroundShaderGroup: buildShaderGroupSchema("#/$defs/BackgroundShaderGroupOrLayer"),
             VisualizationShaderLayer: visualizationLayerBaseSchema,
-            VisualizationShaderGroup: {
-                allOf: [
-                    {
-                        ...visualizationLayerBaseSchema,
-                        properties: {
-                            ...visualizationLayerBaseSchema.properties,
-                            type: { const: "group" }
-                        },
-                        required: ["type"]
-                    },
-                    {
-                        type: "object",
-                        properties: {
-                            shaders: {
-                                type: "object",
-                                additionalProperties: { $ref: "#/$defs/VisualizationShaderGroupOrLayer" }
-                            },
-                            order: { type: "array", items: { type: "string" } }
-                        }
-                    }
-                ]
-            }
+            VisualizationShaderGroup: buildShaderGroupSchema("#/$defs/VisualizationShaderGroupOrLayer")
         };
         defs.BackgroundShaderGroupOrLayer = {
             anyOf: [{ $ref: "#/$defs/BackgroundShaderLayer" }, { $ref: "#/$defs/BackgroundShaderGroup" }]

@@ -2933,7 +2933,7 @@ form.submit();
 
         /**
          * Create a ViewerManager.
-         * @param {object} CONFIG - Configuration bag; must contain params.headers etc. used to configure viewers.
+         * @param {object} CONFIG - Configuration bag with sanitized viewer params and session data.
          */
         constructor(CONFIG: typeof APPLICATION_CONTEXT.config) {
             super();
@@ -3183,7 +3183,7 @@ form.submit();
             const preferredWebGlVersion = APPLICATION_CONTEXT.getOption("webGlPreferredVersion");
             const flexDrawerOptions = {
                 webGlPreferredVersion: preferredWebGlVersion,
-                backgroundColor: APPLICATION_CONTEXT.getOption("background"),
+                backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
@@ -3238,6 +3238,22 @@ form.submit();
                 viewerOptions
             ));
             (viewer as any).__renderingCapability = renderingCapability;
+
+            viewer.makeScalebar({
+                pixelsPerMeter: 1,
+                sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC.bind(null, "px"),
+                stayInsideImage: false,
+                location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
+                xOffset: 5,
+                yOffset: 10,
+                backgroundColor: "rgba(255, 255, 255, 0.5)",
+                fontSize: "small",
+                barThickness: 2,
+                destroy: false
+            });
+            if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
+                viewer.scalebar.setActive(false);
+            }
 
             $(viewer.element).on('contextmenu', function (event: Event) {
                 event.preventDefault();

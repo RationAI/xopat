@@ -311,7 +311,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 $("#system-message-title").html(title);
                 $("#system-message-details").html(description);
                 $("#system-message").removeClass("hidden");
-                $("#viewer-container").addClass("disabled");
+                $("body").addClass("disabled");
                 USER_INTERFACE.Tools.close();
                 this.active = true;
             },

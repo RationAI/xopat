@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-15
-//! Git commit: --90d3cfa-dirty
+//! Built on 2026-04-16
+//! Git commit: --13cbce3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -7066,7 +7066,14 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
     _tryPlaceRect(layerIndex, w, h) {
         const W = this.layerWidth;
         const H = this.layerHeight;
-        const st = this._layerState[layerIndex];
+        let st = this._layerState[layerIndex];
+
+        if (!st) {
+            // todo it happens that the _layerState is empty but plaing called! this is a bug
+            $.console.error('TextureAtlas2DArray._tryPlaceRect: invalid layerIndex');
+            this._createTexture(W, H, this.layers);
+            st = this._layerState[layerIndex];
+        }
 
         // try existing shelves
         for (const shelf of st.shelves) {
@@ -12787,8 +12794,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-15
-//! Git commit: --90d3cfa-dirty
+//! Built on 2026-04-16
+//! Git commit: --13cbce3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -13075,8 +13082,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-15
-//! Git commit: --90d3cfa-dirty
+//! Built on 2026-04-16
+//! Git commit: --13cbce3-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

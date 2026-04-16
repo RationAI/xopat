@@ -127,7 +127,7 @@
         "toolBar": true,
         "statusBar": true,
         // default background color, a hex RGB or RGBA
-        "background": null,
+        "backgroundColor": null,
         // todo update docs, this can carry multiple viewport configurations, also consider moving multiple params to the viewer-dependent configuration
         // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
         // point is in the viewport coordinate system of OpenSeadragon
@@ -179,6 +179,7 @@
             // The server supports url+header configuration for custom proxies. You can
             // - configure module/plugin to use local proxy endpoint
             // - configure the proxy here
+            // Request headers belong only here in secure server config, never in viewer/session params.
             "proxies": {
               // My proxy service will proxy a resource using token that is NOT exposed on the client.
               //"my-service": {

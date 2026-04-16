@@ -89,7 +89,24 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     const viewerSecureMode = // For safety test string too
         ENV.client.secureMode && (ENV.client.secureMode as unknown as string) !== "false";
     //default parameters not extended by CONFIG.params (would bloat link files)
-    CONFIG.params = (CONFIG.params || {}) as XOpatSetup;
+    const rawParams = (CONFIG.params || {}) as Record<string, unknown>;
+    const allowedParamNames = Object.keys(defaultSetup) as Array<keyof XOpatSetup>;
+    const sanitizedParams = {} as XOpatSetup;
+    const droppedParamNames: string[] = [];
+    for (const [name, value] of Object.entries(rawParams)) {
+        if (Object.prototype.hasOwnProperty.call(defaultSetup, name)) {
+            (sanitizedParams as Record<string, unknown>)[name] = value;
+        } else {
+            droppedParamNames.push(name);
+        }
+    }
+    if (droppedParamNames.length) {
+        console.warn(
+            `Ignoring unsupported viewer parameters: ${droppedParamNames.join(", ")}. ` +
+            `Only these viewer parameters are allowed: ${allowedParamNames.join(", ")}.`
+        );
+    }
+    CONFIG.params = sanitizedParams;
     //optimization allways present
     CONFIG.params.bypassCookies = CONFIG.params.bypassCookies ?? defaultSetup.bypassCookies;
     // todo enforce parsing also other by class models

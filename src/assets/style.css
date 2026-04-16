@@ -270,6 +270,9 @@ also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-nam
     max-height: initial !important;
 }
 
+.disabled {
+    position: relative;
+}
 /* Dimmed overlay over container */
 .disabled::after {
     content: '';
@@ -279,6 +282,7 @@ also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-nam
     top: 0;
     left: 0;
     filter: brightness(0.3);
+    z-index: 99998;
     background: #22272ead;
 }
 
@@ -396,7 +400,7 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 .bg-opacity::before {content: "";width: 100%;height: 100%;position: absolute;left: 0;
     background-color: var(--color-bg-primary);opacity: 0.6;top: 0;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
-.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
+.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse); z-index: 999999}
 .system-container .fa-solid, .system-container .fa-regular {color: var(--color-border-inverse);}
 .right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}

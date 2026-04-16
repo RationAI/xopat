@@ -133,7 +133,7 @@ interface XOpatElementInternalRecord extends XOpatElementItem {
  * The viewer session configuration.
  */
 interface XOpatSessionConfig {
-    params?: Record<string, unknown>;
+    params?: Partial<XOpatSetup>;
     data?: DataSpecification[];
     background?: BackgroundItem[];
     visualizations?: VisualizationItem[];

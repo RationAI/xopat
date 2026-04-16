@@ -53,14 +53,14 @@
      *
      */
     $.Viewer.prototype.makeScalebar = function(options) {
-        if (!this.scalebar) {
-            options = options || {};
-            options.viewer = this;
-            this.scalebar = new $.Scalebar(options);
-        } else {
-            options.viewer = this;
-            this.scalebar.refresh(options);
+        options = options || {};
+        options.viewer = this;
+
+        if (this.scalebar) {
+            this.scalebar.destroy();
         }
+
+        this.scalebar = new $.Scalebar(options);
     };
 
     $.ScalebarType = {
@@ -106,6 +106,8 @@
         this.barThickness = options.barThickness || 3;
 
         //todo reflect better in API, allow for distinct measures
+        this.pixelsPerMeterX = options.pixelsPerMeterX;
+        this.pixelsPerMeterY = options.pixelsPerMeterY;
         this.pixelsPerMeter = options.pixelsPerMeter || (options.pixelsPerMeterX + options.pixelsPerMeterY)/2;
         this.location = options.location || $.ScalebarLocation.BOTTOM_LEFT;
         this.xOffset = options.xOffset || 5;
@@ -674,16 +676,281 @@
 
                     if (this.viewer.isOpen()) initSlider();
                     else this.viewer.addOnceHandler('open', initSlider);
+                } else {
+                    const initSlider = () => {
+                        if (!this._active) return;
+
+                        const image = this.viewer.world.getItemAt(0);
+                        if (!image) return;
+
+                        if (this.magnificationContainer) return;
+
+                        const viewport = this.viewer.viewport;
+                        const inside = "oklch(var(--b1))";
+
+                        this.magnificationContainer = document.createElement("div");
+                        this.magnificationContainer.id = this.id + "-magnification";
+                        this.magnificationContainer.classList.add(
+                            "absolute",
+                            "m-0",
+                            "text-base-content",
+                            "flex",
+                            "flex-row",
+                            "items-stretch",
+                            "pointer-events-auto",
+                            "select-none",
+                            "bg-base-200",
+                            "rounded-lg",
+                            "pt-2"
+                        );
+                        this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width = "auto";
+
+                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
+                        this.magnificationContainer.appendChild(sync);
+
+                        const rotCol = document.createElement("div");
+                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
+
+                        const rotReadout = document.createElement("div");
+                        rotReadout.className =
+                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+
+                        const rotSliderContainer = document.createElement("div");
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        this._ui.rotSliderEl = rotSliderContainer;
+
+                        rotCol.append(rotReadout, rotSliderContainer);
+                        this.magnificationContainer.appendChild(rotCol);
+
+                        noUiSlider.cssClasses.target += " noUi-reverse";
+                        noUiSlider.create(rotSliderContainer, {
+                            start: viewport.getRotation() % 360,
+                            range: { min: 0, max: 360 },
+                            direction: "rtl",
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            step: 1,
+                            pips: {
+                                mode: "values",
+                                values: [0, 90, 180, 270, 360],
+                                density: 6,
+                                format: { to: (v) => `${Math.round(v)}°` },
+                            },
+                        });
+
+                        rotSliderContainer.querySelectorAll(".noUi-value-vertical").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+                        const rotSliderEl = rotSliderContainer.noUiSlider.target;
+                        rotSliderEl.style.width = "6px";
+                        rotSliderEl.style.border = "none";
+                        rotSliderEl.style.background = inside;
+
+                        let rotPrevent = false;
+                        const setRotation = (deg) => {
+                            const normalized = ((deg % 360) + 360) % 360;
+                            this.viewer.viewport.setRotation(normalized);
+                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                        };
+
+                        rotSliderContainer.noUiSlider.on("slide", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+                        rotSliderContainer.noUiSlider.on("change", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+
+                        const reflectRotation = () => {
+                            if (rotPrevent) return;
+                            const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360;
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(r);
+                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotPrevent = false;
+                        };
+                        this.viewer.addHandler("rotate", reflectRotation);
+                        this._ui.onRotate = reflectRotation;
+
+                        rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
+                            pip.classList.add("cursor-pointer", "hover:text-base-content");
+                            pip.addEventListener("click", (e) => {
+                                const value = parseFloat((e.target.textContent || "").replace("°", "").trim());
+                                if (!isNaN(value)) {
+                                    rotSliderContainer.noUiSlider.set(value);
+                                    setRotation(value);
+                                }
+                            });
+                        });
+
+                        const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
+                        const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
+                        let pipValues = [];
+                        for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
+                            pipValues.push(step);
+                        }
+                        if (pipValues.length < 2) {
+                            const count = 5;
+                            const span = maxLog - minLog;
+                            pipValues = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
+                        }
+                        const uniquePips = [];
+                        pipValues.forEach((value) => {
+                            if (!uniquePips.some((existing) => Math.abs(existing - value) < 1e-6)) {
+                                uniquePips.push(value);
+                            }
+                        });
+
+                        const sliderContainer = document.createElement("span");
+                        sliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        const sliderWrap = document.createElement("div");
+                        sliderWrap.className = "relative flex-1 flex flex-col items-center justify-center w-full";
+                        sliderWrap.style.minHeight = "120px";
+
+                        this._ui.magSliderEl = sliderContainer;
+                        const magCol = document.createElement("div");
+                        magCol.className = "flex flex-col items-center pb-2 pr-4";
+
+                        const levelReadout = document.createElement("input");
+                        levelReadout.type = "text";
+                        levelReadout.readOnly = true;
+                        levelReadout.className =
+                            "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
+                        levelReadout.style.padding = "0";
+                        levelReadout.style.height = "24px";
+                        levelReadout.style.fontSize = "11px";
+                        levelReadout.style.width = "56px";
+                        levelReadout.style.transform = "translate(14px, 0)";
+
+                        sliderWrap.appendChild(levelReadout);
+                        magCol.appendChild(sliderWrap);
+                        sliderWrap.appendChild(sliderContainer);
+
+                        this.magnificationContainer.appendChild(magCol);
+                        this.viewer.container.appendChild(this.magnificationContainer);
+
+                        noUiSlider.cssClasses.target = this._originalClassTarget;
+                        noUiSlider.create(sliderContainer, {
+                            range: { min: minLog, max: maxLog },
+                            start: Math.log2(Math.max(viewport.getZoom(), Number.EPSILON)),
+                            connect: false,
+                            direction: "rtl",
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            tooltips: false,
+                            pips: {
+                                mode: "values",
+                                values: uniquePips,
+                                density: 5,
+                                format: {
+                                    to: (value) => {
+                                        const nearestIndex = uniquePips.reduce((best, current, index) => {
+                                            const distance = Math.abs(current - value);
+                                            return distance < best.distance ? {index, distance} : best;
+                                        }, {index: 0, distance: Infinity}).index;
+                                        return `L${nearestIndex + 1}`;
+                                    },
+                                    from: (value) => value
+                                }
+                            }
+                        });
+
+                        const sliderEl = sliderContainer.noUiSlider.target;
+                        sliderEl.style.width = "6px";
+                        sliderEl.style.height = "100%";
+                        sliderEl.style.border = "none";
+                        sliderEl.style.background = inside;
+
+                        const formatLevel = (sliderValue) => {
+                            const nearestIndex = uniquePips.reduce((best, current, index) => {
+                                const distance = Math.abs(current - sliderValue);
+                                return distance < best.distance ? {index, distance} : best;
+                            }, {index: 0, distance: Infinity}).index;
+                            return `L${nearestIndex + 1}`;
+                        };
+                        const setLevelReadout = (zoom) => {
+                            levelReadout.value = formatLevel(Math.log2(Math.max(zoom, Number.EPSILON)));
+                        };
+                        setLevelReadout(viewport.getZoom());
+
+                        sliderContainer.querySelectorAll(".noUi-value").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold",
+                                "cursor-pointer",
+                                "hover:text-base-content"
+                            );
+                            el.addEventListener("click", () => {
+                                const label = el.textContent || "";
+                                const match = /^L(\d+)$/i.exec(label.trim());
+                                if (!match) return;
+                                const index = Number.parseInt(match[1], 10) - 1;
+                                const value = uniquePips[index];
+                                if (!Number.isFinite(value)) return;
+                                sliderContainer.noUiSlider.set(value);
+                                this.viewer.viewport.zoomTo(Math.pow(2, value));
+                            });
+                        });
+
+                        const onSliderChange = (values, handle) => {
+                            const sliderValue = parseFloat(values[handle]);
+                            this.viewer.viewport.zoomTo(Math.pow(2, sliderValue));
+                        };
+                        sliderContainer.noUiSlider.on("slide", onSliderChange);
+                        sliderContainer.noUiSlider.on("change", onSliderChange);
+
+                        const reflectUpdate = (e) => {
+                            if (sliderContainer.noUiSlider._prevented) return;
+                            sliderContainer.noUiSlider._prevented = true;
+                            sliderContainer.noUiSlider.set(Math.log2(Math.max(e.zoom, Number.EPSILON)));
+                            sliderContainer.noUiSlider._prevented = false;
+                            setLevelReadout(e.zoom);
+                        };
+                        this.viewer.addHandler("zoom", reflectUpdate);
+                        this._ui.onZoom = reflectUpdate;
+
+                        this.refreshHandler();
+                    };
+
+                    if (this.viewer.isOpen()) initSlider();
+                    else this.viewer.addOnceHandler('open', initSlider);
                 }
 
                 this.setMinWidth(options.minWidth || "150px");
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
-                this.viewer.addHandler("destroy", () => {
-                    this._init({destroy: true});
-                    this.viewer.scalebar = null;
-                });
+                if (!this._viewerDestroyHandler) {
+                    this._viewerDestroyHandler = () => {
+                        this.destroy();
+                        if (this.viewer.scalebar === this) {
+                            this.viewer.scalebar = null;
+                        }
+                    };
+                }
+                if (!this._viewerDestroyHandlerBound) {
+                    this.viewer.addHandler("destroy", this._viewerDestroyHandler);
+                    this._viewerDestroyHandlerBound = true;
+                }
             } else {
                 this._active = false;
 
@@ -729,6 +996,14 @@
                     onZoom: null
                 };
             }
+        },
+
+        destroy: function() {
+            if (this._viewerDestroyHandlerBound && this._viewerDestroyHandler) {
+                this.viewer.removeHandler("destroy", this._viewerDestroyHandler);
+                this._viewerDestroyHandlerBound = false;
+            }
+            this._init({destroy: true});
         },
 
         setActive: function(active) {
@@ -780,8 +1055,17 @@
             if (isDefined(options.barThickness)) {
                 this.barThickness = options.barThickness;
             }
-            if (isDefined(options.pixelsPerMeter)) {
+            if ("pixelsPerMeter" in options) {
                 this.pixelsPerMeter = options.pixelsPerMeter;
+            }
+            if ("pixelsPerMeterX" in options) {
+                this.pixelsPerMeterX = options.pixelsPerMeterX;
+            }
+            if ("pixelsPerMeterY" in options) {
+                this.pixelsPerMeterY = options.pixelsPerMeterY;
+            }
+            if (!isDefined(this.pixelsPerMeter) && isDefined(this.pixelsPerMeterX) && isDefined(this.pixelsPerMeterY)) {
+                this.pixelsPerMeter = (this.pixelsPerMeterX + this.pixelsPerMeterY) / 2;
             }
             if (isDefined(options.location)) {
                 this.location = options.location;
@@ -827,6 +1111,9 @@
          * @param {OpenSeadragon.ScalebarType} options.type The scale bar type.
          */
         refresh: function(options) {
+            if (this.scalebarContainer) {
+                this._init({destroy: true});
+            }
             this.updateOptions(options);
             this.prepareScalebar();
             this.refreshHandler();
