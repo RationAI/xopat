@@ -261,7 +261,7 @@ addPlugin('analyze', class extends XOpatPlugin {
                 document.addEventListener('keydown', onEscape, true);
             });
         } finally {
-            if (prevModeId) annot.setModeById(prevModeId);
+            if (prevModeId !== undefined) annot.setModeById(prevModeId);
             if (annot.presets.left) annot.presets.left.objectFactory = prevFactory;
             if (!wasEnabled) annot.enableInteraction(false);
             if (fw._rootEl) fw._rootEl.style.display = '';
