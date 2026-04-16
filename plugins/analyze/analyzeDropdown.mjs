@@ -436,32 +436,10 @@ addPlugin('analyze', class extends XOpatPlugin {
             }
 
             const currentSlideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId() || '';
-            let rois = [];
-            try {
-                const slideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId();
-                console.log('[analyze] Querying ROIs for slideId:', slideId, 'scope:', scope);
-                // ROIs are annotations with class value "org.empaia.global.v1.classes.roi"
-                // API requires at least one of: creators, jobs, or annotations in the body
-                const roiList = await scope.annotations.query(
-                    {
-                        creators: [scope.id],
-                        ...(slideId ? { references: [slideId] } : {}),
-                    },
-                    true, // with_classes=true so we can filter by ROI class
-                );
-                console.log('[analyze] ROI query result:', roiList);
-                const ROI_CLASS = 'org.empaia.global.v1.classes.roi';
-                rois = (roiList?.items || []).filter(a =>
-                    a.classes?.some(c => c.value === ROI_CLASS)
-                );
-            } catch (e) {
-                console.warn('[analyze] Failed to fetch ROIs', e, 'payload:', e?.payload);
-            }
-
             const inputFields = {};
 
             for (const input of requiredInputs) {
-                const row = this._createInputRow(input, currentSlideId, rois, inputFields);
+                const row = this._createInputRow(input, currentSlideId, inputFields, onCapture);
                 if (row) container.appendChild(row);
             }
 
