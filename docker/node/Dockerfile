@@ -41,6 +41,7 @@ WORKDIR /usr/app
 RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     # User Id 1000 for kubernetes
     && usermod --non-unique --uid 1000 node \
+    && mkdir -p /app \
     && chown -R node:node /app
 
 EXPOSE 9000
