@@ -6,6 +6,8 @@ import { Div } from "../elements/div.mjs";
 import {Badge} from "../elements/badge.mjs";
 import {MenuTab} from "./menuTab.mjs";
 
+import {VisibilityManager} from "../mixins/visibilityManager.mjs";
+
 const ui = { Button, Div, FAIcon };
 const { span } = van.tags
 
@@ -29,10 +31,25 @@ class MenuTabBanner extends MenuTab {
         this.id = item.id;
 
         const [headerButton, contentDiv] = this._createTab(item);
-
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
-        this.toggleHiden();  //default hidden
+        this.visibilityManager = new VisibilityManager(this).init(
+            () => {
+                if (this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "");
+                    this.hidden = false;
+                }
+            },
+            () => {
+                if (!this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "hidden");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "hidden");
+                    this.hidden = true;
+                }
+            }
+        );
+        // todo component was by default hidden, keep hidden?
     }
 
     /**
@@ -122,20 +139,6 @@ class MenuTabBanner extends MenuTab {
 
     iconRotate(){
 
-    }
-
-    toggleHiden() {
-        if (this.hidden) {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "");
-            }
-            this.hidden = false;
-        } else {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "hidden");
-            }
-            this.hidden = true;
-        }
     }
 }
 export { MenuTabBanner };

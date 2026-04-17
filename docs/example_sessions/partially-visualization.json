@@ -1,13 +1,11 @@
 {
   "params": {
     "customBlending": true,
-    "stackedBackground": true
   },
   "data": ["tiff/invalid1.tif","tiff/invalid2.tif", "tiff/data.tif"],
   "visualizations": [
     {
       "name": "My visualization",
-      "lossless": true,
       "shaders": {
         "shader_id_1": {
           "name": "Error Layer",
@@ -29,7 +27,6 @@
     },
     {
       "name": "My Second GOal",
-      "lossless": true,
       "shaders": {
         "shader_id_1": {
           "name": "Error Layer",

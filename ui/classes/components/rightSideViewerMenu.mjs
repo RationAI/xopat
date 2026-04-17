@@ -39,14 +39,14 @@ export class RightSideViewerMenu extends BaseComponent {
         const originalAddTab = this.menu.addTab;
         this.menu.addTab = (item) => {
             const tabItem = originalAddTab.call(this.menu, item);
-            USER_INTERFACE.AppBar.View.registerRightMenuTab(tabItem);
+            USER_INTERFACE.AppBar.View.registerViewComponent("sideViewerMenu", tabItem);
         };
 
         this.menu.addTab(
-            {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: [this.navigatorMenu.create()], background: "glass"}
+            {id: "navigator", icon: "fa-map", title: $.t('main.navigator.title'), body: this.navigatorMenu.create(), background: "glass"}
         );
         this.menu.addTab(
-            {id: "shaders", icon: "fa-eye", title: $.t('main.shaders.title'), body: [this.createShadersMenu()], background: "glass"}
+            {id: "shaders", icon: "fa-eye", title: $.t('main.shaders.title'), body: this.createShadersMenu(), background: "glass"}
         );
 
         this.menu.set(Menu.DESIGN.TITLEONLY);
@@ -64,14 +64,11 @@ export class RightSideViewerMenu extends BaseComponent {
 
         // defaultly open menus
         for (let i of Object.keys(this.menu.tabs)) {
-            if (APPLICATION_CONTEXT.getOption(`${i}-open`, true)) {
+            // todo focus manager similar to visibility manager
+            if (APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
                 this.menu.tabs[i]._setFocus();
             } else {
                 this.menu.tabs[i]._removeFocus();
-            }
-
-            if (APPLICATION_CONTEXT.getOption(`${i}-hidden`, false)) {
-                this.menu.tabs[i].toggleHiden();
             }
         }
 
@@ -110,15 +107,11 @@ export class RightSideViewerMenu extends BaseComponent {
             onShaderChange: (value) => {
                 // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
                 let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
-                if (APPLICATION_CONTEXT.getOption("stackedBackground", false, false)) {
+                if (Array.isArray(activeViz)) {
+                    const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
+                    activeViz[index] = value;
+                } else if (Number.isInteger(activeViz)) {
                     activeViz = value;
-                } else {
-                    if (Array.isArray(activeViz)) {
-                        const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
-                        activeViz[index] = value;
-                    } else if (Number.isInteger(activeViz)) {
-                        activeViz = value;
-                    }
                 }
                 APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
             },
@@ -140,13 +133,32 @@ export class RightSideViewerMenu extends BaseComponent {
         this.menu = undefined;
     }
 
+    clearMenuItem(id) {
+        this.menu.delete(id);
+    }
+
     create() {
         return div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
-                style: "position: absolute; width: 400px; margin-top: 40px; overflow-y: auto;"
+                style: "position: absolute; width: 400px; overflow-y: auto;"
             },
             this.menu.create()
         );
+    }
+
+    onLayoutChange(details) {
+        if (details.width < 600) {
+            this.setClass("mobile", "mobile");
+            this.setClass("display", "hidden");
+        } else {
+            this.setClass("mobile", "");
+            this.setClass("display", "");
+            for (let i of Object.keys(this.menu.tabs)) {
+                if (!APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
+                    this.menu.getTab(i).close();
+                }
+            }
+        }
     }
 }

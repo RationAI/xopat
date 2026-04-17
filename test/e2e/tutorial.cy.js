@@ -13,7 +13,6 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
         let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
-                stackedBackground: true
             }),
             data: config.data('tissue'),
             background: config.background({}, 0, 1, 2),
@@ -41,7 +40,6 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
         tutorialStep(); //global controls
         cy.wait(500);
         cy.get("#images-pin", {timeout: 1000}).click();
-        tutorialStep(); //stacked images menu
         tutorialStep(); //url
         tutorialStep(); //finish
         cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
@@ -49,12 +47,11 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
     })
 })
 
-describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
+describe('Basic Tutorial Walkthrough', () => {
     it('Init', () => {
         let visualization = {
             params: config.params({
                 viewport: config.viewport('tissue', 0),
-                stackedBackground: false
             }),
             data: config.data('tissue'),
             background: config.background({}, 0, 1, 2),
@@ -71,7 +68,6 @@ describe('Basic Tutorial Walkthrough Without Stacked Backgrounds', () => {
         tutorialStep(); //panel
         tutorialStep(); //navigator
         tutorialStep(); //global controls
-        tutorialStep(); //tollbar stacked
         tutorialStep(); //url
         cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');

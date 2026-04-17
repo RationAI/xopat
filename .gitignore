@@ -1,13 +1,16 @@
 # allow only build-in items in modules/plugins
 /modules/**
 !/modules/annotations
+!/modules/chat
 !/modules/empaia-wsi-tile-source
 !/modules/empation-api
 !/modules/fabricjs
+!/modules/geotiff
 !/modules/human-readable-ids
 !/modules/icc_profile
 !/modules/jwt-decode
 !/modules/menu-pages
+!/modules/mlflow
 !/modules/oidc-client-ts
 !/modules/pollyjs
 !/modules/rationai-wsi-tile-source
@@ -20,23 +23,22 @@
 !/modules/web-worker-manager
 
 /plugins/**
-!/plugins/analyze
-!/plugins/analyze/** 
-!/plugins/annotations
-!/plugins/custom-pages
-!/plugins/empaia
-!/plugins/extra-tutorials
-!/plugins/hotkeys
-!/plugins/navigation-tracker
-!/plugins/profiler
-!/plugins/questionaire
-!/plugins/recorder
-!/plugins/.removed/simple-integration
-!/plugins/user-session
-!/plugins/youtrack-feedback-form
-!/plugins/sam-segment-tool-experimental
-!/plugins/dicom
-!/plugins/slide-info
+!/plugins/analyze/*
+!/plugins/annotations/*
+!/plugins/custom-pages/*
+!/plugins/empaia/*
+!/plugins/extra-tutorials/*
+!/plugins/rationai-wsi-file-browser/*
+!/plugins/hotkeys/*
+!/plugins/navigation-tracker/*
+!/plugins/profiler/*
+!/plugins/questionaire/*
+!/plugins/recorder/*
+!/plugins/user-session/*
+!/plugins/youtrack-feedback-form/*
+!/plugins/sam-segment-tool-experimental/*
+!/plugins/dicom/*
+!/plugins/slide-info/*
 
 #rubbish
 *.txt
@@ -55,6 +57,8 @@ Thumbs.db
 /coverage/
 /env/
 !env/README.md
+!env/env.default.json
+dist
 
 #docs
 /docs/build/

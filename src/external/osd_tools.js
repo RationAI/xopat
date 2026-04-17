@@ -17,44 +17,6 @@ OpenSeadragon.Tools = class {
     }
 
     /**
-     * EventSource - compatible event raising with support for async function waiting
-     * @param context EventSource instance
-     * @param eventName name of the event to invoke
-     * @param eventArgs event args object
-     * @deprecated
-     * @return {Promise<void>} promise resolved once event finishes
-     */
-    async raiseAwaitEvent(context, eventName, eventArgs = undefined) {
-        console.warn("This event is deprecated.");
-        let events = context.events[ eventName ];
-        if ( !events || !events.length ) {
-            return null;
-        }
-        events = events.length === 1 ?
-            [ events[ 0 ] ] :
-            Array.apply( null, events );
-        eventArgs = eventArgs || {};
-
-        const length = events.length;
-        async function loop(index) {
-            if ( index >= length || !events[ index ] ) {
-                return;
-            }
-            eventArgs.stopPropagation = function () {
-                index = length;
-            };
-            eventArgs.eventSource = context;
-            eventArgs.userData = events[ index ].userData;
-            let result = events[ index ].handler( eventArgs );
-            if (result && OpenSeadragon.type(result) === "promise") {
-                await result;
-            }
-            await loop(index + 1);
-        }
-        return await loop(0);
-    }
-
-    /**
      * @param params Object that defines the focus
      * @param params.bounds OpenSeadragon.Rect, in viewport coordinates;
      *   both elements below must be defined if bounds are undefined
@@ -110,9 +72,7 @@ OpenSeadragon.Tools = class {
     /**
      * Create viewport screenshot
      * @param {boolean} toImage true if <img> element should be created, otherwise Context2D
-     * @param {object} size the output size
-     * @param {number} size.width
-     * @param {number} size.height
+     * @param {OpenSeadragon.Point|object} size the output size
      * @param {(OpenSeadragon.Rect|object|undefined)} [focus=undefined] screenshot
      *   focus area (screen coordinates), by default thw whole viewport
      * @return {CanvasRenderingContext2D|Image}
@@ -124,17 +84,17 @@ OpenSeadragon.Tools = class {
         if (viewer.drawer.canvas.width < 1) return undefined;
 
         if (!focus) focus = new OpenSeadragon.Rect(0, 0, window.innerWidth, window.innerHeight);
-        size.width = size.width || focus.width;
-        size.height = size.height || focus.height;
-        let ar = size.width / size.height;
+        size.width = size.x || focus.width;
+        size.height = size.y || focus.height;
+        let ar = size.x / size.y;
         if (focus.width < focus.height) focus.width *= ar;
         else focus.height /= ar;
 
         let canvas = document.createElement('canvas'),
             ctx = canvas.getContext('2d');
-        canvas.width = size.width;
-        canvas.height = size.height;
-        ctx.drawImage(viewer.drawer.canvas, focus.x, focus.y, size.width, size.height, 0, 0, size.width, size.height);
+        canvas.width = size.x;
+        canvas.height = size.y;
+        ctx.drawImage(viewer.drawer.canvas, focus.x, focus.y, size.x, size.y, 0, 0, size.x, size.y);
 
         if (toImage) {
             let img = document.createElement("img");
@@ -146,17 +106,18 @@ OpenSeadragon.Tools = class {
 
     /**
      * Create thumbnail screenshot
+     * TODO FIX THIS - VIEWER REFERENCE is too BIG to capture a thumbnail - we should download manually just a proportion of the image,
+     *   right now we force the whole tiled image load, which depends on the screen size and is not optimal (especially if navigator is not defined)
      * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
-     * @param {object} size the output size
+     * @param {OpenSeadragon.Point} size the output size
      * @param {number} timeout
-     * @param {number} size.width
-     * @param {number} size.height
+     * @param {boolean} [size.preserveAspectRatio=true]
      * @return {Promise<CanvasRenderingContext2D>}
      */
-    navigatorThumbnail(config, size = {}, timeout=30000) {
+    async navigatorThumbnail(config, size = {}, timeout=30000) {
         return this.constructor.navigatorThumbnail(this.viewer, config, size);
     }
-    static navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
+    static async navigatorThumbnail(viewer, bgConfig, size = {}, timeout=30000) {
         if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
         // todo works for background right now only -> check how we can extend for also viz layers
         if (!bgConfig.id) {
@@ -176,80 +137,97 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        drawer.renderer.setDimensions(0, 0, viewer.drawer.canvas.width, viewer.drawer.canvas.height, 1);
-        let config = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id) || {
-            id: bgConfig.id,
-            type: "identity",
-            tiledImages: [-1],
-            name: bgConfig.name || dataRef
-        };
-        drawer.overrideConfigureAll({[bgConfig.id]: config});
-
+        // TODO FIXME this needs to use the method from core
         const bgUrlFromEntry = (bgEntry) => {
             if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
                 return bgEntry.tileSource;
             }
-            const proto = !APPLICATION_CONTEXT.getOption("secureMode") && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
             const make = new Function("path,data", "return " + proto);
             return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
         };
 
-        return new Promise((resolve, reject) => {
+        // todo multiple data images? how to retrieve existing configurations?
+        const tiledImages = [-1];
+
+        // First prepare images
+        const imageSources = await Promise.all(tiledImages.map(async idx => {
+            let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
+            if (!source) {
+                // todo: might not carry over all OSD properties such as ajax headers
+                source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+                source = source.source;
+            }
+            if (source.getThumbnail) {
+                // if we have a thumbnail, replace the source with single-image thumbnail
+                try {
+                    let thumb = await source.getThumbnail();
+                    if (thumb) {
+                        thumb = await UTILITIES.imageLikeToImage(thumb);
+                        if (thumb) source = new OpenSeadragon.PreviewSlideSource({image: thumb});
+                    }
+                } catch (e) {
+                    // failed to load thumbnail via API, still, continue manual reconstruction
+                    console.warn("Failed to retrieve thumbnail via API, continuing with manual reconstruction.", e);
+                }
+            }
+            return source;
+        })).catch(e => {
+            // todo - consider: if some parts of the image were downloaded, try to continue with what is available
+            console.error("Failed to instantiate background config, image not valid.", e);
+            return undefined;
+        });
+
+        if (!imageSources) return false;
+
+        // Use prepared sources to render the image thumbnail
+        return new Promise(async (resolve, reject) => {
             let exited = false;
             let timeoutRef;
 
             let loadCount = 0;
             const images = [];
-            for (let idx of config.tiledImages) {
-                if (idx === -1) {
-                    loadCount++;
-                    viewer.instantiateTileImageClass({tileSource: bgUrlFromEntry(bgConfig),
-                        success: e => {
-                            if (exited) return;
-                            e.item.__sshotIndex = images.length;
-                            e.item.__synthetic = true;
-                            // simply download the current tiles
-                            e.item.update(true);
-                            const updateReminder = setInterval(() => {
-                                if (exited) clearInterval(updateReminder);
-                                e.item.update(false);
-                            }, 500);
-                            images.push(e.item);
+            for (let source of imageSources) {
+                loadCount++;
+                viewer.instantiateTiledImageClass({
+                    tileSource: source,
+                    success: async e => {
+                        if (exited) return;
 
-                            e.item.whenFullyLoaded(() => {
-                                if (exited) return;
-                                clearInterval(updateReminder);
-                                loadCount--;
+                        const ti = e.item;
+                        // override drawer to ensure correct drawer is used
+                        ti.getDrawer = () => drawer;
+                        ti.__synthetic = true;
 
-                                if (loadCount < 1) {
-                                    clearTimeout(timeoutRef);
-                                    resolve(images);
-                                }
-                            });
-                        }, error: e => {
+                        // simply download the current tiles, in case of thumbnail we just load the thumbnail
+                        ti.update(true);
+                        const updateReminder = setInterval(() => {
+                            if (exited) clearInterval(updateReminder);
+                            ti.update(true);
+                        }, 500);
+                        images.push(ti);
+
+                        ti.whenFullyLoaded(() => {
                             if (exited) return;
+                            clearInterval(updateReminder);
                             loadCount--;
-                            images.error = e;
 
                             if (loadCount < 1) {
                                 clearTimeout(timeoutRef);
                                 resolve(images);
                             }
-                        }}
-                    );
-                } else {
-                    const item = viewer.world.getItemAt(idx);
-                    item.whenFullyLoaded(() => {
-                        images.push(item);
+                        });
+                    }, error: e => {
+                        if (exited) return;
                         loadCount--;
-                        item.__sshotIndex = images.length;
+                        images.error = e;
 
                         if (loadCount < 1) {
                             clearTimeout(timeoutRef);
                             resolve(images);
                         }
-                    });
-                }
+                    }}
+                );
             }
 
             if (loadCount < 1) {
@@ -257,8 +235,9 @@ OpenSeadragon.Tools = class {
             } else {
                 timeoutRef = setTimeout(() => {
                     exited = true;
-                    images.forEach(i => i.destroy());
-                    reject("Failed to retrieve tiled images and their tiles before timeout.");
+                    resolve(images);
+                    // images.forEach(i => i.destroy());
+                    // reject("Failed to retrieve tiled images and their tiles before timeout.");
                 }, timeout);
             }
         }).then(async images => {
@@ -267,25 +246,87 @@ OpenSeadragon.Tools = class {
                 throw images.error;
             }
 
-            const originalTiledImages = config.tiledImages;
-            config.tiledImages = images.map(i => i.__sshotIndex);
+            console.log("render using", images.length, "images", images)
 
-            const bounds = viewer.viewport.getHomeBounds();
-            await drawer.draw(images, {
+            const existingConfig = viewer.drawer.renderer.getShaderLayerConfig(bgConfig.id);
+
+            let config = existingConfig ? {...existingConfig} : {
+                id: bgConfig.id,
+                type: "identity",
+                tiledImages: null,
+                name: bgConfig.name || dataRef
+            };
+            config.tiledImages = images.map((_, idx) => idx);
+
+            const originalTiledImages = config.tiledImages;
+            const w = images[0].source.width;
+            const h = images[0].source.height;
+            const ar = w / h;
+            const bounds = new OpenSeadragon.Rect(0, 0, 1, 1/ar);
+            const preserve = size.preserveAspectRatio || size.preserveAspectRatio === undefined;
+            if (preserve) {
+                if (ar < 1) size.x = size.x * ar;
+                else size.y = size.y / ar;
+            }
+            const context = await drawer.drawWithConfiguration(images, {[bgConfig.id]: config}, {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: 0,
                 zoom: 1.0 / bounds.width,
-            });
+            }, size);
             config.tiledImages = originalTiledImages;
-
-            let canvas = document.createElement('canvas'),
-                ctx = canvas.getContext('2d');
-            canvas.width = size.width;
-            canvas.height = size.height;
-            ctx.drawImage(drawer.canvas, 0, 0, drawer.canvas.width, drawer.canvas.height, 0, 0, size.width, size.height);
-            return ctx;
+            images.forEach(i => i.destroy());
+            return context;
         });
+    }
+
+    /**
+     * Retrieve label
+     * @param {BackgroundItem|StandaloneBackgroundItem} config bg config
+     * @return {Promise<Image>}
+     */
+    async retrieveLabel(config) {
+        return this.constructor.retrieveLabel(this.viewer, config);
+    }
+    static async retrieveLabel(viewer, bgConfig) {
+        if (viewer.drawer.canvas.width < 1) return Promise.reject("No image to create thumbnail from!");
+        if (!bgConfig.id) {
+            console.error("Thumbnail can be created for now only from background configurations!");
+            return Promise.reject("No background configuration provided!");
+        }
+
+        let dataRef = APPLICATION_CONTEXT.config.data[bgConfig.dataReference];
+        if (typeof bgConfig.dataReference !== "number" && !dataRef) {
+            dataRef = bgConfig.dataReference; // use the value as actual data
+        }
+
+        // TODO FIXME this needs to use the method from core
+        const bgUrlFromEntry = (bgEntry) => {
+            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
+                return bgEntry.tileSource;
+            }
+            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
+            const make = new Function("path,data", "return " + proto);
+            return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
+        };
+
+        // todo find existing item index if bg config is loaded
+        const idx = -1;
+        let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
+        if (!source) {
+            // todo: might not carry over all OSD properties such as ajax headers
+            source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+            source = source.source;
+        }
+        if (source.getLabel) {
+            // if we have a thumbnail, replace the source with single-image thumbnail
+            let label = await source.getLabel();
+            if (label) {
+                label = await UTILITIES.imageLikeToImage(label);
+                return label;
+            }
+        }
+        return undefined;
     }
 
     /**
@@ -305,12 +346,15 @@ OpenSeadragon.Tools = class {
 
         const eventArgs = {
             server: APPLICATION_CONTEXT.env.client.image_group_server,
-            usesCustomProtocol: !!bgSpec.protocolPreview,
             image: dataRef,
             imagePreview: null,
         };
 
         await VIEWER_MANAGER.raiseEventAwaiting("get-preview-url", eventArgs);
+
+        if (eventArgs.imagePreview && typeof eventArgs.imagePreview.then === "function") {
+            eventArgs.imagePreview = await eventArgs.imagePreview;
+        }
 
         if (eventArgs.imagePreview instanceof Image) {
             const imageEl = eventArgs.imagePreview;
@@ -330,20 +374,18 @@ OpenSeadragon.Tools = class {
         };
 
         if (!eventArgs.imagePreview) {
-            this.viewer.tools.navigatorThumbnail(bgSpec, {
-                width, height, timeout: 60000
-            }).then(ctx => {
-                image.src = ctx.canvas.toDataURL();
-            }).catch(e => {
+            try {
+                const ctx = await this.viewer.tools.navigatorThumbnail(bgSpec, {x: width, y: height}, 60000);
+                let data = ctx.canvas.toDataURL();
+                if (data.length < 1000) {
+                    console.warn("Image preview is too small, probably missing data - replacing with preview.");
+                    data = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
+                }
+                image.src = data;
+            } catch (e) {
                 console.error(e);
-                image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`
-                  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 120'>
-                    <rect width='160' height='120' fill='hsl(0, 0%, 93%)'/>
-                    <path d='M20 88l30-34 24 22 18-20 28 32' fill='none' stroke='hsl(0,0%,60%)' stroke-width='8' stroke-linecap='round'/>
-                    <circle cx='54' cy='42' r='10' fill='hsl(0,0%,70%)'/>
-                  </svg>
-                `);
-            });
+                image.src = APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png";
+            }
         } else if (typeof eventArgs.imagePreview === "string") {
             image.src = eventArgs.imagePreview;
         } else {
@@ -496,50 +538,114 @@ OpenSeadragon.Tools = class {
     /**
      * Link the viewer to context-sharing navigation link: all viewers of the same context
      * will follow the same navigation path.
-     * @param context
+     * @param {any} context sync context - in which sync session you operate
+     * @param {function(OpenSeadragon.Viewer, OpenSeadragon.Viewer)} mapper - custom sync logics instead of the default one, usually
+     *   you want to call applyViewportState(...) method with your computed viewport state values
      */
-    link(context=0) {
-        this.constructor.link(this.viewer, context);
+    link(context=0, mapper=undefined) {
+        this.constructor.link(this.viewer, context, mapper);
     }
 
     /**
      * Link the viewer to context-sharing navigation link: all viewers of the same context
      * will follow the same navigation path.
      * @param {OpenSeadragon.Viewer} self
-     * @param context
+     * @param {any} context sync context - in which sync session you operate
+     * @param {function(OpenSeadragon.Viewer, OpenSeadragon.Viewer)} mapper - custom sync logics instead of the default one
      */
-    static link(self, context=0) {
-        let contextData = this._linkContexts[context];
-        if (!contextData) {
-            contextData = this._linkContexts[context] = { name: context, leading: null, subscribed: [] };
+    static link(self, context = 0, mapper = undefined) {
+        let ctx = this._linkContexts[context];
+        if (!ctx) {
+            ctx = this._linkContexts[context] = {
+                subscribed: [],
+                activeLeader: null
+            };
         }
 
-        const handler = function() {
-            const leading = contextData.leading;
-            if (leading !== null) {
-                return;
-            }
-            contextData.leading = self;
-            const leadViewport = self.viewport;
+        // Any linked viewer may be the temporary source of a sync event.
+        // A custom mapper defines how *targets* follow the source; it must not
+        // prevent the source viewer from driving the session.
+        const canLead = true;
 
-            for (let v of contextData.subscribed) {
-                const vp = v.viewport;
-                // todo consider viewport update event and setting only: (might not respect rotation / flip)
-                //  otherViewport.fitBoundsWithConstraints(viewport.getBounds(), true);
-                vp.zoomTo(leadViewport.getZoom());
-                vp.panTo(leadViewport.getCenter());
-                vp.rotateTo(leadViewport.getRotation());
-                vp.setFlip(leadViewport.flipped);
+        if (ctx.subscribed.includes(self)) {
+            self.__sync_mapper = mapper;
+            self.__sync_canLead = canLead;
+            return;
+        }
+
+        self.__sync_mapper = mapper;
+        self.__sync_canLead = canLead;
+
+        const handler = function () {
+            if (!self.__sync_canLead) return;
+
+            if (ctx.activeLeader && ctx.activeLeader !== self) return;
+            ctx.activeLeader = self;
+
+            const leaderState = self.tools.readViewportState();
+
+            for (let v of ctx.subscribed) {
+                if (!v || v === self) continue;
+
+                let state = leaderState;
+                if (typeof v.__sync_mapper === "function") {
+                    state = v.__sync_mapper(self, leaderState);
+                    if (!state) continue;
+                }
+
+                v.tools.applyViewportState(state);
             }
-            contextData.leading = null;
+
+            ctx.activeLeader = null;
         };
 
         self.__sync_handler = handler;
-        contextData.subscribed.push(self);
+        ctx.subscribed.push(self);
+
         self.addHandler('zoom', handler);
         self.addHandler('pan', handler);
         self.addHandler('rotate', handler);
         self.addHandler('flip', handler);
+    }
+
+    applyViewportState(state) {
+        this.constructor.applyViewportState(this.viewer, state);
+    }
+    static applyViewportState(viewer, state) {
+        const vp = viewer.viewport;
+
+        if (!state) return;
+
+        const c = new OpenSeadragon.Point(state.center.x, state.center.y);
+
+        // Clamp zoom
+        const zMin = vp.getMinZoom?.() ?? -Infinity;
+        const zMax = vp.getMaxZoom?.() ?? +Infinity;
+        const z = Math.max(zMin, Math.min(zMax, state.zoom));
+
+        vp.rotateTo(state.rotation, true);
+        vp.zoomTo(z, c, true);
+        vp.panTo(c, true);
+
+        if (typeof vp.getFlip === "function") {
+            if (vp.getFlip() !== state.flip)
+                vp.setFlip(state.flip);
+        }
+
+        vp.applyConstraints?.();
+    }
+
+    readViewportState() {
+        return this.constructor.readViewportState(this.viewer);
+    }
+    static readViewportState(viewer) {
+        const vp = viewer.viewport;
+        return {
+            zoom: vp.getZoom(false),
+            center: vp.getCenter(false),
+            rotation: vp.getRotation(false),
+            flip: vp.getFlip()
+        };
     }
 
     isLinked() {
@@ -569,6 +675,8 @@ OpenSeadragon.Tools = class {
         self.removeHandler('rotate', self.__sync_handler);
         self.removeHandler('flip', self.__sync_handler);
         delete self.__sync_handler;
+        delete self.__sync_mapper;
+        delete self.__sync_canLead;
         contextData.subscribed.splice(index, 1);
     }
 
@@ -588,6 +696,7 @@ OpenSeadragon.Tools = class {
         }
         delete contextData.subscribed;
         delete contextData.leading;
+        delete contextData.activeLeader;
         delete this._linkContexts[context];
     }
 

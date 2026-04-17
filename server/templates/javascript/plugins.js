@@ -1,6 +1,6 @@
 const {parse} = require("comment-json")
 const {loadModules} = require("./modules");
-const {safeScanDir} = require("./utils");
+const {safeScanDir, expandIncludeGlobs} = require("./utils");
 
 module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
@@ -35,14 +35,29 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
             let workspace = fullPath + "package.json";
             if (fileExists(workspace)) {
-                if (!fileExists(fullPath + "index.workspace.js")) {
-                    console.warn(`Plugin ${fullPath} has package.json but no index.workspace.js! The plugin needs to be compiled first!`);
+                let packageData = parse(readFile(workspace));
+
+                // Check for main if defaults are missing
+                let workspaceEntry = "index.workspace.js";
+                const hasDefaultJs = fileExists(fullPath + "index.workspace.js");
+                const hasDefaultMjs = fileExists(fullPath + "index.workspace.mjs");
+
+                if (!hasDefaultJs && !hasDefaultMjs && packageData["main"]) {
+                    workspaceEntry = packageData["main"];
+                } else if (hasDefaultMjs) {
+                    workspaceEntry = "index.workspace.mjs";
                 }
 
-                let packageData = parse(readFile(workspace));
+                if (!fileExists(fullPath + workspaceEntry)) {
+                    console.warn(`Plugin ${fullPath} missing workspace entry: ${workspaceEntry}`);
+                }
+
                 data = data || {};
                 data["includes"] = data["includes"] || [];
-                data["includes"].unshift("index.workspace.js");
+                data["includes"].unshift(workspaceEntry);
+                data["includes"] = expandIncludeGlobs(fullPath, data["includes"]);
+
+                // Map package metadata
                 data["id"] = data["id"] || packageData["name"];
                 data["name"] = data["name"] || packageData["name"];
                 data["author"] = data["author"] || packageData["author"];

@@ -1,0 +1,11 @@
+{
+  "name": "recorder",
+  "version": "1.0.0",
+  "description": "Recording and playback of presentation",
+  "keywords": [],
+  "buildEntry": "recorder-plugin.ts",
+  "author": "Aiosa",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

@@ -45,8 +45,9 @@ export class Title extends BaseComponent {
         const Tag = [h1, h2, h3, h4][(this.level - 1).clamp?.(0, 3) ?? 1] || h2;
 
         const titleEl = Tag({
-            ...this.commonProperties,
+            ...this.commonProperties, //distributes common classes to all children
             class: this.classMap.text,
+            ...this.extraProperties,
         }, this.text);
 
         if (this.separator) {

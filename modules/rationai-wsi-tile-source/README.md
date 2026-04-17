@@ -25,3 +25,12 @@ You can also just set an URL to the WSI server, for example:
    "data_group_protocol": "`${path}/v3/batch/info?slides=${data.join(\",\")}`",
 ````
 But this approach has its limitations.
+
+### Options
+
+Options include:
+``format`` - one of `jpeg, png, tiff, bmp, gif`.
+``quality`` - for e.g. jpeg the image quality to request.
+``channels`` - if format is `tiff`, the channels to request (array of indexes) or `all` literal.
+
+You can set these optiosn

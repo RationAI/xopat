@@ -4,9 +4,18 @@ RewriteEngine On
 # TODO custom index page via env var
 RewriteRule redirect index.php?directive=redirect [NC,L,QSA]
 RewriteRule dev_setup index.php?directive=dev_setup [NC,L,QSA]
+RewriteRule scheme index.php?directive=scheme [NC,L,QSA]
+RewriteRule scheme_raw index.php?directive=scheme_raw [NC,L,QSA]
+RewriteRule scheme_raw_extended index.php?directive=scheme_raw_extended [NC,L,QSA]
 RewriteRule user_setup index.php?directive=user_setup [NC,L,QSA]
+RewriteRule proxy index.php?directive=proxy [NC,L,QSA]
+
 RewriteRule ^/?$ index.php [NC,L,QSA]
 
 RewriteRule redirect\.php redirect [R=301,NC,QSA]
 RewriteRule dev_setup\.php dev_setup [R=301,NC,QSA]
+RewriteRule scheme\.php scheme [R=301,NC,QSA]
+RewriteRule scheme_raw\.php scheme_raw [R=301,NC,QSA]
+RewriteRule scheme_raw_extended\.php scheme_raw_extended [R=301,NC,QSA]
 RewriteRule user_setup\.php user_setup [R=301,NC,QSA]
+RewriteRule proxy\.php proxy [R=301,NC,QSA]

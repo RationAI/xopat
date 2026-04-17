@@ -6,8 +6,8 @@ module.exports = {
     content: [
         './.cache/tw-accumulated.html',
         './ui/**/*.{html,js,mjs}',
-        './modules/**/*.{html,js}',
-        './plugins/**/*.{html,js}',
+        './modules/**/*.{html,js,mjs}',
+        './plugins/**/*.{html,js,mjs}',
         './src/**/*.{html,js}',
         '!**/*.min.js',
         // TODO how to ignore
@@ -32,7 +32,16 @@ module.exports = {
         },
     },
     plugins: [
-        require("daisyui")
+        require("daisyui"),
+        function ({ addComponents }) {
+            addComponents({
+                /* New variant: looks exactly like .btn-neutral */
+                '.btn-pointer': {
+                '--btn-color': 'var(--n)',     // same base color as neutral
+                '--btn-content': 'var(--nc)',  // same text color as neutral
+                },
+            });
+        },
     ],
     /** usage in css: https://v4.daisyui.com/docs/colors/ */
     daisyui: {

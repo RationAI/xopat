@@ -1,0 +1,18 @@
+{
+  "name": "vercel-ai-chat-sdk",
+  "version": "1.0.0",
+  "description": "AI Chat Module",
+  "keywords": [
+    "chat",
+    "llm"
+  ],
+  "buildEntry": "chat.ts",
+  "author": "Aiosa",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.35",
+    "ai": "^6.0.116"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "mlflow",
+  "name": "Mlflow Client - management of mlflow experiments and jobs",
+  "author": "Aiosa",
+  "version": "0.1.0",
+  "includes": [
+    "mlflow.mjs"
+  ],
+  "requires": []
+}

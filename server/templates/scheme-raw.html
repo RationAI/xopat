@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="utf-8">
+    <title>Viewer Session Scheme Raw</title>
+    <template id="template-head"></template>
+</head>
+<body>
+<template id="template-page-init"></template>
+<pre id="scheme-output"></pre>
+
+<template id="template-shared-scheme-script"></template>
+<script type="text/javascript">
+    (() => {
+        const outputNode = document.getElementById("scheme-output");
+
+        function renderSchema() {
+            try {
+                const schema = window.XOpatScheme.buildSchema(window.schemeInit || {});
+                outputNode.textContent = JSON.stringify(schema, null, 2);
+            } catch (error) {
+                console.error(error);
+                outputNode.textContent = String(error?.stack || error);
+            }
+        }
+
+        window.addEventListener("load", renderSchema);
+    })();
+</script>
+</body>
+</html>

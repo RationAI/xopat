@@ -9,16 +9,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context
-     * @param {AutoObjectCreationStrategy} autoCreationStrategy or an object of similar interface
      * @param {PresetManager} presetManager manager of presets or an object of similar interface
      * @param {string} identifier unique annotation identifier, start with '_' to avoid exporting
      *   - note that for now the export avoidance woks only for XML exports, JSON will include all
      * @param {string} objectType which shape type it maps to inside fabricJS
      */
-    constructor(context, autoCreationStrategy, presetManager, identifier, objectType) {
+    constructor(context, presetManager, identifier, objectType) {
         this._context = context;
         this._presets = presetManager;
-        this._auto = autoCreationStrategy;
         this.factoryID = identifier;
         this.type = objectType;
     }
@@ -45,13 +43,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "originalStrokeWidth",
         "type",
         "factoryID",
-        "scaleX,",
-        "scaleY,",
+        "scaleX",
+        "scaleY",
         "hasRotatingPoint",
         "borderColor",
         "cornerColor",
         "borderScaleFactor",
         "hasControls",
+        "hasBorders",
         "lockMovementX",
         "lockMovementY",
         "meta",
@@ -63,6 +62,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "created",
         "private",
         "comments",
+        "label",
     ];
 
     /**
@@ -81,6 +81,26 @@ OSDAnnotations.AnnotationObjectFactory = class {
         "author",
         "created",
         "id",
+    ];
+
+    /**
+     * Geometry properties.
+     * Used internally for cloning, when only geometry should be copied.
+     * @type {string[]}
+     */
+    static geometryProps = [
+        'left', 'top', 'originX', 'originY',
+        'angle', 'flipX', 'flipY',
+        'scaleX', 'scaleY',
+        'skewX', 'skewY',
+        'transformMatrix',
+        'width', 'height',
+        'strokeWidth', 'strokeDashArray', 'strokeLineCap',
+        'strokeLineJoin', 'strokeMiterLimit', 'strokeUniform',
+        'radius', 'rx', 'ry',
+        'x1', 'y1', 'x2', 'y2',
+        'points',
+        'path', 'pathOffset'
     ];
 
     /**
@@ -193,6 +213,14 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return [];
     }
 
+    /**
+     * Initialize object before import
+     * @param {fabric.Object} object object to be initialized
+     */
+    initializeBeforeImport(object) {
+        // do nothing by default
+    }
+
     trimExportJSON(objectList) {
         let array = objectList;
         if (typeof array === "object") {
@@ -288,100 +316,211 @@ OSDAnnotations.AnnotationObjectFactory = class {
         return result;
     }
 
-    renderIcon(iconRenderer, valueRenderer, index) {
-        return new fabric.Control({
+    /**
+     *
+     * @param {string | (fabric.Object) => string} iconRenderer Either a plain icon string, or a callback that returns it
+     * @param {string | (fabric.Object) => string | undefined} valueRenderer Either a plain value string, or a callback that returns it. undefined for no value.
+     * @param {((event: any, transform: any, mouseX: any, mouseY: any) => any) | undefined} onClick mouseUpHandler of the control
+     * @returns
+     */
+    renderIcon(iconRenderer, valueRenderer, onClick) {
+        const control = new fabric.Control({
             x: 0.5,
             y: -0.5,
-            offsetX: 25,
-            offsetY: 20 + 45 * index,
-            cursorStyle: 'grab',
-            mouseUpHandler: () => alert("hi"),
+            offsetX: 22,
+            offsetY: -16,
+            cursorStyle: 'pointer',
+            sizeX: 34,
+            sizeY: 34,
+            touchSizeX: 40,
+            touchSizeY: 40,
+            enabled: true,
             render: (ctx, left, top, styleOverride, fabricObject) => {
-                const icon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
-                const value = valueRenderer ? (
-                    typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject)
-                ) : null;
-                const showValue = value !== null && value !== undefined && value !== '';
-                
-                const iconSize = 36;
+                const rawIcon = typeof iconRenderer === 'string' ? iconRenderer : iconRenderer(fabricObject);
+                const icon = this._resolveControlGlyph(rawIcon);
+
+                const rawValue = valueRenderer
+                    ? (typeof valueRenderer === 'string' ? valueRenderer : valueRenderer(fabricObject))
+                    : null;
+
+                const showValue = rawValue !== null && rawValue !== undefined && rawValue !== '' && Number(rawValue) > 0;
+                const value = showValue ? String(rawValue) : '';
+
+                const iconSize = 18;
                 const padding = 8;
-                
-                let totalWidth = iconSize;
                 let textWidth = 0;
-                
+
                 if (showValue) {
-                    ctx.font = `${iconSize * 0.4}px Arial`;
+                    ctx.font = `600 11px Arial`;
                     textWidth = ctx.measureText(value).width;
-                    totalWidth = iconSize + padding + textWidth + padding;
                 }
-                
-                const height = iconSize;
-                const radius = height / 2;
-                
-                const leftAlignedX = left + (totalWidth / 2) - (iconSize / 2);
-                
+
+                const bubbleHeight = 24;
+                const bubbleWidth = showValue
+                    ? (iconSize + padding * 2 + 8 + textWidth)
+                    : (iconSize + padding * 2);
+
+                const radius = bubbleHeight / 2;
+
                 ctx.save();
-                ctx.translate(leftAlignedX, top);
-                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle));
-                
-                const halfWidth = totalWidth / 2;
-                
+                ctx.translate(left, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle || 0));
+
+                const x = -bubbleWidth / 2;
+                const y = -bubbleHeight / 2;
+
                 ctx.beginPath();
-                ctx.arc(-halfWidth + radius, 0, radius, Math.PI / 2, 3 * Math.PI / 2);
-                ctx.arc(halfWidth - radius, 0, radius, 3 * Math.PI / 2, Math.PI / 2);
+                ctx.moveTo(x + radius, y);
+                ctx.lineTo(x + bubbleWidth - radius, y);
+                ctx.arcTo(x + bubbleWidth, y, x + bubbleWidth, y + radius, radius);
+                ctx.lineTo(x + bubbleWidth, y + bubbleHeight - radius);
+                ctx.arcTo(x + bubbleWidth, y + bubbleHeight, x + bubbleWidth - radius, y + bubbleHeight, radius);
+                ctx.lineTo(x + radius, y + bubbleHeight);
+                ctx.arcTo(x, y + bubbleHeight, x, y + bubbleHeight - radius, radius);
+                ctx.lineTo(x, y + radius);
+                ctx.arcTo(x, y, x + radius, y, radius);
                 ctx.closePath();
-                
+
                 ctx.fillStyle = 'white';
                 ctx.fill();
-                
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
-                
-                const iconX = -halfWidth + iconSize / 2;
-                ctx.font = `${iconSize * 0.8}px Font Awesome 5 Free`;
+
+                const iconCenterX = x + padding + iconSize / 2;
+
+                ctx.font = `900 ${iconSize}px "Font Awesome 5 Free"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
-                ctx.fillText(icon, iconX, 3);
-                
+                ctx.fillText(icon, iconCenterX, 1);
+
                 if (showValue) {
-                    const textX = iconX + iconSize / 2 + padding + textWidth / 2;
-                    ctx.font = `${iconSize * 0.5}px Segoe UI`;
-                    ctx.textAlign = 'center';
+                    ctx.font = `600 11px Arial`;
+                    ctx.textAlign = 'left';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = 'black';
-                    ctx.fillText(value, textX, 1);
+                    ctx.fillText(value, x + padding + iconSize + 8, 1);
                 }
 
                 ctx.restore();
             },
-        })
+        });
+
+        control.positionHandler = (dim, finalMatrix, fabricObject) => {
+            let visibleBefore = 0;
+            const controls = fabricObject?.controls || {};
+            for (const name of Object.keys(controls)) {
+                const ctrl = controls[name];
+                if (ctrl === control) break;
+                let isVisible = true;
+                try {
+                    if (typeof ctrl.getVisibility === 'function') {
+                        isVisible = !!ctrl.getVisibility(fabricObject, name);
+                    } else if (fabricObject._controlsVisibility && name in fabricObject._controlsVisibility) {
+                        isVisible = !!fabricObject._controlsVisibility[name];
+                    } else if ('visible' in ctrl) {
+                        isVisible = !!ctrl.visible;
+                    }
+                } catch {}
+                if (isVisible) visibleBefore++;
+            }
+
+            const spacing = 30;
+            const baseOffsetY = -16;
+            const dynamicOffsetY = baseOffsetY - spacing * visibleBefore;
+
+            const pt = {
+                x: control.x * dim.x + control.offsetX,
+                y: control.y * dim.y + dynamicOffsetY
+            };
+            return fabric.util.transformPoint(pt, finalMatrix);
+        };
+
+        if (onClick) {
+            control.mouseUpHandler = function(eventData, transform, x, y) {
+                eventData?.preventDefault?.();
+                eventData?.stopPropagation?.();
+
+                const wrapper = transform?.target?._factory?.()?._context?.fabric;
+                if (wrapper) {
+                    wrapper._controlInteractionActive = false;
+                    wrapper.module.cursor.isDown = false;
+                    wrapper.module.cursor.mouseTime = Infinity;
+                }
+
+                onClick(eventData, transform, x, y);
+                return true;
+            };
+        }
+
+        return control;
+    }
+
+    _resolveControlGlyph(icon) {
+        const map = {
+            'fa-eye': '\uf06e',
+            'fa-eye-slash': '\uf070',
+            'fa-lock': '\uf023',
+            'fa-comments': '\uf086',
+        };
+        return map[icon] || icon || '?';
     }
 
     renderAllControls(ofObject) {
-        ofObject.controls = {
-            private: this.renderIcon(
-                //fixme should use custom icon lock + eye
-                (obj) => obj.private ? 'fa-lock' : 'fa-eye',
-                undefined,
-                0,
-            ),
-            comments: this.renderIcon(
-                'fa-comments',
-                (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-                1,
-            ),
-        };
+        const controls = {};
+
+        controls.private = this.renderIcon(
+            (obj) => obj.private ? 'fa-eye-slash' : 'fa-eye',
+            undefined,
+            (eventData, transform) => {
+                const target = transform?.target;
+                if (!target) return;
+                const fabric = this._context.fabric;
+                fabric.setAnnotationPrivate(target, !target.private);
+            },
+        );
+
+        const commentsControl = this.renderIcon(
+            'fa-comments',
+            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
+            () => {
+                this._context.raiseEvent('comments-control-clicked');
+            },
+        );
+        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
+        controls.comments = commentsControl;
+
+        ofObject.controls = controls;
+        ofObject.hasControls = false;
+        ofObject.hasBorders = false;
+    }
+
+    __cloneValue(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof value !== "object") return value;
+
+        try {
+            if (typeof structuredClone === "function") {
+                return structuredClone(value);
+            }
+        } catch (e) {
+            // fallback below
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (e) {
+            return value;
+        }
     }
 
     __copyProps(ofObject, toObject, defaultProps, additionalProps) {
         for (let prop of defaultProps) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         if (additionalProps?.length > 0) {
             for (let prop of additionalProps) {
-                toObject[prop] = ofObject[prop];
+                toObject[prop] = this.__cloneValue(ofObject[prop]);
             }
         }
         this.__copyInnerProps(ofObject, toObject);
@@ -389,14 +528,13 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     __copyInnerProps(ofObject, toObject) {
         for (let prop of this.exports()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         for (let prop of this.exportsGeometry()) {
-            toObject[prop] = ofObject[prop];
+            toObject[prop] = this.__cloneValue(ofObject[prop]);
         }
         toObject.type = ofObject.type; //always
     }
-
 
     /**
      * Create an object at given point with a given strategy
@@ -511,7 +649,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
     /**
      * Update the object coordinates by finishing edit() call (this is guaranteed to happen at least once before)
      * @param {fabric.Object} theObject recalculate the object that has been modified
-     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
+     * @return {fabric.Object} modified or original object
      */
     recalculate(theObject, ignoreReplace=false) {
     }
@@ -523,7 +662,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {number} pos.x new x value
      * @param {number} pos.y new y value
      * @param {'move' | 'set'} [pos.mode='set'] whether to 'move' annotation from its existing position or 'set' a new one.
-     * @param {boolean} [ignoreReplace=false] skip the replaceAnnotation call
+     * @param {boolean} [ignoreReplace=false] skip the fabric.replaceAnnotation call
      */
     translate(theObject, pos, ignoreReplace=false) {
         let x, y;
@@ -546,6 +685,16 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @return {Number|undefined} undefined if area not measure-able
      */
     getArea(theObject) {
+        return undefined;
+    }
+
+    /**
+     * Returns the length of the object if applicable (for objects that do not have area).
+     * By default, returns undefined. Should be overridden in subclasses for line-like objects.
+     * @param {fabric.Object} theObject object to measure
+     * @return {Number|undefined} length in pixels and unit, or undefined if not applicable
+     */
+    getLength(theObject) {
         return undefined;
     }
 
@@ -575,6 +724,102 @@ OSDAnnotations.AnnotationObjectFactory = class {
         //         });
         //     }
         // }
+    }
+
+    _copyVal(val) {
+        if (Array.isArray(val)) {
+            return val.map(item => this._copyVal(item));
+        }
+        if (val && typeof val === 'object') {
+            const copy = {};
+            for (const key in val) {
+                if (val.hasOwnProperty(key)) copy[key] = this._copyVal(val[key]);
+            }
+            return copy;
+        }
+        return val;
+    }
+
+    _cloneFabricObject(theObject, customProps = []) {
+        const toCopy = [...this.constructor.geometryProps, ...customProps];
+
+        let cloned;
+        try {
+            cloned = new theObject.constructor();
+        } catch (e) {
+            cloned = new fabric.Object();
+        }
+
+        const props = {};
+        toCopy.forEach(p => {
+          if (theObject[p] !== undefined) props[p] = this._copyVal(theObject[p]);
+        });
+
+        cloned.set(props);
+
+        if (theObject.path && !cloned.path) cloned.path = this._copyVal(theObject.path);
+        if (theObject.points && !cloned.points) cloned.points = this._copyVal(theObject.points);
+
+        cloned.setCoords();
+        return cloned;
+    }
+
+    /**
+     * Create highlight object for the given object
+     * @param {fabric.Object} theObject object to highlight
+     * @return {fabric.Object|null} highlight object or null on error
+     */
+    createHighlight(theObject) {
+        try {
+            const clonedObj = this._cloneFabricObject(theObject, [
+                "originalStrokeWidth",
+                "cornerColor",
+                "borderColor",
+                //"factoryID"
+            ]);
+
+            let newStroke = theObject.strokeWidth * 5;
+            let newStrokeDashArray = [newStroke * 3, newStroke * 2];
+
+            const center = theObject.getCenterPoint();
+
+            clonedObj.set({
+                fill: '',
+                // border color === control UI color, stroke == class
+                stroke: theObject.borderColor,
+                strokeWidth: newStroke,
+                strokeDashArray: newStrokeDashArray,
+                strokeLineCap: 'round',
+                strokeUniform: !!theObject.strokeUniform,
+
+                originX: 'center',
+                originY: 'center',
+                left: center.x,
+                top: center.y,
+
+                angle: theObject.angle || 0,
+                scaleX: theObject.scaleX ?? 1,
+                scaleY: theObject.scaleY ?? 1,
+                flipX: !!theObject.flipX,
+                flipY: !!theObject.flipY,
+
+                selectable: false,
+                evented: false,
+                opacity: 1,
+                hasControls: false,
+                hasBorders: false,
+                isHighlight: true,
+                excludeFromExport: true,
+                objectCaching: false
+            });
+            clonedObj.setCoords();
+            delete clonedObj.type;
+
+            return clonedObj;
+        } catch (error) {
+            console.error("Error in selected function:", error);
+            return null;
+        }
     }
 
     /**
@@ -629,7 +874,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
             if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
                 // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
-                const canvas = this._context.canvas;
+                const canvas = this._context.fabric.canvas;
                 props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
             } else {
                 // Shared props object carries over the value
@@ -637,6 +882,25 @@ OSDAnnotations.AnnotationObjectFactory = class {
             }
             ofObject.set(props);
         }
+    }
+
+    /**
+     * Apply selection style to the object
+     * @param {*} ofObject
+     */
+    applySelectionStyle(ofObject) {
+        ofObject.set({
+            stroke: 'rgba(251, 184, 2, 0.75)',
+        });
+    }
+
+
+    /**
+     * Resolve annotation text from preset metadata (category) and render it on the object.
+     * Intended for text-based objects.
+     * @param {*} ofObject
+     */
+    renderPresetText(ofObject) {
     }
 
     /**
@@ -720,19 +984,33 @@ OSDAnnotations.PolygonUtilities = {
     },
 
     simplify: function (points, highestQuality = true) {
-        // both algorithms combined for performance, simplifies the object based on zoom level
         if (points.length <= 2) return points;
 
-        let tolerance = 15 / VIEWER.scalebar.imagePixelSizeOnScreen();
-        points = highestQuality ? points : this._simplifyRadialDist(points, Math.pow(tolerance, 2));
+        // desired visual tolerance in screen pixels
+        const desiredScreenTol = 15;
+        let pxSize = VIEWER.scalebar.imagePixelSizeOnScreen() || 1;
+
+        // convert to image coords
+        let tolerance = desiredScreenTol / pxSize;
+
+        // CLAMP to keep polygons sane at huge zooms
+        const MIN_TOL = 1.5;   // at least ~1–2 image pixels
+        const MAX_TOL = 100;   // avoid over-simplifying at tiny zoom
+        if (!isFinite(tolerance)) tolerance = MIN_TOL;
+        tolerance = Math.max(MIN_TOL, Math.min(MAX_TOL, tolerance));
+
+        points = highestQuality
+            ? points
+            : this._simplifyRadialDist(points, tolerance * tolerance);
+
         return this._simplifyDouglasPeucker(points, tolerance);
     },
 
-    simplifyQuality: function (points, quality) {
+    simplifyQuality: function (points, imagePixelOnScreen, quality) {
         if (points.length <= 2) return points;
 
         //todo decide empirically on the constant value (quality = 0 means how big relative distance?)
-        let tolerance = (15 - 12*quality) / VIEWER.scalebar.imagePixelSizeOnScreen();
+        let tolerance = (15 - 12*quality) / imagePixelOnScreen;
         return this._simplifyDouglasPeucker(this._simplifyRadialDist(points, Math.pow(tolerance, 2)), tolerance);
     },
 
@@ -973,403 +1251,3 @@ OSDAnnotations.PolygonUtilities = {
         return simplified;
     }
 };
-
-//todo deprecate/remove this in favor of wand
-OSDAnnotations.AutoObjectCreationStrategy = class {
-    constructor(selfName, context) {
-        this.compatibleShaders = ["heatmap", "bipolar-heatmap", "edge", "identity"];
-    }
-
-    approximateBounds(point, growY=true) {
-        //todo default object?
-        return null;
-    }
-
-    /*async*/ createOutline(eventPosition) {
-        //todo default object?
-        return null;
-    }
-};
-
-/**
- * Class that contains all logic for automatic annotation creation.
- * Imported only if WebGL Module is present from the very beginning
- */
-OSDAnnotations.RenderAutoObjectCreationStrategy = class extends OSDAnnotations.AutoObjectCreationStrategy {
-
-    constructor(selfName, context) {
-        super(selfName, context);
-
-        this._currentTile = null;
-        const _this = this;
-        this._renderEngine = new WebGLModule({
-            uniqueId: "annot",
-            onError: function(error) {
-                //potentially able to cope with it
-                context.raiseEvent('warn-system', {
-                    originType: "module",
-                    originId: "annotations",
-                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
-                    message: "Error in the webgl module.",
-                    trace: error
-                });
-            },
-            onFatalError: function (error) {
-                console.error("Error with automatic detection: this feature wil be disabled.");
-                VIEWER.raiseEvent('error-user', {
-                    originType: "module",
-                    originId: "annotations",
-                    code: "E_AUTO_OUTLINE_ENGINE_ERROR",
-                    message: "Error with automatic detection: this feature wil be disabled.",
-                    trace: error
-                });
-                _this._running = false;
-            }
-        });
-        this._running = true;
-        this._renderEngine.addVisualization({
-            shaders: {
-                _ : {
-                    type: "heatmap",
-                    dataReferences: [0],
-                    params: {}
-                }
-            }
-        });
-        this._renderEngine.prepareAndInit(VIEWER.bridge.dataImageSources());
-        this._currentTile = "";
-        this._readingIndex = 0;
-        this._readingKey = "";
-    }
-
-    get running() {
-        return this._running;
-    }
-
-    getLayerIndex() {
-        return this._readingIndex;
-    }
-
-    setLayer(index, key) {
-        this._readingIndex = index;
-        this._readingKey = key;
-    }
-
-    _beforeAutoMethod() {
-        let vis = VIEWER.bridge.visualization();
-        this._renderEngine._visualizations[0] = {
-            shaders: {}
-        };
-        let toAppend = this._renderEngine._visualizations[0].shaders;
-
-        for (let key in vis.shaders) {
-            if (vis.shaders.hasOwnProperty(key)) {
-                let otherLayer = vis.shaders[key];
-                let type;
-                if (key === this._readingKey) {
-                    //todo clipping mask and custom rendering will maybe not work here
-
-                    if (!otherLayer.visible || otherLayer.visible === "false" || otherLayer.visible === "0") {
-
-                        VIEWER.raiseEvent('warn-user', {
-                            originType: "module",
-                            originId: "annotations",
-                            code: "E_AUTO_OUTLINE_INVISIBLE_LAYER",
-                            message: "Creating annotation in an invisible layer.",
-                        });
-                        return false;
-                    }
-
-                    if (otherLayer.type === "bipolar-heatmap") {
-                        this.comparator = function(pixel) {
-                            return Math.abs(pixel[0] - this.origPixel[0]) < 10 &&
-                                Math.abs(pixel[1] - this.origPixel[1]) < 10 &&
-                                Math.abs(pixel[2] - this.origPixel[2]) < 10 &&
-                                pixel[3] > 0;
-                        };
-                        type = otherLayer.type;
-                    } else {
-                        this.comparator = function(pixel) {
-                            return pixel[3] > 0;
-                        };
-                        type = "heatmap";
-                    }
-                } else {
-                    type = 'none';
-                }
-
-                toAppend[key] = {
-                    type: type,
-                    visible: otherLayer.visible,
-                    cache: otherLayer.cache,
-                    dataReferences: otherLayer.dataReferences,
-                    params: otherLayer.params,
-                    _index: otherLayer._index
-                }
-            }
-        }
-        this._renderEngine.rebuildVisualization(Object.keys(vis.shaders));
-
-        this._currentPixelSize = VIEWER.scalebar.imagePixelSizeOnScreen();
-
-        let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
-        for (let i = 0; i < tiles.length; i++) {
-            let tile = tiles[i];
-            if (!tile.hasOwnProperty("annotationCanvas")) {
-                tile.annotationCanvas = document.createElement("canvas");
-                tile.annotationCanvasCtx = tile.annotationCanvas.getContext("2d");
-            }
-            this._renderEngine.setDimensions(tile.sourceBounds.width, tile.sourceBounds.height);
-            let canvas = this._renderEngine.processImage(
-                tile.cacheImageRecord?.getData() || tile.__data, tile.sourceBounds, 0, this._currentPixelSize
-            );
-            tile.annotationCanvas.width = tile.sourceBounds.width;
-            tile.annotationCanvas.height = tile.sourceBounds.height;
-            tile.annotationCanvasCtx.drawImage(canvas, 0, 0, tile.sourceBounds.width, tile.sourceBounds.height);
-        }
-        return true;
-    }
-
-    _afterAutoMethod() {
-        delete this._renderEngine._visualizations[0];
-    }
-
-    approximateBounds(point, growY=true) {
-        if (!this._beforeAutoMethod() || !this.changeTile(point) || !this._running) {
-            this._afterAutoMethod();
-            return null;
-        }
-
-        this.origPixel = this.getPixelData(point);
-        let dimensionSize = Math.max(screen.width, screen.height);
-
-        let p = {x: point.x, y: point.y};
-        if (!this.comparator(this.origPixel)) {
-            //default object of width 40
-            return { top: this.toGlobalPointXY(p.x, p.y - 20), left: this.toGlobalPointXY(p.x - 20, p.y),
-                bottom: this.toGlobalPointXY(p.x, p.y + 20), right: this.toGlobalPointXY(p.x + 20, p.y) }
-        }
-
-        let counter = 0;
-        const _this = this;
-        function progress(variable, stepSize) {
-            while (_this.getAreaStamp(p.x, p.y) === 15 && counter < dimensionSize) {
-                p[variable] += stepSize;
-                counter++;
-            }
-            let ok = counter < dimensionSize;
-            counter = 0;
-            return ok;
-        }
-
-        if (!progress("x", 2)) return null;
-        let right = this.toGlobalPointXY(p.x, p.y);
-        p.x = point.x;
-
-        if (!progress("x", -2)) return null;
-        let left = this.toGlobalPointXY(p.x, p.y);
-        p.x = point.x;
-
-        let top, bottom;
-        if (growY) {
-            if (!progress("y", 2)) return null;
-            bottom = this.toGlobalPointXY(p.x, p.y);
-            p.y = point.y;
-
-            if (!progress("y", -2)) return null;
-            top = this.toGlobalPointXY(p.x, p.y);
-        } else {
-            bottom = top = this.toGlobalPointXY(p.x, p.y);
-        }
-
-        //if too small, discard
-        if (Math.abs(right-left) < 15 && Math.abs(bottom - top) < 15) return null;
-        return { top: top, left: left, bottom: bottom, right: right };
-    }
-
-    /*async*/ createOutline(eventPosition) {
-        if (!this._beforeAutoMethod() || !this.changeTile(eventPosition) || !this._running) {
-            this._afterAutoMethod();
-            return null;
-        }
-
-        this.origPixel = this.getPixelData(eventPosition);
-        let dimensionSize = Math.max(screen.width, screen.height);
-
-        let points = [];
-
-        let x = eventPosition.x;  // current x position
-        let y = eventPosition.y;  // current y position
-
-        if (!this.comparator(this.origPixel)) {
-            console.warn("Outline algorithm exited: outside region.");
-            this._afterAutoMethod();
-            return null;
-        }
-
-        let counter = 0;
-        while (this.getAreaStamp(x, y) === 15 && counter < dimensionSize) {
-            x += 2; //all neightbours inside, skip by two
-            counter++;
-            //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-        }
-        if (counter >= dimensionSize) {
-            this._afterAutoMethod();
-            return null;
-        }
-        //$("#osd").append(`<span style="position:absolute; top:${y}px; left:${x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-
-        const first_point = new OpenSeadragon.Point(x, y);
-        let time = Date.now();
-        let direction = 1;
-
-        let turns = [
-            [0, -1, 0],
-            [1, 0, 1],
-            [0, 1, 2],
-            [-1, 0, 3]
-        ];
-        // 0 -> up, 1 -> right, 2 -> down, 3-> left
-        let rightDirMapping = [1, 2, 3, 0];
-        let leftDirMapping = [3, 0, 1, 2];
-
-        let inside = this.isValidPixel(first_point);
-
-        RUN: for (let i = 3; i >= 0; i--) {
-            let dir = turns[i];
-            let xx = first_point.x;
-            let yy = first_point.y;
-            for (let j = 1; j < 6; j++) {
-                direction = dir[2];
-                first_point.x += dir[0];
-                first_point.y += dir[1];
-
-                if (this.isValidPixel(first_point) !== inside) {
-                    break RUN;
-                }
-            }
-            first_point.x = xx;
-            first_point.y = yy;
-        }
-
-        let oldDirection = direction;
-        counter = 0;
-        while (Math.abs(first_point.x - x) > 6 || Math.abs(first_point.y - y) > 6 || counter < 40) {
-            if (this.isValidPixel(first_point)) {
-                let left = turns[leftDirMapping[direction]];
-                first_point.x += left[0]*2;
-                first_point.y += left[1]*2;
-                oldDirection = direction;
-                direction = left[2];
-
-            } else {
-                let right = turns[rightDirMapping[direction]];
-                first_point.x += right[0]*2;
-                first_point.y += right[1]*2;
-                oldDirection = direction;
-                direction = right[2];
-            }
-
-            if (oldDirection !== direction && counter % 4 === 0) {
-                points.push(this.toGlobalPoint(first_point));
-            }
-
-            //$("#osd").append(`<span style="position:absolute; top:${first_point.y}px; left:${first_point.x}px; width:5px;height:5px; background:blue;" class="to-delete"></span>`);
-            //if (counter % 200 === 0) await OSDAnnotations.sleep(2);
-
-            if (counter % 100 === 0 && Date.now() - time > 1500) {
-                console.warn("Outline algorithm exited: iteration steps exceeded.");
-                this._afterAutoMethod();
-                return;
-            }
-            counter++;
-        }
-        this._afterAutoMethod();
-
-        let area = OSDAnnotations.PolygonUtilities.approximatePolygonArea(points);
-        if (area.diffX < 5*this._currentPixelSize && area.diffY < 5*this._currentPixelSize) return null;
-        return points;
-    }
-
-    toGlobalPointXY (x, y) {
-        return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(new OpenSeadragon.Point(x, y));
-    }
-
-    toGlobalPoint (point) {
-        return VIEWER.scalebar.getReferencedTiledImage().windowToImageCoordinates(point);
-    }
-
-    isValidPixel(eventPosition) {
-        return this.comparator(this.getPixelData(eventPosition));
-    }
-
-    comparator(pixel) {
-        return pixel[0] == this.origPixel[0] &&
-            pixel[1] == this.origPixel[1] &&
-            pixel[2] == this.origPixel[2] &&
-            pixel[3] > 0;
-    }
-
-    /**
-     * Find tile that contains the event point
-     * @param {OpenSeadragon.Point} eventPosition point
-     */
-    changeTile(eventPosition) {
-        let viewportPos = VIEWER.viewport.pointFromPixel(eventPosition);
-        let tiles = VIEWER.bridge.getTiledImage().lastDrawn;
-        for (let i = 0; i < tiles.length; i++) {
-            if (tiles[i].bounds.containsPoint(viewportPos)) {
-                this._currentTile = tiles[i];
-                return true;
-            }
-        }
-        return false;
-    }
-
-    getPixelData(eventPosition) {
-        //change only if outside
-        if (!this._currentTile.bounds.containsPoint(eventPosition)) {
-            this.changeTile(eventPosition);
-        }
-
-        // get position on a current tile
-        let x = eventPosition.x - this._currentTile.position.x;
-        let y = eventPosition.y - this._currentTile.position.y;
-
-        // get position on DZI tile (usually 257*257)
-        let canvasCtx = this._currentTile.getCanvasContext();
-        let relative_x = Math.round((x / this._currentTile.size.x) * canvasCtx.canvas.width);
-        let relative_y = Math.round((y / this._currentTile.size.y) * canvasCtx.canvas.height);
-
-        // let pixel = new Uint8Array(4);
-        // let gl = this._renderEngine.gl;
-        // gl.readPixels(relative_x, relative_y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-        // return pixel;
-        return this._currentTile.annotationCanvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
-    }
-
-    // CHECKS 4 neightbouring pixels and returns which ones are inside the specified region
-    //  |_|_|_|   --> topRight: first (biggest), bottomRight: second, bottomLeft: third, topLeft: fourth bit
-    //  |x|x|x|   --> returns  0011 -> 0*8 + 1*4 + 1*2 + 0*1 = 6, bottom right & left pixel inside
-    //  |x|x|x|
-    getAreaStamp(x, y) {
-        let result = 0;
-        if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y - 1))) {
-            result += 8;
-        }
-        if (this.isValidPixel(new OpenSeadragon.Point(x + 1, y + 1))) {
-            result += 4;
-        }
-        if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y + 1))) {
-            result += 2;
-        }
-        if (this.isValidPixel(new OpenSeadragon.Point(x - 1, y - 1))) {
-            result += 1;
-        }
-        return result;
-    }
-};
-
-OSDAnnotations.TiledImageMagicWand  = class extends OSDAnnotations.AutoObjectCreationStrategy {
-//todo implement magic wand
-}

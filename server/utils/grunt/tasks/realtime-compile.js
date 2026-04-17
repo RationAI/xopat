@@ -22,8 +22,9 @@ const postcss = require("postcss");
 const discardDuplicates = require("postcss-discard-duplicates");
 const mergeRules = require("postcss-merge-rules");
 const cssnano = require("cssnano");
-const esbuildArgs = require("../../esbuild-args");
-const {pathsEqual} = require("./pathsEqual");
+
+const { buildWorkspaceItem, buildUI, buildCore } = require("../../mixins/build-logic");
+const {pathsEqual} = require("../../mixins/pathsEqual");
 
 const toPosix = (p) => p.replace(/\\/g, "/");
 const abs = (root, p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
@@ -32,12 +33,25 @@ const exists = (p) => { try { fs.accessSync(p, fs.constants.F_OK); return true; 
 const ensureDir = (p) => fs.mkdirSync(p, { recursive: true });
 const uniq = (a) => [...new Set(a)];
 const hash = (s) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
+const nodeLogger = {
+    log: (msg) => console.log(msg),
+    warn: (msg) => console.warn(msg),
+    error: (msg) => console.error(msg)
+};
 
 async function runTailwind({ grunt, configFile, inputCSS, outFile, contentGlobs, minify, inputOverride }) {
     const inputToUse = inputOverride || inputCSS;
-    const args = ["-c", toPosix(configFile), "-i", toPosix(inputToUse), "-o", toPosix(outFile)];
-    // For the initial full build we DO NOT pass --content (uses config's default).
-    if (contentGlobs && contentGlobs.length) args.push("--content", contentGlobs.join(","));
+    const args = [
+        "-c", `"${toPosix(configFile)}"`,
+        "-i", `"${toPosix(inputToUse)}"`,
+        "-o", `"${toPosix(outFile)}"`
+    ];
+
+    if (contentGlobs && contentGlobs.length) {
+        // Content globs also need to be quoted if they contain spaces
+        const quotedGlobs = contentGlobs.map(g => `"${toPosix(g)}"`).join(",");
+        args.push("--content", quotedGlobs);
+    }
     if (!minify) args.push("--no-minify");
 
     grunt.log.writeln(`[twinc-merge] npx tailwindcss ${args.join(" ")}`);
@@ -99,54 +113,44 @@ module.exports = function (grunt) {
         }
 
         async function detectAndRebuildWorkspaceElements(files) {
-            async function rebuildWorkspaceItem(childPath) {
-                let itemPath = path.dirname(childPath);
-                while (itemPath && itemPath.length > 4) {
-                    // todo: coverts always, consider optimizing
+            const processedDirs = new Set();
+            for (const f of files) {
+                let itemPath = path.dirname(f);
+                // Traverse upwards to find the nearest package.json (workspace root)
+                while (itemPath && itemPath.length > root.length - 1) {
                     if (pathsEqual(itemPath, root)) break;
-                    const workspaceItem = path.join(itemPath, "package.json");
-                    if (exists(workspaceItem)) {
-                        // todo avoid parsing unless the file itself changed? cache somehow
-                        const workspace = JSON.parse(fs.readFileSync(workspaceItem, "utf8"));
-                        // todo in future let the workspace item redefine default build
-                        // if (workspace.scripts?.build) {
-                        //     grunt.log.writeln(`[twinc-merge] Rebuild workspace item ${workspaceItem}...`);
-                        //     await new Promise((resolve, reject) => {
-                        //         const child = spawn("npm", ["run", "dev"], { cwd: itemPath, stdio: "inherit", shell: process.platform === "win32" });
-                        //         child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm run dev exited ${code}`))));
-                        //     });
-                        //     return;
-                        // }
-                        if (workspace["main"]) {
-                            return new Promise((resolve, reject) => {
-                                const child = spawn("npx", ["esbuild", ...esbuildArgs,
-                                        `--outfile=${itemPath}/index.workspace.js`, `${itemPath}/${workspace["main"]}`],
-                                    {stdio: "inherit", shell: process.platform === "win32"});
-                                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
-                            });
-                        } else {
-                            grunt.log.warn(`[twinc-merge] No "main" field found in ${workspaceItem}.`);
+
+                    const pkgPath = path.join(itemPath, "package.json");
+                    if (fs.existsSync(pkgPath)) {
+                        if (!processedDirs.has(itemPath)) {
+                            try {
+                                processedDirs.add(itemPath);
+                                const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+
+                                grunt.log.writeln(`[twinc-merge] Rebuilding workspace: ${pkg.name || itemPath}`);
+
+                                // Call the shared build logic
+                                await buildWorkspaceItem(itemPath, pkg, nodeLogger);
+                            } catch (e) {
+                                grunt.log.error(`[twinc-merge] Error processing workspace: ${itemPath}`);
+                                grunt.log.error(e.message);
+                                grunt.log.error(e.stack);
+                            }
                         }
-                        break;
-                    }
-                    if (exists(path.join(itemPath, "include.json"))) {
+                        // Once we find the nearest package.json, we stop bubbling up for this file
                         break;
                     }
                     itemPath = path.dirname(itemPath);
                 }
             }
-            return Promise.all(files.map(rebuildWorkspaceItem));
         }
 
         async function rebuildUI() {
-            // 1) One-time full build to OUTFILE (uses config's default content)
-            grunt.log.writeln("[twinc-merge] Rebuild UI...");
+            return buildUI(nodeLogger);
+        }
 
-            return new Promise((resolve, reject) => {
-                const child = spawn("npx", ["esbuild", "--bundle", "--sourcemap", "--format=esm", "--outfile=ui/index.js", "ui/index.mjs"],
-                    { stdio: "inherit", shell: process.platform === "win32" });
-                child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npx esbuild exited ${code}`))));
-            });
+        async function rebuildCore() {
+            return buildCore(nodeLogger);
         }
 
         async function buildDeltaFor(fileAbsPosix, chunkPath) {
@@ -186,6 +190,7 @@ module.exports = function (grunt) {
         const lockExistsRecent = () => exists(LOCK) && (Date.now() - fs.statSync(LOCK).mtimeMs < 15 * 60 * 1000);
 
         async function ensureInitialOnce() {
+            await rebuildUI();
             if (!exists(stateFile) || !exists(baselineCss) || !exists(outFile)) {
                 if (lockExistsRecent()) { grunt.log.writeln("[twinc-merge] Full build in progress/recent; skipping."); return; }
                 fs.writeFileSync(LOCK, String(Date.now()));
@@ -241,10 +246,12 @@ module.exports = function (grunt) {
             const pendingFiles = new Set();
             let pendingNeedsUI = false;
             let pendingMergeOnly = false;
+            let pendingNeedsCore = false;
 
             function queueDelta(fileAbsPosix) {
                 pendingFiles.add(fileAbsPosix);
-                if (fileAbsPosix.includes('/ui/')) pendingNeedsUI = true; // posix path here
+                if (fileAbsPosix.includes('/ui/')) pendingNeedsUI = true;
+                if (fileAbsPosix.includes('/src/')) pendingNeedsCore = true; // NEW: Detect TS
                 scheduleFlush();
             }
 
@@ -267,6 +274,8 @@ module.exports = function (grunt) {
                 pendingFiles.clear();
                 const needUI = pendingNeedsUI;
                 pendingNeedsUI = false;
+                const needCore = pendingNeedsCore;
+                pendingNeedsCore = false;
                 const mergeOnly = pendingMergeOnly;
                 pendingMergeOnly = false;
 
@@ -286,6 +295,11 @@ module.exports = function (grunt) {
                     if (needUI) {
                         await rebuildUI();
                     }
+
+                    if (needCore) {
+                        await rebuildCore();
+                    }
+
                     await detectAndRebuildWorkspaceElements(files);
                 } catch (e) {
                     grunt.log.error(e.message);
@@ -296,8 +310,7 @@ module.exports = function (grunt) {
                     }
                 } finally {
                     isBuilding = false;
-                    // if more work arrived while we were building, run another cycle
-                    if (pendingFiles.size || pendingNeedsUI || pendingMergeOnly) {
+                    if (pendingFiles.size || pendingNeedsUI || pendingNeedsCore || pendingMergeOnly) {
                         scheduleFlush();
                     }
                 }
@@ -312,25 +325,36 @@ module.exports = function (grunt) {
             function onEvt(evt) {
                 return (p) => {
                     const file = absPosix(root, p);
-                    try { if (!fs.statSync(file).isFile()) return; } catch { return; }
-                    if (!matchesWatch(file)) return;
 
-                    grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
+                    // 1. Check matching first
+                    if (!matchesWatch(file)) {
+                        // Uncomment the line below to debug path mismatches
+                        // grunt.log.writeln(`[DEBUG] Ignored (no match): ${file}`);
+                        return;
+                    }
 
+                    // 2. Handle Deletion
                     if (evt === "unlink") {
+                        grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
                         const rel = manifest[file];
                         if (rel) {
                             try { fs.unlinkSync(path.join(cacheDir, rel)); } catch {}
                             delete manifest[file];
                             fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
                         }
-                        // If the removed file was under /ui/, ensure we also kick a UI bundle rebuild
                         if (file.includes('/ui/')) pendingNeedsUI = true;
                         queueMergeOnly();
                         return;
                     }
 
-                    // add/change → queue delta; UI flag will be set inside queueDelta()
+                    // 3. Handle Add/Change (Only stat if it's not a deletion)
+                    try {
+                        if (!fs.statSync(file).isFile()) return;
+                    } catch (e) {
+                        return; // File vanished between event and stat
+                    }
+
+                    grunt.log.writeln(`[twinc-merge] ${evt}: ${file}`);
                     queueDelta(file);
                 };
             }

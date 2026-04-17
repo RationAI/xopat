@@ -1,7 +1,6 @@
 // noinspection JSUnresolvedVariable
 
 /**
- * @typedef OpenSeadragon.TileSource
  * Empty tile source to render in place of faulty layer
  * @memberof OpenSeadragon
  * @extends OpenSeadragon.TileSource
@@ -9,9 +8,12 @@
 OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.TileSource {
 
     constructor(options) {
+        options.ready = true;
+        options.height = options.height || 256;
+        options.width = options.width || 256;
+        options.tileSize = options.tileSize || 256;
         super(options);
         this.tilesUrl = 'empty';
-        this.fileFormat = ".jpg";
         this.color = "rgba(0,0,0,0)";
     }
     supports( data, url ){
@@ -34,12 +36,13 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
     getMetadata() {
         return {error: 'No data available. The layer is empty.'};
     }
+
     setColor(color) {
         this.color = color;
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
-        return `empty`;
+        return this.tilesUrl;
     }
 
     tileExists( level, x, y ) {
@@ -64,31 +67,6 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
 
     downloadTileAbort(context) {
         //pass
-    }
-
-    createTileCache(cache, data) {
-        cache._data = data;
-    }
-
-    destroyTileCache(cache) {
-        cache._data = null;
-        cache._image = null;
-    }
-
-    getTileCacheData(cache) {
-        return cache._data;
-    }
-
-    getTileCacheDataAsImage(cache) {
-        if (!cache._image) {
-            cache._image = new Image();
-            cache._image.src = this._data.canvas.toDataURL();
-        }
-        return cache._image;
-    }
-
-    getTileCacheDataAsContext2D(cache) {
-        return cache._data;
     }
 };
 

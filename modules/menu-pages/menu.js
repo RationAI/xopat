@@ -1,4 +1,4 @@
-window.AdvancedMenuPages = class {
+window.AdvancedMenuPages = class extends XOpatModule {
 
     vegaInit = {};
 
@@ -7,9 +7,9 @@ window.AdvancedMenuPages = class {
      * @param {string} moduleId unique id of this module instance.
      * @param {function|string} strategy builder strategy, renderUIFromJson or guessUIFromJson
      */
-    constructor(moduleId, strategy=this.renderUIFromJson) {
-        this.id = "menu-pages";
-        this.uid = moduleId;
+    constructor(moduleId, strategy='renderUIFromJson') {
+        super()
+        this.__uids = moduleId; // todo consider doing this in some standard way... we need to inherit the identity to e.g. crash together with the owner
         this._count = 0;
         this.strategy = typeof strategy === "string" ? this[strategy] : strategy;
     }
@@ -140,12 +140,10 @@ window.AdvancedMenuPages = class {
         }
 
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str, sanitizeConfig));
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str));
             }, "sanitize-html");
@@ -188,12 +186,10 @@ window.AdvancedMenuPages = class {
             this.loadVega();
         };
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str, sanitizeConfig), selector);
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
                 build(config, str => SanitizeHtml(str), selector);
             })
@@ -203,56 +199,53 @@ window.AdvancedMenuPages = class {
     }
 
     /**
-     *
-     * @param {OpenSeadragon.Viewer|string} viewerOrId
-     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
+     * @typedef {function} ViewerHtmlConfigGetter
+     * @param {OpenSeadragon.Viewer} viewer - viewer that is the config meant for
+     * @return JSONHtmlConfig
+     */
+
+    /**
+     * @param {ViewerHtmlConfigGetter} getter
      * @param sanitizeConfig
      */
-    buildViewerMenu(viewerOrId, config, sanitizeConfig=false) {
-        if (!config) return;
-
-        const build = (config, sanitizer) => {
-            for (let data of config) {
-                const html = [];
-
-                if (!data.title || !data.page) {
-                    console.warn("Config for advanced menu pages missing title or page props - skipping!", data);
-                    continue;
-                }
-
-                for (let element of (data.page || [])) {
-                    html.push(this.strategy(element, sanitizer));
-                }
-
-                // todo replacement must work
-                VIEWER_MANAGER.getMenu(viewerOrId).append(
-                    data.title,
-                    undefined,
-                    html.join(""),
-                    this.getMenuId(data.id, this._count++),
-                    this.uid
-                );
+    buildViewerMenu(getter, sanitizeConfig=false) {
+        const build = (viewer, sanitizer) => {
+            let config = null;
+            try {
+                config = getter(viewer);
+            } catch (e) {
+                console.error(`Error in module menu builder for ${getter}:`, e);
             }
-            this._count += config.length;
-            this.loadVega();
+
+            if (!config) return;
+
+            const html = [];
+            for (let element of (config.page || [])) {
+                html.push(this.strategy(element, sanitizer));
+            }
+
+            // todo vega might be problematic -> we don't know WHEN it gets updated, we need callback to execute when inserted
+            setTimeout(() => this.loadVega());
+
+            // todo icon
+            return {
+                id: this.getMenuId(config.id, this._count++),
+                title: config.title,
+                icon: "fa-cog",
+                body: html.join("")
+            }
         };
 
-        if (!Array.isArray(config)) {
-            config = [config];
-        }
-
         if (typeof sanitizeConfig === "object") {
-            const _this = this;
             UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str, sanitizeConfig));
+                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str, sanitizeConfig)));
             }, "sanitize-html");
         } else if (sanitizeConfig) {
-            const _this = this;
             UTILITIES.loadModules(() => {
-                build(config, str => SanitizeHtml(str));
+                this.registerViewerMenu(viewer => build(viewer, str => SanitizeHtml(str)));
             }, "sanitize-html");
         } else {
-            build(config, false);
+            this.registerViewerMenu(viewer => build(viewer, false));
         }
     }
 
@@ -437,166 +430,438 @@ window.AdvancedMenuPages = class {
             .trim();
         return s.charAt(0).toUpperCase() + s.slice(1);
     }
-    _isPlainObject(v) { return Object.prototype.toString.call(v) === "[object Object]"; }
-    _isPrimitive(v) { return v === null || (typeof v !== "object" && typeof v !== "function"); }
+
+    _isPlainObject(v) {
+        return Object.prototype.toString.call(v) === "[object Object]";
+    }
+
+    _isPrimitive(v) {
+        return v === null || (typeof v !== "object" && typeof v !== "function");
+    }
+
     _arrayKind(arr) {
         if (!Array.isArray(arr)) return "none";
         if (!arr.length) return "empty";
-        const allPrim = arr.every(this._isPrimitive);
+        const allPrim = arr.every(v => this._isPrimitive(v));
         if (allPrim) return "primitives";
-        const allObj = arr.every(this._isPlainObject);
+        const allObj = arr.every(v => this._isPlainObject(v));
         if (allObj) return "objects";
         return "mixed";
     }
-    _fmtValue(v) {
+
+    _isShortText(v, max=72) {
+        return typeof v === "string" && !v.includes("\n") && v.length <= max;
+    }
+
+    _isLongText(v, max=160) {
+        return typeof v === "string" && (v.includes("\n") || v.length > max);
+    }
+
+    _fmtValue(v, maxLen=220) {
         if (v === null) return "null";
         if (typeof v === "undefined") return "undefined";
-        if (typeof v === "string") return v;
-        try { return JSON.stringify(v); } catch { return String(v); }
+        if (typeof v === "boolean") return v ? "Yes" : "No";
+        if (typeof v === "string") {
+            return v.length > maxLen ? `${v.slice(0, maxLen - 1)}…` : v;
+        }
+        if (Array.isArray(v)) {
+            return `[${v.length} item${v.length === 1 ? "" : "s"}]`;
+        }
+        try {
+            const str = JSON.stringify(v);
+            return str.length > maxLen ? `${str.slice(0, maxLen - 1)}…` : str;
+        } catch {
+            return String(v);
+        }
     }
 
-    /**
-     * Build a small UI spec node for a labeled value line.
-     * Uses generic Div + classes to avoid depending on unknown Input components.
-     */
-    _buildLabeledValue(label, valueStr) {
-        return {
-            type: "div",
-            extraClasses: "flex items-start gap-2 py-1",
-            children: [
-                { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
-                { type: "div", extraClasses: "text-xs font-mono bg-base-200 px-2 py-0.5 rounded", children: [valueStr] }
-            ]
-        };
+    _compactValue(v) {
+        if (typeof v === "boolean") return v ? "Yes" : "No";
+        if (typeof v === "number") return String(v);
+        if (typeof v === "string") return this._fmtValue(v, 64);
+        if (v === null) return "null";
+        if (Array.isArray(v)) return `${v.length} item${v.length === 1 ? "" : "s"}`;
+        if (this._isPlainObject(v)) return `${Object.keys(v).length} field${Object.keys(v).length === 1 ? "" : "s"}`;
+        return this._fmtValue(v, 64);
     }
 
-    /** Tag/badge chip */
+    _uiDiv(extraClasses="", children=[]) {
+        return { type: "div", extraClasses, children };
+    }
+
+    _uiBadge(text, extraClasses="") {
+        return this._uiDiv(`badge badge-outline badge-sm ${extraClasses}`.trim(), [String(text)]);
+    }
+
+    _uiMuted(text, extraClasses="") {
+        return this._uiDiv(`text-xs opacity-70 ${extraClasses}`.trim(), [String(text)]);
+    }
+
+    _uiSectionTitle(text, extraClasses="") {
+        return this._uiDiv(`text-sm font-semibold tracking-wide ${extraClasses}`.trim(), [String(text)]);
+    }
+
+    _buildValuePill(value, classes="") {
+        return this._uiDiv(`inline-flex max-w-full items-center rounded-xl bg-base-200 px-2.5 py-1 text-sm break-all ${classes}`.trim(), [this._fmtValue(value)]);
+    }
+
+    _buildFieldRow(label, value, opts={}) {
+        const valueClasses = opts.monospace
+            ? "font-mono text-xs"
+            : (opts.longText ? "whitespace-pre-wrap break-words leading-relaxed" : "break-words");
+
+        return this._uiDiv("py-2 border-b border-base-300 last:border-b-0", [
+            this._uiDiv("mb-1 text-[11px] font-medium uppercase tracking-wide opacity-60", [label || "Value"]),
+            this._uiDiv(`text-sm ${valueClasses}`.trim(), [this._fmtValue(value, opts.longText ? 10000 : 220)])
+        ]);
+    }
+
+    _buildFactTile(label, value) {
+        return this._uiDiv("rounded-xl border border-base-300 bg-base-200 px-3 py-2", [
+            this._uiDiv("mb-1 text-[11px] font-medium uppercase tracking-wide opacity-60", [label]),
+            this._uiDiv("text-sm font-medium break-words", [this._compactValue(value)])
+        ]);
+    }
+
     _buildChip(text) {
+        return this._uiBadge(text);
+    }
+
+    _buildChipList(items, max=12) {
+        const shown = items.slice(0, max).map(item => this._buildChip(this._fmtValue(item, 48)));
+        if (items.length > max) shown.push(this._buildChip(`+${items.length - max} more`));
+        return this._uiDiv("flex flex-wrap gap-1.5", shown);
+    }
+
+    _buildCard({ title="", subtitle="", badge="", extraClasses="" }={}, children=[]) {
+        const header = [];
+        if (title || subtitle || badge) {
+            const left = [];
+            if (title) left.push(this._uiDiv("text-base font-semibold leading-tight break-words", [title]));
+            if (subtitle) left.push(this._uiDiv("text-sm opacity-75 break-words whitespace-pre-wrap", [subtitle]));
+            header.push(this._uiDiv("mb-3 flex items-start justify-between gap-3", [
+                this._uiDiv("min-w-0 space-y-1", left),
+                badge ? this._uiBadge(badge, "shrink-0") : ""
+            ]));
+        }
+        return this._uiDiv(`rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm ${extraClasses}`.trim(), [
+            ...header,
+            ...children
+        ]);
+    }
+
+    _buildKeyValueCard(title, entries) {
+        if (!entries.length) return null;
+        return this._buildCard({ title }, entries.map(([label, value]) => {
+            const isLong = this._isLongText(value);
+            const isCodeish = typeof value === "string" && (value.startsWith("{") || value.startsWith("["));
+            return this._buildFieldRow(label, value, {
+                longText: isLong,
+                monospace: isCodeish
+            });
+        }));
+    }
+
+    _buildPrimitiveArrayCard(label, arr) {
+        return this._buildCard(
+            { title: label || "Items", badge: `${arr.length}` },
+            [this._buildChipList(arr)]
+        );
+    }
+
+    _buildRawValueCard(label, value, badge="") {
+        return this._buildCard(
+            { title: label || "Value", badge },
+            [this._buildFieldRow(label || "Value", this._fmtValue(value, 10000), { longText: true, monospace: true })]
+        );
+    }
+
+    _headlineKeys() {
+        return [
+            "title", "name", "label", "displayName", "display_name", "slideName", "slide_name",
+            "filename", "fileName", "imageName", "image_name", "caseName", "case_name",
+            "specimen", "sample", "id", "identifier", "accession"
+        ];
+    }
+
+    _subtitleKeys() {
+        return ["description", "summary", "subtitle", "notes", "comment", "details"];
+    }
+
+    _pickHeadline(obj, fallbackTitle="Slide information") {
+        const headline = {
+            title: fallbackTitle,
+            titleKey: "",
+            subtitle: "",
+            subtitleKey: ""
+        };
+
+        for (const key of this._headlineKeys()) {
+            const value = obj?.[key];
+            if (typeof value === "string" && value.trim()) {
+                headline.title = value.trim();
+                headline.titleKey = key;
+                break;
+            }
+            if ((typeof value === "number" || typeof value === "boolean") && value !== "") {
+                headline.title = `${this.humanizeKey(key)}: ${this._compactValue(value)}`;
+                headline.titleKey = key;
+                break;
+            }
+        }
+
+        for (const key of this._subtitleKeys()) {
+            const value = obj?.[key];
+            if (typeof value === "string" && value.trim()) {
+                headline.subtitle = value.trim().length > 180 ? `${value.trim().slice(0, 179)}…` : value.trim();
+                headline.subtitleKey = key;
+                break;
+            }
+        }
+
+        return headline;
+    }
+
+    _pickSummaryFacts(obj, excludeKeys=new Set(), limit=4) {
+        const preferred = [
+            "type", "format", "status", "vendor", "scanner", "stain", "diagnosis",
+            "width", "height", "size", "dimensions", "magnification", "objectivePower",
+            "channel", "modality", "created", "updated", "version"
+        ];
+        const entries = Object.entries(obj || {}).filter(([key, value]) => {
+            if (excludeKeys.has(key)) return false;
+            if (!this._isPrimitive(value)) return false;
+            if (typeof value === "string" && !this._isShortText(value, 48)) return false;
+            return true;
+        });
+
+        const ranked = entries.sort((a, b) => {
+            const ai = preferred.indexOf(a[0]);
+            const bi = preferred.indexOf(b[0]);
+            const av = ai === -1 ? 999 : ai;
+            const bv = bi === -1 ? 999 : bi;
+            if (av !== bv) return av - bv;
+            return a[0].localeCompare(b[0]);
+        });
+
+        return ranked.slice(0, limit);
+    }
+
+    _buildObjectHero(label, obj, opts={}) {
+        const fallbackTitle = label || opts.title || "Slide information";
+        const headline = this._pickHeadline(obj, fallbackTitle);
+        const usedKeys = new Set([headline.titleKey, headline.subtitleKey].filter(Boolean));
+        const facts = this._pickSummaryFacts(obj, usedKeys, 4);
+
+        const children = [
+            this._uiDiv("text-[11px] font-medium uppercase tracking-[0.14em] opacity-60", [label ? this.humanizeKey(label) : "Slide information"]),
+            this._uiDiv("text-lg font-semibold leading-tight break-words", [headline.title])
+        ];
+
+        if (headline.subtitle) {
+            children.push(this._uiDiv("text-sm opacity-80 whitespace-pre-wrap break-words", [headline.subtitle]));
+        }
+
+        if (facts.length) {
+            children.push(
+                this._uiDiv(
+                    "mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2",
+                    facts.map(([factKey, factValue]) => this._buildFactTile(this.humanizeKey(factKey), factValue))
+                )
+            );
+        }
+
         return {
-            type: "div",
-            extraClasses: "badge badge-outline badge-sm",
-            children: [String(text)]
+            node: this._buildCard({}, children),
+            excludeKeys: usedKeys,
+            factKeys: new Set(facts.map(([factKey]) => factKey))
         };
     }
 
-    /** Join row of chips */
-    _buildChipRow(label, arr, max=10) {
-        const shown = arr.slice(0, max).map(v => this._buildChip(this._fmtValue(v)));
-        if (arr.length > max) shown.push(this._buildChip(`+${arr.length - max} more`));
+    _renderExplicitSpec(node, depth, opts) {
+        if (!node || !node.type) return node;
+        if (!Array.isArray(node.children)) return node;
+
         return {
-            type: "div",
-            extraClasses: "flex items-start gap-2 py-1",
-            children: [
-                { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
-                { type: "join", extraClasses: "flex flex-wrap gap-1", children: shown }
-            ]
+            ...node,
+            children: node.children.flatMap(child => {
+                if (child && typeof child === "object" && child.type) {
+                    return [this._renderExplicitSpec(child, depth + 1, opts)];
+                }
+                if (this._isPrimitive(child)) return [String(child ?? "")];
+                return [this._buildRawValueCard("Value", child)];
+            })
         };
     }
 
-    /**
-     * Guess UI spec for any JSON value.
-     *
-     * @param {string} key - current property key (for labels)
-     * @param {*} value - the JSON value
-     * @param {number} depth - current recursion depth
-     * @param {object} opts - { maxDepth, maxArrayItems }
-     * @returns {Array} array of UI spec nodes
-     */
+    _buildObjectSection(label, obj, depth, opts={}) {
+        const title = label ? this.humanizeKey(label) : (opts.title || "Object");
+
+        if (depth >= opts.maxDepth) {
+            return [this._buildRawValueCard(title, obj, `${Object.keys(obj).length} fields`)];
+        }
+
+        const isRoot = depth === 1;
+        const nodes = [];
+        const excludedKeys = new Set();
+
+        if (isRoot) {
+            const hero = this._buildObjectHero(label, obj, opts);
+            nodes.push(hero.node);
+            hero.excludeKeys.forEach(key => excludedKeys.add(key));
+            hero.factKeys.forEach(key => excludedKeys.add(key));
+        }
+
+        const scalarEntries = [];
+        const longTextEntries = [];
+        const primitiveArrays = [];
+        const objectEntries = [];
+        const complexArrays = [];
+        const explicitSpecs = [];
+
+        for (const [key, value] of Object.entries(obj)) {
+            if (excludedKeys.has(key)) continue;
+
+            if (value && typeof value === "object" && value.type) {
+                const resolved = this.resolveUIClass(value.type) || this.ALIAS[this.norm(value.type)];
+                if (resolved) {
+                    explicitSpecs.push(this._renderExplicitSpec(value, depth + 1, opts));
+                    continue;
+                }
+            }
+
+            if (Array.isArray(value)) {
+                const kind = this._arrayKind(value);
+                if (kind === "primitives" || kind === "empty") {
+                    primitiveArrays.push([key, value]);
+                } else {
+                    complexArrays.push([key, value]);
+                }
+                continue;
+            }
+
+            if (this._isPlainObject(value)) {
+                objectEntries.push([key, value]);
+                continue;
+            }
+
+            if (this._isLongText(value)) {
+                longTextEntries.push([key, value]);
+            } else {
+                scalarEntries.push([key, value]);
+            }
+        }
+
+        if (scalarEntries.length) {
+            const card = this._buildKeyValueCard(isRoot ? "Properties" : `${title} properties`, scalarEntries.map(([key, value]) => [this.humanizeKey(key), value]));
+            if (card) nodes.push(card);
+        }
+
+        for (const [key, value] of primitiveArrays) {
+            const labelText = this.humanizeKey(key);
+            if (!value.length) {
+                nodes.push(this._buildKeyValueCard(labelText, [[labelText, "[]"]]));
+            } else {
+                nodes.push(this._buildPrimitiveArrayCard(labelText, value));
+            }
+        }
+
+        for (const [key, value] of longTextEntries) {
+            nodes.push(this._buildCard(
+                { title: this.humanizeKey(key) },
+                [this._uiDiv("text-sm whitespace-pre-wrap break-words leading-relaxed", [this._fmtValue(value, 10000)])]
+            ));
+        }
+
+        for (const [key, value] of objectEntries) {
+            nodes.push(...this._buildObjectSection(key, value, depth + 1, opts));
+        }
+
+        for (const [key, value] of complexArrays) {
+            nodes.push(...this._buildArraySection(key, value, depth + 1, opts));
+        }
+
+        nodes.push(...explicitSpecs);
+
+        return nodes;
+    }
+
+    _buildArrayItemCard(item, index, depth, opts) {
+        const badge = `#${index + 1}`;
+
+        if (this._isPlainObject(item)) {
+            const headline = this._pickHeadline(item, `Item ${index + 1}`);
+            const nested = this._buildObjectSection(`Item ${index + 1}`, item, depth + 1, opts);
+            return this._buildCard(
+                { title: headline.title, subtitle: headline.subtitle, badge },
+                nested.length ? nested : [this._buildFieldRow(`Item ${index + 1}`, this._fmtValue(item, 10000), { longText: true, monospace: true })]
+            );
+        }
+
+        if (Array.isArray(item)) {
+            const nested = this._buildArraySection(`Item ${index + 1}`, item, depth + 1, opts);
+            return this._buildCard({ title: `Item ${index + 1}`, badge }, nested);
+        }
+
+        return this._buildCard({ title: `Item ${index + 1}`, badge }, [
+            this._buildValuePill(item)
+        ]);
+    }
+
+    _buildArraySection(label, arr, depth, opts={}) {
+        const title = label ? this.humanizeKey(label) : "Items";
+        const kind = this._arrayKind(arr);
+
+        if (depth >= opts.maxDepth) {
+            return [this._buildRawValueCard(title, arr, `${arr.length} items`)];
+        }
+
+        if (kind === "empty") {
+            return [this._buildKeyValueCard(title, [[title, "[]"]])];
+        }
+
+        if (kind === "primitives") {
+            return [this._buildPrimitiveArrayCard(title, arr)];
+        }
+
+        const items = arr.slice(0, opts.maxArrayItems);
+        const itemCards = items.map((item, index) => this._buildArrayItemCard(item, index, depth, opts));
+        if (arr.length > opts.maxArrayItems) {
+            itemCards.push(this._uiMuted(`Showing ${opts.maxArrayItems} of ${arr.length} items.`, "pt-1"));
+        }
+
+        const content = itemCards.length > 3
+            ? [{ type: "collapse", label: `Show ${items.length}${arr.length > opts.maxArrayItems ? ` of ${arr.length}` : ""} items`, startOpen: false, children: itemCards }]
+            : itemCards;
+
+        return [this._buildCard({ title, badge: `${arr.length} items` }, content)];
+    }
+
     _guessSpecForValue(key, value, depth, opts) {
         const label = this.humanizeKey(key);
-        const nodes = [];
 
-        // Primitive types
-        if (typeof value === "boolean") {
-            nodes.push({ type: "checkbox", label, checked: !!value });
-            return nodes;
-        }
-        if (typeof value === "number") {
-            nodes.push(this._buildLabeledValue(label, String(value)));
-            return nodes;
-        }
-        if (typeof value === "string") {
-            const isLong = value.length > 120 || value.includes("\n");
-            nodes.push({
-                type: "div",
-                extraClasses: "flex items-start gap-2 py-1",
-                children: [
-                    { type: "div", extraClasses: "w-40 shrink-0 text-xs opacity-80", children: [label] },
-                    { type: "div", extraClasses: (isLong ? "text-xs whitespace-pre-wrap" : "text-xs"),
-                        children: [value] }
-                ]
-            });
-            return nodes;
-        }
-        if (value === null) {
-            nodes.push(this._buildLabeledValue(label, "null"));
-            return nodes;
-        }
-
-        // Arrays
-        if (Array.isArray(value)) {
-            const kind = this._arrayKind(value);
-            if (kind === "empty") {
-                nodes.push(this._buildLabeledValue(label, "[]"));
-                return nodes;
-            }
-            if (kind === "primitives") {
-                nodes.push(this._buildChipRow(label, value, opts.maxArrayItems));
-                return nodes;
-            }
-            nodes.push({ type: "title", text: label, level: Math.min(4, depth + 2), separator: false });
-
-            const children = [];
-            const items = value.slice(0, opts.maxArrayItems);
-            items.forEach((item, i) => {
-                if (depth >= opts.maxDepth) {
-                    children.push(this._buildLabeledValue("", this._fmtValue(item)));
-                } else {
-                    children.push(...this._guessSpecForValue(i, item, depth + 1, opts));
-                }
-            });
-            if (value.length > opts.maxArrayItems) {
-                children.push(this._buildLabeledValue("Note", `+${value.length - opts.maxArrayItems} more items truncated`));
-            }
-
-            if (children.length > 3) {
-                nodes.push({
-                    type: "collapse",
-                    label: `Items (${value.length})`,
-                    children,
-                    startOpen: false
-                });
-            } else {
-                nodes.push(...children);
-            }
-            return nodes;
+        if (value && typeof value === "object" && value.type) {
+            const resolved = this.resolveUIClass(value.type) || this.ALIAS[this.norm(value.type)];
+            if (resolved) return [this._renderExplicitSpec(value, depth, opts)];
         }
 
         if (this._isPlainObject(value)) {
-            if (value.type && this.resolveUIClass(value.type)) {
-                if (Array.isArray(value.children)) {
-                    value.children = value.children.map(ch => this._guessSpecForValue("", ch, depth + 1, opts));
-                }
-                nodes.push(value);
-                return nodes;
-            }
-
-            if (label) {
-                nodes.push({ type: "title", text: label || "Object", level: Math.min(4, depth + 2), separator: false });
-            }
-            if (depth >= opts.maxDepth) {
-                nodes.push(this._buildLabeledValue("Value", this._fmtValue(value)));
-                return nodes;
-            }
-            for (let chKey in value) {
-                nodes.push(...this._guessSpecForValue(chKey, value[chKey], depth + 1, opts));
-            }
-            return nodes;
+            return this._buildObjectSection(label, value, depth, opts);
         }
 
-        // Fallback
-        nodes.push(this._buildLabeledValue(label || "Value", this._fmtValue(value)));
-        return nodes;
+        if (Array.isArray(value)) {
+            return this._buildArraySection(label, value, depth, opts);
+        }
+
+        if (this._isLongText(value)) {
+            return [this._buildCard({ title: label || opts.title || "Value" }, [
+                this._uiDiv("text-sm whitespace-pre-wrap break-words leading-relaxed", [this._fmtValue(value, 10000)])
+            ])];
+        }
+
+        return [this._buildCard({ title: label || opts.title || "Value" }, [
+            this._buildValuePill(value)
+        ])];
     }
 
     /**
@@ -609,11 +874,14 @@ window.AdvancedMenuPages = class {
      * @returns {string} HTML string
      */
     guessUIFromJson(json, sanitizer=false, options={}) {
-        options.maxDepth = Math.max(1, options.maxDepth ?? 3);
-        options.maxArrayItems = Math.max(1, options.maxArrayItems ?? 25);
+        options.maxDepth = Math.max(1, options.maxDepth ?? 4);
+        options.maxArrayItems = Math.max(1, options.maxArrayItems ?? 10);
+        options.title = options.title || "Slide information";
 
         const spec = this._guessSpecForValue("", json, 1, options);
-        const htmlParts = spec.map(node => this.renderUIFromJson(node, sanitizer));
-        return htmlParts.join("");
+        const wrapped = this._uiDiv("space-y-4", spec);
+        return this.renderUIFromJson(wrapped, sanitizer);
     }
 };
+
+addModule("menu-pages", AdvancedMenuPages);

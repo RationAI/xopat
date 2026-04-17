@@ -17,6 +17,8 @@
       "renderDesc": "Your browser did not pass a rendering test: the visual output might not work as intended.",
       "defaultDemoHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the session has been lost - please, report the issue.</li></ul>",
       "invalidDataHtml": "<ul class=\"ml-3\"><li>you have an invalid link, or</li><li>the data you are trying to view does not exist, or</li><li>you are not authorized to view the data</li></ul>",
+      "macroImage": "The image {{image}} you are trying to view is a macro image. No magnification scales are available.",
+      "sessionExpiredReloading": "Your session expired or became invalid. Reloading…",
       "slide": {
         "404": "The data you are trying to open does not exist!",
         "401": "Your login session has expired: please refresh the window to log in.",
@@ -36,13 +38,17 @@
         "clone": "Clone the viewer",
         "preview": "Data Window"
       },
+      "globalMenu": {
+        "globalMenu": "Global menu",
+        "noMenuToView": "There is no menu to view."
+      },
       "navigator": {
         "title": "Navigator",
         "faultyTissue": "Faulty {{slide}}",
         "faultyViz": "Invalid Data"
       },
       "shaders": {
-        "title": "Shaders Menu",
+        "title": "Visualization",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",
@@ -51,11 +57,33 @@
         "maskDisable": "Enable mask",
         "clipMask": "Set clipping mask",
         "clipMaskOff": "Unset clipping mask",
+        "notAvailable": "No visualization available.",
+        "shader": "Shader",
+        "type": "Shader type",
+        "modeShow": "Overlay",
+        "modeBlend": "Mask",
+        "modeBlendClip": "Clip mask",
+        "modeShowShort": "Show",
+        "modeBlendShort": "Mask",
+        "modeClipShort": "Clip",
+        "blendConfigure": "Configure blending",
+        "blendMode": "Blend mode",
+        "blend": "Blend",
         "faulty": "Possibly faulty layer.",
+        "blendingTitle": "Blending",
+        "blendingInfoShow": "Layer is shown without masking.",
+        "blendingInfoMask": "Layer is used as a mask over layers below.",
+        "blendingInfoMaskClip": "Layer is used as a clipping mask over layers below.",
         "defaultTitle": "Custom Visualization",
         "cacheByOrder": "Remember settings by layers order",
         "cacheByName": "Remember settings by layer name",
-        "notAvailable": "No overlays available",
+        "cacheClear": "Clear cache",
+        "cacheHit": "Loaded from cache",
+        "cacheMiss": "Not cached",
+        "clipHint": "The layer is masking the element directly below.",
+        "cacheStale": "",
+        "cacheTitle": "Layer visuals are cached",
+        "cacheInfo": "The layer remembers parameter values set before.",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."
@@ -64,6 +92,7 @@
       "bar": {
         "pinFullscreen": "Pin to Fullscreen Menu",
         "copy": "Copy",
+        "edit": "Edit",
         "view": "View",
         "share": "Share",
         "exportUrl": "URL",
@@ -75,7 +104,11 @@
         "tutorials": "Tutorials",
         "explainTutorials": "Show tutorials",
         "settings": "Settings",
-        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved."
+        "staticFileExplain": "This browser was opened from a shared file. Changes are not being saved.",
+        "viewerSidebars": "Viewer Side Menus",
+        "viewerToolbars": "Tool Bars",
+        "undo": "Undo {{action}}",
+        "redo": "Redo {{action}}"
       }
     },
     "messages": {
@@ -182,7 +215,8 @@
       "Tissues": "Tissues",
       "Source": "Source",
       "selectAll": "Select All",
-      "deselectAll": "Deselect All"
+      "deselectAll": "Deselect All",
+      "Close": "Close"
     }
   }
 }

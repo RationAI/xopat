@@ -48,7 +48,4 @@ export default {
     getSwapBackgroundPlaceholder(index) {
         return cy.get("#tissue-preview-container").children().eq(index);
     },
-    getStackedImageMenuItem(index) {
-        return cy.get("#image-layer-options").children().eq(index);
-    }
 }

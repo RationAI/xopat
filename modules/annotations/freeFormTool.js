@@ -20,25 +20,25 @@ OSDAnnotations.FreeFormTool = class {
         this._created = false;
         this._node = null;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
-        this._scale = this._scale = {x: 0, y: 0, factor: 1};
-        this._windowSize = {width: this._context.overlay._containerWidth, height: this._context.overlay._containerHeight};
+        this._scale = {x: 0, y: 0, factor: 1};
+        this._windowSize = {width: 0, height: 0};
 
         USER_INTERFACE.addHtml(`<div id="annotation-cursor" class="${this._context.id}-plugin-root" style="border: 2px solid black;border-radius: 50%;position: absolute;transform: translate(-50%, -50%);pointer-events: none;display:none;"></div>`,
             this._context.id);
         this._node = document.getElementById("annotation-cursor");
 
         this._windowCanvas = document.createElement('canvas');
-        this._windowCanvas.width = this._windowSize.width + 4 * this.maxRadius;
+        this._windowCanvas.width  = this._windowSize.width + 4 * this.maxRadius;
         this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
         this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
         this._annotationCanvas = document.createElement('canvas');
-        this._annotationCanvas.width = this._windowSize.width * 3;
+
+        this._annotationCanvas.width  = this._windowSize.width * 3;
         this._annotationCanvas.height = this._windowSize.height * 3;
         this._ctxAnnotationFull =  this._annotationCanvas.getContext('2d', { willReadFrequently: true });
 
         this.MagicWand = OSDAnnotations.makeMagicWand();
-        this.ref = VIEWER.scalebar.getReferencedTiledImage();
     }
 
     /**
@@ -54,13 +54,14 @@ OSDAnnotations.FreeFormTool = class {
     init(object, created=false) {
         let objectFactory = this._context.getAnnotationObjectFactory(object.factoryID);
         this._created = created;
+        this.ref = this._context.viewer.scalebar.getReferencedTiledImage();
 
         this._updateCanvasSize();
         this._initializeDefaults();
 
         if (objectFactory !== undefined) {
             if (objectFactory.factoryID !== "polygon" && objectFactory.factoryID !== "multipolygon") {  //object can be used immedietaly
-                let points = Array.isArray(created) ? points : (
+                let points = Array.isArray(created) ? created : (
                     objectFactory.supportsBrush() ?
                         objectFactory.toPointArray(object,
                             OSDAnnotations.AnnotationObjectFactory.withObjectPoint, 1) : undefined
@@ -85,18 +86,17 @@ OSDAnnotations.FreeFormTool = class {
             return;
         }
         this.mousePos = {x: -99999, y: -9999}; //first click can also update
-        this.simplifier = OSDAnnotations.PolygonUtilities.simplify.bind(OSDAnnotations.PolygonUtilities);
         this._updatePerformed = false;
     }
 
     _updateCanvasSize() {
         if (this._isWindowSizeUpdated()) {
 
-            this._windowCanvas.width = this._windowSize.width + 4 * this.maxRadius;
+            this._windowCanvas.width  = this._windowSize.width + 4 * this.maxRadius;
             this._windowCanvas.height = this._windowSize.height + 4 * this.maxRadius;
             this._ctxWindow = this._windowCanvas.getContext('2d', { willReadFrequently: true });
 
-            this._annotationCanvas.width = this._windowSize.width * 3;
+            this._annotationCanvas.width  = this._windowSize.width * 3;
             this._annotationCanvas.height = this._windowSize.height * 3;
             this._ctxAnnotationFull = this._annotationCanvas.getContext('2d', { willReadFrequently: true });
             return;
@@ -118,22 +118,36 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _isWindowSizeUpdated() {
-        const { containerWidth, containerHeight } = this._context.overlay;
+        const { containerWidth, containerHeight } = this._context.fabric.overlay;
 
         if (this._windowSize.width === containerWidth && this._windowSize.height === containerHeight) {
             return false;
         }
 
-        this._windowSize.width = this._context.overlay._containerWidth;
-        this._windowSize.height = this._context.overlay._containerHeight;
+        this._windowSize.width = this._context.fabric.overlay._containerWidth;
+        this._windowSize.height = this._context.fabric.overlay._containerHeight;
         return true;
+    }
+
+    _normalizeCanvasBBox(bbox, ctx) {
+        const x = Math.max(0, Math.floor(bbox.x));
+        const y = Math.max(0, Math.floor(bbox.y));
+        const right = Math.min(ctx.canvas.width, Math.ceil(bbox.x + bbox.width));
+        const bottom = Math.min(ctx.canvas.height, Math.ceil(bbox.y + bbox.height));
+
+        return {
+            x,
+            y,
+            width: Math.max(1, right - x),
+            height: Math.max(1, bottom - y)
+        };
     }
 
     /**
      * Update cursor indicator radius
      */
     updateCursorRadius() {
-        let screenRadius = this.radius * VIEWER.scalebar.imagePixelSizeOnScreen() * 2;
+        let screenRadius = this.radius * this._context.viewer.scalebar.imagePixelSizeOnScreen() * 2;
         if (this._node) {
             this._node.style.width = screenRadius + "px";
             this._node.style.height = screenRadius + "px";
@@ -173,7 +187,7 @@ OSDAnnotations.FreeFormTool = class {
      * @return {boolean} true if mode 'add' is active
      */
     get isModeAdd() {
-        return this._update === this._subtract;
+        return this._update === this._union;
     }
 
     /**
@@ -208,15 +222,18 @@ OSDAnnotations.FreeFormTool = class {
      * Set the tool radius, in screen coordinates
      * @param {number} radius in screen pixels
      */
-    setRadius (radius) {
-        let imageTileSource = VIEWER.scalebar.getReferencedTiledImage();
-        let pointA = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(0, 0));
-        let pointB = imageTileSource.windowToImageCoordinates(new OpenSeadragon.Point(radius*2, 0));
-        //no need for euclidean distance, vector is horizontal
-        this.radius = Math.round(Math.abs(pointB.x - pointA.x));
+    setRadius(radius) {
+        const imageTileSource = this._context.viewer.scalebar.getReferencedTiledImage();
+        const pointA = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(0, 0));
+        const pointB = imageTileSource.viewerElementToImageCoordinates(new OpenSeadragon.Point(radius * 2, 0));
+
+        // Under viewport rotation this image-space vector is no longer horizontal.
+        // Keep the existing scale semantics, but use full vector length.
+        this.radius = Math.round(Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y));
+
         if (this.screenRadius !== radius) this.updateCursorRadius();
         this.screenRadius = radius;
-        this._context.raiseEvent('free-form-tool-radius', {radius: radius});
+        this._context.raiseEvent('free-form-tool-radius', { radius });
     }
 
     /**
@@ -272,7 +289,7 @@ OSDAnnotations.FreeFormTool = class {
             }
 
             this._updatePerformed = this._update(point) || this._updatePerformed;
-            this._context.canvas.renderAll();
+            this._context.fabric.rerender();
 
         } catch (e) {
             console.warn("FreeFormTool: something went wrong, ignoring...", e);
@@ -291,7 +308,8 @@ OSDAnnotations.FreeFormTool = class {
      * Finalize the object modification
      * @return {fabric.Polygon | null} polygon if successfully updated
      */
-    finish (_withDeletion=false) {
+    finish(_withDeletion=false) {
+        this.ref = null;
         if (this.polygon) {
             delete this.initial.moveCursor;
             delete this.polygon.moveCursor;
@@ -299,17 +317,17 @@ OSDAnnotations.FreeFormTool = class {
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
                 //revert annotation replacement and delete the initial (annotation was erased by modification)
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
-                this._context.deleteAnnotation(this.initial);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.deleteAnnotation(this.initial);
             } else if (!this._created) {
                 //revert annotation replacement and when updated, really swap
-                this._context.replaceAnnotation(this.polygon, this.initial, true);
+                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
                 if (this._updatePerformed) {
-                    this._context.replaceAnnotation(this.initial, this.polygon);
+                    this._context.fabric.replaceAnnotation(this.initial, this.polygon);
                 }
             } else {
-                this._context.deleteHelperAnnotation(this.polygon);
-                this._context.addAnnotation(this.polygon);
+                this._context.fabric.deleteHelperAnnotation(this.polygon);
+                this._context.fabric.addAnnotation(this.polygon);
             }
             this._created = false;
             let outcome = this.polygon;
@@ -333,7 +351,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _convertOSD = (point) => {
-        let newPoint = this.ref.imageToWindowCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        let newPoint = this.ref.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
         newPoint.x += this._offset.x;
         newPoint.y += this._offset.y;
 
@@ -344,13 +362,33 @@ OSDAnnotations.FreeFormTool = class {
         point.x -= this._offset.x;
         point.y -= this._offset.y;
 
-        return this.ref.windowToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
+        return this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(point.x, point.y));
     }
 
     _convertScaling = (point) => {
         return {
             x: (point.x - this._scale.x) * this._scale.factor + this._offset.x,
             y: (point.y - this._scale.y) * this._scale.factor + this._offset.y
+        };
+    }
+
+    _viewerRectToImageBounds(left, top, right, bottom) {
+        const corners = [
+            this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(left, top)),
+            this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(right, top)),
+            this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(right, bottom)),
+            this.ref.viewerElementToImageCoordinates(new OpenSeadragon.Point(left, bottom)),
+        ];
+
+        const xs = corners.map(p => p.x);
+        const ys = corners.map(p => p.y);
+
+        return {
+            left: Math.min(...xs),
+            top: Math.min(...ys),
+            right: Math.max(...xs),
+            bottom: Math.max(...ys),
+            corners,
         };
     }
 
@@ -382,7 +420,7 @@ OSDAnnotations.FreeFormTool = class {
             }
         }
 
-        ctx.fill("evenodd");
+        ctx.fill("nonzero");
     }
 
     //initialize object so that it is ready to be modified
@@ -391,9 +429,9 @@ OSDAnnotations.FreeFormTool = class {
         this.initial = original;
 
         if (!this._created) {
-            this._context.replaceAnnotation(original, polyObject, true);
+            this._context.fabric.replaceAnnotation(original, polyObject, true);
         } else {
-            this._context.addHelperAnnotation(polyObject);
+            this._context.fabric.addHelperAnnotation(polyObject);
         }
 
         const isPolygon = polyObject.factoryID === "polygon";
@@ -416,13 +454,13 @@ OSDAnnotations.FreeFormTool = class {
         newObject.type = factory.type;
 
         if (!this._created) {
-            this._context.replaceAnnotation(this.polygon, this.initial, true);
+            this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
             this.polygon = newObject;
-            this._context.replaceAnnotation(this.initial, this.polygon, true);
+            this._context.fabric.replaceAnnotation(this.initial, this.polygon, true);
         } else {
-            this._context.deleteHelperAnnotation(this.polygon);
+            this._context.fabric.deleteHelperAnnotation(this.polygon);
             this.polygon = newObject;
-            this._context.addHelperAnnotation(this.polygon);
+            this._context.fabric.addHelperAnnotation(this.polygon);
         }
     }
 
@@ -502,21 +540,24 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _calculateBounds() {
-        const polygonPoints = this.polygon.factoryID === "polygon" ? this.polygon.points : this.polygon.points[0];
+        const polygonPoints = this.polygon.factoryID === "polygon"
+            ? this.polygon.points
+            : this.polygon.points[0];
+
         const bbox = OSDAnnotations.PolygonUtilities.getBoundingBox(polygonPoints);
-        const annotationBounds = { left: bbox.x, top: bbox.y, right: bbox.x + bbox.width, bottom: bbox.y + bbox.height };
+        const annotationBounds = {
+            left: bbox.x,
+            top: bbox.y,
+            right: bbox.x + bbox.width,
+            bottom: bbox.y + bbox.height
+        };
 
-        const topLeft = this.ref.windowToImageCoordinates(
-            new OpenSeadragon.Point(-this._offset.x, -this._offset.y)
+        const screenBounds = this._viewerRectToImageBounds(
+            -this._offset.x,
+            -this._offset.y,
+            this._ctxWindow.canvas.width - this._offset.x,
+            this._ctxWindow.canvas.height - this._offset.y
         );
-        const bottomRight = this.ref.windowToImageCoordinates(
-            new OpenSeadragon.Point(
-                this._ctxWindow.canvas.width - this._offset.x,
-                this._ctxWindow.canvas.height - this._offset.y
-            )
-        );
-
-        const screenBounds = { left: topLeft.x, top: topLeft.y, right: bottomRight.x, bottom: bottomRight.y };
 
         const zoomed = this._isPartiallyOutside(screenBounds, annotationBounds);
         return { screenBounds, annotationBounds, zoomed };
@@ -545,20 +586,44 @@ OSDAnnotations.FreeFormTool = class {
             ];
         }
 
-        const { x: left, y: top } = this._convertScaling({ x: screenBounds.left, y: screenBounds.top });
-        const { x: right, y: bottom } = this._convertScaling({ x: screenBounds.right, y: screenBounds.bottom });
+        const scaledCorners = [
+            this._convertScaling({ x: screenBounds.left,  y: screenBounds.top }),
+            this._convertScaling({ x: screenBounds.right, y: screenBounds.top }),
+            this._convertScaling({ x: screenBounds.right, y: screenBounds.bottom }),
+            this._convertScaling({ x: screenBounds.left,  y: screenBounds.bottom }),
+        ];
 
-        const width = right - left;
-        const height = bottom - top;
+        const xs = scaledCorners.map(p => p.x);
+        const ys = scaledCorners.map(p => p.y);
 
-        this._canvasDims = { left, top, width, height };
-        this._ctxAnnotationFull.drawImage(this._ctxWindow.canvas, left, top, width, height);
+        const left = Math.min(...xs);
+        const top = Math.min(...ys);
+        const right = Math.max(...xs);
+        const bottom = Math.max(...ys);
+
+        const width = Math.max(1, right - left);
+        const height = Math.max(1, bottom - top);
+
+        this._canvasDims = {
+            left: Math.floor(left),
+            top: Math.floor(top),
+            width: Math.ceil(width),
+            height: Math.ceil(height)
+        };
+
+        this._ctxAnnotationFull.drawImage(
+            this._ctxWindow.canvas,
+            this._canvasDims.left,
+            this._canvasDims.top,
+            this._canvasDims.width,
+            this._canvasDims.height
+        );
 
         const points = [
-            {x: left, y: top},
-            {x: right, y: top},
-            {x: right, y: bottom},
-            {x: left, y: bottom},
+            { x: this._canvasDims.left, y: this._canvasDims.top },
+            { x: this._canvasDims.left + this._canvasDims.width, y: this._canvasDims.top },
+            { x: this._canvasDims.left + this._canvasDims.width, y: this._canvasDims.top + this._canvasDims.height },
+            { x: this._canvasDims.left, y: this._canvasDims.top + this._canvasDims.height },
             ...this._annotationBoundsScaled
         ];
 
@@ -566,7 +631,7 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _processContours(nextMousePos, fillColor) {
-        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 3) return false;
+        if (!this.polygon || this._toDistancePointsAsObjects(this.mousePos, nextMousePos) < this.radius / 2) return false;
         this._offset = {x: 2 * this.maxRadius, y: 2 * this.maxRadius};
         this._convert = this._convertOSD;
 
@@ -626,24 +691,36 @@ OSDAnnotations.FreeFormTool = class {
     }
 
     _getContours(ctx, bbox, zoomed) {
+        bbox = this._normalizeCanvasBBox(bbox, ctx);
         const imageData = ctx.getImageData(bbox.x, bbox.y, bbox.width, bbox.height);
         const mask = this._getBinaryMask(imageData.data, imageData.width, imageData.height);
         if (!mask.bounds) return [];
 
         let contours = this.MagicWand.traceContours(mask);
         contours = this._getValidContours(contours, ctx, {x: bbox.x, y: bbox.y}, zoomed);
-        contours = this.MagicWand.simplifyContours(contours, 0, 30);
+        // contours = this.MagicWand.simplifyContours(contours, 0, 30);
 
-        const imageContours = contours.map(contour => ({
-            ...contour,
-            points: contour.points.map(point => {
-                point.x += bbox.x + 0.5;
-                point.y += bbox.y + 0.5;
-                return this._convert(point);
-            })
-        }));
+        const MAX_POINTS = 4000;
 
-        return imageContours;
+        for (let contour of contours) {
+            contour.points = OSDAnnotations.PolygonUtilities.simplify(
+                contour.points.map(point => {
+                    // empirically found: the polygon
+                    point.x += bbox.x + 0.3;
+                    point.y += bbox.y + 0.1;
+                    return this._convert(point);
+                })
+            );
+
+            if (contour.points.length > MAX_POINTS) {
+                // Aggressive extra simplification if still insane
+                contour.points = OSDAnnotations.PolygonUtilities.simplifyQuality(
+                    contour.points,
+                    0.2 // lower quality → higher tolerance
+                );
+            }
+        }
+        return contours;
     }
 
     _getBinaryMask(data, width, height) {
@@ -654,9 +731,15 @@ OSDAnnotations.FreeFormTool = class {
             for (let x = 0; x < width; x++) {
                 const index = (y * width + x) * 4;
                 const r = data[index];
+                const g = data[index + 1];
+                const b = data[index + 2];
+                const a = data[index + 3];
 
-                if (r === 255) {
-                    mask[y * width + x] = 1;
+                // simple luminance threshold + alpha guard
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                if (a > 0 && lum >= 200) {  // instead of r === 255
+                    const idx = y * width + x;
+                    mask[idx] = 1;
 
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -669,20 +752,10 @@ OSDAnnotations.FreeFormTool = class {
         if (maxX === -1 || maxY === -1) {
             bounds = null;
         } else {
-            bounds = {
-                minX: minX,
-                minY: minY,
-                maxX: maxX,
-                maxY: maxY
-            }
+            bounds = { minX, minY, maxX, maxY };
         }
 
-        return {
-            data: mask,
-            width: width,
-            height: height,
-            bounds: bounds,
-        }
+        return { data: mask, width, height, bounds };
     }
 
     _toDistancePointsAsObjects(pointA, pointB) {

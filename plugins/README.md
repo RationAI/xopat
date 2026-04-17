@@ -137,7 +137,7 @@ static ROOT;
 ````
 
 #### `XOpatPlugin::constructor(id, params)`
-The plugin main class is given it's `id` and `params` object (dynamic metadata), make sure to call `super(id);`. `params` object
+The plugin main class is given it's `id` and `params` object (dynamic metadata). `params` object
 is integrated within the system and gets exported in the viewer configuration - such information is available when 
 sharing the plugin
 exports.
@@ -279,33 +279,27 @@ if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
 }
 ```
 
-### Data Management Options  TODO: rewrite
-There are generally **five** different options how to manage data. For metadata (e.g. configurations, settings), 
+### Data Management Options
+There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings), 
 three different options are available:
 
-TODO docs
- 1. ``getOption``, `setOption` suitable for small configuration metadata, present in the configuration present in _viewer URL and file exports_
- 2. ``getStaticMeta``, ``-nothing-`` suitable for static (hardcoded) configuration metadata, reading from your `include.json`
- 3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available
-    - use for user configurations caching to avoid re-setting in each session
+ 1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_.
+ 2. `getStaticMeta` suitable for static (hardcoded) configuration metadata, reading from your `include.json`.
+ 3. `async getCache`, `async setCache` suitable for session-independent data (cookies or user data), always available.
+    - use for user configurations caching to avoid re-setting in each session.
 
-And one global meta store meant for reading only, global viewer metadata    
- 4. ``APPLICATION_CONTEXT.metadata`` as an instance of `MetaStore` class  
-todo docs
-For data IO, you ahve two options
- 1. ``async importData``, `async exportData` suitable for data in general, present in _viewer file exports_
- 2. custom service storing data at server
-    - this is not supported as of now in any way, implement your own logic on how to access a third party storage service
-    - prefer use of ``sendJSON`` method to communicate, the user info metadata is automatically included
-    
+And one global meta store meant for reading only global viewer metadata:
+ 4. `APPLICATION_CONTEXT.metadata` as an instance of `MetaStore` class.
 
+For data IO, you have two options:
+ 1. `async importData`, `async exportData` suitable for data in general, present in _viewer file exports_.
+ 2. Custom service storing data at server
+    - this requires your own implementation to access a third party storage service.
+    - prefer the use of the `HttpClient` class to communicate, as it automatically integrates with the authentication system.
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
-
-> Events are available only after `this.registerAsEventSource()` has been called.
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -334,22 +328,31 @@ First, get familiar with (sorted in importance order):
         - getting reference to _main_ tiled image, getting pixel size on screen,
     - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
     - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
+ - `window.VIEWER_MANAGER`
+    - manager for viewers
  - `window.USER_INTERFACE`
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`
     - functional API - exporting, downloading files, refreshing page and many other useful utilities
-    - especially fetching is encouraged to use through ``UTILITIES.fetchJSON(...)``  todo docs is this still true?
- - Third party code (see below)    
- - `window.UIComponents`
-    - building blocks for HTML structures, does not have to be used but contains ready-to-use building blocks - menus...
+ - ``window.HTTPClient`` for seamless auth integration
+    - Third party code (see below)
  - `window.APPLICATION_CONTEXT`
     - note that this interface is meant for inner logic and you probably do not need to access it
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`
     - to access the viewer parameters, use `[set|get]Option(...)` method
+ - ``window.LAYOUT`` 
+   - the main app layout
   
 And also other available modules. Each module provides it's own way of enriching the environment, 
 such as pre-defined color maps, (already mentioned) webgl processing, fabricJS canvas, JSON to HTML parser, 
 annotation logic, HTML sanitization, vega graphs, threading worker or keyframe snapshots.   
+
+> #### Note on `XOpatViewerSingleton`
+> The `XOpatViewerSingleton` is not a module nor plugin (do not confuse it like so), it is utility class instantiated per viewer.
+> Unlike plugins, you need to call ``registerViewerSingleton(XOpatModuleViewerSingleton)``.
+> Multiple such classes can exist within a plugin, as they do not define a plugin.
+> Instead of ``registerViewerSingleton``, you can call `requireViewerSingletonPresence`
+> to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
 
 ### Available Third-party Code and UI
 - You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
@@ -384,6 +387,25 @@ or an object to specify a file on the web. The object properties (almost) map to
     ]
 }
 ```` 
+## Viewer Multiplexing
+There can be multiple viewers open at once. You might need to create:
+- custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
+- custom viewer-oriented data models: use `XOpatViewerSingleton` if you need only instance per viewer.
+
+### ``XOpatViewerSingleton``
+The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
+created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton)``.
+
+For dynamically or lazily loaded singletons, use the loader helper APIs. Ensure that `className` accurately matches the expected context context:
+
+````js
+this.integrateWithViewerSingletonModule('MyViewerSingleton', viewerRef, async (module) => {
+    //...
+});
+
+const mod = viewerSingletonModule('MyViewerSingleton', viewerRef);
+````
 
 ## Dynamic Loading
 As workers and js modules (recommended usage), the viewer does not offer advanced tools for
@@ -403,6 +425,26 @@ the functionality appropriately. Also, **do not store reference** to any tiled i
 Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ Tiled Image: an image wrt. which
 all measures should be done.
 
+For authentication, ``HttpClient`` is avaiable and strongly recommended. It integrates with
+the viewer auth flows directly, and you can use custom contexts for authentication too.
+Moreover, you can use proxies to hide API keys: the proxy can be used only trusted services: you should use ``HttpClient`` to talk to the proxy, and not ``fetch``
+````javascript
+// here is some login that logs within contextId
+const authClient = new OIDCAuthClient(oidcConfig, {
+    userContextId: "my-service",
+    serviceName,
+    authMethod: "popup",
+});
+
+const client = new HttpClient({
+    proxy: "proxy-key",           // the config key in server.secure.proxies
+    baseURL: "/v1",               // optional base path inside the proxy
+    auth: {                       // optional authentication, if configured, directly integrates with xOpatUser API
+        contextId: "my-service",
+        types: ["jwt"],
+    },
+});
+````
  
 ## Hints
 If you have a panel registered under your ID, you can use `loading` class to show a loading spinner

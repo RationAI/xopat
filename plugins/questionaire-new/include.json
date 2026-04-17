@@ -1,0 +1,6 @@
+{
+  "name": "Questionnaire",
+  "description": "Custom questionnaire runtime for xOpat v3.",
+  "directory": "questionaire",
+  "permaLoad": false
+}

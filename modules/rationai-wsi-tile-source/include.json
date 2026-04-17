@@ -3,8 +3,7 @@
     "name": "RationAI Enhanced WSI Service by Empaia",
     "version": "0.1.0",
     "includes" : [
-        "tile-source.js",
-        "color.js"
+        "tile-source.js"
     ],
     "requires": []
 }

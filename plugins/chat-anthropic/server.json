@@ -1,0 +1,12 @@
+{
+  "providerDefaults": {
+    "baseUrl": "https://api.anthropic.com/v1",
+    "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
+    "defaultModelId": "",
+    "modelsPath": "/models",
+    "anthropicVersion": "2023-06-01",
+    "contextId": "jwt",
+    "authType": "jwt",
+    "requiresLogin": true
+  }
+}

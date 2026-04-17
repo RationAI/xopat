@@ -20,10 +20,8 @@ $replacer = function($match) use ($i18n) {
     switch ($match[1]) {
         case "head":
             require_openseadragon();
-            require_lib("primer");
-            require_lib("jquery");
-            require_lib("render");
-            require_ui();  // TODO Jirka: do we need this?
+            require_libs();
+            require_ui();
             require_core("env");
             require_core("deps");
             break;

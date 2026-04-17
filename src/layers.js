@@ -1,4 +1,4 @@
-function initXopatLayers() {
+function initXOpatLayers() {
     function parseStore(key) {
         try {
             return JSON.parse(APPLICATION_CONTEXT.AppCache.get(key, "{}"));
@@ -12,23 +12,30 @@ function initXopatLayers() {
             return x && typeof x === type;
         }
 
-        for (let visualizationTarget of configData) {
-            if (!isset(visualizationTarget.name)) {
-                visualizationTarget.name = $.t('main.shaders.defaultTitle');
-            }
-            if (!isset(visualizationTarget.shaders, "object")) {
-                console.warn(`Visualization #${index} invalid: missing shaders definition.`, visualizationTarget);
-                visualizationTarget.shaders = {};
+        function parseShaderMap(shaderMap, visualizationIndex, parentPath = []) {
+            if (!isset(shaderMap, "object")) {
+                return {};
             }
 
             let sid = 0, source = $.t("common.Source");
-            for (let data in visualizationTarget.shaders) {
-                const layer = visualizationTarget.shaders[data];
+            for (let data in shaderMap) {
+                const layer = shaderMap[data];
+                const layerPath = parentPath.concat([data]).join("/");
+
+                if (!isset(layer, "object")) {
+                    console.warn(`Visualization #${visualizationIndex} shader layer removed: invalid config.`, layerPath, layer);
+                    delete shaderMap[data];
+                    continue;
+                }
+
+                const hasNestedShaders = isset(layer.shaders, "object");
+                if (!isset(layer.type) && hasNestedShaders) {
+                    layer.type = "group";
+                }
 
                 if (!isset(layer.type)) {
-                    //message ui? 'messages.shaderTypeMissing'
-                    console.warn(`Visualization #${index} shader layer removed: missing type.`, layer);
-                    delete visualizationTarget.shaders[data];
+                    console.warn(`Visualization #${visualizationIndex} shader layer removed: missing type.`, layerPath, layer);
+                    delete shaderMap[data];
                     continue;
                 }
 
@@ -37,12 +44,212 @@ function initXopatLayers() {
                     if (temp.length !== data.length) temp = "..." + temp;
                     layer.name = source + ": " + temp;
                 }
+
+                if (hasNestedShaders) {
+                    layer.shaders = parseShaderMap(layer.shaders, visualizationIndex, parentPath.concat([data]));
+                }
+
+                sid++;
             }
+
+            return shaderMap;
+        }
+
+        let index = 0;
+        for (let visualizationTarget of configData) {
+            if (!isset(visualizationTarget.name)) {
+                visualizationTarget.name = $.t('main.shaders.defaultTitle');
+            }
+            if (!isset(visualizationTarget.shaders, "object")) {
+                console.warn(`Visualization #${index} invalid: missing shaders definition.`, visualizationTarget);
+                visualizationTarget.shaders = {};
+            }
+            visualizationTarget.shaders = parseShaderMap(visualizationTarget.shaders, index++);
         }
     }
 
     const namedCookieCache = parseStore('_layers.namedCache');
     const orderedCookieCache = parseStore('_layers.orderedCache');
+
+    function isObject(value) {
+        return !!value && typeof value === "object" && !Array.isArray(value);
+    }
+
+    function normalizeCachePayload(value) {
+        if (!isObject(value)) {
+            return {};
+        }
+
+        return Object.fromEntries(
+            Object.entries(value).filter(([_, val]) => isObject(val) && Object.keys(val).length > 0)
+        );
+    }
+
+    const SNAPSHOT_STATE_KEY = "__xopat_state";
+
+    function extractShaderState(config) {
+        const params = isObject(config?.params) ? config.params : {};
+        const state = {};
+
+        if (config?.visible !== undefined) {
+            state.visible = !!config.visible;
+        }
+        if (params.use_mode !== undefined) {
+            state.use_mode = params.use_mode;
+        }
+        if (params.use_blend !== undefined) {
+            state.use_blend = params.use_blend;
+        }
+
+        return state;
+    }
+
+    function buildSnapshotPayload(config, shader) {
+        const payload = normalizeCachePayload(config?.cache || shader?._cache);
+        const state = extractShaderState(config);
+
+        if (Object.keys(state).length > 0) {
+            payload[SNAPSHOT_STATE_KEY] = state;
+        }
+
+        return payload;
+    }
+
+    function splitSnapshotPayload(payload) {
+        const normalized = normalizeCachePayload(payload);
+        const state = isObject(normalized[SNAPSHOT_STATE_KEY]) ? { ...normalized[SNAPSHOT_STATE_KEY] } : {};
+        delete normalized[SNAPSHOT_STATE_KEY];
+        return { cache: normalized, state };
+    }
+
+    function applySnapshotState(config, state) {
+        if (!isObject(config) || !isObject(state) || Object.keys(state).length < 1) {
+            return;
+        }
+
+        config.params = isObject(config.params) ? config.params : {};
+
+        if (state.visible !== undefined) {
+            config.visible = state.visible ? 1 : 0;
+        }
+        if (state.use_mode !== undefined) {
+            config.params.use_mode = state.use_mode;
+        }
+        if (state.use_blend !== undefined) {
+            config.params.use_blend = state.use_blend;
+        }
+    }
+
+    function ensureSmartNamedStore(store) {
+        if (store && store.__version === 2) {
+            store.byId = store.byId || {};
+            store.byPath = store.byPath || {};
+            store.byName = store.byName || {};
+            store.entries = Array.isArray(store.entries) ? store.entries : [];
+            return store;
+        }
+
+        const upgraded = {
+            __version: 2,
+            byId: {},
+            byPath: {},
+            byName: {},
+            entries: []
+        };
+
+        if (isObject(store)) {
+            for (const [name, cache] of Object.entries(store)) {
+                const normalized = normalizeCachePayload(cache);
+                if (Object.keys(normalized).length < 1) continue;
+                upgraded.byName[name] = upgraded.byName[name] || [];
+                upgraded.byName[name].push({ cache: normalized });
+                upgraded.entries.push({ name, cache: normalized });
+            }
+        }
+
+        return upgraded;
+    }
+
+    function ensureOrderedStore(store) {
+        if (store && store.__version === 2) {
+            store.byOrder = store.byOrder || {};
+            store.byPath = store.byPath || {};
+            store.entries = Array.isArray(store.entries) ? store.entries : [];
+            return store;
+        }
+
+        const upgraded = {
+            __version: 2,
+            byOrder: {},
+            byPath: {},
+            entries: []
+        };
+
+        if (isObject(store)) {
+            for (const [index, cache] of Object.entries(store)) {
+                const normalized = normalizeCachePayload(cache);
+                if (Object.keys(normalized).length < 1) continue;
+                upgraded.byOrder[index] = normalized;
+                upgraded.entries.push({ index, cache: normalized });
+            }
+        }
+
+        return upgraded;
+    }
+
+    function collectShaderEntries() {
+        const renderer = VIEWER?.drawer?.renderer;
+        const entries = [];
+
+        if (renderer && typeof renderer.forEachShaderLayerWithContext === "function") {
+            renderer.forEachShaderLayerWithContext(
+                renderer.getAllShaders(),
+                renderer.getShaderLayerOrder(),
+                (shaderLayer, shaderId, shaderConfig, htmlContext) => {
+                    entries.push({
+                        shader: shaderLayer,
+                        shaderId,
+                        config: shaderConfig || shaderLayer?.getConfig?.() || {},
+                        path: htmlContext?.path || [shaderId],
+                        pathString: htmlContext?.pathString || shaderId,
+                    });
+                }
+            );
+            return entries;
+        }
+
+        const active = renderer?.getAllShaders?.() || {};
+        let index = 0;
+        for (const shaderId in active) {
+            if (!Object.prototype.hasOwnProperty.call(active, shaderId)) continue;
+            const shader = active[shaderId];
+            entries.push({
+                shader,
+                shaderId,
+                config: shader?.getConfig?.() || {},
+                path: [shaderId],
+                pathString: shaderId,
+                index: index++
+            });
+        }
+        return entries;
+    }
+
+    function forEachShaderConfig(shaderConfigMap, callback, path = []) {
+        if (!isObject(shaderConfigMap)) return;
+
+        let index = 0;
+        for (const [shaderId, config] of Object.entries(shaderConfigMap)) {
+            if (!isObject(config)) continue;
+
+            const nextPath = path.concat([shaderId]);
+            callback(config, shaderId, nextPath, index++);
+
+            if (isObject(config.shaders)) {
+                forEachShaderConfig(config.shaders, callback, nextPath);
+            }
+        }
+    }
 
     /**
      * Initialize Visualization (data group) from APPLICATION_CONTEXT.config setup
@@ -59,23 +266,63 @@ function initXopatLayers() {
     /*---------------------------------------------------------*/
 
     const recordCache = (cookieKey, currentCache, cacheKeyMaker, keepEmpty) => {
-        const shaderCache = currentCache;
-        let index = 0;
-        let active = VIEWER.drawer.renderer.getAllShaders();
-        for (let key in active) {
-            if (active.hasOwnProperty(key)) {
-                let shader = active[key];
+        const entries = collectShaderEntries();
 
-                //filter cache so that only non-empty objects are stored
-                const cache = Object.fromEntries(
-                    Object.entries(shader._cache).filter(([key, val]) => Object.keys(val)?.length > 0)
-                );
-                if (keepEmpty || Object.keys(cache).length > 0) {
-                    shaderCache[cacheKeyMaker(shader.getConfig(), index++)] = cache;
-                }
-            }
+        if (cookieKey === '_layers.namedCache') {
+            currentCache.__version = 2;
+            currentCache.byId = {};
+            currentCache.byPath = {};
+            currentCache.byName = {};
+            currentCache.entries = [];
+        } else if (cookieKey === '_layers.orderedCache') {
+            currentCache.__version = 2;
+            currentCache.byOrder = {};
+            currentCache.byPath = {};
+            currentCache.entries = [];
         }
-        APPLICATION_CONTEXT.AppCache.set(cookieKey, JSON.stringify(shaderCache));
+
+        entries.forEach((entry, index) => {
+            const config = entry.config || {};
+            const cache = buildSnapshotPayload(config, entry.shader);
+            if (!keepEmpty && Object.keys(cache).length < 1) {
+                return;
+            }
+
+            const primaryKey = cacheKeyMaker(config, index, entry);
+            if (cookieKey === '_layers.namedCache') {
+                if (config.id) {
+                    currentCache.byId[config.id] = cache;
+                }
+                currentCache.byPath[entry.pathString] = cache;
+                if (config.name) {
+                    currentCache.byName[config.name] = currentCache.byName[config.name] || [];
+                    currentCache.byName[config.name].push({
+                        id: config.id,
+                        path: entry.pathString,
+                        cache
+                    });
+                }
+                currentCache.entries.push({
+                    key: primaryKey,
+                    id: config.id,
+                    name: config.name,
+                    path: entry.pathString,
+                    cache
+                });
+            } else {
+                currentCache.byOrder[String(index)] = cache;
+                currentCache.byPath[entry.pathString] = cache;
+                currentCache.entries.push({
+                    key: primaryKey,
+                    id: config.id,
+                    name: config.name,
+                    path: entry.pathString,
+                    cache
+                });
+            }
+        });
+
+        APPLICATION_CONTEXT.AppCache.set(cookieKey, JSON.stringify(currentCache));
     };
 
     /**
@@ -94,19 +341,47 @@ function initXopatLayers() {
      * @param shaderConfigMap
      */
     UTILITIES.applyStoredVisualizationSnapshot = function (shaderConfigMap) {
+        const smartNamedCache = ensureSmartNamedStore(namedCookieCache);
+        const smartOrderedCache = ensureOrderedStore(orderedCookieCache);
+
         let sid = 0;
-        for (const shaderId in shaderConfigMap) {
-            const config = shaderConfigMap[shaderId];
-            const namedCache = namedCookieCache[config.name] || {};
-            if (Object.keys(namedCache).length > 0) {
-                config.cache = namedCache;
-                config._cacheApplied = "name";
-            } else {
-                config.cache = config.cache || orderedCookieCache[sid] || {};
-                config._cacheApplied = Object.keys(config.cache).length > 0 ? "order" : undefined;
+        forEachShaderConfig(shaderConfigMap, (config, shaderId, path) => {
+            const pathString = path.join("/");
+            const namedById = config.id ? smartNamedCache.byId[config.id] : undefined;
+            const namedByPath = smartNamedCache.byPath[pathString];
+            const namedCandidates = config.name ? (smartNamedCache.byName[config.name] || []) : [];
+
+            let namedSnapshot = splitSnapshotPayload(namedById || namedByPath);
+            let cacheApplied;
+
+            if (Object.keys(namedSnapshot.cache).length > 0 || Object.keys(namedSnapshot.state).length > 0) {
+                cacheApplied = namedById ? "id" : "path";
+            } else if (namedCandidates.length > 0) {
+                const exactMatch = namedCandidates.find(entry => entry.path === pathString || entry.id === config.id);
+                const fallback = exactMatch || namedCandidates[0];
+                namedSnapshot = splitSnapshotPayload(fallback?.cache);
+                if (Object.keys(namedSnapshot.cache).length > 0 || Object.keys(namedSnapshot.state).length > 0) {
+                    cacheApplied = exactMatch ? "name+path" : "name";
+                }
             }
+
+            if (Object.keys(namedSnapshot.cache).length > 0 || Object.keys(namedSnapshot.state).length > 0) {
+                config.cache = namedSnapshot.cache;
+                applySnapshotState(config, namedSnapshot.state);
+                config._cacheApplied = cacheApplied;
+            } else {
+                const orderedSnapshot = splitSnapshotPayload(
+                    smartOrderedCache.byPath[pathString] || smartOrderedCache.byOrder[String(sid)]
+                );
+                config.cache = orderedSnapshot.cache;
+                applySnapshotState(config, orderedSnapshot.state);
+                config._cacheApplied = Object.keys(orderedSnapshot.cache).length > 0 || Object.keys(orderedSnapshot.state).length > 0
+                    ? (smartOrderedCache.byPath[pathString] ? "order+path" : "order")
+                    : undefined;
+            }
+
             sid++;
-        }
+        });
     };
 
     /**

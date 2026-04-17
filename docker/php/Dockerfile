@@ -21,6 +21,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         locales \
         tzdata \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -43,9 +45,9 @@ FROM viewer-build-deps AS viewer-build
 RUN cd /tmp \
     && git clone https://github.com/RationAI/openseadragon.git \
     && cd openseadragon \
-    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
     && npm ci
 
+ENV XO_REPO_ROOT=/tmp/xopat
 COPY . /tmp/xopat
 RUN cd /tmp/xopat && npm ci && npm run build
 
@@ -84,7 +86,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
     && rm /etc/apache2/sites-available/000-default.conf \
-    && echo > /etc/apache2/ports.conf
+    && echo > /etc/apache2/ports.conf \
+    && echo "ok" > /var/www/healthz.txt
 
 COPY --chown=www-data:www-data docker/php/apache-dev.conf /etc/apache2/sites-available/000-default.conf
 
@@ -126,6 +129,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         vim \
         nano \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -144,7 +149,8 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     && chmod --recursive 777 /var/run \
     # Delete configurations we won't use to avoid problems with superuser requierments to bind port 80
     && rm /etc/apache2/sites-available/000-default.conf \
-    && echo > /etc/apache2/ports.conf
+    && echo > /etc/apache2/ports.conf \
+    && echo "ok" > /var/www/healthz.txt
 
 COPY --chown=www-data:www-data docker/php/apache.conf /etc/apache2/sites-available/000-default.conf
 

@@ -53,14 +53,14 @@
      *
      */
     $.Viewer.prototype.makeScalebar = function(options) {
-        if (!this.scalebar) {
-            options = options || {};
-            options.viewer = this;
-            this.scalebar = new $.Scalebar(options);
-        } else {
-            options.viewer = this;
-            this.scalebar.refresh(options);
+        options = options || {};
+        options.viewer = this;
+
+        if (this.scalebar) {
+            this.scalebar.destroy();
         }
+
+        this.scalebar = new $.Scalebar(options);
     };
 
     $.ScalebarType = {
@@ -95,6 +95,7 @@
 
         //Defaults
         this.viewer = options.viewer;
+        this.ViewportSyncAPI = new ViewportSyncAPI(this.viewer);
 
         this.setDrawScalebarFunction(options.type || $.ScalebarType.MICROSCOPY);
         this.color = options.color || "black";
@@ -105,6 +106,8 @@
         this.barThickness = options.barThickness || 3;
 
         //todo reflect better in API, allow for distinct measures
+        this.pixelsPerMeterX = options.pixelsPerMeterX;
+        this.pixelsPerMeterY = options.pixelsPerMeterY;
         this.pixelsPerMeter = options.pixelsPerMeter || (options.pixelsPerMeterX + options.pixelsPerMeterY)/2;
         this.location = options.location || $.ScalebarLocation.BOTTOM_LEFT;
         this.xOffset = options.xOffset || 5;
@@ -136,8 +139,11 @@
             this.scalebarContainer.style.left = location.x + "px";
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
-            this.magnificationContainer.style.left = location.x + 8 + "px";
-            this.magnificationContainer.style.top = location.y - this.magnificationContainerHeight - 50 + "px";
+            if (this.magnificationContainer) {
+                this.magnificationContainer.style.left = location.x + 20 + "px";
+                const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
+                this.magnificationContainer.style.top = (location.y - h - 12) + "px";
+            }
 
         }.bind(this);
         this._init(options);
@@ -147,7 +153,7 @@
         /**
          * Referenced tile image getter used for measurements
          * todo we should provide references scale image allways and all
-         *  access on BG data should be via the APP Context
+         * access on BG data should be via the APP Context
          */
         getReferencedTiledImage: function () {},
         /**
@@ -170,7 +176,11 @@
 
                 let tiledImage = this.viewer.world.getItemAt(0);
                 //todo proprietary func from before OSD 2.0, remove? search API
-                this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
+                if (tiledImage) {
+                    this.__pixelRatio = tiledImageViewportToImageZoom(tiledImage, zoom);
+                } else {
+                    this.__pixelRatio = 1;
+                }
             }
             return this.__pixelRatio;
         },
@@ -189,204 +199,823 @@
          */
         imageLengthToGivenUnits: function(length) {
             //todo what about flexibility in units?
-            return getWithUnitRounded(length / this.pixelsPerMeter,
-                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
+            return getWithUnitRounded(length / this.pixelsPerMeter, this.lengthMetric());
         },
 
         imageAreaToGivenUnits: function(area) {
             //todo what about flexibility in units?
-            return getWithSquareUnitRounded(area / (this.pixelsPerMeter*this.pixelsPerMeter),
-                this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px");
+            return getWithSquareUnitRounded(area / (this.pixelsPerMeter*this.pixelsPerMeter), this.areaMetric());
         },
 
+        imageLength: function (length) {
+            return length / this.pixelsPerMeter;
+        },
+
+        imageArea: function (area) {
+            return area / (this.pixelsPerMeter*this.pixelsPerMeter);
+        },
+
+        lengthMetric: function () {
+            return this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m" : "px";
+        },
+
+        areaMetric: function () {
+            return this.sizeAndTextRenderer === $.ScalebarSizeAndTextRenderer.METRIC_LENGTH ? "m²" : "px²";
+        },
+
+        formatLength: function (unit) {return getWithUnitRounded(unit, this.lengthMetric())},
+        formatArea: function (unit) {return getWithSquareUnitRounded(unit, this.areaMetric())},
+
         _init: function (options) {
+            if (!this._ui) {
+                this._ui = {
+                    rotSliderEl: null,
+                    magSliderEl: null,
+                    onRotate: null,
+                    onZoom: null
+                };
+                this._originalClassTarget = noUiSlider.cssClasses.target;
+            }
             if (!options.destroy) {
                 this.id = options.viewer.id + "-scale-bar";
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
-                    this.scalebarContainer.classList.add("relative", "m-0", "pointer-events-none");
+                    this.scalebarContainer.classList.add(
+                        "absolute",
+                        "m-0",
+                        "pointer-events-none",
+                        "select-none",
+                        "glass",
+                        "backdrop-blur-[2px]",
+                        "px-3",
+                        "py-1",
+                        "ring-1",
+                        "ring-base-300/40",
+                        "text-xs",
+                        "font-semibold"
+                    );
                     this.scalebarContainer.id = this.id;
                 }
                 this.viewer.container.appendChild(this.scalebarContainer);
 
-                if (!this.magnificationContainer) {
-                    this.magnificationContainer = document.createElement("div");
-                    this.magnificationContainer.id = this.id + "-magnification";
-                    // this.magnificationContainer.style.display = "none";
+                if (this.magnification > 0) {
+                    // We need to wait for the image to open to get bounds for the slider
+                    const initSlider = () => {
+                        if (!this._active) return;
 
-                    if (this.magnification > 0) {
+                        const image = this.viewer.world.getItemAt(0);
+                        if (!image) return;
+
+                        if (this.magnificationContainer) return;
+
+                        const viewport = this.viewer.viewport;
+                        const inside = "oklch(var(--b1))";
+                        const outside = "oklch(var(--er))";
+
+                        this.magnificationContainer = document.createElement("div");
+                        this.magnificationContainer.id = this.id + "-magnification";
                         this.magnificationContainer.classList.add(
-                            "relative",
+                            "absolute",
                             "m-0",
+                            "text-base-content",
+                            "flex",
+                            "flex-row",
+                            "items-stretch",
+                            "pointer-events-auto",
+                            "select-none",
                             "bg-base-200",
-                            "backdrop-blur-[2px]",
-                            "pr-2", "pt-1", "pb-2",
                             "rounded-lg",
-                            "shadow-sm",
-                            "ring-1", "ring-base-300/40",
-                            "flex", "flex-col", "items-center", "gap-1.5",
+                            "pt-2"
                         );
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
-                        this.magnificationContainer.style.width  = "50px";
+                        this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width = "auto";
 
-                        let steps = 0;
-                        let testMag = this.magnification;
-                        while (testMag > 4) {
-                            testMag = Math.round(testMag / 2);
-                            steps++;
+                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
+                        this.magnificationContainer.appendChild(sync);
+
+                        // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
+                        const rotCol = document.createElement("div");
+                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
+
+                        const rotReadout = document.createElement("div");
+                        rotReadout.className =
+                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+
+                        const rotSliderContainer = document.createElement("div");
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+
+                        this._ui.rotSliderEl = rotSliderContainer;
+
+                        rotCol.append(rotReadout, rotSliderContainer);
+                        this.magnificationContainer.appendChild(rotCol);
+
+                        noUiSlider.cssClasses.target += ' noUi-reverse';
+                        noUiSlider.create(rotSliderContainer, {
+                            start: viewport.getRotation() % 360,
+                            range: { min: 0, max: 360 },
+                            direction: "rtl",
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            step: 1,
+                            pips: {
+                                mode: "values",
+                                values: [0, 90, 180, 270, 360], // 5 pips
+                                density: 6,
+                                format: { to: (v) => `${Math.round(v)}°` },
+                            },
+                        });
+
+                        // pip styling
+                        rotSliderContainer.querySelectorAll(".noUi-value-vertical").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+                        // rail styling
+                        const rotSliderEl = rotSliderContainer.noUiSlider.target;
+                        rotSliderEl.style.width = "6px";
+                        rotSliderEl.style.border = "none";
+                        rotSliderEl.style.background = inside;
+
+                        let rotPrevent = false;
+
+                        // Slider -> Viewport
+                        const setRotation = (deg) => {
+                            const normalized = ((deg % 360) + 360) % 360;
+                            this.viewer.viewport.setRotation(normalized);
+                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                        };
+
+                        rotSliderContainer.noUiSlider.on("slide", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+                        rotSliderContainer.noUiSlider.on("change", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+
+                        // Viewport -> Slider
+                        const reflectRotation = () => {
+                            if (rotPrevent) return;
+                            const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360; // FIX: this.viewer
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(r);
+                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotPrevent = false;
+                        };
+                        this.viewer.addHandler("rotate", reflectRotation);
+                        this._ui.onRotate = reflectRotation;
+
+                        // Clicking pips MUST rotate as well (programmatic set doesn't always fire 'change')
+                        rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
+                            pip.classList.add("cursor-pointer", "hover:text-base-content");
+                            pip.addEventListener("click", (e) => {
+                                const t = (e.target.textContent || "").replace("°", "").trim();
+                                const v = parseFloat(t);
+                                if (!isNaN(v)) {
+                                    rotSliderContainer.noUiSlider.set(v);
+                                    setRotation(v); // <-- this is the missing piece
+                                }
+                            });
+                        });
+
+                        const homeRot = rotSliderContainer.querySelectorAll(".noUi-value")
+                            .item(0); // first one is 0° in our list
+                        if (homeRot) {
+                            homeRot.classList.remove("text-base-content/60");
+                            homeRot.classList.add("text-base-content", "font-semibold");
+                            // optional: add a little badge-ish feel
+                            homeRot.style.opacity = "1";
                         }
 
-                        const minValue = 0;
+
+                        // --- Dynamic Range & Log Scale Calculation ---
+                        const minZoom = viewport.getMinZoom();
+                        const maxZoom = viewport.getMaxZoom();
+
+                        const nativeMag = this.magnification;
+
+                        const getNativeVpZoom = () => {
+                            const currentImage = this.viewer.world.getItemAt(0);
+                            return currentImage ? currentImage.imageToViewportZoom(1) : 1;
+                        };
+
+
+                        const vpZoomToMag = (vpZ) => (vpZ / getNativeVpZoom()) * nativeMag;
+                        const magToVpZoom = (mag) => (mag / nativeMag) * getNativeVpZoom();
+
+                        const minMag = vpZoomToMag(minZoom);
+                        const maxMag = vpZoomToMag(maxZoom);
+
+                        // 3. Define Standard Steps (Pips)
+                        const possibleSteps = [
+                            0.01, 0.02, 0.05,
+                            0.1, 0.2, 0.5,
+                            1, 2, 5,
+                            10, 20, 40,
+                            80, 160, 240, 480
+                        ];
+                        let pipValues = possibleSteps.filter(v => v >= minMag && v <= maxMag);
+                        if (nativeMag >= minMag && nativeMag <= maxMag) {
+                            const eps = nativeMag * 1e-6 + 1e-9;
+                            const hasNative = pipValues.some(v => Math.abs(v - nativeMag) <= eps);
+                            if (!hasNative) pipValues.push(nativeMag);
+                            pipValues.sort((a,b) => a - b);
+                        }
+                        // Ensure strict bounds are handled cleanly (optional, mostly for range)
+                        // We convert these Magnification values to Log2 values for the slider configuration
+                        const toLog = (v) => Math.log2(v);
+                        const toLin = (v) => Math.pow(2, v);
+
+                        const range = {
+                            'min': toLog(minMag),
+                            'max': toLog(maxMag)
+                        };
+
+                        // 4. Gradient Coloring
+                        // Calculate where the "Native" magnification sits on the slider (0% to 100%)
+                        // Top is Min Value (due to 'rtl'), Bottom is Max Value.
+                        const totalRange = range.max - range.min;
+                        const nativeVal = toLog(nativeMag);
+
+                        let percentNative = ((nativeVal - range.min) / totalRange) * 100;
+                        percentNative = Math.max(0, Math.min(100, percentNative));
+                        const bgStyle = `linear-gradient(to top,
+  ${inside} 0%,
+  ${inside} ${percentNative}%,
+  ${outside} ${percentNative}%,
+  ${outside} 100%
+)`;
+
                         const sliderContainer = document.createElement("span");
+                        sliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        const sliderWrap = document.createElement("div");
+                        sliderWrap.className = "relative flex-1 flex flex-col items-center justify-center w-full";
+                        sliderWrap.style.minHeight = "120px";
 
-                        const range = {max: [this.magnification], min: [1]}, values = [this.magnification];
-                        let mag = this.magnification, stepPerc = Math.round(100 / (steps+1)), stepPercIter = 100;
-                        while (mag > 4) {
-                            mag = Math.floor(mag / 2);
-                            stepPercIter -= stepPerc;
-                            range[`${stepPercIter}%`] = [mag];
-                            values.push(mag);
-                        }
-                        values.push(1);
-                        values.reverse();
+                        this._ui.magSliderEl = sliderContainer;
+                        const magCol = document.createElement("div");
+                        magCol.className = "flex flex-col items-center pb-2 pr-4";
 
-                        const updateZoom = (mag) => {
-                            if (sliderContainer.noUiSlider._prevented) return;
-                            const image = this.viewer.world.getItemAt(0);
-                            if (!image) {
-                                throw "Linked referenced image does not exist!";
-                            }
-                            if (mag < 2) {
-                                this.viewer.viewport.goHome();
-                            } else {
-                                const desiredZoom = image.imageToViewportZoom(mag / this.magnification);
-                                this.viewer.viewport.zoomTo(desiredZoom);
-                            }
-                        };
+                        const magInput = document.createElement("input");
+                        magInput.type = "number";
+                        magInput.inputMode = "decimal";
+                        magInput.step = "0.1";
+                        magInput.className = "input input-xs";
+                        magInput.min = String(minMag);
+                        magInput.max = String(maxMag);
+                        magInput.style.width = "45px";
+                        magInput.style.transform = "translate(14px, 0)";
+                        magInput.className =
+                            "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
+                        magInput.style.padding = "0";
+                        magInput.style.height = "24px";
+                        magInput.style.fontSize = "11px";
 
-                        const reflectUpdate = (e) => {
-                            const image = this.viewer.world.getItemAt(0);
-                            if (!image) {
-                                console.error("Linked referenced image does not exist!");
-                            } else {
-                                sliderContainer.noUiSlider._prevented = true;
-                                const desiredZoom = image.viewportToImageZoom(e.zoom) * this.magnification;
-                                sliderContainer.noUiSlider.set(desiredZoom);
-                                sliderContainer.noUiSlider._prevented = false;
-                            }
-                        };
-                        this.viewer.addHandler('zoom', reflectUpdate);
+                        sliderWrap.appendChild(magInput);
 
-                        function closestValue (v) {
-                            let d = Infinity, result = -1;
-                            for (let i = 0; i < values.length; i++) {
-                                let dd = Math.abs(values[i] - v);
-                                if (dd < d) {
-                                    d = dd;
-                                    result = i;
+                        magCol.appendChild(sliderWrap);
+                        sliderWrap.appendChild(sliderContainer);
+
+                        this.magnificationContainer.appendChild(magCol);
+                        this.viewer.container.appendChild(this.magnificationContainer);
+
+                        noUiSlider.cssClasses.target = this._originalClassTarget;
+                        noUiSlider.create(sliderContainer, {
+                            range: range,
+                            start: toLog(vpZoomToMag(viewport.getZoom())),
+                            connect: false, // Using custom background
+                            direction: "rtl", // Top = Min, Bottom = Max
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            tooltips: {
+                                to: (v) => toLin(v).toFixed(1) + "x",
+                                from: (s) => toLog(parseFloat(s))
+                            },
+                            pips: {
+                                mode: 'values',
+                                values: pipValues.map(toLog), // Pass Log values for positions
+                                density: 5,
+                                format: {
+                                    to: (v) => {
+                                        let val = toLin(v);
+                                        // Format nicely (e.g. 20x, 0.5x)
+                                        return (val < 1 ? val.toFixed(1) : Math.round(val)) + "x";
+                                    },
+                                    from: (s) => parseFloat(s)
                                 }
                             }
-                            return result;
-                        }
+                        });
 
-                        const mkBtn = (iconClass) => {
-                            const b = document.createElement("button");
-                            b.type = "button";
-                            b.className = "btn btn-ghost btn-xs min-h-0 w-7 h-7 p-0 rounded-md text-base-content/70 hover:text-base-content";
-                            b.innerHTML = `<i class="fa-solid fa-auto ${iconClass}"></i>`;
-                            return b;
+                        const sliderEl = sliderContainer.noUiSlider.target;
+                        sliderEl.style.width = "6px";
+                        sliderEl.style.height = "100%";
+                        sliderEl.style.border = "none";
+                        sliderEl.style.background = bgStyle;
+
+                        // Keep input in sync with current magnification
+                        const setInputFromMag = (mag) => {
+                            // show nicely: <1 keeps 1 decimal; >=1 rounds to 1 decimal as well (feel free to tweak)
+                            magInput.value = (mag < 1 ? mag.toFixed(1) : mag.toFixed(1));
+                        };
+                        setInputFromMag(vpZoomToMag(viewport.getZoom()));
+
+                        const homeLog = nativeVal;
+                        let bestEl = null;
+                        let bestDist = Infinity;
+
+                        sliderContainer.querySelectorAll(".noUi-value").forEach((el) => {
+                            const v = parseFloat(el.getAttribute("data-value"));
+                            if (!isFinite(v)) return;
+                            const d = Math.abs(v - homeLog);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestEl = el;
+                            }
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+                        // todo consider restoring home-magnification pipe
+
+                        // --- Event Handlers ---
+
+                        // Slide Change -> Update Zoom
+                        const onSliderChange = (values, handle) => {
+                            const logVal = parseFloat(values[handle]);
+                            const mag = toLin(logVal);
+                            const targetZoom = magToVpZoom(mag);
+                            this.viewer.viewport.zoomTo(targetZoom);
                         };
 
-                        let minusBtn = mkBtn("fa-minus");
-                        minusBtn.addEventListener("click", () => {
-                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
-                            if (idx > 0) { sliderContainer.noUiSlider.set(values[idx-1]); updateZoom(values[idx-1]); }
-                        });
-                        this.magnificationContainer.appendChild(minusBtn);
+                        sliderContainer.noUiSlider.on("slide", onSliderChange);
+                        sliderContainer.noUiSlider.on("change", onSliderChange);
 
-                        this.magnificationContainer.appendChild(sliderContainer);
+                        // Viewer Zoom -> Update Slider
+                        const reflectUpdate = (e) => {
+                            if (sliderContainer.noUiSlider._prevented) return;
+                            const currentMag = vpZoomToMag(e.zoom);
+                            // Convert to Log for slider
+                            sliderContainer.noUiSlider._prevented = true;
+                            sliderContainer.noUiSlider.set(toLog(currentMag));
+                            sliderContainer.noUiSlider._prevented = false;
+                            setInputFromMag(currentMag);
+
+                        };
+                        this.viewer.addHandler('zoom', reflectUpdate);
+                        this._ui.onZoom = reflectUpdate;
+                        // Helper for Buttons
+                        const stepSlider = (direction) => {
+                            const currLog = parseFloat(sliderContainer.noUiSlider.get());
+
+                            // Find nearest pip value in Log space
+                            const pipLogs = pipValues.map(toLog).sort((a,b) => a-b);
+
+                            // Find index of closest standard step
+                            let idx = -1;
+                            let minDist = Infinity;
+                            for(let i=0; i<pipLogs.length; i++) {
+                                let d = Math.abs(pipLogs[i] - currLog);
+                                if(d < minDist) { minDist = d; idx = i; }
+                            }
+
+                            let nextIdx = idx + direction;
+                            // Clamp
+                            if (nextIdx < 0) nextIdx = 0;
+                            if (nextIdx >= pipLogs.length) nextIdx = pipLogs.length - 1;
+
+                            const nextLog = pipLogs[nextIdx];
+
+                            // Behavior logic:
+                            // If we are 'close' to a pip but not on it, snapping to it might feel like 'no movement' if direction is wrong
+                            // But usually snapping to next index is sufficient.
+
+                            if (direction < 0 && currLog <= pipLogs[idx] + 0.01 && idx > 0) {
+                                // We are effectively AT idx, so we want idx-1
+                                sliderContainer.noUiSlider.set(pipLogs[idx-1]);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx-1])));
+                            } else if (direction > 0 && currLog >= pipLogs[idx] - 0.01 && idx < pipLogs.length - 1) {
+                                // We are effectively AT idx, so we want idx+1
+                                sliderContainer.noUiSlider.set(pipLogs[idx+1]);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(pipLogs[idx+1])));
+                            } else {
+                                // We are between pips, just go to the calculated nearest neighbor in direction
+                                sliderContainer.noUiSlider.set(nextLog);
+                                this.viewer.viewport.zoomTo(magToVpZoom(toLin(nextLog)));
+                            }
+                        };
+
+                        // Click on Pips - FIXED HANDLER
+                        // We use an arrow function here to preserve 'this' as the Scalebar instance (for this.viewer access if needed)
+                        // but we access the DOM element via the 'e.target' or the 'p' closure variable.
+                        const pips = sliderContainer.querySelectorAll(".noUi-value");
+                        pips.forEach(p => {
+                            p.classList.add("cursor-pointer", "hover:text-base-content");
+                            p.addEventListener("click", (e) => {
+                                // e.target is the clicked pip element
+                                let text = e.target.textContent || "";
+                                let valText = text.replace('x','').trim();
+                                if(!valText) return;
+
+                                let val = parseFloat(valText);
+                                if (!isNaN(val)) {
+                                    let logVal = toLog(val);
+                                    sliderContainer.noUiSlider.set(logVal);
+                                    this.viewer.viewport.zoomTo(magToVpZoom(val));
+                                }
+                            });
+                        });
+
+                        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+                        const applyMagFromInput = () => {
+                            const raw = parseFloat(magInput.value);
+                            if (!isFinite(raw)) return;
+
+                            const mag = clamp(raw, minMag, maxMag);
+                            const logVal = toLog(mag);
+
+                            // update slider + zoom using the same mapping as everywhere else
+                            sliderContainer.noUiSlider.set(logVal);
+                            this.viewer.viewport.zoomTo(magToVpZoom(mag));
+
+                            setInputFromMag(mag);
+                        };
+                        magInput.addEventListener("change", applyMagFromInput);
+                        magInput.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                magInput.blur();
+                                applyMagFromInput();
+                            }
+                        });
+                        magInput.addEventListener("blur", applyMagFromInput);
+
+                        this.refreshHandler();
+                    };
+
+                    if (this.viewer.isOpen()) initSlider();
+                    else this.viewer.addOnceHandler('open', initSlider);
+                } else {
+                    const initSlider = () => {
+                        if (!this._active) return;
+
+                        const image = this.viewer.world.getItemAt(0);
+                        if (!image) return;
+
+                        if (this.magnificationContainer) return;
+
+                        const viewport = this.viewer.viewport;
+                        const inside = "oklch(var(--b1))";
+
+                        this.magnificationContainer = document.createElement("div");
+                        this.magnificationContainer.id = this.id + "-magnification";
+                        this.magnificationContainer.classList.add(
+                            "absolute",
+                            "m-0",
+                            "text-base-content",
+                            "flex",
+                            "flex-row",
+                            "items-stretch",
+                            "pointer-events-auto",
+                            "select-none",
+                            "bg-base-200",
+                            "rounded-lg",
+                            "pt-2"
+                        );
+                        this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
+                        this.magnificationContainer.style.width = "auto";
+
+                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
+                        this.magnificationContainer.appendChild(sync);
+
+                        const rotCol = document.createElement("div");
+                        rotCol.className = "flex flex-col items-center pb-2 pl-5";
+
+                        const rotReadout = document.createElement("div");
+                        rotReadout.className =
+                            "text-xs font-bold px-2 py-1 rounded-lg bg-base-200 shadow text-base-content";
+                        rotReadout.textContent = `${Math.round(viewport.getRotation() % 360)}°`;
+
+                        const rotSliderContainer = document.createElement("div");
+                        rotSliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        this._ui.rotSliderEl = rotSliderContainer;
+
+                        rotCol.append(rotReadout, rotSliderContainer);
+                        this.magnificationContainer.appendChild(rotCol);
+
+                        noUiSlider.cssClasses.target += " noUi-reverse";
+                        noUiSlider.create(rotSliderContainer, {
+                            start: viewport.getRotation() % 360,
+                            range: { min: 0, max: 360 },
+                            direction: "rtl",
+                            orientation: "vertical",
+                            behaviour: "drag",
+                            step: 1,
+                            pips: {
+                                mode: "values",
+                                values: [0, 90, 180, 270, 360],
+                                density: 6,
+                                format: { to: (v) => `${Math.round(v)}°` },
+                            },
+                        });
+
+                        rotSliderContainer.querySelectorAll(".noUi-value-vertical").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold"
+                            );
+                        });
+
+                        const rotSliderEl = rotSliderContainer.noUiSlider.target;
+                        rotSliderEl.style.width = "6px";
+                        rotSliderEl.style.border = "none";
+                        rotSliderEl.style.background = inside;
+
+                        let rotPrevent = false;
+                        const setRotation = (deg) => {
+                            const normalized = ((deg % 360) + 360) % 360;
+                            this.viewer.viewport.setRotation(normalized);
+                            rotReadout.textContent = `${Math.round(normalized)}°`;
+                        };
+
+                        rotSliderContainer.noUiSlider.on("slide", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+                        rotSliderContainer.noUiSlider.on("change", (vals) => {
+                            rotPrevent = true;
+                            setRotation(parseFloat(vals[0]));
+                            rotPrevent = false;
+                        });
+
+                        const reflectRotation = () => {
+                            if (rotPrevent) return;
+                            const r = ((this.viewer.viewport.getRotation() % 360) + 360) % 360;
+                            rotPrevent = true;
+                            rotSliderContainer.noUiSlider.set(r);
+                            rotReadout.textContent = `${Math.round(r)}°`;
+                            rotPrevent = false;
+                        };
+                        this.viewer.addHandler("rotate", reflectRotation);
+                        this._ui.onRotate = reflectRotation;
+
+                        rotSliderContainer.querySelectorAll(".noUi-value").forEach((pip) => {
+                            pip.classList.add("cursor-pointer", "hover:text-base-content");
+                            pip.addEventListener("click", (e) => {
+                                const value = parseFloat((e.target.textContent || "").replace("°", "").trim());
+                                if (!isNaN(value)) {
+                                    rotSliderContainer.noUiSlider.set(value);
+                                    setRotation(value);
+                                }
+                            });
+                        });
+
+                        const minLog = Math.log2(Math.max(viewport.getMinZoom(), Number.EPSILON));
+                        const maxLog = Math.log2(Math.max(viewport.getMaxZoom(), viewport.getMinZoom() + Number.EPSILON));
+                        let pipValues = [];
+                        for (let step = Math.ceil(minLog); step <= Math.floor(maxLog); step++) {
+                            pipValues.push(step);
+                        }
+                        if (pipValues.length < 2) {
+                            const count = 5;
+                            const span = maxLog - minLog;
+                            pipValues = Array.from({length: count}, (_, i) => minLog + (span * i) / (count - 1));
+                        }
+                        const uniquePips = [];
+                        pipValues.forEach((value) => {
+                            if (!uniquePips.some((existing) => Math.abs(existing - value) < 1e-6)) {
+                                uniquePips.push(value);
+                            }
+                        });
+
+                        const sliderContainer = document.createElement("span");
+                        sliderContainer.className = "relative flex-1 w-1.5 my-2";
+                        const sliderWrap = document.createElement("div");
+                        sliderWrap.className = "relative flex-1 flex flex-col items-center justify-center w-full";
+                        sliderWrap.style.minHeight = "120px";
+
+                        this._ui.magSliderEl = sliderContainer;
+                        const magCol = document.createElement("div");
+                        magCol.className = "flex flex-col items-center pb-2 pr-4";
+
+                        const levelReadout = document.createElement("input");
+                        levelReadout.type = "text";
+                        levelReadout.readOnly = true;
+                        levelReadout.className =
+                            "input-xs text-xs font-bold rounded-lg bg-base-200 shadow text-base-content";
+                        levelReadout.style.padding = "0";
+                        levelReadout.style.height = "24px";
+                        levelReadout.style.fontSize = "11px";
+                        levelReadout.style.width = "56px";
+                        levelReadout.style.transform = "translate(14px, 0)";
+
+                        sliderWrap.appendChild(levelReadout);
+                        magCol.appendChild(sliderWrap);
+                        sliderWrap.appendChild(sliderContainer);
+
+                        this.magnificationContainer.appendChild(magCol);
+                        this.viewer.container.appendChild(this.magnificationContainer);
+
+                        noUiSlider.cssClasses.target = this._originalClassTarget;
                         noUiSlider.create(sliderContainer, {
-                            range,
-                            start: minValue,
-                            connect: true,
-                            direction: "ltr",
+                            range: { min: minLog, max: maxLog },
+                            start: Math.log2(Math.max(viewport.getZoom(), Number.EPSILON)),
+                            connect: false,
+                            direction: "rtl",
                             orientation: "vertical",
                             behaviour: "drag",
                             tooltips: false,
                             pips: {
                                 mode: "values",
-                                values,
+                                values: uniquePips,
                                 density: 5,
                                 format: {
-                                    to: (v) => (v < 2 ? "⌂" : v),
-                                    from: (s) => (s === "⌂" ? 0 : s),
-                                },
-                            },
+                                    to: (value) => {
+                                        const nearestIndex = uniquePips.reduce((best, current, index) => {
+                                            const distance = Math.abs(current - value);
+                                            return distance < best.distance ? {index, distance} : best;
+                                        }, {index: 0, distance: Infinity}).index;
+                                        return `L${nearestIndex + 1}`;
+                                    },
+                                    from: (value) => value
+                                }
+                            }
                         });
+
                         const sliderEl = sliderContainer.noUiSlider.target;
-                        sliderEl.classList.add("flex-1", "mx-auto");
-                        sliderEl.style.width = "6px"; // thicker track
+                        sliderEl.style.width = "6px";
+                        sliderEl.style.height = "100%";
+                        sliderEl.style.border = "none";
+                        sliderEl.style.background = inside;
 
-                        const sliderWrap = document.createElement("div");
-                        sliderWrap.className = "relative flex-1 flex items-center";
-                        this.magnificationContainer.appendChild(sliderWrap);
-                        sliderWrap.appendChild(sliderContainer);
+                        const formatLevel = (sliderValue) => {
+                            const nearestIndex = uniquePips.reduce((best, current, index) => {
+                                const distance = Math.abs(current - sliderValue);
+                                return distance < best.distance ? {index, distance} : best;
+                            }, {index: 0, distance: Infinity}).index;
+                            return `L${nearestIndex + 1}`;
+                        };
+                        const setLevelReadout = (zoom) => {
+                            levelReadout.value = formatLevel(Math.log2(Math.max(zoom, Number.EPSILON)));
+                        };
+                        setLevelReadout(viewport.getZoom());
 
-                        let plusBtn = mkBtn("fa-plus");
-                        plusBtn.addEventListener("click", () => {
-                            const idx = closestValue(parseInt(sliderContainer.noUiSlider.get(), 10));
-                            if (idx < values.length - 1) { sliderContainer.noUiSlider.set(values[idx+1]); updateZoom(values[idx+1]); }
+                        sliderContainer.querySelectorAll(".noUi-value").forEach((el) => {
+                            el.classList.add(
+                                "px-1.5",
+                                "py-0.5",
+                                "rounded-md",
+                                "bg-base-200",
+                                "text-base-content",
+                                "shadow",
+                                "font-semibold",
+                                "cursor-pointer",
+                                "hover:text-base-content"
+                            );
+                            el.addEventListener("click", () => {
+                                const label = el.textContent || "";
+                                const match = /^L(\d+)$/i.exec(label.trim());
+                                if (!match) return;
+                                const index = Number.parseInt(match[1], 10) - 1;
+                                const value = uniquePips[index];
+                                if (!Number.isFinite(value)) return;
+                                sliderContainer.noUiSlider.set(value);
+                                this.viewer.viewport.zoomTo(Math.pow(2, value));
+                            });
                         });
-                        this.magnificationContainer.appendChild(plusBtn);
-                        //todo custom ranges
 
-                        sliderContainer.noUiSlider.target.classList.add('d-inline-block', 'flex-1');
-                        sliderContainer.noUiSlider.target.style.width = "4px";
+                        const onSliderChange = (values, handle) => {
+                            const sliderValue = parseFloat(values[handle]);
+                            this.viewer.viewport.zoomTo(Math.pow(2, sliderValue));
+                        };
+                        sliderContainer.noUiSlider.on("slide", onSliderChange);
+                        sliderContainer.noUiSlider.on("change", onSliderChange);
 
-                        sliderContainer.noUiSlider.on("change", (event) => {
-                            updateZoom(Number.parseInt(sliderContainer.noUiSlider.get()));
-                        });
+                        const reflectUpdate = (e) => {
+                            if (sliderContainer.noUiSlider._prevented) return;
+                            sliderContainer.noUiSlider._prevented = true;
+                            sliderContainer.noUiSlider.set(Math.log2(Math.max(e.zoom, Number.EPSILON)));
+                            sliderContainer.noUiSlider._prevented = false;
+                            setLevelReadout(e.zoom);
+                        };
+                        this.viewer.addHandler("zoom", reflectUpdate);
+                        this._ui.onZoom = reflectUpdate;
 
-                        function onPipiClick() {
-                            let value = Number.parseInt(this.getAttribute('data-value'));
-                            sliderContainer.noUiSlider.set(value);
-                            updateZoom(value);
-                        }
-                        const pips = sliderContainer.querySelectorAll(".noUi-value");
-                        pips.forEach(p => {
-                            p.classList.add("cursor-pointer", "hover:text-base-content"); // nicer hover
-                            p.addEventListener("click", onPipiClick);
-                        });
-                    }
-                    this.viewer.container.appendChild(this.magnificationContainer);
+                        this.refreshHandler();
+                    };
+
+                    if (this.viewer.isOpen()) initSlider();
+                    else this.viewer.addOnceHandler('open', initSlider);
                 }
+
                 this.setMinWidth(options.minWidth || "150px");
 
                 this.viewer.addOnceHandler("update-viewport", this.prepareScalebar.bind(this));
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
-                this.viewer.addHandler("destroy", () => {
-                    this._init({destroy: true});
-                    this.viewer.scalebar = null;
-                });
+                if (!this._viewerDestroyHandler) {
+                    this._viewerDestroyHandler = () => {
+                        this.destroy();
+                        if (this.viewer.scalebar === this) {
+                            this.viewer.scalebar = null;
+                        }
+                    };
+                }
+                if (!this._viewerDestroyHandlerBound) {
+                    this.viewer.addHandler("destroy", this._viewerDestroyHandler);
+                    this._viewerDestroyHandlerBound = true;
+                }
             } else {
                 this._active = false;
+
+                // Remove viewport handler
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
-                let container = document.getElementById(this.id);
-                if (container) container.remove();
+
+                // Remove rotation handler
+                if (this._ui.onRotate) {
+                    this.viewer.removeHandler("rotate", this._ui.onRotate);
+                }
+
+                // Remove zoom handler
+                if (this._ui.onZoom) {
+                    this.viewer.removeHandler("zoom", this._ui.onZoom);
+                }
+
+                // Destroy rotation slider
+                if (this._ui.rotSliderEl?.noUiSlider) {
+                    this._ui.rotSliderEl.noUiSlider.destroy();
+                }
+
+                // Destroy magnification slider
+                if (this._ui.magSliderEl?.noUiSlider) {
+                    this._ui.magSliderEl.noUiSlider.destroy();
+                }
+
+                // Remove DOM nodes
+                if (this.scalebarContainer) {
+                    this.scalebarContainer.remove();
+                }
+
+                if (this.magnificationContainer) {
+                    this.magnificationContainer.remove();
+                }
+
+                this.magnificationContainer = null;
+
+                // Reset UI state
+                this._ui = {
+                    rotSliderEl: null,
+                    magSliderEl: null,
+                    onRotate: null,
+                    onZoom: null
+                };
             }
+        },
+
+        destroy: function() {
+            if (this._viewerDestroyHandlerBound && this._viewerDestroyHandler) {
+                this.viewer.removeHandler("destroy", this._viewerDestroyHandler);
+                this._viewerDestroyHandlerBound = false;
+            }
+            this._init({destroy: true});
         },
 
         setActive: function(active) {
             if (this._active == active) return;
             this._active = active;
             if (active) {
-                this.magnificationContainer.style.visibility = "visible";
-                this.container.style.visibility = "visible";
+                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "visible";
+                this.scalebarContainer.style.visibility = "visible";
                 this.viewer.addHandler("update-viewport", this.refreshHandler);
             } else {
-                this.magnificationContainer.style.visibility = "hidden";
-                this.container.style.visibility = "hidden";
+                if(this.magnificationContainer) this.magnificationContainer.style.visibility = "hidden";
+                this.scalebarContainer.style.visibility = "hidden";
                 this.viewer.removeHandler("update-viewport", this.refreshHandler);
             }
         },
@@ -426,8 +1055,17 @@
             if (isDefined(options.barThickness)) {
                 this.barThickness = options.barThickness;
             }
-            if (isDefined(options.pixelsPerMeter)) {
+            if ("pixelsPerMeter" in options) {
                 this.pixelsPerMeter = options.pixelsPerMeter;
+            }
+            if ("pixelsPerMeterX" in options) {
+                this.pixelsPerMeterX = options.pixelsPerMeterX;
+            }
+            if ("pixelsPerMeterY" in options) {
+                this.pixelsPerMeterY = options.pixelsPerMeterY;
+            }
+            if (!isDefined(this.pixelsPerMeter) && isDefined(this.pixelsPerMeterX) && isDefined(this.pixelsPerMeterY)) {
+                this.pixelsPerMeter = (this.pixelsPerMeterX + this.pixelsPerMeterY) / 2;
             }
             if (isDefined(options.location)) {
                 this.location = options.location;
@@ -473,6 +1111,9 @@
          * @param {OpenSeadragon.ScalebarType} options.type The scale bar type.
          */
         refresh: function(options) {
+            if (this.scalebarContainer) {
+                this._init({destroy: true});
+            }
             this.updateOptions(options);
             this.prepareScalebar();
             this.refreshHandler();
@@ -494,7 +1135,15 @@
             this.scalebarContainer.style.borderTop = "none";
         },
         drawMicroscopyScalebar: function(size, text) {
-            this.scalebarContainer.style.borderBottom = this.barThickness + "px solid " + this.color;
+            this.scalebarContainer.style.borderBottom =
+                this.barThickness + "px solid " + this.color;
+
+            this.scalebarContainer.style.borderLeft =
+                this.barThickness + "px solid " + this.color;
+
+            this.scalebarContainer.style.borderRight =
+                this.barThickness + "px solid " + this.color;
+
             this.scalebarContainer.innerHTML = text;
             this.scalebarContainer.style.width = size + "px";
         },
@@ -687,7 +1336,7 @@
          * Generic metric unit. One can use this function to create a new metric
          * scale. For example, here is an implementation of energy levels:
          * function(ppeV, minSize) {
-         *   return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC("eV", ppeV, minSize);
+         * return OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC("eV", ppeV, minSize);
          * }
          */
         METRIC_GENERIC: getScalebarSizeAndTextForMetric
@@ -760,67 +1409,594 @@
     }
 
     function getWithUnit(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         if (value < 0.000001) {
-            return value * 1000000000 + " n" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000000000 + " n" + unitSuffix;
         }
         if (value < 0.001) {
-            return value * 1000000 + " μ" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000000 + " μ" + unitSuffix;
         }
         if (value < 1) {
-            return value * 1000 + " m" + unitSuffix;
+            return (negative ? "-" : "") + value * 1000 + " m" + unitSuffix;
         }
         if (value < 1000) {
-            return value + unitSuffix;
+            return (negative ? "-" : "") + value + unitSuffix;
         }
         if (value >= 1000) {
-            return value / 1000 + " k" + unitSuffix;
+            return (negative ? "-" : "") + value / 1000 + " k" + unitSuffix;
         }
-        return getWithSpaces(value / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(value / 1000, "k" + unitSuffix);
     }
 
     function getWithUnitRounded(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         if (value < 0.000001) {
-            return (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000000) / 100) + " n" + unitSuffix;
         }
         if (value < 0.001) {
-            return (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000000) / 100) + " μ" + unitSuffix;
         }
         if (value < 1) {
-            return (Math.round(value * 100000) / 100) + " m" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100000) / 100) + " m" + unitSuffix;
         }
         if (value < 1000) {
-            return (Math.round(value * 100) / 100) + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value * 100) / 100) + unitSuffix;
         }
         if (value >= 1000) {
-            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
+            return (negative ? "-" : "") + (Math.round(value / 10) / 100) + " k" + unitSuffix;
         }
-        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }
 
     function getWithSquareUnitRounded(value, unitSuffix) {
+        const negative = value < 0;
+        value = Math.abs(value);
         // No support for NM
         if (value < 0.000001) {
-            return (Math.round(value * 100000000000000) / 100) + " μ" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000000000) / 100, " μ" + unitSuffix);
         }
         if (value < 1) {
-            return (Math.round(value * 100000000) / 100) + " m" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100000000) / 100, " m" + unitSuffix);
         }
         if (value < 1000000) {
-            return (Math.round(value * 100) / 100) + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value * 100) / 100, unitSuffix);
         }
         if (value >= 1000000) {
-            return (Math.round(value / 10) / 100) + " k" + unitSuffix;
+            return (negative ? "-" : "") + getWithSpaces(Math.round(value / 10) / 100, " k" + unitSuffix);
         }
-        return getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
+        return (negative ? "-" : "") + getWithSpaces(Math.round(value) / 1000, "k" + unitSuffix);
     }
 
     function getWithSpaces(value, unitSuffix) {
-        if (value < 0) return "Negative distance!";
+        if (value < 0) return "Negative!";
         //https://gist.github.com/MSerj/ad23c73f65e3610bbad96a5ac06d4924
         return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " " + unitSuffix;
     }
 
     function isDefined(variable) {
         return typeof (variable) !== "undefined";
+    }
+
+    function SyncToggleButton(viewer, tool) {
+        const enabled = van.state(!!tool?.isEnabled?.());
+
+        // NEW: calibration UI state
+        const busy = van.state(false);
+        const progressText = van.state(""); // e.g. "Pick points 1/3"
+        const isRef = van.state(false);
+
+        const updateFromTool = () => {
+            enabled.val = !!tool?.isEnabled?.();
+
+            const S = tool?.constructor?._session;
+            isRef.val = !!enabled.val && !!S?.leaderId && viewer.uniqueId === S.leaderId;
+        };
+
+        const setProgress = (txt) => { progressText.val = txt || ""; };
+        const setBusy = (b) => { busy.val = !!b; };
+
+        // Expose hooks so tool can update the button
+        tool.__ui = { setProgress, setBusy };
+
+        const onClick = async () => {
+            if (!tool) return;
+
+            if (busy.val) return;
+            setBusy(true);
+
+            if (VIEWER_MANAGER.viewers.length < 2) {
+                Dialogs?.show?.("Sync is possible with more than one slide opened.");
+                setBusy(false);
+                return;
+            }
+
+            try {
+                if (enabled.val) {
+                    tool.disable();
+                    enabled.val = false;
+                    setProgress("");
+                    Dialogs?.show?.("Sync disabled", 1200, Dialogs.MSG_INFO);
+                } else {
+                    setProgress("0/3");
+                    await tool.enable(); // will drive progress via callbacks
+                    enabled.val = true;
+                    setProgress("");
+                    Dialogs?.show?.("Sync enabled", 1200, Dialogs.MSG_SUCCESS);
+                }
+            } catch (e) {
+                console.error(e);
+                tool.disable?.();
+                enabled.val = false;
+                setProgress("");
+                Dialogs?.show?.("Sync not enabled", 1600, Dialogs.MSG_WARN);
+            } finally {
+                setBusy(false);
+            }
+        };
+
+        viewer.__syncToolChanged = updateFromTool;
+
+        return van.tags.button(
+            {
+                class: () => [
+                    "btn btn-xs border-none absolute px-1",
+                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
+                ].join(" "),
+                onclick: onClick,
+                title: () => (enabled.val ? "Disable sync" : "Enable sync"),
+                style: "left: -10px; top: -15px;"
+            },
+            // Use a simple Link icon or text abbreviation
+            van.tags.span({ class: "text-[10px] font-bold" },
+                () => {
+                    if (busy.val) return "...";
+                    if (!enabled.val) return "LINK";
+                    return isRef.val ? "REF" : "SYNC";
+                }
+            )
+        );
+    }
+
+    class ViewportSyncAPI {
+
+        constructor(viewer) {
+            this.master = viewer;
+            this.enabled = false;
+            this.points = new Map(); // viewer.uniqueId -> [{x,y}*3]
+            this.transforms = new Map(); // target.uniqueId -> {A,b,scale,rotDeg}
+            this.context = 0;
+        }
+
+        isEnabled() { return this.enabled; }
+
+        _getSession() {
+            if (!ViewportSyncAPI._session) {
+                ViewportSyncAPI._session = {
+                    context: this.context || 0,
+                    leaderId: null,     // first calibrated viewer; used only as reference space
+                    leaderPts: null,
+                    transforms: {},     // viewerId -> { A, b, invA, scale, rotDeg }
+                    flipParity: {}      // viewerId -> boolean, relative to reference viewer
+                };
+            }
+
+            const S = ViewportSyncAPI._session;
+            S.transforms ||= {};
+            S.flipParity ||= {};
+            if (typeof S.context !== "number") S.context = this.context || 0;
+            return S;
+        }
+
+        _findViewerById(viewerId) {
+            return (window.VIEWER_MANAGER?.viewers || []).find(v => v?.uniqueId === viewerId) || null;
+        }
+
+        _getLinkedPeers() {
+            const S = this._getSession();
+            return OpenSeadragon.Tools?._linkContexts?.[S.context]?.subscribed || [];
+        }
+
+        _identityTransform() {
+            return {
+                A: [1, 0, 0, 1],
+                b: { x: 0, y: 0 },
+                invA: [1, 0, 0, 1],
+                scale: 1,
+                rotDeg: 0
+            };
+        }
+
+        _normalizeTransform(t) {
+            if (!t) return null;
+            const invA = t.invA || this._invert2x2(t.A);
+            if (!invA) return null;
+            return {
+                A: t.A,
+                b: { x: t.b.x, y: t.b.y },
+                invA,
+                scale: t.scale || 1,
+                rotDeg: t.rotDeg || 0
+            };
+        }
+
+        _storeViewerTransform(viewerId, t) {
+            const S = this._getSession();
+            const normalized = this._normalizeTransform(t);
+            if (!normalized) throw new Error("Invalid calibration transform");
+            S.transforms[viewerId] = normalized;
+            this.transforms.set(viewerId, normalized);
+            return normalized;
+        }
+
+        _getViewerTransform(viewerId) {
+            const S = this._getSession();
+            const t = S.transforms?.[viewerId];
+            return this._normalizeTransform(t);
+        }
+
+        _setFlipParity(viewerId, parity) {
+            this._getSession().flipParity[viewerId] = !!parity;
+        }
+
+        _getFlipParity(viewerId) {
+            return !!this._getSession().flipParity?.[viewerId];
+        }
+
+        _xorBool(...vals) {
+            return vals.reduce((acc, v) => acc !== !!v, false);
+        }
+
+        async enable() {
+            if (this.enabled) return;
+
+            const S = this._getSession();
+            const selfId = this.master.uniqueId;
+
+            if (!S.leaderId) {
+                // First calibrated viewer defines the reference image space only.
+                this.__ui?.setProgress?.("0/3");
+                const refPts = await this.calibrateViewer(this.master);
+
+                S.leaderId = selfId;
+                S.leaderPts = refPts;
+                this.points.set(selfId, refPts);
+                this._storeViewerTransform(selfId, this._identityTransform());
+                this._setFlipParity(selfId, false);
+            } else if (!this._getViewerTransform(selfId)) {
+                // Calibrate this viewer once against the shared reference image space.
+                this.__ui?.setProgress?.("0/3");
+                const tgtPts = await this.calibrateViewer(this.master);
+                this.points.set(selfId, tgtPts);
+
+                const t = this._similarityFrom3(S.leaderPts, tgtPts);
+                if (!t) throw new Error("Calibration invalid");
+                this._storeViewerTransform(selfId, t);
+
+                const refViewer = this._findViewerById(S.leaderId);
+                const refFlip = refViewer?.viewport?.getFlip?.() ?? false;
+                const selfFlip = this.master?.viewport?.getFlip?.() ?? false;
+                this._setFlipParity(selfId, this._xorBool(selfFlip, refFlip));
+            }
+
+            // The reference viewer also uses the generic mapper so it can follow
+            // any other viewer via the inverse registration.
+            this.master.tools.link(S.context, (sourceViewer, sourceState) => {
+                return this._mapStateBetweenViewers(sourceViewer, this.master, sourceState);
+            });
+
+            this.enabled = true;
+
+            // Make the newly joined viewer snap to the current synced pose using
+            // whichever linked viewer is already active in the session.
+            const peers = this._getLinkedPeers().filter(v => v && v !== this.master);
+            const sourceViewer = peers[0] || this._findViewerById(S.leaderId);
+            if (sourceViewer && sourceViewer !== this.master) {
+                this._alignTargetToSourceNow(sourceViewer, this.master);
+            }
+
+            this.master.__syncToolChanged?.();
+        }
+
+        disable() {
+            if (!this.enabled) return;
+            const S = this._getSession();
+
+            this.master.tools?.unlink?.(S.context);
+            this.enabled = false;
+            this.master.__syncToolChanged?.();
+        }
+
+        async calibrateViewer(viewer) {
+            return new Promise((resolve, reject) => {
+                let cleanupPick = null;
+
+                cleanupPick = this.pickThreePoints(
+                    (pts) => {
+                        Dialogs.show("Calibration saved", 1200, Dialogs.MSG_SUCCESS);
+                        this.__ui?.setProgress?.("");
+                        resolve(pts);
+                    },
+                    () => {
+                        this.__ui?.setProgress?.("");
+                        reject(new Error("Calibration cancelled"));
+                    },
+                    (current, total) => {
+                        this.__ui?.setProgress?.(`${current}/${total}`);
+                    },
+                    { timeoutMs: 15000 }
+                );
+            });
+        }
+
+        /**
+         * Ask user to pick three points. The scalebar then stores the navigation sync data for it
+         * @param onDone
+         * @param onCancel
+         * @return {(function(): void)|*}
+         */
+        pickThreePoints(onDone, onCancel, onProgress, opts = {}) {
+            const viewer = this.master;
+            const pts = [];
+            const overlays = [];
+            const total = 3;
+
+            const timeoutMs = Math.max(1000, opts.timeoutMs ?? 30000); // “reasonable time”
+            let timeoutRef = null;
+
+            const removeAll = () => {
+                for (const o of overlays) {
+                    try { viewer.removeOverlay(o.el); } catch {}
+                }
+                overlays.length = 0;
+            };
+
+            const cancel = () => {
+                viewer.removeHandler("canvas-click", handler);
+                window.removeEventListener("keydown", keyHandler, true);
+                if (timeoutRef) clearTimeout(timeoutRef);
+                removeAll();
+                onCancel?.();
+            };
+
+            const finish = () => {
+                viewer.removeHandler("canvas-click", handler);
+                window.removeEventListener("keydown", keyHandler, true);
+                if (timeoutRef) clearTimeout(timeoutRef);
+                removeAll();
+                onDone?.(pts);
+            };
+
+            const restartTimeout = () => {
+                if (timeoutRef) clearTimeout(timeoutRef);
+                timeoutRef = setTimeout(() => {
+                    Dialogs?.show?.("Sync calibration timed out", 1600, Dialogs.MSG_WARN);
+                    cancel();
+                }, timeoutMs);
+            };
+
+            const addMarker = (imgPt, item) => {
+                // Convert IMAGE coords -> VIEWPORT coords for overlays
+                const vpPt = item.imageToViewportCoordinates(
+                    new OpenSeadragon.Point(imgPt.x, imgPt.y)
+                );
+
+                const el = document.createElement("div");
+                el.className =
+                    "w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full " +
+                    "bg-error ring-2 ring-base-100 shadow pointer-events-none";
+                el.style.display = "grid";
+                el.style.placeItems = "center";
+                el.style.fontSize = "10px";
+                el.style.fontWeight = "700";
+                el.style.color = "white";
+                el.textContent = String(pts.length);
+
+                viewer.addOverlay({
+                    element: el,
+                    location: vpPt, // <-- viewport coords
+                    placement: OpenSeadragon.Placement.CENTER
+                });
+
+                overlays.push({ el, img: imgPt });
+            };
+
+            const removeLast = () => {
+                if (!pts.length) return;
+                pts.pop();
+                const o = overlays.pop();
+                if (o?.el) {
+                    try { viewer.removeOverlay(o.el); } catch {}
+                }
+                onProgress?.(pts.length, total);
+                restartTimeout();
+            };
+
+            const keyHandler = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    cancel();
+                } else if (ev.key === "Backspace") {
+                    ev.preventDefault();
+                    removeLast();
+                }
+            };
+
+            const handler = (e) => {
+                if (!e?.position) return;
+
+                const item = viewer.world.getItemAt(0);
+                if (!item) return;
+
+                const vp = viewer.viewport.pointFromPixel(e.position);
+                const img = item.viewportToImageCoordinates(vp);
+                if (!isFinite(img.x) || !isFinite(img.y)) return;
+
+                pts.push({ x: img.x, y: img.y });
+                onProgress?.(pts.length, total);
+
+                addMarker(img, item);
+                restartTimeout();
+
+                if (pts.length >= total) finish();
+                e.preventDefaultAction = true;
+            };
+
+            // single instruction toast once (you already do this pattern)
+            Dialogs?.show?.("Click three points on the slide to calibrate sync.", 5000, Dialogs.MSG_INFO);
+            onProgress?.(0, total);
+
+            viewer.addHandler("canvas-click", handler);
+            window.addEventListener("keydown", keyHandler, true);
+            restartTimeout();
+
+            // return cleanup for callers (calibrateViewer uses this)
+            return cancel;
+        }
+
+        _mapImagePointToReference(imgPt, t) {
+            if (!t) return null;
+            const shifted = { x: imgPt.x - t.b.x, y: imgPt.y - t.b.y };
+            return this._mul2x2_vec(t.invA, shifted);
+        }
+
+        _mapImagePointFromReference(refPt, t) {
+            if (!t) return null;
+            const mapped = this._mul2x2_vec(t.A, refPt);
+            return { x: mapped.x + t.b.x, y: mapped.y + t.b.y };
+        }
+
+        _mapStateBetweenViewers(sourceViewer, targetViewer, sourceState) {
+            if (!sourceViewer || !targetViewer || !sourceState) return null;
+            if (sourceViewer === targetViewer) return sourceState;
+
+            const sourceItem = sourceViewer.world.getItemAt(0);
+            const targetItem = targetViewer.world.getItemAt(0);
+            if (!sourceItem || !targetItem) return null;
+
+            const sourceT = this._getViewerTransform(sourceViewer.uniqueId);
+            const targetT = this._getViewerTransform(targetViewer.uniqueId);
+            if (!sourceT || !targetT) return null;
+
+            const sourceCenterImg = sourceItem.viewportToImageCoordinates(sourceState.center);
+            if (!isFinite(sourceCenterImg.x) || !isFinite(sourceCenterImg.y)) return null;
+
+            const refCenterImg =
+                sourceViewer.uniqueId === this._getSession().leaderId
+                    ? { x: sourceCenterImg.x, y: sourceCenterImg.y }
+                    : this._mapImagePointToReference(sourceCenterImg, sourceT);
+            if (!refCenterImg || !isFinite(refCenterImg.x) || !isFinite(refCenterImg.y)) return null;
+
+            const targetCenterImg =
+                targetViewer.uniqueId === this._getSession().leaderId
+                    ? refCenterImg
+                    : this._mapImagePointFromReference(refCenterImg, targetT);
+            if (!targetCenterImg || !isFinite(targetCenterImg.x) || !isFinite(targetCenterImg.y)) return null;
+
+            const targetCenterVp = targetItem.imageToViewportCoordinates(
+                new OpenSeadragon.Point(targetCenterImg.x, targetCenterImg.y)
+            );
+            if (!isFinite(targetCenterVp.x) || !isFinite(targetCenterVp.y)) return null;
+
+            const zoom = sourceState.zoom * ((sourceT.scale || 1) / (targetT.scale || 1));
+            const rotation = sourceState.rotation + (sourceT.rotDeg || 0) - (targetT.rotDeg || 0);
+            const flip = this._xorBool(
+                !!sourceState.flip,
+                this._getFlipParity(sourceViewer.uniqueId),
+                this._getFlipParity(targetViewer.uniqueId)
+            );
+
+            return {
+                center: targetCenterVp,
+                zoom,
+                rotation,
+                flip
+            };
+        }
+
+        _alignTargetToSourceNow(sourceViewer, targetViewer) {
+            const sourceState = sourceViewer?.tools?.readViewportState?.();
+            const mappedState = this._mapStateBetweenViewers(sourceViewer, targetViewer, sourceState);
+            if (mappedState) {
+                targetViewer.tools.applyViewportState(mappedState);
+            }
+        }
+
+        _invert2x2(m) {
+            const [a,b,c,d] = m; // [a b; c d]
+            const det = a*d - b*c;
+            if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+            const invDet = 1 / det;
+            return [ d*invDet, -b*invDet, -c*invDet, a*invDet ];
+        }
+
+        _mul2x2(a, b) {
+            // a,b are [a b c d]
+            return [
+                a[0]*b[0] + a[1]*b[2],
+                a[0]*b[1] + a[1]*b[3],
+                a[2]*b[0] + a[3]*b[2],
+                a[2]*b[1] + a[3]*b[3],
+            ];
+        }
+
+        _mul2x2_vec(m, v) {
+            return { x: m[0]*v.x + m[1]*v.y, y: m[2]*v.x + m[3]*v.y };
+        }
+
+        _similarityFrom3(refPts, tgtPts) {
+            const rc = {
+                x: (refPts[0].x + refPts[1].x + refPts[2].x) / 3,
+                y: (refPts[0].y + refPts[1].y + refPts[2].y) / 3
+            };
+            const tc = {
+                x: (tgtPts[0].x + tgtPts[1].x + tgtPts[2].x) / 3,
+                y: (tgtPts[0].y + tgtPts[1].y + tgtPts[2].y) / 3
+            };
+
+            let a = 0, b = 0, denom = 0;
+
+            for (let i = 0; i < 3; i++) {
+                const rx = refPts[i].x - rc.x;
+                const ry = refPts[i].y - rc.y;
+                const tx = tgtPts[i].x - tc.x;
+                const ty = tgtPts[i].y - tc.y;
+
+                a += rx * tx + ry * ty;
+                b += rx * ty - ry * tx;
+                denom += rx * rx + ry * ry;
+            }
+
+            if (!isFinite(denom) || denom < 1e-12) return null;
+
+            const norm = Math.hypot(a, b);
+            if (!isFinite(norm) || norm < 1e-12) return null;
+
+            const scale = norm / denom;
+            const cos = a / norm;
+            const sin = b / norm;
+
+            const A = [
+                scale * cos, -scale * sin,
+                scale * sin,  scale * cos
+            ];
+
+            const Arc = {
+                x: A[0] * rc.x + A[1] * rc.y,
+                y: A[2] * rc.x + A[3] * rc.y
+            };
+
+            const t = {
+                x: tc.x - Arc.x,
+                y: tc.y - Arc.y
+            };
+
+            const rotDeg = Math.atan2(A[2], A[0]) * 180 / Math.PI;
+            const invA = this._invert2x2(A);
+            if (!invA) return null;
+
+            return { A, b: t, invA, scale, rotDeg };
+        }
     }
 }(OpenSeadragon));

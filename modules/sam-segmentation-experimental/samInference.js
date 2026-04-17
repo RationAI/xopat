@@ -6,13 +6,12 @@
  */
 class SAMInference extends XOpatModuleSingleton {
   constructor() {
-    super("sam-segmentation-experimental");
+    super();
     this._models = {};
     this._processors = {};
     this._modelsLoaded = false;
     this._selectedModel = null;
     this._selectedComputationDevice = "Client";
-    this.registerAsEventSource();
 
     // Servers defined in the configuration
     const serverConfigs = this.getStaticMeta("servers", []);
@@ -441,3 +440,4 @@ class SAMInference extends XOpatModuleSingleton {
 
 // Register the module
 window.SAMInference = SAMInference;
+addModule("sam-segmentation-experimental", SAMInference);

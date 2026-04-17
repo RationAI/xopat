@@ -1,5 +1,6 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
+import {Loading} from "../elements/loading.mjs";
 
 /**
  * @namespace UI.Explorer
@@ -178,9 +179,15 @@ export class Explorer extends BaseComponent {
         ].join(" ");
 
         // Data/config
-        this.levels = Array.isArray(opts.levels) ? opts.levels.slice() : [];
-        if (!this.levels.length) {
-            console.warn("Explorer created with no levels.");
+        if (Array.isArray(opts.levels)) {
+            this.levels = opts.levels.slice();
+        } else if (typeof opts.levels === "object" && opts.levels !== null) {
+            this.levels = {
+                isDynamic: true,
+                level: opts.levels,
+            };
+        } else {
+            this.levels = [];
         }
 
         this.onPathChange = typeof opts.onPathChange === "function" ? opts.onPathChange : null;
@@ -199,12 +206,26 @@ export class Explorer extends BaseComponent {
         this._store = new Map();
 
         this._io = null;
+        this.loader = new Loading({
+            id: `${this.id}-loader`,
+            overlay: true,
+            type: "spinner"
+        });
 
         // bind
         this._navigate = this._navigate.bind(this);
         this._loadAndRender = this._loadAndRender.bind(this);
         this._renderLevelView = this._renderLevelView.bind(this);
         this._debouncedSearch = this._debouncedSearch.bind(this);
+    }
+
+    _getLevel(levelIndex) {
+        if (!this.levels) return null;
+        if (Array.isArray(this.levels)) return this.levels[levelIndex] || null;
+
+        if (this.levels.isDynamic) return this.levels.level;
+
+        return null;
     }
 
     getItem(index) {
@@ -230,14 +251,17 @@ export class Explorer extends BaseComponent {
     }
 
     _bucketKey(levelIndex, parentItem, search) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const parentKey = this._parentKey(levelIndex, parentItem);
+        if (this.levels.isDynamic)
+            return `DYNAMIC::${parentKey}::${search || ""}`;
+
         return `${lvl?.id || levelIndex}::${parentKey}::${search || ""}`;
     }
 
     _parentKey(levelIndex, parentItem) {
         if (levelIndex === 0) return "ROOT";
-        const prevLvl = this.levels[levelIndex - 1];
+        const prevLvl = this._getLevel(levelIndex - 1);
         if (!parentItem) return "NULLPARENT";
 
         // 1) Prefer custom keyOf if available
@@ -274,14 +298,15 @@ export class Explorer extends BaseComponent {
 
     _ensureBucket(levelIndex, parentItem, search) {
         const k = this._bucketKey(levelIndex, parentItem, search);
+        const lvl = this._getLevel(levelIndex);
         let b = this._store.get(k);
         if (!b) {
             b = {
                 pages: new Map(),
                 total: undefined,
                 virtualOffset: 0,
-                mode: this.levels[levelIndex]?.mode || "page",
-                currentPage: 0,            // ⬅️ single source of truth for current page
+                mode: lvl?.mode || "page",
+                currentPage: 0, 
             };
             this._store.set(k, b);
         }
@@ -308,10 +333,9 @@ export class Explorer extends BaseComponent {
 
     /** Navigate into next level; before leaving, remember the page of the current level (if paged). */
     async _navigate(levelIndex, item) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         if (!lvl) return;
 
-        // ⬅️ Snapshot current page for this level (only matters for mode:"page")
         if (lvl.mode === "page") {
             const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
             const bucket = this._ensureBucket(levelIndex, parent, this._search);
@@ -329,7 +353,7 @@ export class Explorer extends BaseComponent {
     /** Load and render the requested level, restoring remembered page when applicable. */
     async _loadAndRender(levelIndex, { replace = false } = {}) {
         const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const host = document.getElementById(this.id);
         if (!host || !lvl) return;
 
@@ -369,7 +393,7 @@ export class Explorer extends BaseComponent {
     }
 
     async _fetchPage(levelIndex, parent, bucket, pageNo) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
         const provider = this._pickProvider(lvl);
 
@@ -385,7 +409,7 @@ export class Explorer extends BaseComponent {
     }
 
     async _fetchVirtualBatch(levelIndex, parent, bucket, append = true) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 64);
         const provider = this._pickProvider(lvl);
         const offset = append ? bucket.virtualOffset : 0;
@@ -442,23 +466,16 @@ export class Explorer extends BaseComponent {
     }
 
     _showScopedLoader({ title = "", description = "" } = {}) {
-        const el = this._getLoaderEl(); if (!el) return;
-        const t = el.querySelector(`#${this.id}-loader-title`);
-        const d = el.querySelector(`#${this.id}-loader-desc`);
-        if (t) { t.textContent = title; t.style.display = title ? "" : "none"; }
-        if (d) { d.textContent = description; d.style.display = description ? "" : "none"; }
-        el.style.display = "";
+        this.loader.show(title, description);
     }
 
     _hideScopedLoader() {
-        const el = this._getLoaderEl(); if (!el) return;
-        el.style.display = "none";
+        this.loader.hide();
     }
 
     _asyncWithScopedSpinner(fn, delayMs = 300, info = {}) {
         this._pendingLoads++;
         if (this._pendingLoads === 1) {
-            // first task: arm the timer
             this._loaderTimer = setTimeout(() => {
                 this._showScopedLoader(info);
                 this._loaderTimer = null;
@@ -468,8 +485,10 @@ export class Explorer extends BaseComponent {
         const finalize = () => {
             this._pendingLoads = Math.max(0, this._pendingLoads - 1);
             if (this._pendingLoads === 0) {
-                // last task finished: clear timer and hide overlay
-                if (this._loaderTimer) { clearTimeout(this._loaderTimer); this._loaderTimer = null; }
+                if (this._loaderTimer) {
+                    clearTimeout(this._loaderTimer);
+                    this._loaderTimer = null;
+                }
                 this._hideScopedLoader();
             }
         };
@@ -484,6 +503,8 @@ export class Explorer extends BaseComponent {
                 a({
                         class: "link",
                         onclick: () => {
+                            this._path = [];
+                            this._viewState.clear();
                             this._loadAndRender(0, { replace: true });
                         }
                     },
@@ -494,9 +515,9 @@ export class Explorer extends BaseComponent {
 
         this._path.forEach((p, i) => {
             i = i + 1; // root is implicit 0
-            const lvl = this.levels[p.levelIndex];
+            const lvl = this._getLevel(p.levelIndex);
             const label = this._labelFor(lvl, p.item) || `Level ${lvl?.title || lvl?.id || i}`;
-            const isLast = this._path.length >= i;
+            const isLast = (i === this._path.length);
             const onclick = isLast ? undefined : () => {
                 // Truncate path and render that level; remembered page for that level will be used
                 this._path = this._path.slice(0, i);
@@ -520,7 +541,7 @@ export class Explorer extends BaseComponent {
                     const parent = levelIndex > 0 ? this._path[levelIndex - 1]?.item : null;
                     const key = this._bucketKey(levelIndex, parent, this._search);
                     this._store.delete(key);
-                    const lvl = this.levels[levelIndex];
+                    const lvl = this._getLevel(levelIndex);
                     if (lvl?.id) this._viewState.delete(lvl.id); // ⬅️ forget page on new search
                     this._loadAndRender(levelIndex, { replace: true });
                 }, 250)
@@ -538,7 +559,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderLevelView(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         if (!lvl) {
             return div({ class: "p-4 text-base-content/60" }, "No further levels.");
         }
@@ -551,14 +572,14 @@ export class Explorer extends BaseComponent {
         if (lvl.mode === "virtual") {
             listWrap.appendChild(this._renderVirtualList(levelIndex, parent, bucket));
         } else {
-            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket)); // ⬅️ uses bucket.currentPage
+            listWrap.appendChild(this._renderPagedList(levelIndex, parent, bucket));
         }
 
-        return div({ class: this.classMap.base, id: this.id }, header, listWrap);
+        return div({ class: this.classMap.base, id: this.id }, header, listWrap, this.loader.create());
     }
 
     _renderPagedList(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const pageSize = Math.max(1, lvl?.pageSize | 0 || 20);
 
         // Source of truth: bucket.currentPage
@@ -579,60 +600,65 @@ export class Explorer extends BaseComponent {
 
         // footer controls (prev/next) – unchanged behavior
         const pageState = van.state((currentPage || 0) + 1);
-        const totalState = van.state(bucket.total ?? null);
+
         const canNextState = van.state(true);
 
         // Calculate total pages if known
         const total = bucket.total;
         const totalPages = total ? Math.max(1, Math.ceil(total / pageSize)) : undefined;
-        if (totalPages && totalState.val == null) totalState.val = totalPages;
+        const totalState = van.state(totalPages);
 
         // ------- Windowed rendering for paged lists -------
         // Config
-        const OVERSCAN = 8;        // render a few extra rows above/below for smoothness
-        let rowH = 0;              // measured row height
-        let start = 0, end = -1;   // current rendered window [start, end)
-
-        // Spacers to simulate full height without mounting all rows
+        // ------- Windowed rendering (cached) -------
+        const OVERSCAN = 8;
+        let rowH = 0;
+        let start = 0, end = -1;
         const topSpacer = div({ style: "height:0px" });
         const bottomSpacer = div({ style: "height:0px" });
+        const renderedItems = new Map(); // index -> li Node
 
-        // Simple pool: we fully re-render the window on changes (keeps code small & robust)
-        const renderWindow = (force=false) => {
+        const renderWindow = (force = false) => {
             const vpH = viewport.clientHeight || 0;
             const scrollTop = viewport.scrollTop || 0;
-            if (!rowH) {
-                // if we don't know row height yet, delay until measured
-                return;
-            }
+            if (!rowH) return;
+
             const maxIdx = items.length;
-            // compute indexes
             const visStart = Math.max(0, Math.floor(scrollTop / rowH));
             const visEnd = Math.min(maxIdx, Math.ceil((scrollTop + vpH) / rowH));
             const nextStart = Math.max(0, visStart - OVERSCAN);
             const nextEnd = Math.min(maxIdx, visEnd + OVERSCAN);
             if (!force && nextStart === start && nextEnd === end) return;
 
-            start = nextStart; end = nextEnd;
+            start = nextStart;
+            end = nextEnd;
 
-            // update spacers
-            const topH = start * rowH;
-            const bottomH = (maxIdx - end) * rowH;
-            topSpacer.style.height = `${topH}px`;
-            bottomSpacer.style.height = `${bottomH}px`;
+            // Update spacer heights
+            topSpacer.style.height = `${start * rowH}px`;
+            bottomSpacer.style.height = `${(maxIdx - end) * rowH}px`;
 
-            // replace visible chunk
-            // keep ONLY top spacer at first position; wipe middle; keep bottom spacer at end
-            // structure: [topSpacer, ...rows..., bottomSpacer]
-            // clear previous rows (keep first and last children if they are our spacers)
-            while (listEl.childNodes.length > 0) listEl.removeChild(listEl.lastChild);
-            listEl.appendChild(topSpacer);
-
-            for (let i = start; i < end; i++) {
-                listEl.appendChild(this._renderItemLi(levelIndex, items[i], i));
+            // Keep order: topSpacer, [items in window], bottomSpacer
+            // Remove old nodes not in range
+            for (const [i, node] of renderedItems) {
+                if (i < start - OVERSCAN * 2 || i > end + OVERSCAN * 2) {
+                    renderedItems.delete(i);
+                    node.remove();
+                }
             }
 
-            listEl.appendChild(bottomSpacer);
+            // Ensure in-range nodes exist in correct order
+            const frag = document.createDocumentFragment();
+            for (let i = start; i < end; i++) {
+                let node = renderedItems.get(i);
+                if (!node) {
+                    node = this._renderItemLi(levelIndex, items[i], i);
+                    renderedItems.set(i, node);
+                }
+                frag.appendChild(node);
+            }
+
+            // Rebuild listEl children (cheap because we re-append spacers + fragment)
+            listEl.replaceChildren(topSpacer, frag, bottomSpacer);
         };
 
         // Initial draw: we need a measured row height
@@ -663,7 +689,20 @@ export class Explorer extends BaseComponent {
         viewport.addEventListener("scroll", onScroll);
 
         // Re-compute on resize as well
-        const ro = new ResizeObserver(() => renderWindow(true));
+        const ro = new ResizeObserver(() => {
+            // Wrap the DOM modification in requestAnimationFrame
+            requestAnimationFrame(() => {
+                if (!rowH || !document.body.contains(viewport)) return;
+
+                const vpH = viewport.clientHeight || 0;
+                const scrollTop = viewport.scrollTop || 0;
+                const visStart = Math.max(0, Math.floor(scrollTop / rowH));
+                const visEnd = Math.min(items.length, Math.ceil((scrollTop + vpH) / rowH));
+
+                topSpacer.style.height = `${visStart * rowH}px`;
+                bottomSpacer.style.height = `${(items.length - visEnd) * rowH}px`;
+            });
+        });
         ro.observe(viewport);
 
         // Navigation controls
@@ -761,7 +800,7 @@ export class Explorer extends BaseComponent {
 
 
     _renderVirtualList(levelIndex, parent, bucket) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const listEl = ul({ class: "menu p-1 gap-1" });
 
         // Virtual mode: no remembering required
@@ -828,13 +867,21 @@ export class Explorer extends BaseComponent {
     }
 
     reconfigure({ levels, search = "" } = {}) {
-        if (levels && Array.isArray(levels)) {
+        if (Array.isArray(levels)) {
             this.levels = levels.slice();
+        } else if (typeof levels === "object" && levels !== null) {
+            this.levels = {
+                isDynamic: true,
+                level: levels,
+            };
+        } else {
+            this.levels = [];
         }
+
         this._search = (typeof search === "string" ? search : "");
         this._path = [];
         this._store.clear();
-        this._viewState.clear(); // ⬅️ reset remembered pages when reconfiguring
+        this._viewState.clear();
         this._loadAndRender(0, { replace: true });
     }
 
@@ -849,7 +896,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderItemPlaceholder(levelIndex, item, idx, pageNo) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);
         const ph = li({
             class: "skeleton h-10 rounded-md",
@@ -861,7 +908,7 @@ export class Explorer extends BaseComponent {
     }
 
     _renderItemLi(levelIndex, item, idx, { heavy = false, pageNo = 0 } = {}) {
-        const lvl = this.levels[levelIndex];
+        const lvl = this._getLevel(levelIndex);
         const idxMap = this._lastIndexMaps[levelIndex] || (this._lastIndexMaps[levelIndex] = new WeakMap());
         try { idxMap.set(item, idx); } catch {}
         const key = this._keyOf(lvl, item, idx, levelIndex>0?this._path[levelIndex-1]?.item:null);

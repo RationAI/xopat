@@ -23,6 +23,21 @@ const HtmlRenderer = v => {
  */
 
 /**
+ * @typedef {object} UINamedItem The named item in UI.
+ * @property {string} [id] unique id
+ * @property {string} [icon] icon class (FA icons) or empty string if icon not desirable
+ * @property {string} [title] the item title
+ * @property {UIElement|undefined} [body] Returns body of the item, or falsey value if
+ * the item does not exist.
+ */
+
+/**
+ * @typedef {function} UINamedItemGetter
+ * @param {any} argument - use depends on the particular case
+ * @return UINamedItem
+ */
+
+/**
  * @class BaseComponent
  * @description The base class for all components
  */
@@ -48,6 +63,10 @@ export class BaseComponent {
      * @param {string} [options.id] - The id of the component
      */
     constructor(options, ...children) {
+
+        window.addEventListener('app:layout-change', (e) => {
+            this.onLayoutChange?.(e.detail);
+        });
 
         if (typeof options === "string" || options instanceof Node || options instanceof BaseComponent) {
             children.unshift(options);
@@ -170,21 +189,6 @@ export class BaseComponent {
             }
         }
         return this;
-    }
-
-    /**
-     * Resolve a DOM node from a string id, jQuery wrapper, or direct element reference.
-     * @param {string|Element|Object} element
-     * @return {Element|null}
-     */
-    _resolveMountNode(element) {
-        if (typeof element === "string") return document.getElementById(element);
-        let mount = element;
-        if (mount && (mount.jquery || typeof mount.get === "function" || Array.isArray(mount))) {
-            const candidate = typeof mount.get === "function" ? mount.get(0) : (Array.isArray(mount) ? mount[0] : mount[0]);
-            if (candidate) mount = candidate;
-        }
-        return mount || null;
     }
 
     /**
@@ -415,6 +419,30 @@ export class BaseComponent {
     }
 
     /**
+     * Externally added components to the DOM must be wrapped by this function,
+     * so that upon failure they can be removed.
+     * @param {UIElement} element root node
+     * @param {XOpatElementID} componentId plugin or module ID that added the item
+     * @param {boolean} instantiateString turn strings into dom done - for compatibility reasons
+     */
+    static ensureTaggedAsExternalComponent(element, componentId, instantiateString=false) {
+        if (!element) return;
+
+        if (element instanceof BaseComponent) {
+            element.toggleClass('__base__', componentId + '-plugin-root', true);
+            return element;
+        }
+
+        if (typeof element === 'string') {
+            return `<div class="${componentId}-plugin-root">${element}</div>`;
+        }
+
+        // assume node
+        element.classList.add(componentId + '-plugin-root');
+        return element;
+    }
+
+    /**
      * @description Remove the component from the DOM
      */
     remove() {
@@ -458,12 +486,12 @@ export class BaseComponent {
 
 /**
  * @typedef {BaseUIOptions} SelectableUIOptions
- * @property {string} [itemID] - The selection ID
+ * @property {string|false} [itemID] - The selection ID, or false to remove any selection.
  */
 export class BaseSelectableComponent extends BaseComponent {
     constructor(options, ...args) {
-        super(options, ...args);
-        this.itemID = this.options.itemID || this.id;
+        options = super(options, ...args).options;
+        this.itemID = options.itemID || this.id;
     }
 
     setSelected(itemID) {

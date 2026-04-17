@@ -1,6 +1,7 @@
 const {parse} = require("comment-json");
 
-module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv) {
+// secure mode removes all 'secure' options from the config - leave to true when using the config for FE response
+module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, readEnv, secure=true, defaults={}) {
 
     function parseBool(x) {
         const type = typeof x;
@@ -217,6 +218,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
 
     } catch (e) {
         core.exception = e;
+        console.error(e);  // todo better handling
         //core uses default values
     }
 
@@ -245,7 +247,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         core.exception = "JavaScript cannot deduce the domain: configuration must specify the viewer domain and protocol!";
     }
 
-    core.VERSION = CORE["version"];
+    if (secure) {
+        // Security: server configuration secret
+        delete CORE.server.secure;
+    }
+
+    core.VERSION = CORE["version"] || defaults.version || "dev";
+    core["version"] = CORE.VERSION;
     core.GATEWAY = CORE["gateway"];
     core.CORE = CORE;
     core.ENV = ENV;

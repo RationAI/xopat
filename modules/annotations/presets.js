@@ -20,7 +20,7 @@ OSDAnnotations.Preset = class {
      * @param {string} color fill color
      */
     constructor(id, objectFactory = null, category = "", color = "") {
-        if (! objectFactory instanceof OSDAnnotations.AnnotationObjectFactory) throw "Invalid preset constructor!";
+        if (!(objectFactory instanceof OSDAnnotations.AnnotationObjectFactory)) throw "Invalid preset constructor!";
         this.color = color;
         this.objectFactory = objectFactory;
         this.presetID = id;
@@ -150,11 +150,12 @@ OSDAnnotations.PresetManager = class {
         selectable: true,
         originalStrokeWidth: 3,
         borderColor: 'rgba(251,184,2,0.35)',
-        cornerColor: 'rgba(251,184,2,0.35)',
+        cornerColor: 'rgba(251, 185, 2, 1)',
         stroke: 'black',
         borderScaleFactor: 3,
         strokeSide: 'center',
         hasControls: true,
+        hasBorders: false,
         lockMovementY: true,
         lockMovementX: true,
         hasRotatingPoint: false,
@@ -169,7 +170,7 @@ OSDAnnotations.PresetManager = class {
      */
     constructor(selfName, context) {
         this._context = context;
-        this._presets = {};
+        this._presets = new Map();
         //active presets for mouse buttons, default state create one
         this.left = undefined;
         this.right = undefined;
@@ -234,14 +235,15 @@ OSDAnnotations.PresetManager = class {
 
     /**
      * Add new preset with default values
-     * @param {string?} id to create, generates random otherwise
-     * @param {string?} categoryName custom name
+     * @param {string} [id] to create, generates random otherwise
+     * @param {string} [categoryName=""] custom name
+     * @param {string} [color] hex color
      * @event preset-create
      * @returns {OSDAnnotations.Preset} newly created preset
      */
-    addPreset(id=undefined, categoryName="") {
-        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, this.randomColorHexString());
-        this._presets[preset.presetID] = preset;
+    addPreset(id=undefined, categoryName="", color=undefined) {
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, color || this.randomColorHexString());
+        this._presets.set(preset.presetID, preset);
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;
     }
@@ -270,13 +272,17 @@ OSDAnnotations.PresetManager = class {
         return this._withDynamicOptions(this.commonAnnotationVisuals);
     }
 
+    get length() {
+        return this._presets.size;
+    }
+
     /**
      * Check if preset exists
      * @param {string} id preset id
      * @returns true if exists
      */
     exists(id) {
-        return this._presets.hasOwnProperty(id);
+        return this._presets.has(id);
     }
 
     /**
@@ -285,21 +291,21 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id = undefined) {
-        if (!id) {
-            for (const k in this._presets) {
-                if (Object.prototype.hasOwnProperty.call(this._presets, k)) return this._presets[k];
+        if (!id && this._presets.size > 0) {
+            if (this._presets.size > 1) {
+                return this._presets.values().next().value;
             }
             return this.unknownPreset;
         }
-        return this._presets[id];
+        return this._presets.get(id);
     }
 
     /**
      * Presets getter
-     * @returns {Array<any>} preset ids
+     * @returns {MapIterator<any>} preset ids
      */
     getExistingIds() {
-        return Object.keys(this._presets);
+        return this._presets.keys();
     }
 
     /**
@@ -316,20 +322,21 @@ OSDAnnotations.PresetManager = class {
      * Safely remove preset
      * @event preset-delete
      * @param {string} id preset id
-     * @returns deleted preset or false if deletion failed
+     * @returns {OSDAnnotations.Preset|false|null} deleted preset or false if deletion failed or null if
+     *   deletion was not possible (e.g. preset is used by existing annotations)
      */
     removePreset(id) {
-        let toDelete = this._presets[id];
-        if (!toDelete) return undefined;
+        let toDelete = this._presets.get(id);
+        if (!toDelete) return false;
 
-        if (this._context.overlay.fabric._objects.some(o => {
+        if (this._context.fabric.canvas._objects.some(o => {
             return o.presetID === id;
         })) {
             Dialogs.show("This preset belongs to existing annotations: it cannot be removed.",
                 8000, Dialogs.MSG_WARN);
-            return undefined;
+            return null;
         }
-        delete this._presets[id];
+        this._presets.delete(id);
         this._context.raiseEvent('preset-delete', {preset: toDelete});
         return toDelete;
     }
@@ -342,7 +349,7 @@ OSDAnnotations.PresetManager = class {
      * @return updated preset in case any value changed, undefined otherwise
      */
     updatePreset(id, properties) {
-        let preset = this._presets[id],
+        let preset = this._presets.get(id),
             needsRefresh = false;
         if (!preset) return undefined;
 
@@ -377,7 +384,7 @@ OSDAnnotations.PresetManager = class {
      * @return {string|undefined} the new meta id, undefined if no preset found
      */
     addCustomMeta(id, name, value) {
-        let preset = this._presets[id];
+        let preset = this._presets.get(id);
         if (!preset) return undefined;
         let key = "k"+Date.now();
         preset.meta[key] = {
@@ -395,7 +402,7 @@ OSDAnnotations.PresetManager = class {
      * @param {string} key meta key
      */
     deleteCustomMeta(id, key) {
-        let preset = this._presets[id];
+        let preset = this._presets.get(id);
         if (preset && preset.meta[key]) {
             delete preset.meta[key];
             this._context.raiseEvent('preset-meta-remove', {preset: preset, key: key});
@@ -412,7 +419,7 @@ OSDAnnotations.PresetManager = class {
      */
     setCommonVisualProp(propertyName, propertyValue) {
         if (this.commonAnnotationVisuals[propertyName] === undefined) {
-            console.error("[setCommonVisualProp] property name not one of", this.presets.constructor.commonAnnotationVisuals, propertyName);
+            console.error("[setCommonVisualProp] property name not one of", this.constructor.commonAnnotationVisuals, propertyName);
             return false;
         }
         this._context.cache.set('visuals.' + propertyName, propertyValue);
@@ -434,9 +441,8 @@ OSDAnnotations.PresetManager = class {
      * @param {function} call
      */
     foreach(call) {
-        for (let id in this._presets) {
-            if (!this._presets.hasOwnProperty(id)) continue;
-            call(this._presets[id]);
+        for (const [key, value] of this._presets) {
+            call(value);
         }
     }
 
@@ -447,11 +453,8 @@ OSDAnnotations.PresetManager = class {
      */
     toObject(usedOnly=false) {
         let exported = [];
-        for (let preset in this._presets) {
-            if (!this._presets.hasOwnProperty(preset)) continue;
-            preset = this._presets[preset];
-
-            if (!usedOnly || this._context.canvas._objects.some(x => x.presetID === preset.presetID)) {
+        for (const [key, preset] in this._presets) {
+            if (!usedOnly || this._context.fabric.canvas._objects.some(x => x.presetID === preset.presetID)) {
                 exported.push(preset.toJSONFriendlyObject());
             }
         }
@@ -468,41 +471,40 @@ OSDAnnotations.PresetManager = class {
     async import(presets, clear=false) {
         const _this = this;
 
-        for (let pid in this._presets) {
-            const preset = this._presets[pid];
+        for (const [pid, preset] in this._presets) {
             // TODO: clear might remove presets that are attached to existing annotations!
             if (clear || this.isUnusedPreset(preset)) {
                 this._context.raiseEvent('preset-delete', {preset});
-                delete this._presets[pid];
+                this._presets.delete(pid);
             }
         }
 
-        if (typeof presets === 'string' && presets.length > 10) {
+        if (typeof presets === 'string') {
             presets = JSON.parse(presets);
         }
 
         let first;
         if (Array.isArray(presets)) {
-            presets.map(p => OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context)).forEach(p => {
-                if (!_this._presets.hasOwnProperty(p.presetID)) {
-                    _this._context.raiseEvent('preset-create', {preset: p});
-                    _this._presets[p.presetID] = p;
-                    _this._colorStep++; //generate new colors
+            for (let p of presets) {
+                p = OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context);
+                if (!this._presets.has(p.presetID)) {
+                    this._context.raiseEvent('preset-create', {preset: p});
+                    this._presets.set(p.presetID, p);
+                    this._presetsImported = true;
+                    this._colorStep++; //generate new colors
                     if (!first) first = p;
                 }
-            });
+            }
         } else {
             throw "Invalid presets data provided as an input for import.";
         }
 
-        this._presetsImported = presets.length > 0;
-
         const leftPresetId = await this._context.cache.get('presets.left.id', undefined, false);
         const rightPresetId = await this._context.cache.get('presets.right.id', undefined, false);
-        if (leftPresetId && (leftPresetId === "__unset__" || this._presets[leftPresetId])) {
+        if (leftPresetId && (leftPresetId === "__unset__" || this._presets.get(leftPresetId))) {
             this.selectPreset(leftPresetId, true, false);
         }
-        if (rightPresetId && (rightPresetId === "__unset__" || this._presets[rightPresetId])) {
+        if (rightPresetId && (rightPresetId === "__unset__" || this._presets.get(rightPresetId))) {
             this.selectPreset(rightPresetId, false, false);
         }
 
@@ -521,8 +523,8 @@ OSDAnnotations.PresetManager = class {
     selectPreset(id, isLeftClick= true, cached= true) {
         let preset = undefined, cachedId = "__unset__";
         if (id) {
-            if (!this._presets[id]) return;
-            preset = this._presets[id];
+            if (!this._presets.has(id)) return;
+            preset = this._presets.get(id);
             cachedId = preset.presetID;
         }
         if (isLeftClick) {
@@ -536,12 +538,13 @@ OSDAnnotations.PresetManager = class {
     }
 
     _withDynamicOptions(options) {
-        const canvas = this._context.canvas,
+        const canvas = this._context.fabric.canvas,
             zoom = canvas.getZoom(),
             gZoom = canvas.computeGraphicZoom(zoom);
 
+        //const layerID = this._context.fabric.getActiveLayer()?.id;
         return $.extend(options, {
-            layerID: this._context.getLayer().id,
+            layerID: undefined,
             zoomAtCreation: zoom,
             strokeWidth: this.commonAnnotationVisuals.originalStrokeWidth / gZoom
         });
@@ -601,6 +604,8 @@ OSDAnnotations.PresetManager = class {
  */
 OSDAnnotations.Layer = class {
 
+    static _counter = 0;
+
     /**
      * Constructor
      * @param {OSDAnnotations} context Annotation Plugin Context
@@ -609,9 +614,11 @@ OSDAnnotations.Layer = class {
     constructor(context, id=String(Date.now())) {
         this._context = context;
         this.id = id;
-        this.position = -1;
-        this.position = Object.values(this._context._layers)
-            .reduce((result, current) => Math.max(result, current.position), 0) + 1;
+        this._objects = [];
+        this.type = "layer";
+        this.visible = true;
+        this.name = `Layer ${++OSDAnnotations.Layer._counter}`;
+        this._name = undefined;
     }
 
     /**
@@ -629,8 +636,155 @@ OSDAnnotations.Layer = class {
      */
     iterate(callback) {
         const _this = this;
-        this._context.canvas.getObjects().forEach(o => {
+        this._context.fabric.canvas.getObjects().forEach(o => {
             if (o.layerID === _this.id) callback(_this, o);
         });
+    }
+
+    /**
+     * Returns a plain shallow copy of this layer for serialization.
+     * @returns {Object} Plain object copy without the internal context.
+     */
+    toObject() {
+        const copy = { ...this, _objects: [...this._objects] };
+	    delete copy._context;
+        return copy;
+    }
+
+    /**
+     * Get the number of annotations in this layer
+     * @returns {number} number of objects in this layer
+     */
+    getAnnotationCount() {
+        return this._objects.length;
+    }
+
+    /**
+    * Add a fabric object to this layer
+    * @param {fabric.Object} object
+    * @param {number} index index at which to add the object
+    */
+    addObject(object, index = undefined) {
+        if (!object || object.internalID === undefined || object.internalID === null) return;
+
+        if (!this.contains(object)) {
+            if (typeof index === "number" && index >= 0 && index <= this._objects.length) {
+                this._objects.splice(index, 0, object);
+            } else {
+                this._objects.push(object);
+            }
+
+            object.layerID = this.id;
+            this._context.fabric._applyAnnotationVisibilityState?.(object);
+            this._context.fabric.rerender();
+        }
+    }
+
+    /**
+    * Remove a fabric object from this layer
+    * @param {fabric.Object} object
+    */
+    removeObject(object) {
+        if (!object || object.internalID === undefined || object.internalID === null) return;
+
+        object.visible = true;
+        this._objects = this._objects.filter(obj => obj.internalID !== object.internalID);
+
+        this._context.fabric.rerender();
+    }
+
+    /**
+     * Swap (move) an annotation up or down within this layer.
+     * @param {fabric.Object} annotation
+     * @param {"up"|"down"} direction "up" or "down"
+     * @returns {boolean} true if swapped, false if at edge or not found
+     */
+    swapAnnotation(annotation, direction) {
+        const idx = this._objects.findIndex(obj => obj.internalID === annotation.internalID);
+        if (idx === -1) return false;
+        const newIdx = direction === "up" ? idx - 1 : idx + 1;
+        if (newIdx < 0 || newIdx >= this._objects.length) return false;
+        [this._objects[idx], this._objects[newIdx]] = [this._objects[newIdx], this._objects[idx]];
+        return true;
+    }
+
+    /**
+     * Return array of all objects assigned to this layer
+     * @returns {fabric.Object[]}
+     */
+    getObjects() {
+        return [...this._objects];
+    }
+
+    /**
+     * Set objects for this layer
+     * @param {fabric.Object[]} objects array of objects
+     */
+    setObjects(objects, changeLayerID = false) {
+        this._objects.forEach(object => {
+            object.visible = true;
+            object.evented = true;
+            object.selectable = true;
+        });
+
+        this._objects = objects;
+
+        if (changeLayerID) {
+            this._objects.forEach(obj => {
+                obj.layerID = this.id;
+            });
+        }
+
+        this._objects.forEach(object => {
+            this._context.fabric._applyAnnotationVisibilityState?.(object);
+        });
+
+        this._context.fabric.rerender();
+    }
+
+    /**
+    * Clear all objects from this layer (does not delete them from canvas)
+    */
+    clear() {
+       this._objects.forEach(object => {
+           if (object.layerID === this.id) {
+                object.layerID = undefined;
+                object.visible = true;
+           }
+       });
+       this._objects = [];
+    }
+
+    /**
+     * Check if this layer contains the object
+     * @param {*} object object to check
+     * @returns {boolean} true if the object is in this layer
+     */
+    contains(object) {
+        return this._objects.some(obj => obj.internalID === object.internalID);
+    }
+
+    setVisibility(visible) {
+        this.visible = !!visible;
+        this._objects.forEach(obj => {
+            this._context.fabric._applyAnnotationVisibilityState?.(obj);
+        });
+        this._context.fabric.rerender();
+    }
+
+    /**
+     * Toggle the visibility of all objects in the layer
+     */
+    toggleVisibility() {
+        this.setVisibility(!this.visible);
+    }
+
+    /**
+     * Get the index of an annotation within this layer
+     * @param {fabric.Object} annotation annotation to find
+     * @returns {number} index of the annotation, -1 if not found
+     */
+    getAnnotationIndex(annotation) {
+        return this._objects.findIndex(obj => obj.incrementId === annotation.incrementId);
     }
 };

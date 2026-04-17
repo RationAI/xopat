@@ -14,6 +14,10 @@ function throwFatalErrorIfFallback($condition, $title, $description, $details) {
 
     echo preg_replace_callback(HTML_TEMPLATE_REGEX, function ($match) use ($title, $description, $details) {
         switch ($match[1]) {
+            case "head":
+                ob_start();
+                require_libs();
+                return ob_get_clean();
             case "error":
                 return <<<EOF
 <div class="collapsible" onclick="toggleContent()">Detailed Information</div>

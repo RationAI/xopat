@@ -228,10 +228,20 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         };
     }
 
-    getLevelScale( level ) {
-        level = this.maxLevel-level;
+    getLevelScale(level) {
+        const serverLevel = this.maxLevel - level;
         const levels = this.data.levels;
-        return levels[level].extent.x / levels[0].extent.x;
+
+        const getDS = (lvl, idx) => {
+            if (lvl.downsample_factor != null) return Number(lvl.downsample_factor);
+            if (lvl.downsample != null)        return Number(lvl.downsample);
+            // worst-case fallback
+            return Math.pow(2, idx);
+        };
+
+        const dsBase = getDS(levels[0], 0);
+        const dsHere = getDS(levels[serverLevel], serverLevel);
+        return dsBase / dsHere;
     }
 
     getMetadata() {
@@ -388,18 +398,5 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
         level = this.maxLevel-level; //OSD assumes max level is biggest number, query vice versa,
         return `${x}_${y}/${level}/${this.fileId}`;
-    }
-
-    getTileCacheDataAsContext2D(cacheObject) {
-        //hotfix: in case the cacheObject._data object arrives as array, fix it (webgl drawing did not get called)
-        //todo will be replaced by the cache overhaul in OpenSeadragon
-        if (!cacheObject._renderedContext) {
-            if (Array.isArray(cacheObject._data)) {
-                cacheObject._data = cacheObject._data[0];
-            } else if (Array.isArray(cacheObject.data)) {
-                cacheObject.data = cacheObject.data[0];
-            }
-        }
-        return super.getTileCacheDataAsContext2D(cacheObject);
     }
 };

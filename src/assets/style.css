@@ -270,6 +270,9 @@ also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-nam
     max-height: initial !important;
 }
 
+.disabled {
+    position: relative;
+}
 /* Dimmed overlay over container */
 .disabled::after {
     content: '';
@@ -279,6 +282,7 @@ also good idea to use <span class="btn-pointer"><span class="fa-auto fa-icon-nam
     top: 0;
     left: 0;
     filter: brightness(0.3);
+    z-index: 99998;
     background: #22272ead;
 }
 
@@ -396,9 +400,8 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 .bg-opacity::before {content: "";width: 100%;height: 100%;position: absolute;left: 0;
     background-color: var(--color-bg-primary);opacity: 0.6;top: 0;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
-.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse);}
+.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse); z-index: 999999}
 .system-container .fa-solid, .system-container .fa-regular {color: var(--color-border-inverse);}
-#top-side {z-index: 99;}
 .right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
@@ -458,6 +461,7 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 /*input.switch:checked + label {background: var(--color-diff-blob-comment-button-bg);}*/
 /*input.switch:checked + label:after {left: calc(100% - 5px);transform: translateX(-100%);}*/
 /*input.switch + label:active:after {width: 130px;}*/
+
 
 /** DIALOGS*/
 input.selectable-image-row-context:checked + div {
@@ -521,6 +525,14 @@ input.selectable-image-row-context:checked + div {
 /**************************************************************
 **************** GLOBAL RULES *********************************
 ***************************************************************/
+:root:has(:is(.modal-open, .modal:target, .modal-toggle:checked + .modal, .modal[open])) {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+:root:has(:is(.modal-open, .\!modal:target, .modal-toggle:checked + .\!modal, .\!modal[open])) {
+    overflow: hidden !important;
+    scrollbar-gutter: auto !important;
+}
 .svg-bg {fill: var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity, 1)));}
 .svg-fg {fill: var(--fallback-bc,oklch(var(--bc)/1));}
 .stretch-grid__item {
@@ -543,6 +555,9 @@ input.selectable-image-row-context:checked + div {
 }
 a {cursor: pointer;}
 input {background-color: inherit;}
+input[type=range]:not(.range) {
+    filter: contrast(0.5); /*attempt to make really visible*/
+}
 canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);border: none;}
 /*IE*/ select::-ms-expand {display: none; /* Remove default arrow in Internet Explorer 10 and 11 */}
 ::-webkit-scrollbar {background: transparent;margin: 25px 0 25px 0;width: 14px;height: 14px;}
@@ -552,3 +567,25 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
     -webkit-box-shadow: inset -1px -1px 0 rgba(0, 0, 0, 0.05), inset 1px 1px 0 rgba(0, 0, 0, 0.05);}
 ::-webkit-scrollbar-button {width: 0;height: 0;display: none;}
 ::-webkit-scrollbar-corner {background-color: transparent;}
+
+#osd .xo-viewer-host {position: relative;}
+#osd .xo-viewer-host::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 2px solid transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+    border-radius: 8px;
+    pointer-events: none;
+    z-index: 12;
+    transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+#osd .xo-viewer-host[data-active-viewer="true"]::before {
+    border-color: rgba(59, 130, 246, 0.95);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45), 0 0 0 1px rgba(59, 130, 246, 0.65);
+}
+@media (prefers-reduced-motion: reduce) {
+    #osd .xo-viewer-host::before {
+        transition: none;
+    }
+}

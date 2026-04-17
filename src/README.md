@@ -23,53 +23,75 @@ Supported configuration for the visualization itself, can be passed both in `POS
 
 
 Example configuration:
+
 ````JSON
-{    
-    "params": {
-    }, 
-    "data": ["path/to/tissue/scan.tif", "path/to/annotation.tif", "path/to/probability.tif"],
-    "background": [
-        {
-            "dataReference": 0,
-            "lossless": false,
-            "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
+{
+  "params": {
+  },
+  "data": [
+    {
+      "dataID": "path/to/tissue/scan.tif",
+      "microns": 0.001,
+      "options": {
+        "customTileSrouceOption": "someValue"
+      }
+    },
+    "path/to/annotation.tif",
+    "path/to/probability.tif"
+  ],
+  "background": [
+    {
+      "dataReference": 0,
+      "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
+    }
+  ],
+  "visualizations": [
+    {
+      "name": "A visualization setup 1",
+      "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
+      "shaders": {
+        "shader_id_1": {
+          "name": "Advanced visualization layer",
+          "type": "new_type",
+          "fixed": false,
+          "visible": 1,
+          "dataReferences": [
+            2,
+            0
+          ],
+          "params": {}
+        },
+        "another_shader_id": {
+          "name": "Probability layer",
+          "type": "edge",
+          "visible": 1,
+          "dataReferences": [
+            1
+          ],
+          "params": {
+            "color": "#fa0058",
+            "use_gamma": 1.0
+          }
         }
-    ],
-    "visualizations": [
-        {
-            "name": "A visualization setup 1",
-            "lossless": true,
-            "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
-            "shaders": {
-                "shader_id_1": { 
-                    "name": "Advanced visualization layer",
-                    "type": "new_type", 
-                    "fixed": false,
-                    "visible": 1, 
-                    "dataReferences": [2, 0],
-                    "params": { }
-                },
-                "another_shader_id": {
-                    "name": "Probability layer",
-                    "type": "edge", 
-                    "visible": 1, 
-                    "dataReferences": [1],
-                    "params": { 
-                        "color": "#fa0058",
-                        "use_gamma": 1.0
-                    }
-                }
-            }      
-        }
-    ],
-    "plugins": {
-        "recorder": {}
-    }    
+      }
+    }
+  ],
+  "plugins": {
+    "recorder": {}
+  }
 }
 ````
 **External parameters** &emsp;
 We will use [R] for required and [O] for optional parameters.
-- [R]`data` - an array OF `DataID` types (strings, objects...), identifiers such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
+- [R]`data` - an array OF `DataSpecification` types:
+  - [ONE OF] `DataID` type - identifiers (strings, objects...) such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
+  - [ONE OF] ``DataOverride``: can override data access and some metadata
+    - [R]`dataID` - `DataID` type
+    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
+    - [O]`microns` - size of pixel in micrometers, default `undefined`,
+    - [O]`protocol` - see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
+    - [-]`tileSource` - [usable only in code]
+
 - [O]`params` - an object, visualization parameters, supported:
     - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
     - [O]`locale` - language locale, default `en`
@@ -77,40 +99,42 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
     - [O]`statusBar` - whether to show user action and system status hints, default `true`
-    - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can be an array of indices (multiple views)
-    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can be an array
+    - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can also be an array of indices for multi-view mode
+    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can also be an array for multi-view mode
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
-    - [O]`viewport` - where to focus on load, default `undefined`
+    - [O]`viewport` - where to focus on load, default `undefined`; can be a single viewport object applied to all viewers or an array of viewport objects in multi-view mode
         - [R]`point` - center of the focus
         - [R]`zoomLevel` - level of the zoom
+        - [O]`rotation` - rotation in degrees
     - [O]`scaleBar` - show scale, does not show if microns not defined, default `true`,
     - [O]`grayscale` - enforce grayscale transfer, default `false`,
     - [O]`tileCache` - use tile caching, default `true`,
     - [O]`permaLoadPlugins` - remember loaded plugins, default `true`,
     - [O]`bypassCookies` - do not use cookies, default `false`, cookies are necessary for user setup memory
     - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
-    - [O]`stackedBackground` - whether to show backgrounds as switchable slide show (`false`, default) or overlays
+    - [O]`stackedBackground` - removed, not supported anymore - use shaders config map on background item to render multiple overlays within single BG item
     - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
     - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
-    - [O]`fetchAsync` - by default uses generic multiplexing on tile protocols to support async fetching, overrideable behaviour
+    - [O]`fetchAsync` - deprecated, kept only for backward compatibility
     - [O]`bypassCache` - do not allow using cached values for the user, default `false`
-    - [O]`bypassCacheLoadTime` - TODO: better name also affects cookies
+    - [O]`bypassCacheLoadTime` - at viewer initial loading, ignore cache - this can avoid pulling cached content into foreign session 
+    - [O]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
-    - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`
+    - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
+    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional)
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
-    - [O]`lossless` - default `false` if the data should be sent from the server as 'png' or 'jpg'
-    - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`lossless` - deprecated
+    - [O]`protocol` - deprecated, moved to `DataOverride`
     - [O]`tileSource` - a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized
       - the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads using events
-    - [O]`protocolPreview` - as above, must be able to generate file preview (fetch top-level tile)
-    - [O]`microns` - size of pixel in micrometers, default `undefined`,
-    - [O]`micronsX` - horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
-    - [O]`micronsY` - vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
+    - [O]`microns` - deprecated, moved to `DataOverride`
+    - [O]`micronsX` - deprecated, moved to `DataOverride`
+    - [O]`micronsY` - deprecated, moved to `DataOverride`
     - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
     - [O]`sessionName` - overrides `sessionName` of global params if set
-    - [O]`goalIndex` - preferred visualization index for this background, ignored if `stackedBackground=true`, overrides `activeVisualizationIndex` otherwise
-- [O]`visualization` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
+    - [O]`goalIndex` - preferred visualization index for this background, overrides `activeVisualizationIndex`
+- [O]`visualizations` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
 it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
     - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 
         - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
@@ -121,9 +145,9 @@ it is an inherited configuration interface of the WebGL module extended by optio
             - shaders can then reference `data` items using index to the `dataReferences` array
             - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
         - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
-    - [O]`name` - visualization goal name 
-    - [O]`lossless` - default `true` if the data should be sent from the server as 'png' or lossy 'jpg'
-    - [O]`protocol` - see protocol construction below in advanced details
+    - [O]`name` - visualization goal name
+    - [O]`lossless` - deprecated, kept only for backward compatibility
+    - [O]`protocol` - deprecated, moved to `DataOverride`
 - [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
 
    
@@ -210,25 +234,21 @@ The OSD location is configurable through the ENV.
 
 ## Available API
 
-The viewer comes with many available features. Here will be described only where to look for them, most functions are
-either documented or self-explanatory named. Some selected API is described in plugins root ``README``.
-Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
-Definition of UI builder classes are in ``ui_components.js`` whereas existing UI menus are defined along with their (**You should use new UI components, see [this](../../../../../Repos/xopat-shadowaya/ui/README.md)
-**)
-enriched API in ``user_interface.js``. `layers.js` take care of overlay rendering interaction with the UI and
-the engine setup. ``scripts.js`` contain various utility functions - we encourange browsing
-the documentation API page.
+Make sure you've read the [INTEGRATION](../INTEGRATION.md) document.
 
-Outside, ``../index.php`` file takes care of the main UI layout and basic functionality around parameter and metadata
-handling, plugin and module loading and the viewport and events management.
+The viewer comes with many available features. Here will be described only where to look for them, the software contains READMEs across the codebase. Some selected API is described in plugins root ``README``.
+Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
+
+For CORE UI, look into `../ui/` folder.``user_interface.js`` serves as definition of globally available UI methods, we are in process of moving
+these definitions to CORE UI services.
 
 Many features are available through ``modules`` that implement additional important functionality.
 
 ### UI
 **You should use new UI components, see [this README](../ui/README.md)**.
-Components are accessible through `UI` global variable. ``user_interface.js`` creates
-a global API ``USER_INTERFACE`` with many UI utilities (notifications, existing menus API...).
-The UI builds upon *tailwind* css and *Daisy UI* system.
+For UI, use the CORE UI available via global `UI` variable. It contains many UI utilities (notifications, existing menus API...).
+> We recommend re-using and extending these instead of pulling new dependencies.
+> Please, make yourself familiar with the UI components and available methods before making new features. 
 
 > We recommend re-using and extending these instead of pulling new dependencies.
 > Please, make yourself familiar with the UI API before making new features. 
@@ -247,11 +267,7 @@ For plugins localization, see the plugins README.
 ### Advanced: Re-using parts of the CORE SERVER in PHP and JS
 <details>
 <summary>Reusing the Viewer Code in custom apps.</summary>
-A good idea is to look at the server's implementation of the developer setup page.
-This way, you can load parts of the viewer code into any web page, using
-either Node.js, PHP, or other available server implementation.
-This is an example how to include modules and plugins API with loading capabilities
-to a custom PHP script:
+This is an example how to include modules and plugins API with loading capabilities to a custom PHP script:
 
 ```php
 // load static config and core functions
@@ -284,6 +300,7 @@ require_core("loader");
 async function() {
     // loader needs this data from the plugins.php
     const runLoader = initXOpatLoader(
+        <?php echo json_encode((object)$CORE) ?>,
         <?php echo json_encode($PLUGINS) ?>,
         <?php echo json_encode($MODULES) ?>,
         '<?php echo PLUGINS_FOLDER ?>',

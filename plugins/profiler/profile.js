@@ -48,7 +48,7 @@ addPlugin('profiler', class extends XOpatPlugin {
 
     pluginReady() {
         const _this = this;
-        this.snapshots = OpenSeadragon.Snapshots.instance();
+        this.snapshots = OpenSeadragon.RecorderModule.instance();
         let cache;
         this.snapshots.addHandler('play', function () {
             _this.records = [];

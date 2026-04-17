@@ -1,6 +1,8 @@
 const {parse} = require("comment-json");
 const {execSync: exec} = require("child_process");
 const path = require("path");
+const buildLogic = require("../mixins/build-logic");
+
 module.exports = function(grunt) {
     grunt.utils = grunt.utils || {};
 
@@ -82,8 +84,8 @@ module.exports = function(grunt) {
                 const content = grunt.file.read(workspaceFile).toString().trim();
                 const packageData = parse(content);
 
-                if (!packageData["main"]) {
-                    grunt.log.errorlns(`${contextName} ${item} has no main entry! package.json must define main file to compile!`);
+                if (!packageData["buildEntry"] && !grunt.file.isFile(`${itemDirectory}/index.workspace.js`)) {
+                    grunt.log.errorlns(`${contextName} ${item} has no buildEntry entry! package.json must define buildEntry file to compile!`);
                     data = null;
                 } else {
                     data = data || {};
@@ -96,7 +98,11 @@ module.exports = function(grunt) {
                     data["version"] = data["version"] || packageData["version"];
                     data["description"] = data["description"] || packageData["description"];
 
-                    data["__workspace_item_entry__"] = `${itemDirectory}/${packageData["main"]}`;
+                    data["__workspace_item_entry__"] = `${itemDirectory}/${packageData["buildEntry"]}`;
+
+                    if (!data.includes.includes("index.workspace.js")) {
+                        data.includes.unshift("index.workspace.js");
+                    }
                 }
                 if (log) grunt.log.write(`${data["id"] || packageData["name"] || contextName} is a workspace: ${workspaceFile}`);
             }
@@ -113,11 +119,32 @@ module.exports = function(grunt) {
     }
 
     grunt.util.reduceUI = function (accumulator, initialValue, parseMeta=true, log=false) {
-        item = "ui/index.js"
-        if (log) grunt.log.write(`UI found: ${item}`);
-        initialValue=accumulator(initialValue, item, item);
-        if (log) grunt.log.write("\n");  
-        
+        const item = "ui/index.mjs";
+        if (grunt.file.isFile(item)) {
+            if (log) grunt.log.write(`UI found: ${item}`);
+            initialValue = accumulator(initialValue, item, "ui");
+            if (log) grunt.log.write("\n");
+        } else {
+            if (log) grunt.log.write(`UI invalid: missing ${item}\n`);
+        }
         return initialValue;
+    };
+
+    grunt.util.buildWorkspaceItem = async function(itemDirectory, packageData) {
+        const logger = {
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg)
+        };
+        return buildLogic.buildWorkspaceItem(itemDirectory, packageData, logger);
+    };
+
+    grunt.util.cleanWorkspaceItem = async function(itemDirectory, packageData) {
+        const logger = {
+            log: (msg) => grunt.log.writeln(msg),
+            warn: (msg) => grunt.log.warn(msg),
+            error: (msg) => grunt.log.error(msg)
+        };
+        return buildLogic.cleanWorkspaceItem(itemDirectory, packageData, logger);
     };
 };

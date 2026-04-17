@@ -4,30 +4,37 @@ import van from "../../vanjs.mjs";
 const { select, option, div} = van.tags
 
 export class Select extends BaseComponent{
+    /**
+     *
+     * @param options
+     * @param {Array<{text: string, value: string, hidden: ?Boolean}>} children
+     */
     constructor(options = undefined, ...children) {
-        options = super(options, ...children).options;
+        options = super(options).options;
 
         this.title = options["title"] || "";
         this.selected = options["selected"] || null;
         this.onChange = options["onchange"] || (() => {});
+        this.classMap["base"] = "select select-bordered select-xs max-w-xs";
+        this._options = children;
     }
 
     create() {
         return div({},
             this.title,
-            select({ 
-                    class: "select select-bordered select-xs max-w-xs",
+            select(
+                {
+                    ...this.commonProperties,
                     onchange: this.onChange,
-                    id: this.id,
                     style: "margin: 0.2rem;",
+                    ...this.extraProperties,
                 },
-                ...this._children.map(o => {
+                ...this._options.map(o => {
                     return option({
                         value: o.value || "",
                         selected: o.value === this.selected ? "selected" : "",
                         hidden: o.hidden || "",
-                        text: o.text || ""
-                    });
+                    }, o.text || "");
                 })
             )
         )

@@ -5,7 +5,6 @@ FROM node:20 AS viewer-build
 WORKDIR /tmp
 RUN git clone https://github.com/RationAI/openseadragon.git \
     && cd openseadragon \
-    && git reset --hard ea54427f42a076e1a7a33f8590e0de22e7a335f4 \
     && npm i \
     && cd ..
 
@@ -13,6 +12,7 @@ RUN git clone https://github.com/RationAI/openseadragon.git \
 # VIEWER: PROD GIT       ####
 #############################
 # Viewer that creates php runtime but does not include code - it must be fetched by the container on startup.
+# Note that the viewer might newly require build tasks to proceed - the init container must have NPM and run npm run build.
 FROM node:20 AS viewer-git
 
 ENV LANG=en_US.UTF-8
@@ -30,6 +30,8 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
         nano \
         tini \
     && ln -fs /usr/share/zoneinfo/Europe/Prague /etc/localtime \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -47,9 +49,20 @@ WORKDIR /app
 ###############################
 # VIEWER: PROD STANDALONE  ####
 ###############################
-# Viewer with all the necessities
 FROM viewer-git AS viewer-standalone
-COPY --chown=node:1000 . /app
-RUN cd /app && npm install
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENV XO_REPO_ROOT=/app
+WORKDIR /app
+
+USER root
+
+COPY --chown=node:node . /app
+
+RUN mkdir -p /app/server/.cache \
+    && chown -R node:node /app
+
+USER node
+
+RUN npm ci && npm run build
+
+ENTRYPOINT ["/usr/bin/tini", "--", "npm", "run", "s-node"]

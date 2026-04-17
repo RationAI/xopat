@@ -20,6 +20,7 @@ import { Input } from "./classes/elements/input.mjs";
 import { Badge } from "./classes/elements/badge.mjs";
 import { Title } from "./classes/elements/title.mjs";
 import { Collapse } from "./classes/elements/collapse.mjs";
+import { Loading } from "./classes/elements/loading.mjs";
 
 // COMPONENTS
 import { Menu } from "./classes/components/menu.mjs";
@@ -27,8 +28,15 @@ import { MainPanel } from "./classes/components/mainPanel.mjs";
 import { MultiPanelMenuTab } from "./classes/components/multiPanelMenuTab.mjs";
 import { MultiPanelMenu } from "./classes/components/multiPanelMenu.mjs";
 import { FullscreenMenu } from "./classes/components/fullscreenMenu.mjs";
+import { FullscreenMenuNavTab } from "./classes/components/fullscreenMenuNavTab.mjs";
+import { FullscreenMenuPanel } from "./classes/components/fullscreenMenuPanel.mjs";
 import { TabsMenu } from "./classes/components/tabsMenu.mjs";
-import { Toolbar } from "./classes/components/toolbar.mjs";
+import { Toolbar } from "./classes/components/toolbar/toolbar.mjs";
+import { ToolbarItem} from "./classes/components/toolbar/toolbarItem.mjs";
+import { ToolbarSeparator } from "./classes/components/toolbar/toolbarSeparator.mjs";
+import { ToolbarGroup } from "./classes/components/toolbar/toolbarGroup.mjs";
+import { ToolbarChoiceGroup } from "./classes/components/toolbar/toolbarChoiceGroup.mjs";
+import { ToolbarPanelButton } from "./classes/components/toolbar/toolbarPanelButton.mjs";
 import { ShaderLayer } from "./classes/components/shaderLayer.mjs";
 import { ShaderSideMenu } from "./classes/components/shaderSideMenu.mjs";
 import { FloatingWindow } from "./classes/components/floatingWindow.mjs";
@@ -38,24 +46,80 @@ import { MenuTabBanner } from "./classes/components/menuTabBanner.mjs";
 import { RightSideViewerMenu } from "./classes/components/rightSideViewerMenu.mjs";
 import { NavigatorSideMenu } from "./classes/components/navigatorSideMenu.mjs";
 import { Explorer } from "./classes/components/explorer.mjs";
+import { DockableWindow } from "./classes/components/dockableWindow.mjs";
+import { StatusBar } from "./classes/components/statusBar.mjs";
+import { Modal } from "./classes/components/modal.mjs";
+import { TagSelect } from "./classes/components/tagSelect.mjs";
 
+// SERVICES
 import { GlobalTooltip } from "./services/globalTooltip.mjs";
 import { AppBar } from "./services/appBar.mjs";
+import { MobileBottomBar } from "./services/mobileBottomBar.mjs";
+import { FloatingManager } from "./services/floatingManager.mjs";
+import { FullscreenMenus } from "./services/fullscreenMenus.mjs";
+
+// MIXINS
+import { VisibilityManager } from "./classes/mixins/visibilityManager.mjs";
+import * as utils from "./classes/mixins/utils.mjs";
+
+class ServiceContainer {
+    _globalTooltip = null;
+    _appBar = null;
+    _MobileBottomBar = null;
+    _floatingManager = null;
+    _fullscreenMenus = null;
+
+    get GlobalTooltip() {
+        if (!this._globalTooltip) {
+            this._globalTooltip = new GlobalTooltip();
+        }
+        return this._globalTooltip;
+    }
+
+    get AppBar() {
+        if (!this._appBar) {
+            this._appBar = new AppBar();
+        }
+        return this._appBar;
+    }
+
+    get MobileBottomBar() {
+        if (!this._MobileBottomBar) {
+            this._MobileBottomBar = new MobileBottomBar();
+        }
+        return this._MobileBottomBar;
+    }
+
+    get FloatingManager() {
+        if (!this._floatingManager) {
+            this._floatingManager = new FloatingManager();
+        }
+        return this._floatingManager;
+    }
+
+    get FullscreenMenus() {
+        if (!this._fullscreenMenus) {
+            this._fullscreenMenus = new FullscreenMenus();
+        }
+        return this._fullscreenMenus;
+    }
+}
 
 const UI = {
-    // Elements
     BaseComponent,
     Button, FAIcon, Join, Div, Dropdown, Checkbox, Select, RawHtml, Alert,
-    StretchGrid, Input, Badge, Title, Collapse,
+    StretchGrid, Input, Badge, Title, Collapse, Loading,
 
-    // Components
-    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, TabsMenu,
-    Toolbar, ShaderLayer, ShaderSideMenu, FloatingWindow,
-    MainLayout, Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu,
-    Explorer,
+    Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
+    FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
+    Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
+    ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar, Modal, TagSelect,
 
-    // Services
-    GlobalTooltip, AppBar
+    Services: new ServiceContainer(),
+    Mixins: {
+        VisibilityManager,
+        Utilities: utils
+    }
 };
 
 globalThis.UI = UI;

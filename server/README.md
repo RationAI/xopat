@@ -12,10 +12,11 @@ support certain features and also behaves statically: needs to be compiled, and
 then provides an HTML static page.
 
 ## Available Servers / Entrypoints
- - [x] PHP Server
  - [x] Node.js Server
-   - cornercases might be not handled well yet (e.g. supplying POST data in different ways) 
+ - [x] PHP Server
+   - no RPC support
  - [x] HTML static index page
+   - no dynamic loading of modules and plugins, no server support
 
 ## Implementation
 
@@ -71,7 +72,7 @@ Servers should also allow to
  - use only single URL endpoint to multiple functionalities if applicable:
    - ``directive=user_setup`` shows page that documents statically available visualizations and allows
    users to build sessions using JSON
-   - ``directive=user_setup`` shows page with user-friendly setup of shaders (TODO: in progress of design)
+   - ``directive=user_setup`` shows page with user-friendly setup of shaders (in progress of design)
 
 It should include all necessary dependencies respecting their inclusion order and requirements (e.g.
 support for WASM - see below, or JS modules). It should also ensure that new file versions are being labeled
@@ -149,6 +150,18 @@ To do so, each server must attempt to process POST data by:
      }
  }
 ````
+
+### Proxy support
+Support proxying to services:
+ - parse ``config.json`` (usually referred to as CORE config in servers) and read the `server` -> `secure` -> `proxies` object
+ - adhering to the proxy configuration, proxy requests to the services
+ - a plugin can issue ``proxy/[key]/...`` and the key is the key to `proxies` object in `config.json`
+ - the session must be secured: use CSRF protection - you must set ``window.XOPAT_CSRF_TOKEN`` when user visits the viewer page
+ - the resource must be secured: if configured, the server must verify a desired authentication method (so called verifier) - see ``config.json`` for more details
+
+> !IMPORTANT!: The server, when delivering CORE configuration to the front-end *MUST DELETE* the secure object 
+> of the server configuration, which MUST NOT be available on the client - it can contain secrets that are explicitly left
+> hidden on the server.
 
 ### WASM Support
 WASM Files need all content to be served with the correct MIME type and headers, required by threading.

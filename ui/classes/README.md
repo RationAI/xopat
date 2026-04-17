@@ -163,6 +163,14 @@ new Panel({ id: "p1" }, "Hello").attachTo("workspace");
 - BaseComponent ensures an id exists (passed or auto-generated). Use this.id (or the id in commonProperties) when you need to query or reference the root element.
 - attachTo accepts: a DOM Node, an element id string, or another BaseComponent instance (in which case this component is added into the other’s children or directly mounted if the parent is already in the DOM).
 
+## Z-Indexing
+To keep components in the DOM in the correct order, use the zIndex property. The app uses:
+ - modal z-index: 999 - anything above this value is considered a modal component that should block everything else
+ - top-container (menu bar) - z-index 990, should be above most components, but not below modals
+ - floating components - z-index 100-900, should increase their z-index if they need to come to the front on interaction (see the FloatingManager)
+    - use FloatingManager to support floating components
+ - everything static - z-index 0-99
+   
 ## Best practices
 - Keep create() side-effect free: just build nodes. Avoid DOM queries and mutations in create().
 - Use setClass with semantic keys (e.g., size, style, display) so external code and functional properties can interoperate.

@@ -31,13 +31,11 @@ Example of the configuration:
     "background": [
         {
             "dataReference": 0,
-            "lossless": false,
         }
     ],
     "visualizations": [
         {
             "name": "A visualization setup 1",
-            "lossless": true,
             "shaders": {
                 "shader_id_1": { 
                     "name": "My visualization layer",

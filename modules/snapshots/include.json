@@ -1,9 +1,0 @@
-{
-    "id": "snapshots",
-    "name": "Visualization snapshots",
-    "version": "0.1.0",
-    "includes" : [
-        "snapshots.js"
-    ],
-    "requires": []
-}

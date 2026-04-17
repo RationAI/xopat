@@ -4,6 +4,8 @@ import { FAIcon } from "../elements/fa-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 
+import { VisibilityManager } from "../mixins/visibilityManager.mjs";
+
 const { span } = van.tags
 
 /**
@@ -16,7 +18,7 @@ const { span } = van.tags
  */
 class MenuTab extends BaseComponent {
     /**
-     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be created
      * @param {*} parent parent menu component
      */
     constructor(item, parent) {
@@ -29,14 +31,29 @@ class MenuTab extends BaseComponent {
         this.id = item.id;
 
         const [headerButton, contentDiv] = this._createTab(item);
-
         this.headerButton = headerButton;
         this.contentDiv = contentDiv;
+        this.visibilityManager = new VisibilityManager(this).init(
+            () => {
+                if (this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "");
+                    this.hidden = false;
+                }
+            },
+            () => {
+                if (!this.hidden) {
+                    if (this.headerButton) this.headerButton.setClass("display", "hidden");
+                    if (this.contentDiv) this.contentDiv.setClass("display", "hidden");
+                    this.hidden = true;
+                }
+            }
+        );
     }
 
     /**
      * todo: private?
-     * @param {*} item dictionary with id, icon, title, body which will be created
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be created
      * @returns {*} Button and Div components from VanJS framework
      */
     _createTab(item) {
@@ -50,7 +67,6 @@ class MenuTab extends BaseComponent {
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
-
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,
             size: Button.SIZE.SMALL,
@@ -63,7 +79,16 @@ class MenuTab extends BaseComponent {
 
         let c = undefined;
         if (content) {
-            c = new Div({ id: this.parent.id + "-c-" + item.id, extraClasses: {display: "display-none", height: "h-full"} }, ...content);
+            const options = {
+                id: this.parent.id + "-c-" + item.id,
+                extraClasses: { display: "display-none", height: "h-full" }
+            };
+
+            if (typeof content !== "string" && typeof content?.[Symbol.iterator] === "function") {
+                c = new Div(options, ...content);
+            } else {
+                c = new Div(options, content);
+            }
         }
         return [b, c];
     }
@@ -88,13 +113,14 @@ class MenuTab extends BaseComponent {
         }
     }
 
+    // todo implement focus as API of the FlagManagerLike
     focus() {
         for (let tab of Object.values(this.parent.tabs)) {
             if (tab.headerButton && tab.headerButton.id != this.headerButton?.id) {
                 tab._removeFocus();
-                APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
+                APPLICATION_CONTEXT.AppCache.set(`${tab.id}-open`, false);
             }
-        };
+        }
 
         if (this._focused) {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, false);
@@ -102,7 +128,7 @@ class MenuTab extends BaseComponent {
         } else {
             APPLICATION_CONTEXT.AppCache.set(`${this.id}-open`, true);
             this._setFocus();
-        };
+        }
     }
 
     unfocus(){
@@ -120,17 +146,18 @@ class MenuTab extends BaseComponent {
 
     _removeFocus() {
         this._focused = false;
-        this.headerButton?.setClass("type", "btn-neutral");
+        this.headerButton?.setClass("type", "");
         if (this.contentDiv){
             this.contentDiv.setClass("display", "hidden");
         }
     }
 
     close() {
-        this.headerButton?.setClass("type", "btn-neutral");
-        if (this.contentDiv){
-            this._removeFocus();
-        };
+        this._removeFocus();
+    }
+
+    open() {
+        this._setFocus();
     }
 
     /**
@@ -148,8 +175,9 @@ class MenuTab extends BaseComponent {
         }
         this.style = "TITLE";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.add("hidden");
-        nodes[1].classList.remove("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.add("hidden");
+        nodes[1]?.classList.remove("hidden");
     }
 
     titleIcon() {
@@ -158,8 +186,9 @@ class MenuTab extends BaseComponent {
         }
         this.style = "ICONTITLE";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("hidden");
-        nodes[1].classList.remove("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.remove("hidden");
+        nodes[1]?.classList.remove("hidden");
     }
 
     iconOnly() {
@@ -168,38 +197,75 @@ class MenuTab extends BaseComponent {
         }
         this.style = "ICON";
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("hidden");
-        nodes[1].classList.add("hidden");
+        if (!nodes?.length) return;
+        nodes[0]?.classList.remove("hidden");
+        nodes[1]?.classList.add("hidden");
     }
 
-    iconRotate(){
+    syncHeaderLayout({ onSide = false, side = "LEFT", rotated = false, compact = false, collapsedToTop = false } = {}) {
+        const header = document.getElementById(this.headerButton?.id);
+        if (!header) return;
+
+        const [iconNode, titleNode] = header.children;
+        const collapsed = collapsedToTop === true;
+        const alignRight = side === "RIGHT" && onSide && !rotated && !collapsed;
+        const justify = collapsed
+            ? "flex-start"
+            : (rotated ? "center" : (alignRight ? "flex-end" : "flex-start"));
+        const textAlign = alignRight ? "right" : "left";
+
+        header.style.display = "inline-flex";
+        header.style.alignItems = "center";
+        header.style.justifyContent = justify;
+        header.style.textAlign = textAlign;
+        header.style.whiteSpace = (onSide || collapsed) ? "nowrap" : "";
+
+        // important: compact top-strip buttons must NOT keep side full-width behavior
+        header.style.width = collapsed ? "auto" : (onSide && !rotated ? "100%" : "");
+        header.style.maxWidth = collapsed ? "max-content" : "";
+        header.style.minWidth = collapsed ? "fit-content" : "";
+        header.style.flex = collapsed ? "0 0 auto" : "";
+        header.style.alignSelf = collapsed
+            ? "auto"
+            : (onSide && !rotated ? (alignRight ? "flex-end" : "flex-start") : "");
+
+        // smaller padding for side-not-rotated and for collapsed compact top strip
+        header.style.paddingInline = (compact || collapsed) ? "0.625rem" : "";
+        header.style.paddingBlock = (compact || collapsed) ? "0.375rem" : "";
+
+        if (titleNode) {
+            titleNode.style.textAlign = textAlign;
+            titleNode.style.whiteSpace = "nowrap";
+            titleNode.style.flex = collapsed
+                ? "0 0 auto"
+                : (onSide && !rotated ? "1 1 auto" : "");
+            titleNode.style.maxWidth = collapsed
+                ? "none"
+                : (onSide && !rotated ? "100%" : "");
+            titleNode.style.overflow = collapsed ? "visible" : "";
+            titleNode.style.textOverflow = collapsed ? "clip" : "";
+        }
+
+        if (iconNode) {
+            iconNode.style.flexShrink = "0";
+        }
+    }
+
+    iconRotate() {
         const nodes = this.headerButton?.children;
-        nodes[0].classList.remove("rotate-90");
-        nodes[0].classList.remove("-rotate-90");
-        if(!(this.style==="ICON")){
+        if (!nodes?.length) return;
+
+        nodes[0]?.classList.remove("rotate-90");
+        nodes[0]?.classList.remove("-rotate-90");
+
+        if (!(this.style === "ICON")) {
             return;
         }
-        if(this.parent.orientation==="RIGHT"){
-            nodes[0].classList.add("rotate-90");
-        
-        } else if(this.parent.orientation==="LEFT"){
-            nodes[0].classList.add("-rotate-90");
-        }
-    }
 
-    toggleHiden() {
-        if (this.hidden) {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "");
-            }
-            this.contentDiv.setClass("display", "");
-            this.hidden = false;
-        } else {
-            if(this.headerButton){
-                this.headerButton.setClass("display", "hidden");
-            }
-            this.contentDiv.setClass("display", "hidden");
-            this.hidden = true;
+        if (this.parent.orientation === "RIGHT") {
+            nodes[0]?.classList.add("rotate-90");
+        } else if (this.parent.orientation === "LEFT") {
+            nodes[0]?.classList.add("-rotate-90");
         }
     }
 }

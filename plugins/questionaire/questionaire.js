@@ -285,7 +285,7 @@ addPlugin('questionaire', class extends XOpatPlugin {
     // ========== builder (no preview) ==========
     _openBuilderWindow() {
         if (this._builderWin) {
-            if (!this._builderWin.opened()) {
+            if (!this._builderWin.isOpened()) {
                 this._builderWin.focus();
             }
             return;

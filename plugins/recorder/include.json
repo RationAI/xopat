@@ -1,11 +1,5 @@
 {
-    "id": "recorder",
-    "name": "Recording and playback of presentation",
-    "author": "Jirka Horák",
-    "version": "1.0.0",
     "description": "Record ROI's using your computer screen - a different approach! Suitable for presentation, emphasis focus or application testing.",
-    "icon": null,
-    "includes" : ["presenter.js"],
-    "modules": ["snapshots", "annotations"],
-    "permaLoad": false
+    "modules": ["recorder-module", "annotations"],
+    "permaLoad": true
 }

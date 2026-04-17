@@ -36,6 +36,7 @@ RUN apt-get update -y && apt-get install --no-install-recommends --fix-missing -
 WORKDIR /usr/app
 
 RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
+    && npm install -g grunt grunt-cli \
     # User Id 1000 for kubernetes
     && usermod --non-unique --uid 1000 node
 

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <title>Viewer Session Scheme</title>
+    <template id="template-head"></template>
+</head>
+<body class="min-h-screen bg-base-100 text-base-content">
+<template id="template-page-init"></template>
+
+<div class="container mx-auto px-4 py-8 max-w-7xl">
+    <div class="flex flex-col gap-4">
+        <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+                <h1 class="text-3xl font-light">Viewer Session Scheme</h1>
+                <p class="opacity-70 text-sm">Generated from deployment config, enabled plugins, and live renderer shader docs.</p>
+            </div>
+            <div class="flex gap-2">
+                <a href="./scheme_raw" class="btn btn-sm btn-ghost">Open Raw</a>
+                <button id="copy-json" class="btn btn-sm btn-ghost">Copy JSON</button>
+                <button id="download-json" class="btn btn-sm btn-primary">Download JSON</button>
+            </div>
+        </div>
+
+        <div id="status" class="text-sm opacity-70"></div>
+        <pre id="scheme-output" class="bg-base-200 border border-base-300 rounded-box p-4 overflow-auto text-xs leading-6 whitespace-pre-wrap"></pre>
+    </div>
+</div>
+
+<template id="template-shared-scheme-script"></template>
+<script type="text/javascript">
+    (() => {
+        const statusNode = document.getElementById("status");
+        const outputNode = document.getElementById("scheme-output");
+        const copyButton = document.getElementById("copy-json");
+        const downloadButton = document.getElementById("download-json");
+
+        function setStatus(text, isError = false) {
+            statusNode.textContent = text;
+            statusNode.classList.toggle("text-error", !!isError);
+        }
+
+        function renderSchema() {
+            try {
+                const schema = window.XOpatScheme.buildSchema(window.schemeInit || {});
+                const json = JSON.stringify(schema, null, 2);
+                outputNode.textContent = json;
+            ;    setStatus("Ready");
+
+                copyButton.onclick = async () => {
+                    await navigator.clipboard.writeText(json);
+                    setStatus("Copied to clipboard");
+                };
+
+                downloadButton.onclick = () => {
+                    const blob = new Blob([json], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const anchor = document.createElement("a");
+                    anchor.href = url;
+                    anchor.download = "viewer-session-schema.json";
+                    anchor.click();
+                    URL.revokeObjectURL(url);
+                };
+            } catch (error) {
+                console.error(error);
+                outputNode.textContent = String(error?.stack || error);
+                setStatus("Failed to build scheme", true);
+            }
+        }
+
+        window.addEventListener("load", renderSchema);
+    })();
+</script>
+</body>
+</html>

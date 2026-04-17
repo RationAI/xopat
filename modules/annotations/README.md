@@ -40,7 +40,7 @@ are special annotations with specific use (e.g. a ruler).
  
 For most of the behaviour, you can consult ``fabricjs`` documentation, however there are new features available:
  - check main annotations class API there are many functions you would like to use over the fabricjs middleware
- - check other main classes API in the framework, namely ``PolygonUtilities``, `PresetsManager`, `History`.
+ - check other main classes API in the framework, namely ``PolygonUtilities``, `PresetsManager`, and the global App `History` system via `APPLICATION_CONTEXT.history`.
  - inherited from ``fabricjs module`` there is a new function on  `fabric.Object`: `zooming(zoom)` that gets invoked if exists
  - extended by ``annotations module`` there is a new funciton on  `fabric.Object`: `_factory()` memoization that simplifies factory API access
 

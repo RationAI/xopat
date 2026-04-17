@@ -48,25 +48,16 @@
     <!-- Template head -->
     <template id="template-head"></template>
 </head>
-<body style="overflow: hidden; height: 100vh; width: 100vw">
-
+<body style="margin: 0; padding: 0; overflow: hidden; height: 100vh; width: 100%; display: flex; flex-direction: column;">
     <!-- Template ui -->
     <template id="template-ui"></template>
 
-    <script>
-        // todo make sure our globals dont get out of hand...
-        window.LAYOUT = new UI.MainLayout({
-            id: "viewer-container",
-            position: "right",
-            initialWidth: 360,
-            // tabs: [
-            //     { id: "layers", icon: "fa-layer-group", title: "Layers", body: ["…"] },
-            //     { id: "measure", icon: "fa-ruler",       title: "Measure", body: ["…"] }
-            // ]
-        });
-        // Attach once (replaces your static HTML wrapper)
-        window.LAYOUT.attachTo(document.body);
-    </script>
+    <div id="top-container" class="glass" style="min-height: 35px; flex-shrink: 0; pointer-events: auto; z-index: 990;"></div>
+
+    <div id="middle-container" style="flex-grow: 1; position: relative;"></div>
+
+    <div id="bottom-container" style="display: flex; flex-direction: column; flex-shrink: 0;"></div>
+
 <!--&lt;!&ndash; OSD viewer &ndash;&gt;-->
 <!--<div id="viewer-container" class="absolute w-full h-full top-0 left-0" style="pointer-events: none;">-->
 <!--    <div id="osd" style="pointer-events: auto;" class="absolute w-full h-full top-0 left-0"></div>-->
@@ -84,15 +75,15 @@
 
 <!-- System messaging -->
 <div id="system-message" class="hidden system-container">
-    <div id="system-message-warn" class="font-light text-4xl text-center">
-        <span class="material-icons font-light text-3xl mr-1" style="transform: translate(0px, -5px);">error_outline</span>
+    <div id="system-message-warn" class="font-light text-4xl text-center text-base-100">
+        <span class="fa fa-error font-light text-3xl mr-1" style="transform: translate(0px, -5px);"></span>
         <span data-i18n="error.title">Error</span>
     </div>
-    <div id="system-message-title" class="font-light text-3xl text-center"></div>
-    <div id="system-message-subtitle" class="font-normal text-center"></div>
-    <div class="text-sm text-center mb-4" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+    <div id="system-message-title" class="font-light text-3xl text-center text-base-100"></div>
+    <div id="system-message-subtitle" class="font-normal text-center text-base-100"></div>
+    <div class="text-sm text-center mb-4 text-base-100" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
     <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('display', 'none');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
-    <div id="system-message-details" class="px-4 py-3 mb-2 border rounded-md overflow-y-scroll" style="display: none;max-height: 50vh;"></div>
+    <div id="system-message-details" class="px-4 py-3 mb-2 border rounded-md overflow-y-scroll text-base-100" style="display: none;max-height: 50vh;"></div>
     <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()" class="btn" type="button" data-i18n="error.dismissBtn">dismiss</button>
 </div>
 
@@ -118,6 +109,7 @@
 //preventive error message, that will be discarded after the full initialization, no translation
 window.onerror = function (message, file, line, col, error) {
     let ErrUI = USER_INTERFACE.Errors;
+    if (!ErrUI) console.error("Error UI not initialized! Attempt to show error message: ", message, " ", file, " ", line, " ", col, " ", error);
     if (ErrUI.active) return false;
     error = error || {};
     ErrUI.show("Unknown error.", `Something has gone wrong: '${message}' <br><code>${error.message}
@@ -131,49 +123,6 @@ window.onerror = function (message, file, line, col, error) {
 
     <!-- Template modules -->
     <template id="template-modules"></template>
-
-    <script type="text/javascript">
-
-(function (window) {
-
-    /*---------------------------------------------------------*/
-    /*------------ Basic Tutorial       -----------------------*/
-    /*---------------------------------------------------------*/
-
-    const withLayers = () => APPLICATION_CONTEXT.config.visualizations.length > 0;
-    window.USER_INTERFACE.Tutorials.add("", $.t('tutorials.basic.title'), $.t('tutorials.basic.description'), "foundation", [
-        {'next #viewer-container' : $.t('tutorials.basic.1')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.3')
-        }, {'next #myMenu-opendiv-navigator' : $.t('tutorials.basic.4'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && withLayers();}
-        }, {'next #tissue-title-header' : $.t('tutorials.basic.4a'),
-            runIf: function() {return APPLICATION_CONTEXT.config.background.length === 1 && !withLayers();}
-        }, {
-            'next #__tisue_list' : $.t('tutorials.basic.6'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && !APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {
-            'click #images-pin' : $.t('tutorials.basic.7'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {'next #panel-images' : $.t('tutorials.basic.8'),
-            runIf: function () {return APPLICATION_CONTEXT.config.background.length > 1 && APPLICATION_CONTEXT.getOption("stackedBackground");}
-        }, {'next #panel-shaders': $.t('tutorials.basic.9'), runIf: withLayers
-        }, {'click #shaders-pin': $.t('tutorials.basic.10'), runIf: withLayers
-        }, {'next #shaders': $.t('tutorials.basic.11'), runIf: withLayers
-        }, {'next #data-layer-options': $.t('tutorials.basic.12'), runIf: withLayers
-        }, {'next #cache-snapshot': $.t('tutorials.basic.13'), runIf: withLayers
-        }, {'next #left-side-buttons-menu-b-share' : $.t('tutorials.basic.14')
-        }, {'next #left-side-buttons-menu-b-tutorial' : $.t('tutorials.basic.15')}], function() {
-        if (withLayers()) {
-            //prerequisite - pin in default state
-            let pin = $("#shaders-pin");
-            let container = pin.parents().eq(1).children().eq(1);
-            pin.removeClass('pressed');
-            container.removeClass('force-visible');
-        }
-    });
-
-})(window);
-    </script>
 
     <!-- Template plugins -->
     <template id="template-plugins"></template>

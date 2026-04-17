@@ -40,6 +40,18 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
 
+## Plain Modules
+Any code can be a module. You can clone a npm package and export as xopat module (there is a task for it).
+You can add requirement for another module and just extend/integrate new feature. You can
+export global window variable. And so on. Note though, that due to loosely coupled architecture,
+you should think about how other access your code - usually, you want to attach to a global variable or namespace.
+
+## xOpat Modules
+xOpat modules bring powerful features - configurable options, IO support, and more - the list is below.
+Modules can be defined JUST ONCE per a module, and the module class is auto-exported as ``xmodules`` variable.
+The list of features is below. Similar to plugins, you need to call ``addModule(id, Class)`` to register the module.
+
+
 ##### Built-in options
 Unlike plugins, module options are usually built-in centered, or used to cache values - vales
 are actually not stored anywhere, unless the cache itself is being persisted by overriding xOpat storage API.
@@ -114,7 +126,7 @@ static ROOT;
 Modules that inherit from `XOpatModuleSingleton` should instantiate the module as `ModuleClass.instance()`.
 ````js
 /**
- * Get instance of the annotations manger, a singleton
+ * Get instance of the singleton
  * (only one instance can run since it captures mouse events)
  * @static
  * @return {XOpatModuleSingleton} manager instance
@@ -127,7 +139,14 @@ static instance();
 static instantiated();
 ````
 
-### Selected global API functions todo consider getOption shift to classes
+> #### Note on `XOpatViewerSingleton`
+> The `XOpatViewerSingleton` is not a module (do not confuse it like so), it is instantiated per viewer.
+> Unlike modules, you need to call ``registerViewerSingleton(XOpatModuleViewerSingleton)``.
+> Multiple such classes can exist within a module, as they do not define a module.
+> Instead of ``registerViewerSingleton``, you can call `requireViewerSingletonPresence`
+> to ensure that the singleton is instantiated along with each viewer without explicitly telling it so.
+
+### Selected global API functions
 #### `APPLICATION_CONTEXT::getOption(key, defaultValue=undefined)`
 Returns stored value if available, supports cookie caching and the value gets exported with the viewer. The value itself is
 read from the `params` object given to the constructor, unless cookie cache overrides it. Default value can be ommited
@@ -143,10 +162,11 @@ Return data exported with the viewer if available. Exporting the data is done th
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
-should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on) and it
-should be invoked on the ``XOpatModule`` or `XOpatModuleSingleton` instance. 
+should be provided. These events require OpenSeadragon.EventSource implementation (which it is based on).
 
-> Events are available only after `this.registerAsEventSource()` has been called.
+Events can furthermore be broadcasted if the instance you want to raise on is ``XOpatViewer*Instance*`` like object,
+which is alive once per active viewer window. The events to call are ``broadcastHandler`` and `cancelBroadcast`, 
+the syntax is similar to the other handlers. Asynchronous versions are not yet available.
 
 ### Localization
 Can be done using ``this.loadLocale(locale, data)`` which behaves like plugin's `loadLocale` function
@@ -243,3 +263,28 @@ This might come in handy if you for example want to do additional IO initializat
 > **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
 > ``module[<module_id>.key] = value;``. Nested keys are up to the module to manage for itself,
 > e.g. ``module[<module_id>.parentKey.subKey] = value;``.
+
+## Viewer Multiplexing
+There can be multiple viewers open at once. You might need to create:
+ - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
+ - custom viewer-oriented data models: use ``XOpatViewerSingletonModule`` if you need the module API, or `XOpatViewerSingleton` if you need only instance per viewer.
+
+### ``XOpatViewerSingleton``
+The `XOpatViewerSingleton` or `XOpatViewerSingletonModule` comes with helper APIs that ease the multiplexing management. You can either keep ``XOpatViewerSingletonModule`` X instances per viewer,
+or rather offer single module `XOpatModuleSingleton` interface that internally owns multiple `XOpatViewerSingleton`s, which is usually nicer to users. These classes
+exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT
+created, only when one requests the instance with ```MyViewerSingleton.instance(viewerRefOrViewerUID)```. If you want to force
+instance creation per viewer automatically, call ``requireViewerSingletonPresence(MyViewerSingleton)``.
+
+For dynamically or lazily loaded singletons, use the loader helper APIs (similar to global singletons). Ensure that `className` accurately matches the expected context:
+
+````js
+// Wait for instance creation for a specific viewer
+this.integrateWithViewerSingletonModule('MyViewerSingleton', viewerRef, async (module) => {
+    //...
+});
+
+// Or attempt directly fetching it
+const mod = viewerSingletonModule('MyViewerSingleton', viewerRef);
+````
+

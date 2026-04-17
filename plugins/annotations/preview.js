@@ -10,7 +10,6 @@ AnnotationsGUI.Previewer = class {
             `<h3 class="f2-light">Fast Previews</h3><button class="btn float-right" onclick="${this.self}.load();">Reload previews</button><br>
 <p>Inspect existing annotations one by one on a single page. Note that the annotation itself is not drawn (defaults to the whole image rectangle).</p>
 <div id="preview-of-annotations" class="p-2">No previews were loaded yet.</div>`);
-        this._previews = {};
     }
 
     async load() {
@@ -57,6 +56,7 @@ data-width="${bbox.width}" data-height="${bbox.height}" src="./src/assets/image.
             };
             const outputSize = {width: Math.round(region.width / region.height * 120), height: 120};
 
+            //todo implement back
             VIEWER.tools.offlineScreenshot(region, outputSize, (canvas) => {
                 let image = document.getElementById(`matrix-${thisStep}-annotation-preview`);
                 if (image) {

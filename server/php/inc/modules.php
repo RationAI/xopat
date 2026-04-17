@@ -9,6 +9,31 @@ $MODULES = array();
 include_once PHP_INCLUDES . "comments.class.php";
 use Ahc\Json\Comment;
 
+/**
+ * Expands glob patterns within an array of includes.
+ * @param string $basePath The absolute path to the module/plugin directory.
+ * @param array $includes The includes array from the JSON config.
+ * @return array The expanded includes array.
+ */
+function expand_include_globs($basePath, $includes) {
+    $expanded = [];
+    foreach ($includes as $file) {
+        // We only support globs on string entries
+        if (is_string($file) && (str_contains($file, '*') || str_contains($file, '?'))) {
+            $matches = glob($basePath . $file, GLOB_BRACE);
+            if ($matches) {
+                foreach ($matches as $fullPath) {
+                    // Convert absolute path back to relative path for the include
+                    $expanded[] = str_replace($basePath, '', $fullPath);
+                }
+            }
+        } else {
+            $expanded[] = $file;
+        }
+    }
+    return $expanded;
+}
+
 foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
     $full_path = ABS_MODULES . "$dir/";
     $interface = $full_path . "include.json";
@@ -22,16 +47,35 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
 
         $workspace = $full_path . 'package.json';
         if (file_exists($workspace)) {
-            if (!file_exists($full_path . 'index.workspace.js')) {
-                error_log('Module ' . $full_path . ' has package.json but no index.workspace.js! The module needs to be compiled first!');
-            }
-
             $packageData = (new Comment)->decode(file_get_contents($workspace), true);
 
-            if (!isset($data['includes']) || !is_array($data['includes'])) {
-                $data['includes'] = [];
+            // Default entry points
+            $has_js = file_exists($full_path . 'index.workspace.js');
+            $has_mjs = file_exists($full_path . 'index.workspace.mjs');
+
+            // Logic: Default JS -> Default MJS -> Package 'main'
+            $workspaceEntry = null;
+            if ($has_js) {
+                $workspaceEntry = 'index.workspace.js';
+            } else if ($has_mjs) {
+                $workspaceEntry = 'index.workspace.mjs';
+            } else if (isset($packageData['main'])) {
+                $workspaceEntry = $packageData['main'];
             }
-            array_unshift($data['includes'], 'index.workspace.js');
+
+            if ($workspaceEntry) {
+                if (!isset($data['includes']) || !is_array($data['includes'])) {
+                    $data['includes'] = [];
+                }
+                // Avoid duplicate includes if 'main' is already there
+                if (!in_array($workspaceEntry, $data['includes'])) {
+                    array_unshift($data['includes'], $workspaceEntry);
+                }
+            } else {
+                error_log("Module $full_path has package.json but no valid entry point found (index.workspace or main)!");
+            }
+
+            $data['includes'] = expand_include_globs($full_path, $data['includes']);
 
             // Fill missing fields from package.json
             if (!isset($data['id']) || $data['id'] === '' ) {

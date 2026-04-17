@@ -1,0 +1,1374 @@
+import { generateText } from 'ai';
+import { ChatServerRegistry } from './chatRegistry.server';
+
+const LLM_DEBUG = true;
+
+function llmLog(label: string, data: any) {
+    if (!LLM_DEBUG) return;
+
+    try {
+        console.log(`[LLM DEBUG] ${label}`, JSON.stringify(data, null, 2));
+    } catch {
+        console.log(`[LLM DEBUG] ${label}`, data);
+    }
+}
+
+function readPositiveEnvInt(name: string, fallback: number): number {
+    const raw = Number((globalThis as any)?.process?.env?.[name]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+const CHAT_SEND_TURN_TIMEOUT_MS = Math.max(
+    60_000,
+    readPositiveEnvInt(
+        'XOPAT_CHAT_TURN_TIMEOUT_MS',
+        readPositiveEnvInt('XOPAT_CHAT_SENDTURN_TIMEOUT_MS', 180_000)
+    )
+);
+const CHAT_MAX_INLINE_ATTACHMENT_BYTES = Math.max(
+    16 * 1024,
+    readPositiveEnvInt('XOPAT_CHAT_MAX_INLINE_ATTACHMENT_BYTES', 512 * 1024)
+);
+const CHAT_MAX_OUTPUT_TOKENS = Math.max(
+    256,
+    readPositiveEnvInt('XOPAT_CHAT_MAX_OUTPUT_TOKENS', 4096)
+);
+
+export const policy = {
+    ensureModelCapabilities: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 30_000, maxBodyBytes: 128 * 1024, maxConcurrency: 10, queueLimit: 20 },
+    },
+    registerProviderType: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 3_000, maxBodyBytes: 128 * 1024, maxConcurrency: 10, queueLimit: 20 },
+    },
+    listProviderTypes: {
+        auth: { public: true, requireSession: false },
+        runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
+    },
+    createProvider: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    },
+    listProviders: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
+    },
+    getProvider: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 2_000, maxBodyBytes: 32 * 1024, maxConcurrency: 50, queueLimit: 100 },
+    },
+    updateProvider: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 128 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    },
+    deleteProvider: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 20, queueLimit: 50 },
+    },
+    listModels: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 5_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
+    },
+    createSession: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
+    },
+    listSessions: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
+    },
+    getSession: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 4_000, maxBodyBytes: 64 * 1024, maxConcurrency: 20, queueLimit: 100 },
+    },
+    renameSession: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 10, queueLimit: 50 },
+    },
+    deleteSession: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 3_000, maxBodyBytes: 32 * 1024, maxConcurrency: 10, queueLimit: 50 },
+    },
+    uploadAttachment: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 10_000, maxBodyBytes: 12 * 1024 * 1024, maxConcurrency: 5, queueLimit: 20 },
+    },
+    appendMessages: {
+        auth: { public: false, requireSession: true },
+        runtime: { timeoutMs: 5_000, maxBodyBytes: 512 * 1024, maxConcurrency: 10, queueLimit: 50 },
+    },
+    sendTurn: {
+        auth: { public: false, requireSession: true },
+        runtime: {
+            timeoutMs: CHAT_SEND_TURN_TIMEOUT_MS,
+            maxBodyBytes: 512 * 1024,
+            maxConcurrency: 5,
+            queueLimit: 25,
+            circuitBreaker: { key: 'chat-upstream', failureThreshold: 5, resetAfterMs: 30_000 },
+        },
+    },
+} as const;
+
+function getRegistry() {
+    return ChatServerRegistry.instance();
+}
+
+async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSessionHydration> {
+    const hydrated = await getRegistry().hydrateSession(sessionId);
+    const owner = hydrated.session.metadata?.userId ?? null;
+    const requester = ctx?.user?.id ?? null;
+
+    if (owner && requester && owner !== requester) {
+        throw new Error('Chat session does not belong to current user.');
+    }
+
+    if (owner && !requester) {
+        throw new Error('Chat session requires an authenticated user.');
+    }
+
+    return hydrated;
+}
+
+function ensureSlash(url: string): string {
+    return url.endsWith('/') ? url : `${url}/`;
+}
+
+function summarizePart(part: any) {
+    if (!part) return null;
+    return {
+        type: part.type,
+        mimeType: part.mimeType,
+        hasDataUrl: !!part.dataUrl,
+        hasUrl: !!part.url,
+        name: part.name || null,
+        dataUrlLen: typeof part.dataUrl === 'string' ? part.dataUrl.length : 0,
+    };
+}
+
+function summarizeModelPart(part: any) {
+    return {
+        type: part?.type,
+        mediaType: part?.mediaType,
+        hasImage: typeof part?.image === 'string' ? true : false,
+        imageLen: typeof part?.image === 'string' ? part.image.length : 0,
+        hasData: typeof part?.data === 'string' ? true : false,
+        dataLen: typeof part?.data === 'string' ? part.data.length : 0,
+        filename: part?.filename || null,
+        textLen: typeof part?.text === 'string' ? part.text.length : 0,
+    };
+}
+
+function summarizeModelMessage(msg: any) {
+    if (typeof msg?.content === 'string') {
+        return { role: msg?.role, contentType: 'string', chars: msg.content.length };
+    }
+    if (Array.isArray(msg?.content)) {
+        return {
+            role: msg?.role,
+            contentType: 'array',
+            parts: msg.content.map(summarizeModelPart),
+        };
+    }
+    return { role: msg?.role, contentType: typeof msg?.content };
+}
+
+function isContextWindowError(error: any): boolean {
+    const message = String(error?.message || error || '');
+    return /context length|context window|ContextWindowExceeded|Requested token count exceeds/i.test(message);
+}
+
+function isInvalidImageInputError(error: any): boolean {
+    const message = String(error?.message || error || '');
+    return /loading IMAGE data|Truncated File Read|ImageData\(url='data:image|invalid image|corrupt image/i.test(message);
+}
+
+function buildContextWindowGuidance(error: any, attemptedMessageCount: number): string {
+    const message = String(error?.message || error || '').trim();
+    return [
+        'The chat request exceeded the model context limit.',
+        `The runtime attempted to send ${attemptedMessageCount} message(s), but the provider rejected the prompt as too large.`,
+        'Typical causes:',
+        '- long accumulated session history',
+        '- large returned objects or logs',
+        '- screenshot or file data embedded into message text',
+        '',
+        'Recommended action:',
+        '- start a fresh session',
+        '- avoid returning raw data URLs or large blobs as plain text',
+        '- keep logs and workspace file reads targeted',
+        '- ask the harness to continue from a concise summary of findings',
+        '',
+        `Provider error: ${message}`,
+    ].join('\n');
+}
+
+function buildInvalidImageInputGuidance(error: any): string {
+    const message = String(error?.message || error || '').trim();
+    return [
+        'The model could not read one of the attached images for this turn.',
+        'This usually happens when an invalid or truncated image data URL was added to the chat history.',
+        '',
+        'Recommended action:',
+        '- start a fresh session or retry after removing the broken image-producing turn',
+        '- avoid returning image prefixes such as `screenshot.substring(...)` as structured data',
+        '- return the full screenshot value or a non-image textual summary instead',
+        '- if you need multimodal analysis, attach the full image or screenshot as an image attachment',
+        '',
+        `Provider error: ${message}`,
+    ].join('\n');
+}
+
+function builtinPersonalities(): ChatPersonality[] {
+    return [
+        {
+            id: 'default',
+            label: 'Default',
+            systemPrompt: `
+You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
+Behave as a helpful, professional assistant for this application.
+Your users include pathologists, clinicians, students and researchers including IT specialists.
+
+Integration notes:
+- You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
+- You may receive access to a scripting API. Only use explicitly allowed namespaces.
+- You MUST NOT guess on facts. If information is missing, ask clarifying questions.
+- Do not assume any previous script succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If the user asks who created something, and the available API does not identify the current user or owner, say so clearly instead of inferring.
+
+When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
+If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
+Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.
+            `.trim(),
+        },
+        {
+            id: 'concise',
+            label: 'Concise',
+            systemPrompt: `
+You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
+Be brief, direct, and accurate.
+
+Rules:
+- Prefer short answers first.
+- Ask only the minimum clarifying question required when information is missing.
+- Do not guess or infer missing facts.
+- Do not assume previous script execution succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If scripting is available and clearly useful, use it silently.
+- Do not mention scripts, code blocks, namespaces, or execution unless the user explicitly asks for technical details.
+- If the available API cannot prove a fact such as authorship or ownership, say that clearly.
+
+Keep language plain and outcome-focused.
+            `.trim(),
+        },
+        {
+            id: 'technical',
+            label: 'Technical',
+            systemPrompt: `
+You are an assistant integrated into xOpat pathology slide viewer's Chat tab.
+Behave as a precise, technically strong assistant for advanced users.
+
+Rules:
+- Be accurate and explicit about limitations.
+- Do not guess. If data is missing, say exactly what is missing.
+- Do not assume previous script execution succeeded unless its result is present in the conversation.
+- Do not use scripting for greetings, thanks, or simple acknowledgements.
+- If scripting is available and useful, prefer using it silently.
+- When the user asks for technical details, you may explain implementation details clearly and concretely.
+- Never invent namespaces, methods, fields, or viewer capabilities.
+- If the available API cannot establish authorship, ownership, or provenance, say so directly.
+
+Prefer precise terminology for technical users, but stay readable.
+            `.trim(),
+        },
+    ];
+}
+
+function defaultPersonality(): ChatPersonality {
+    return builtinPersonalities()[0]!;
+}
+
+function ensureBuiltinPersonalities() {
+    const registry = getRegistry();
+
+    for (const personality of builtinPersonalities()) {
+        if (!registry.getPersonality(personality.id)) {
+            registry.registerPersonality(personality);
+        }
+    }
+}
+
+function buildAttachmentIndex(attachments: ChatAttachmentRecord[] = []): Map<string, ChatAttachmentRecord> {
+    return new Map(attachments.map((att) => [att.id, att]));
+}
+
+function resolvePartPayload(
+    part: any,
+    attachmentIndex?: Map<string, ChatAttachmentRecord>
+): { source: string; mimeType?: string; name?: string } {
+    const attachment = part?.attachmentId ? attachmentIndex?.get(part.attachmentId) : undefined;
+    return {
+        source: String(part?.dataUrl || part?.url || attachment?.dataUrl || '').trim(),
+        mimeType: part?.mimeType || attachment?.mimeType || undefined,
+        name: part?.name || attachment?.name || undefined,
+    };
+}
+
+
+function dataUrlToBytes(value: string | undefined | null): { bytes: Uint8Array | null; mediaType?: string } {
+    const raw = String(value || '').trim();
+    const match = raw.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.*)$/i);
+    if (!match) return { bytes: null };
+
+    const mediaType = match[1] || undefined;
+    const base64 = match[2] || '';
+    const BufferCtor = (globalThis as any)?.Buffer;
+    if (!BufferCtor?.from) return { bytes: null, mediaType };
+    const buf = BufferCtor.from(base64, 'base64');
+    return { bytes: new Uint8Array(buf), mediaType };
+}
+
+function attachmentExceedsInlineLimit(bytes: Uint8Array | null | undefined): boolean {
+    return !!bytes && bytes.byteLength > CHAT_MAX_INLINE_ATTACHMENT_BYTES;
+}
+
+function ensureBuiltinAdapters() {
+    // No built-in provider adapters are registered by core.
+    // Provider plugins are responsible for registering their own adapter implementations.
+}
+
+function scriptSystemContent(
+    allowedScriptApi?: AllowedScriptApiManifest,
+    options: { executionMode?: string | null } = {}
+): string {
+    if (options.executionMode === 'host') {
+        return `Dev host execution is available.
+
+Host automation rules:
+- Prefer exactly one fenced code block tagged xopat-host-script whenever execution is needed.
+- The xopat-host-script body runs as unrestricted async JavaScript in the page context.
+- You may access normal page globals directly, including window, document, globalThis, APPLICATION_CONTEXT, VIEWER_MANAGER, VIEWER, USER_INTERFACE, UTILITIES, xserver, singletonModule, and chatModule.
+- Host helper functions are injected both as direct globals and under the host object: getServerStatus(), getServerLogs(), readWorkspaceFiles(), getDevSessionBootstrap(), captureViewerScreenshotDataUrl().
+- Always explicitly return the final value from xopat-host-script.
+- Do not emit xopat-script unless the harness explicitly switches to viewer-script mode.
+- Do not claim host helpers are unavailable unless a runtime error explicitly says so.`;
+    }
+
+    if (!allowedScriptApi?.namespaces?.length) {
+        return [
+            'Scripting API access is currently disabled.',
+            'Do not produce executable viewer scripts.',
+            'Do not call scripting namespaces.',
+            'If the user asks for automation, explain that scripting access is not currently granted.',
+        ].join('\n');
+    }
+
+    const namespacesText = allowedScriptApi.namespaces.map((ns) => {
+        const methods = ns.methods.map((method) => {
+            const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
+            const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
+            const description = method.description ? ` — ${method.description}` : '';
+            const declaration = method.tsDeclaration ? `
+    TS: ${method.tsDeclaration}` : '';
+            return `  - ${signature}${description}${declaration}`;
+        }).join('\n');
+        const namespaceDescription = ns.description ? ` — ${ns.description}` : '';
+        const namespaceDeclaration = ns.tsDeclaration ? `
+  Namespace TS:
+  ${ns.tsDeclaration}` : '';
+        return `- namespace ${ns.namespace}${namespaceDescription}${namespaceDeclaration}
+${methods}`;
+    }).join('\n\n');
+
+    return `Viewer scripting is available.
+
+Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
+Scripting has priority whenever the allowed API can perform the task, inspect state, fetch viewer data, or automate a multi-step action.
+When scripting can help, you MUST use it instead of describing manual steps.
+Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
+If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
+
+Critical output rules:
+- If you use scripting, return exactly one fenced code block with language tag xopat-script.
+- Do NOT return XML, pseudo-XML, JSON call envelopes, function-call objects, or tags such as <call>, <message>, <start|assistant|>, commentary, or tool-call formats.
+- Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
+- Your only executable output format is exactly one fenced code block tagged xopat-script like so: \`\`\`xopat-script [executable here] \`\`\`.
+- Even if the scripting definition does not say it, you need to **await** all API method calls as they are being routed through asynchronous gate.
+- You MUST explicitly \`return\` the final value that should be fed back into the conversation. The runtime only captures the async function's return value.
+- A trailing expression such as \`result;\` or \`contexts;\` is not enough. Use \`return result;\`.
+- Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
+- For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
+- If you produce an image or file, return it together with a short textual summary when possible, for example \`return ["Viewport screenshot captured.", screenshotDataUrl, metadata];\`.
+- Do not rely on console output, side effects, or the last expression statement for feedback. Only the returned value is guaranteed to be passed back.
+- If a requested action does not map cleanly to an allowed method, do not invent a method. Ask a brief clarification question or use the closest valid method sequence.
+- Assume the application executes xopat-script automatically.
+- For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
+- Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
+- Never invent namespaces or methods.
+- The script must be using plain JavaScript + the allowed scripting API only. Do NOT use TypeScript syntax.
+- Do not wrap explanations inside the code block.
+- If you need to both explain and execute, put the explanation outside the code block and keep the executable block as the only fenced block.
+- After successful tool execution, read the returned host feedback carefully. Host feedback and script-result parts are authoritative observations from the runtime.
+- After successful tool execution, if the result contains numbers, measurements, coordinates, zoom values, ratios, or metadata, quote them directly and explain them briefly.
+
+Recommended patterns:
+- To inspect viewer contexts: \`const contexts = await application.getGlobalInfo(); return contexts.map(c => ({ contextId: c.contextId, imageName: c.imageName, serverPath: c.serverPath }));\`
+- To read metadata from the active viewer: \`const metadata = await viewer.getMetadata(); return metadata;\`
+- To select a context before viewer calls: \`await application.setActiveViewer(contextId); const metadata = await viewer.getMetadata(); return { contextId, metadata };\`
+- To capture a screenshot with metadata: \`const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return ["Viewport screenshot captured.", screenshot, metadata];\`
+- To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
+
+If scripting is not needed, answer normally in plain user-facing language.
+
+Allowed scripting API:
+${namespacesText}`;
+}
+
+function sessionPreamble(
+    providerId: string,
+    allowedScriptApi?: AllowedScriptApiManifest,
+    options: { executionMode?: string | null } = {}
+): string {
+    const scriptNamespaces = allowedScriptApi?.namespaces?.map((n) => n.namespace).join(', ') || 'none';
+    const executionLines = options.executionMode === 'host'
+        ? [
+            'Current execution mode:',
+            '- Host JavaScript execution is enabled for this dev session.',
+            '- Viewer scripting namespaces are not the primary execution path.',
+        ].join('\n')
+        : `Current session:
+- Provider: ${providerId}
+- Allowed scripting namespaces: ${scriptNamespaces}`;
+    return `You are an assistant integrated into a pathology slide viewer's Chat tab.
+Behave as a helpful, professional assistant for this application.
+Your users include pathologists, clinicians, students and researchers including IT specialists.
+
+Integration notes:
+- You only know what the user explicitly writes in chat unless additional capabilities are granted through the scripting API.
+- You may receive access to a scripting API. Only use explicitly allowed namespaces.
+- You MUST NOT guess on facts. If information is missing, ask clarifying questions.
+- Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
+- Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
+- If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
+
+${executionLines}
+
+When relevant, ask brief clarifying questions and keep outputs readable (Markdown supported).
+If scripting is available and useful, prefer doing the work silently rather than talking about the script itself.
+Match the selected personality. For non-technical users, avoid technical language and implementation details unless explicitly requested.`;
+}
+
+function summarizeForTitle(messages: ChatMessage[]): string {
+    const firstUser = messages.find((m) => m.role === 'user');
+    const text = coerceMessageText(firstUser || null).trim();
+    if (!text) return 'New chat';
+    return text.slice(0, 80);
+}
+
+function coerceMessageText(message: ChatMessage | null | undefined): string {
+    if (!message) return '';
+    if (typeof message.content === 'string' && message.content.trim()) return message.content;
+    const parts = message.parts || [];
+    return parts.map((part) => {
+        switch (part.type) {
+            case 'text': return part.text;
+            case 'host-feedback': return part.text;
+            case 'script-result': return part.text;
+            case 'image': return `[Image: ${part.name || part.mimeType}]`;
+            case 'file': return `[File: ${part.name}]`;
+            default: return '';
+        }
+    }).filter(Boolean).join('\n');
+}
+
+function normalizeIncomingMessage(message: ChatMessage): ChatMessage {
+    if (message.parts?.length) {
+        return {
+            ...message,
+            content: message.content || coerceMessageText(message),
+            createdAt: message.createdAt || new Date().toISOString(),
+        };
+    }
+    if (typeof message.content === 'string') {
+        return {
+            ...message,
+            parts: [{ type: 'text', text: message.content }],
+            createdAt: message.createdAt || new Date().toISOString(),
+        };
+    }
+    return {
+        ...message,
+        parts: [],
+        content: '',
+        createdAt: message.createdAt || new Date().toISOString(),
+    };
+}
+
+function stripDataUrlPrefix(value: string | undefined | null): { mediaType?: string; data: string } {
+    const raw = String(value || '').trim();
+    const match = raw.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.*)$/i);
+    if (match) {
+        return { mediaType: match[1] || undefined, data: match[2] || '' };
+    }
+    return { data: raw };
+}
+
+function toModelMessage(
+    message: ChatMessage,
+    attachmentIndex?: Map<string, ChatAttachmentRecord>,
+    capabilities?: ModelCapabilities | null
+) {
+    const parts = message.parts || (message.content ? [{ type: 'text', text: message.content }] : []);
+    const hasMediaParts = parts.some((part: any) => part?.type === 'image' || part?.type === 'file');
+    const role = message.role === 'tool'
+        ? 'user'
+        : (message.role === 'assistant' && hasMediaParts ? 'user' : message.role);
+
+    if (role === 'system') {
+        return {
+            role: 'system',
+            content: typeof message.content === 'string' && message.content.trim()
+                ? message.content
+                : coerceMessageText(message),
+        } as any;
+    }
+
+    const content = parts.map((part) => {
+        switch (part.type) {
+            case 'text':
+            case 'host-feedback':
+            case 'script-result':
+                return { type: 'text', text: part.text } as const;
+
+            case 'image': {
+                if (!mediaAllowedForModel('image', capabilities)) {
+                    return {
+                        type: 'text',
+                        text: part.name ? `[Image omitted for non-multimodal model: ${part.name}]` : '[Image omitted for non-multimodal model]',
+                    } as const;
+                }
+
+                const resolved = resolvePartPayload(part, attachmentIndex);
+                const inline = dataUrlToBytes(resolved.source);
+
+                if (inline.bytes) {
+                    if (attachmentExceedsInlineLimit(inline.bytes)) {
+                        return {
+                            type: 'text',
+                            text: resolved.name
+                                ? `[Image omitted because it exceeds the inline prompt budget: ${resolved.name}]`
+                                : '[Image omitted because it exceeds the inline prompt budget]',
+                        } as const;
+                    }
+                    return {
+                        type: 'image',
+                        image: inline.bytes,
+                        mediaType: resolved.mimeType || inline.mediaType || 'image/*',
+                    } as const;
+                }
+
+                if (/^https?:\/\//i.test(resolved.source)) {
+                    return {
+                        type: 'image',
+                        image: resolved.source,
+                        mediaType: resolved.mimeType || 'image/*',
+                    } as const;
+                }
+
+                return {
+                    type: 'text',
+                    text: resolved.name ? `[Image unavailable: ${resolved.name}]` : '[Image unavailable]',
+                } as const;
+            }
+
+            case 'file': {
+                if (!mediaAllowedForModel('file', capabilities)) {
+                    return {
+                        type: 'text',
+                        text: part.name ? `[File omitted for unsupported model: ${part.name}]` : '[File omitted for unsupported model]',
+                    } as const;
+                }
+                const resolved = resolvePartPayload(part, attachmentIndex);
+                const inline = dataUrlToBytes(resolved.source);
+
+                if (inline.bytes) {
+                    if (attachmentExceedsInlineLimit(inline.bytes)) {
+                        return {
+                            type: 'text',
+                            text: resolved.name
+                                ? `[File omitted because it exceeds the inline prompt budget: ${resolved.name}]`
+                                : '[File omitted because it exceeds the inline prompt budget]',
+                        } as const;
+                    }
+                    return {
+                        type: 'file',
+                        data: inline.bytes,
+                        mediaType: resolved.mimeType || inline.mediaType || 'application/octet-stream',
+                        filename: resolved.name,
+                    } as const;
+                }
+
+                if (/^https?:\/\//i.test(resolved.source)) {
+                    return {
+                        type: 'file',
+                        data: resolved.source,
+                        mediaType: resolved.mimeType || 'application/octet-stream',
+                        filename: resolved.name,
+                    } as const;
+                }
+
+                return {
+                    type: 'text',
+                    text: resolved.name ? `[File unavailable: ${resolved.name}]` : '[File unavailable]',
+                } as const;
+            }
+
+            default:
+                return { type: 'text', text: '' } as const;
+        }
+    });
+    if (content.length === 1 && content[0]!.type === 'text') {
+        return { role, content: content[0]!.text } as any;
+    }
+
+    return { role, content } as any;
+}
+
+function mediaAllowedForModel(
+    partType: 'image' | 'file',
+    capabilities?: ModelCapabilities | null
+): boolean {
+    if (!capabilities) return true;
+    if (partType === 'image') return capabilities.images === 'supported';
+    return capabilities.files === 'supported';
+}
+
+function capabilityFromBool(value: any): CapabilityState {
+    return value === true ? 'supported' : value === false ? 'unsupported' : 'unknown';
+}
+
+function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
+    const modalities = Array.isArray(item?.modalities)
+        ? item.modalities.map((v: any) => String(v).toLowerCase())
+        : [];
+
+    const inputModalities = Array.isArray(item?.input_modalities)
+        ? item.input_modalities.map((v: any) => String(v).toLowerCase())
+        : [];
+
+    const caps = item?.capabilities && typeof item.capabilities === 'object' ? item.capabilities : {};
+
+    const imageHint =
+        item?.supportsImages ??
+        item?.supports_images ??
+        item?.vision ??
+        item?.supportsVision ??
+        caps?.images ??
+        caps?.vision ??
+        (modalities.includes('image') || inputModalities.includes('image') ? true : undefined);
+
+    const fileHint =
+        item?.supportsFiles ??
+        item?.supports_files ??
+        caps?.files ??
+        caps?.documents ??
+        (modalities.includes('file') || modalities.includes('document') || inputModalities.includes('file') || inputModalities.includes('document') ? true : undefined);
+
+    const hasAnyProviderSignal =
+        imageHint !== undefined ||
+        fileHint !== undefined ||
+        item?.multimodal !== undefined ||
+        modalities.length > 0 ||
+        inputModalities.length > 0;
+
+    return {
+        text: 'supported',
+        images: capabilityFromBool(imageHint),
+        files: capabilityFromBool(fileHint),
+        source: hasAnyProviderSignal ? 'provider-metadata' : 'default',
+        checkedAt: new Date().toISOString(),
+    };
+}
+
+function tinyProbePng(): Uint8Array {
+    return new Uint8Array([
+        137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,
+        0,0,0,1,0,0,0,1,8,2,0,0,0,144,119,83,222,
+        0,0,0,12,73,68,65,84,8,153,99,248,15,4,0,9,251,3,253,
+        160,90,167,130,0,0,0,0,73,69,78,68,174,66,96,130
+    ]);
+}
+
+function tinyProbeTextFile(): Uint8Array {
+    return new TextEncoder().encode('probe file');
+}
+
+async function probeModelCapabilities(ctx: any, providerId: string, modelId: string): Promise<ModelCapabilities> {
+    const registry = getRegistry();
+    const runtime = await registry.getProviderRuntime(providerId);
+    const adapter = registry.getAdapter(runtime.type.adapter);
+    if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
+
+    const model = await adapter.resolveModel({
+        ctx,
+        providerId: runtime.instance.id,
+        providerTypeId: runtime.type.id,
+        modelId,
+        contextId: runtime.instance.contextId || null,
+        type: runtime.type,
+        instance: runtime.instance,
+        config: runtime.config,
+        secrets: runtime.secrets,
+    });
+
+    const result: ModelCapabilities = {
+        text: 'unknown',
+        images: 'unknown',
+        files: 'unknown',
+        source: 'probe',
+        checkedAt: new Date().toISOString(),
+    };
+
+    try {
+        const textProbe = await generateText({
+            model,
+            messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+            maxOutputTokens: 8,
+        } as any);
+
+        const out = String(textProbe?.text || '').trim().toUpperCase();
+        result.text = out.includes('OK') ? 'supported' : 'unsupported';
+    } catch {
+        result.text = 'unsupported';
+    }
+
+    try {
+        const imageProbe = await generateText({
+            model,
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'image', image: tinyProbePng(), mediaType: 'image/png' },
+                    { type: 'text', text: 'If you can process image input, reply with exactly: IMAGE_OK. Otherwise reply with exactly: IMAGE_UNSUPPORTED.' },
+                ],
+            }],
+            maxOutputTokens: 12,
+        } as any);
+
+        const out = String(imageProbe?.text || '').trim().toUpperCase();
+        result.images = out.includes('IMAGE_OK') && !out.includes('IMAGE_UNSUPPORTED')
+            ? 'supported'
+            : 'unsupported';
+    } catch {
+        result.images = 'unsupported';
+    }
+
+    try {
+        const fileProbe = await generateText({
+            model,
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'file', data: tinyProbeTextFile(), mediaType: 'text/plain', filename: 'probe.txt' },
+                    { type: 'text', text: 'If you can process file input, reply with exactly: FILE_OK. Otherwise reply with exactly: FILE_UNSUPPORTED.' },
+                ],
+            }],
+            maxOutputTokens: 12,
+        } as any);
+
+        const out = String(fileProbe?.text || '').trim().toUpperCase();
+        result.files = out.includes('FILE_OK') && !out.includes('FILE_UNSUPPORTED')
+            ? 'supported'
+            : 'unsupported';
+    } catch {
+        result.files = 'unsupported';
+    }
+
+    return registry.setModelCapabilities(providerId, modelId, result);
+}
+
+function modelCapabilitySystemContent(capabilities?: ModelCapabilities | null): string {
+    const lines = [
+        `Model image support: ${capabilities?.images || 'unknown'}.`,
+        `Model file support: ${capabilities?.files || 'unknown'}.`,
+    ];
+
+    if (capabilities?.images !== 'supported') {
+        lines.push(
+            'Do not rely on screenshots or image-returning API methods for reasoning.',
+            'Prefer metadata, coordinates, measurements, labels, and plain-text summaries.'
+        );
+    }
+
+    if (capabilities?.files !== 'supported') {
+        lines.push(
+            'Do not rely on file-returning API methods for reasoning.',
+            'Prefer plain-text outputs when possible.'
+        );
+    }
+
+    return lines.join('\n');
+}
+
+function sanitizeClientProviderTypeInput(input: CreateProviderTypeInput | UpdateProviderTypeInput): CreateProviderTypeInput | UpdateProviderTypeInput {
+    const cloned: any = { ...input };
+    delete cloned.fixedSecrets;
+    return cloned;
+}
+
+export async function ensureModelCapabilities(
+    ctx: any,
+    input: { providerId: string; modelId: string; contextId?: string | null }
+): Promise<{ providerId: string; modelId: string; capabilities: ModelCapabilities }> {
+    ensureBuiltinAdapters();
+
+    const registry = getRegistry();
+    const cached = registry.getModelCapabilities(input.providerId, input.modelId);
+    if (
+        cached &&
+        (cached.images !== 'unknown' || cached.files !== 'unknown') &&
+        cached.source !== 'probe'
+    ) {
+        return { providerId: input.providerId, modelId: input.modelId, capabilities: cached };
+    }
+
+    if (cached?.source === 'probe') {
+        registry.clearModelCapabilities(input.providerId, input.modelId);
+    }
+
+    const models = await registry.listModels(input.providerId, { ctx, contextId: input.contextId || null });
+    const discovered = models.find((m) => m.id === input.modelId)?.capabilities || null;
+
+    if (discovered && (discovered.images !== 'unknown' || discovered.files !== 'unknown')) {
+        const stored = registry.setModelCapabilities(input.providerId, input.modelId, discovered);
+        return { providerId: input.providerId, modelId: input.modelId, capabilities: stored };
+    }
+
+    const probed = await probeModelCapabilities(ctx, input.providerId, input.modelId);
+    return { providerId: input.providerId, modelId: input.modelId, capabilities: probed };
+}
+
+export function registerPersonality(personality: ChatPersonality): void {
+    ensureBuiltinAdapters();
+    getRegistry().registerPersonality(personality);
+}
+
+export function registerProviderTypeServer(input: CreateProviderTypeInput | UpdateProviderTypeInput): ChatProviderTypeRecord {
+    ensureBuiltinAdapters();
+    const payload = {
+        ...input,
+        configSchema: Array.isArray(input.configSchema) ? input.configSchema : [],
+        source: input.source || 'plugin',
+    };
+    return getRegistry().upsertProviderType(payload as CreateProviderTypeInput);
+}
+
+export async function registerProviderType(_ctx: any, input: CreateProviderTypeInput | UpdateProviderTypeInput): Promise<ChatProviderTypeClientRecord> {
+    const registered = registerProviderTypeServer(sanitizeClientProviderTypeInput(input));
+    const listed = getRegistry().listProviderTypes().find((item) => item.id === registered.id);
+    if (!listed) throw new Error(`Failed to register provider type '${registered.id}'.`);
+    return listed;
+}
+
+export async function listProviderTypes(): Promise<ProviderTypeListResult> {
+    ensureBuiltinAdapters();
+    return { providerTypes: getRegistry().listProviderTypes() };
+}
+
+export async function createProvider(ctx: any, input: CreateProviderInstanceInput): Promise<any> {
+    ensureBuiltinAdapters();
+    return getRegistry().createProviderInstance(input, ctx?.user?.id ?? null);
+}
+
+export async function ensureManagedProvider(ctx: any, input: {
+    pluginId: string;
+    providerType: CreateProviderTypeInput | UpdateProviderTypeInput;
+    provider: Omit<CreateProviderInstanceInput, 'typeId'> & { typeId?: string | null };
+    managedKey?: string | null;
+}): Promise<{
+    ok: true;
+    providerTypeId: string;
+    providerId: string | null;
+    providerCreated: boolean;
+    providerUpdated: boolean;
+}> {
+    ensureBuiltinAdapters();
+
+    const pluginId = String(input?.pluginId || '').trim();
+    if (!pluginId) throw new Error('ensureManagedProvider: missing pluginId.');
+
+    const providerType = registerProviderTypeServer(input.providerType);
+    const typeId = String(input.provider?.typeId || providerType.id || '').trim();
+    if (!typeId) throw new Error('ensureManagedProvider: missing provider type id.');
+
+    const managedKey = String(input?.managedKey || `${pluginId}:${typeId}:default`).trim();
+    const providerPayload = {
+        ...input.provider,
+        typeId,
+        metadata: {
+            managedByPlugin: pluginId,
+            managedKey,
+            autoCreated: true,
+            role: 'default-provider',
+            ...(input.provider?.metadata || {}),
+        },
+    };
+
+    const listed = await listProviders(ctx, { typeId });
+    const providers = Array.isArray(listed?.providers) ? listed.providers : [];
+    const existing = providers.find((provider: any) => {
+        const meta = provider?.metadata || {};
+        return (
+            provider?.typeId === typeId &&
+            (
+                meta.managedKey === managedKey ||
+                (meta.managedByPlugin === pluginId && meta.autoCreated === true)
+            )
+        );
+    });
+
+    let provider: any;
+    let providerCreated = false;
+    let providerUpdated = false;
+
+    if (!existing) {
+        provider = await createProvider(ctx, providerPayload as CreateProviderInstanceInput);
+        providerCreated = true;
+    } else {
+        provider = await updateProvider(ctx, {
+            id: existing.id,
+            ...(providerPayload as Omit<UpdateProviderInstanceInput, 'id'>),
+        });
+        providerUpdated = true;
+    }
+
+    return {
+        ok: true,
+        providerTypeId: typeId,
+        providerId: provider?.id || existing?.id || null,
+        providerCreated,
+        providerUpdated,
+    };
+}
+
+export async function listProviders(ctx: any, input?: { typeId?: string | null }): Promise<ProviderListResult> {
+    ensureBuiltinAdapters();
+    const providers = await getRegistry().listProviderInstances({ userId: ctx?.user?.id ?? null, typeId: input?.typeId || null });
+    return { providers };
+}
+
+export async function getProvider(ctx: any, input: { providerId: string }): Promise<any> {
+    ensureBuiltinAdapters();
+    const provider = await getRegistry().getProviderInstance(input.providerId);
+    if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+    const owner = provider.metadata?.ownerUserId ?? null;
+    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    return provider;
+}
+
+export async function updateProvider(ctx: any, input: UpdateProviderInstanceInput): Promise<any> {
+    ensureBuiltinAdapters();
+    const current = await getRegistry().getProviderInstance(input.id);
+    if (!current) throw new Error(`Unknown provider '${input.id}'.`);
+    const owner = current.metadata?.ownerUserId ?? null;
+    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    return getRegistry().updateProviderInstance(input.id, input);
+}
+
+export async function deleteProvider(ctx: any, input: { providerId: string }): Promise<{ ok: true }> {
+    ensureBuiltinAdapters();
+    const current = await getRegistry().getProviderInstance(input.providerId);
+    if (!current) throw new Error(`Unknown provider '${input.providerId}'.`);
+    const owner = current.metadata?.ownerUserId ?? null;
+    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    await getRegistry().deleteProviderInstance(input.providerId);
+    return { ok: true };
+}
+
+export async function listModels(ctx: any, input: {
+    providerId?: string | null;
+    providerTypeId?: string | null;
+    draftConfig?: Record<string, unknown>;
+    draftSecrets?: Record<string, unknown>;
+    contextId?: string | null;
+}): Promise<ProviderModelListResult> {
+    ensureBuiltinAdapters();
+    if (input.providerId) {
+        const models = await getRegistry().listModels(input.providerId, { ctx, contextId: input.contextId || null });
+        return { providerId: input.providerId, models };
+    }
+    if (input.providerTypeId) {
+        const models = await getRegistry().previewListModels(input.providerTypeId, {
+            ctx,
+            contextId: input.contextId || null,
+            draftConfig: input.draftConfig || {},
+            draftSecrets: input.draftSecrets || {},
+        });
+        return { providerTypeId: input.providerTypeId, models };
+    }
+    throw new Error('listModels requires either providerId or providerTypeId.');
+}
+
+export async function createSession(ctx: any, input: CreateSessionInput): Promise<ChatSession> {
+    ensureBuiltinAdapters();
+    ensureBuiltinPersonalities();
+    const registry = getRegistry();
+    const provider = await registry.getProviderInstance(input.providerId);
+    if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
+
+    if (input.personalityId && input.personalityPrompt && !registry.getPersonality(input.personalityId)) {
+        registry.registerPersonality({ id: input.personalityId, label: input.personalityId, systemPrompt: input.personalityPrompt });
+    }
+
+    return registry.getSessionStore().createSession({
+        id: registry.newId('sess'),
+        title: input.title || 'New chat',
+        providerId: input.providerId,
+        providerTypeId: provider.typeId,
+        modelId: input.modelId || provider.defaultModelId || '',
+        personalityId: input.personalityId || 'default',
+        contextId: input.contextId || provider.contextId || null,
+        metadata: { ...input.metadata, userId: ctx?.user?.id ?? null },
+    });
+}
+
+export async function listSessions(ctx: any, input?: { providerId?: string | null }): Promise<SessionListResult> {
+    const sessions = await getRegistry().getSessionStore().listSessions({ providerId: input?.providerId || undefined, userId: ctx?.user?.id ?? null });
+    return { sessions };
+}
+
+export async function getSession(ctx: any, input: { sessionId: string; hydrateMessages?: boolean }): Promise<{ session: ChatSession; messages?: ChatMessage[]; attachments?: ChatAttachmentRecord[] }> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    return input.hydrateMessages === false ? { session: hydrated.session } : hydrated;
+}
+
+export async function renameSession(ctx: any, input: { sessionId: string; title: string }): Promise<ChatSession> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    return getRegistry().getSessionStore().updateSession(input.sessionId, {
+        title: input.title,
+        metadata: {
+            ...(hydrated.session.metadata || {}),
+            manualTitle: true,
+        },
+    });
+}
+
+export async function deleteSession(ctx: any, input: { sessionId: string }): Promise<{ ok: true }> {
+    await requireSessionAccess(ctx, input.sessionId);
+    await getRegistry().getSessionStore().deleteSession(input.sessionId);
+    return { ok: true };
+}
+
+export async function uploadAttachment(ctx: any, input: {
+    sessionId: string;
+    kind?: 'image' | 'file' | 'screenshot';
+    name?: string;
+    mimeType: string;
+    dataBase64: string;
+    metadata?: Record<string, unknown>;
+}): Promise<ChatAttachmentRecord> {
+    await requireSessionAccess(ctx, input.sessionId);
+
+    const record: ChatAttachmentRecord = {
+        id: getRegistry().newId('att'),
+        sessionId: input.sessionId,
+        kind: input.kind || (input.mimeType.startsWith('image/') ? 'image' : 'file'),
+        name: input.name,
+        mimeType: input.mimeType,
+        sizeBytes: input.dataBase64.length,
+        dataUrl: input.dataBase64,
+        createdAt: new Date().toISOString(),
+        metadata: input.metadata,
+    };
+    return getRegistry().getSessionStore().uploadAttachment(record);
+}
+
+export async function appendMessages(ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    const messages = input.messages.map(normalizeIncomingMessage);
+    const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
+    const hasManualTitle = !!hydrated.session.metadata?.manualTitle;
+
+    if (!hasManualTitle) {
+        const all = await getRegistry().getSessionStore().listMessages(input.sessionId);
+        const title = summarizeForTitle(all);
+        await getRegistry().getSessionStore().updateSession(input.sessionId, {
+            title,
+            metadata: hydrated.session.metadata,
+        });
+    }
+
+    return { messages: appended };
+}
+
+function mergeAdjacentUserMultimodalTurns(messages: ChatMessage[]): ChatMessage[] {
+    const merged: ChatMessage[] = [];
+
+    for (const msg of messages) {
+        const prev = merged[merged.length - 1];
+
+        const msgParts = msg.parts || [];
+        const prevParts = prev?.parts || [];
+
+        const msgHasMedia = msg.role === 'user' && msgParts.some((p: any) => p.type === 'image' || p.type === 'file');
+        const msgHasText = msg.role === 'user' && msgParts.some((p: any) => p.type === 'text' && String(p.text || '').trim());
+
+        const prevHasMediaOnly =
+            prev?.role === 'user' &&
+            prevParts.length > 0 &&
+            prevParts.some((p: any) => p.type === 'image' || p.type === 'file') &&
+            !prevParts.some((p: any) => p.type === 'text' && String(p.text || '').trim());
+
+        if (prev && prevHasMediaOnly && msg.role === 'user' && msgHasText && !msgHasMedia) {
+            const combinedParts = [...prevParts, ...msgParts];
+
+            merged[merged.length - 1] = {
+                ...msg,
+                id: msg.id || prev.id,
+                sessionId: msg.sessionId || prev.sessionId,
+                parts: combinedParts,
+                content: coerceMessageText({ ...msg, parts: combinedParts } as ChatMessage),
+                createdAt: msg.createdAt || prev.createdAt,
+            };
+            continue;
+        }
+
+        merged.push(msg);
+    }
+
+    return merged;
+}
+
+export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurnResult> {
+    ensureBuiltinAdapters();
+    ensureBuiltinPersonalities();
+
+    const registry = getRegistry();
+    const sessionStore = registry.getSessionStore();
+    const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    const session = hydrated.session;
+    const runtime = await registry.getProviderRuntime(session.providerId);
+    const adapter = registry.getAdapter(runtime.type.adapter);
+    if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
+    const executionMode = String(input.executionMode || session.metadata?.testMode || '').trim() || null;
+
+    const personality = (input.personalityId ? registry.getPersonality(input.personalityId) : registry.getPersonality(session.personalityId)) || defaultPersonality();
+    const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
+    const recentMessages = mergeAdjacentUserMultimodalTurns(
+        hydrated.messages.slice(-maxRecentMessages)
+    );
+
+    const attachmentIndex = buildAttachmentIndex(hydrated.attachments || []);
+
+    const modelCaps = await ensureModelCapabilities(ctx, {
+        providerId: session.providerId,
+        modelId: session.modelId,
+        contextId: session.contextId || null,
+    });
+    const mergedSystemContent = [
+        sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
+        `Active personality: ${personality.label}
+
+${input.personalityPrompt || personality.systemPrompt}`,
+        scriptSystemContent(input.allowedScriptApi, { executionMode }),
+    ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+        .join("\n---\n");
+
+    const systemMessages = mergedSystemContent
+        ? [toModelMessage({
+            role: 'system',
+            content: mergedSystemContent,
+            parts: [{ type: 'text', text: mergedSystemContent }],
+            createdAt: new Date().toISOString(),
+        } as ChatMessage, attachmentIndex)]
+        : [];
+
+    const buildConversation = (count: number) => recentMessages
+        .slice(-Math.max(1, count))
+        .map((m) => toModelMessage(m, attachmentIndex, modelCaps.capabilities));
+    let conversation = buildConversation(recentMessages.length);
+
+    const model = await adapter.resolveModel({
+        ctx,
+        providerId: runtime.instance.id,
+        providerTypeId: runtime.type.id,
+        modelId: session.modelId,
+        contextId: session.contextId || runtime.instance.contextId || null,
+        type: runtime.type,
+        instance: runtime.instance,
+        config: runtime.config,
+        secrets: runtime.secrets,
+    });
+
+
+    console.debug('[chat-debug/sendTurn]', {
+        sessionId: session.id,
+        providerId: session.providerId,
+        modelId: session.modelId,
+        recentMessages: recentMessages.map((m) => ({
+            role: m.role,
+            contentChars: typeof m.content === 'string' ? m.content.length : 0,
+            parts: (m.parts || []).map(summarizePart),
+        })),
+        attachments: (hydrated.attachments || []).map((att) => ({
+            id: att.id,
+            kind: att.kind,
+            mimeType: att.mimeType,
+            name: att.name || null,
+            dataUrlLen: typeof att.dataUrl === 'string' ? att.dataUrl.length : 0,
+        })),
+        conversation: conversation.map(summarizeModelMessage),
+    });
+
+    llmLog("MODEL_INPUT", {
+        messageCount: [...systemMessages, ...conversation].length,
+        messages: [...systemMessages, ...conversation].map((m: any) => ({
+            role: m.role,
+            content: Array.isArray(m.content)
+                ? m.content.map((p: any) => {
+                    if (p.type === 'image') {
+                        return {
+                            type: 'image',
+                            hasData: !!p.image,
+                            isUint8Array: p.image instanceof Uint8Array,
+                            byteLength: p.image instanceof Uint8Array
+                                ? p.image.byteLength
+                                : (typeof p.image === 'string' ? p.image.length : 0),
+                            preview: typeof p.image === 'string'
+                                ? p.image.slice(0, 80)
+                                : (p.image instanceof Uint8Array
+                                    ? Array.from(p.image.slice(0, 12))
+                                    : null),
+                            mediaType: p.mediaType,
+                        };
+                    }
+                    if (p.type === 'file') {
+                        return {
+                            type: 'file',
+                            hasData: !!p.data,
+                            isUint8Array: p.data instanceof Uint8Array,
+                            byteLength: p.data instanceof Uint8Array
+                                ? p.data.byteLength
+                                : (typeof p.data === 'string' ? p.data.length : 0),
+                            filename: p.filename,
+                            mediaType: p.mediaType,
+                        };
+                    }
+                    return p;
+                })
+                : m.content
+        }))
+    });
+
+    let result: any = null;
+    let lastContextError: any = null;
+    const retryCounts = Array.from(new Set([
+        recentMessages.length,
+        Math.min(recentMessages.length, 10),
+        Math.min(recentMessages.length, 8),
+        Math.min(recentMessages.length, 6),
+        Math.min(recentMessages.length, 4),
+        2,
+        1,
+    ].filter((value) => value > 0))).sort((a, b) => b - a);
+
+    for (const count of retryCounts) {
+        conversation = buildConversation(count);
+        try {
+            result = await generateText({
+                model,
+                messages: [...systemMessages, ...conversation],
+                maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+            });
+            lastContextError = null;
+            break;
+        } catch (error) {
+            if (isInvalidImageInputError(error)) {
+                const text = buildInvalidImageInputGuidance(error);
+                const message: ChatMessage = {
+                    id: registry.newId('msg'),
+                    sessionId: session.id,
+                    role: 'assistant',
+                    content: text,
+                    parts: [{ type: 'text', text }],
+                    createdAt: new Date().toISOString(),
+                    metadata: {
+                        uiVariant: 'error',
+                        reason: 'invalid-image-input',
+                    } as any,
+                };
+
+                await sessionStore.appendMessages(session.id, [message]);
+                const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+                const updatedSession = await sessionStore.updateSession(session.id, { title });
+
+                return {
+                    message,
+                    session: updatedSession,
+                    capabilities: modelCaps.capabilities,
+                };
+            }
+
+            if (!isContextWindowError(error)) throw error;
+            lastContextError = error;
+        }
+    }
+
+    if (!result && lastContextError) {
+        const text = buildContextWindowGuidance(lastContextError, recentMessages.length);
+        const message: ChatMessage = {
+            id: registry.newId('msg'),
+            sessionId: session.id,
+            role: 'assistant',
+            content: text,
+            parts: [{ type: 'text', text }],
+            createdAt: new Date().toISOString(),
+            metadata: {
+                uiVariant: 'error',
+                reason: 'context-window-exceeded',
+            } as any,
+        };
+
+        await sessionStore.appendMessages(session.id, [message]);
+        const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+        const updatedSession = await sessionStore.updateSession(session.id, { title });
+
+        return {
+            message,
+            session: updatedSession,
+            capabilities: modelCaps.capabilities,
+        };
+    }
+
+    const text = typeof result.text === 'string' ? result.text : '';
+    const message: ChatMessage = {
+        id: registry.newId('msg'),
+        sessionId: session.id,
+        role: 'assistant',
+        content: text,
+        parts: [{ type: 'text', text }],
+        createdAt: new Date().toISOString(),
+    };
+
+    await sessionStore.appendMessages(session.id, [message]);
+    const title = summarizeForTitle(await sessionStore.listMessages(session.id));
+    const updatedSession = await sessionStore.updateSession(session.id, { title });
+
+    const usage = (result as any).usage || (result as any).totalUsage;
+    return {
+        message,
+        session: updatedSession,
+        usage: usage
+            ? {
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                totalTokens: usage.totalTokens,
+            }
+            : undefined,
+        capabilities: modelCaps.capabilities,
+    };
+}

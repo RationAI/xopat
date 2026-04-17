@@ -5,6 +5,7 @@ import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Menu } from "./menu.mjs";
 import { MultiPanelMenuTab } from "./multiPanelMenuTab.mjs";
+import {BaseComponent} from "../baseComponent.mjs";
 
 const ui = { Join, Div, Button, MenuTab };
 const { div } = van.tags
@@ -54,14 +55,20 @@ class MultiPanelMenu extends Menu {
     }
 
     /**
-     * @param {*} item dictionary with id, icon, title, body which will be added to the menu
+     * @param {UINamedItem} item dictionary with id, icon, title, body which will be added to the menu
+     * @param {XOpatElementID} [componentId]
+     * @return {MenuTab|Dropdown}
      */
-    addTab(item) {
+    addTab(item, componentId=undefined) {
         if (!(item.id && item.icon && item.title)) {
             throw new Error("Item for menu needs every property set.");
         }
-        const tab = new MultiPanelMenuTab(item,this);
+        let tab = new MultiPanelMenuTab(item, this);
         this.tabs[item.id] = tab;
+
+        if (componentId) {
+            tab = BaseComponent.ensureTaggedAsExternalComponent(tab, componentId);
+        }
 
         switch (this._design) {
             case "ICONONLY":
@@ -85,8 +92,16 @@ class MultiPanelMenu extends Menu {
      * @param {*} id of the item we want to close
      */
     closeTab(id) {
-        if (id in this.tabs) {
+        if (id in this.tabs && !(this.parentElement.classMap["mobile"] === "mobile")) {
             this.tabs[id].close();
+            return true;
+        }
+        return false;
+    }
+
+    openTab(id) {
+        if (id in this.tabs) {
+            this.tabs[id].open();
             return true;
         }
         return false;

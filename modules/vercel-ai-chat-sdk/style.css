@@ -1,0 +1,65 @@
+#pathology-chat-panel pre {
+    max-width: 100%;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+}
+#pathology-chat-panel pre code {
+    white-space: pre;
+}
+
+#pathology-chat-panel table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+#pathology-chat-panel img, #pathology-chat-panel iframe, #pathology-chat-panel video {
+    max-width: 100%;
+}
+
+.chat-md :is(h1,h2,h3,h4,h5,h6){
+    font-size: 12px !important;
+    margin: 4px 0 3px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.chat-md p{
+    margin: 3px 0;
+}
+
+.chat-md ul,
+.chat-md ol{
+    margin: 3px 0 3px 14px;
+    padding-left: 0;
+}
+
+.chat-md li{
+    margin: 1px 0;
+}
+
+.chat-md li > p{
+    margin: 0;
+}
+
+.chat-md pre{
+    margin: 6px 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    overflow: auto;
+    border: 1px solid rgba(0,0,0,.08);
+}
+
+.chat-md table{
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0;
+    font-size: 11px;
+}
+
+.chat-md th,
+.chat-md td{
+    border: 1px solid rgba(0,0,0,.08);
+    padding: 5px 6px;
+    vertical-align: top;
+}

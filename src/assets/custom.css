@@ -116,7 +116,7 @@ button div {
 #overlay-content{
     position: absolute; 
     pointer-events: auto; 
-    z-index: 5; 
+    z-index: 101; 
     background-color: var(--fallback-b1,oklch(var(--b2)/var(--tw-bg-opacity, 1)));
     max-width: 800px; 
     width: calc(-65px + 100vw);
@@ -139,6 +139,51 @@ button div {
     z-index: 4;
     background-color: rgba(0, 0, 0, 0.5);
 }
+body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
+    z-index: 0 !important;
+    pointer-events: none !important;
+}
+
+#fullscreen-menu-content{
+    position: fixed;
+    width: calc(100% - 10px);
+    height: calc(100% - 35px);
+    pointer-events: auto;
+}
+
+#overlay.mobile {
+    width: 100% !important;
+}
+
+#overlay.mobile #overlay-content {
+    overflow: scroll !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    background-color: var(--fallback-b1,oklch(var(--b2)/var(--tw-bg-opacity, 1)));
+    max-width: none !important;
+    transform: none !important;
+    padding-left: 0px !important;
+    padding-right: 0px !important;
+    padding-top: 0px !important;
+}
+
+#overlay.mobile #fullscreen-menu-content {
+    overflow: scroll !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    background-color: var(--fallback-b1,oklch(var(--b2)/var(--tw-bg-opacity, 1)));
+    max-width: none !important;
+    transform: none !important;
+    padding-left: 0px !important;
+    padding-right: 0px !important;
+    padding-top: 0px !important;
+}
 
 .ui-menu{
     pointer-events: none;
@@ -157,7 +202,7 @@ button div {
     display: flex;
     flex-direction: column;
     color: var(--fallback-pc,oklch(var(--pc)/var(--tw-text-opacity)));
-    background-color: var(--fallback-bg,oklch(var(--b3)/var(--tw-bg-opacity)));
+    /*background-color: var(--fallback-bg,oklch(var(--b3)/var(--tw-bg-opacity)));*/
 }
 
 .boxed {
@@ -209,6 +254,21 @@ button div {
     cursor: grabbing;
 }
 
+.draggable.mobile {
+    position: relative !important;
+    top: 0px !important; 
+    left: 0px !important;     
+}
+
+.right-side-menu.mobile {
+    width: 100% !important;
+    height: 100% !important;
+    overflow: scroll !important;
+    top: 0 !important;
+    left: 0 !important;
+    background-color: black;
+}
+
 .opaque-bg {
     background-color: rgba(0, 0, 0, 0.406);
 }
@@ -219,4 +279,16 @@ button div {
 
 .pointer-events-none {
     pointer-events: none;
+}
+
+/* ensure close/overlay buttons sit above fullscreen menu */
+#overlay-content > button,
+#overlay-content .btn.absolute {
+    z-index: 1100 !important;
+}
+
+/* mobile overlay: keep button above fixed content */
+#overlay.mobile #overlay-content > button,
+#overlay.mobile #overlay-content .btn.absolute {
+    z-index: 1100 !important;
 }
