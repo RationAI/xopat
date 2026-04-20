@@ -135,13 +135,13 @@ interface ErrorUserEvent {
  * `event.data`, `event.background`, or `event.visualizations` to override
  * what will be loaded.  Awaitable via `raiseEventAwaiting`.
  *
- * @event before-first-open
+ * @event before-app-init
  * @memberof VIEWER_MANAGER
  * @property {DataID[]} data - Global data identifiers array.
  * @property {BackgroundItem[]} background - Background configuration array.
  * @property {VisualizationItem[]} visualizations - Visualization configuration array.
  */
-interface BeforeFirstOpenEvent {
+interface BeforeAppInitEvent {
     data: DataID[];
     background: BackgroundItem[];
     visualizations: VisualizationItem[];

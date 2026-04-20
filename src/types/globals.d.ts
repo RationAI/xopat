@@ -143,7 +143,7 @@ declare global {
         }
 
         interface ViewerManagerEventMap {
-            "before-first-open": BeforeFirstOpenEvent;
+            "before-app-init": BeforeAppInitEvent;
             "before-refresh": BeforeRefreshEvent;
             "before-open": BeforeOpenEvent;
             "after-open": AfterOpenEvent;

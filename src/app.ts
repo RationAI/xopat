@@ -1224,9 +1224,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             /**
              * First loading of the viewer from a clean state.
              * @memberOf VIEWER_MANAGER
-             * @event before-first-open
+             * @event before-app-init
              */
-            await VIEWER_MANAGER.raiseEventAwaiting('before-first-open', event).catch((e: any) => {
+            await VIEWER_MANAGER.raiseEventAwaiting('before-app-init', event).catch((e: any) => {
                 //todo something meaningful
                 console.error(e);
             });
