@@ -59,7 +59,7 @@ WORKDIR /app
 USER root
 
 COPY --chown=node:node . /app
-COPY --chown=node:node --from=viewer-build ./openseadragon/build/openseadragon /app/openseadragon/build/openseadragon
+COPY --chown=node:node --from=viewer-build /tmp/openseadragon/build/openseadragon /app/openseadragon/build/openseadragon
 
 USER node
 
