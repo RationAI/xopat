@@ -6,7 +6,7 @@ const { div, input, textarea, span, button, label, h3 } = van.tags;
 class NewAppForm extends BaseComponent {
     constructor(options = {}) {
         options = super(options).options;
-        this.id = options.id || 'analyze-new-app-form';
+        this.id = options.id || 'analyze-dev-new-app-form';
         this.onSubmit = options.onSubmit || (() => {});
         this.values = options.values || {};
         this._el = null;

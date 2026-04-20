@@ -1,7 +1,7 @@
 import { Dropdown } from "../../ui/classes/elements/dropdown.mjs";
 import { NewAppForm } from "./newAppForm.mjs";
 
-addPlugin('analyze', class extends XOpatPlugin {
+addPlugin('analyze-dev', class extends XOpatPlugin {
     constructor(id, params) {
         super(id);
         this.params = params || {};
@@ -228,31 +228,48 @@ addPlugin('analyze', class extends XOpatPlugin {
      */
     async _captureAnnotation(fw) {
         const annot = singletonModule('annotations');
+        console.log('[analyze] _captureAnnotation start, annot:', annot, 'mode:', annot?.mode?.getId?.());
         if (!annot) throw new Error('Annotations module not available');
-        if (!annot.presets.left) throw new Error('No active annotation preset configured');
 
-        const rectFactory = annot.getAnnotationObjectFactory('rect');
+        // Find rect factory by fabric structure in case its ID was registered incorrectly
+        const rectFactory = annot.getAnnotationObjectFactory('rect')
+            || Object.values(annot.objectFactories).find(f => f.fabricStructure?.() === 'rect');
         if (!rectFactory) throw new Error('Rectangle annotation factory not available');
 
-        const prevModeId = annot.mode?.getId?.();
+        if (!annot.presets.left) annot.setPreset(true, true);
         const prevFactory = annot.presets.left.objectFactory;
+        const prevModeId = annot.mode?.getId?.();
         const wasEnabled = !annot.disabledInteraction;
 
-        annot.enableInteraction(true);
-        annot.setModeById('custom');
         annot.presets.left.objectFactory = rectFactory;
+        annot.enableInteraction(true);
+        // Ensure the CUSTOM mode is registered before activating it
+        annot.setModeUsed('CUSTOM');
+        // setModeById fires mode-changed which may throw in third-party handlers,
+        // but the mode is assigned before the event fires so the catch is safe to ignore
+        try { annot.setModeById('custom'); } catch (_) {}
+        console.log('[analyze] mode after switch:', annot.mode?.getId?.(), 'disabledInteraction:', annot.disabledInteraction);
         if (fw._rootEl) fw._rootEl.style.display = 'none';
+
+        // Debug: monitor canvas-press to see if OSD is intercepting clicks
+        const debugPress = (e) => console.log('[analyze] canvas-press fired on VIEWER');
+        const debugRelease = (e) => console.log('[analyze] canvas-release on annot');
+        VIEWER.addHandler('canvas-press', debugPress);
+        annot.addHandler('canvas-release', debugRelease);
 
         let annotObj;
         try {
+            console.log('[analyze] _captureAnnotation: waiting for annotation-create event');
             annotObj = await new Promise((resolve, reject) => {
                 const onCreate = (ev) => {
+                    console.log('[analyze] annotation-create fired, object:', ev.object);
                     annot.removeHandler('annotation-create', onCreate);
                     document.removeEventListener('keydown', onEscape, true);
                     resolve(ev.object);
                 };
                 const onEscape = (e) => {
                     if (e.key !== 'Escape') return;
+                    console.log('[analyze] Escape pressed, cancelling annotation capture');
                     annot.removeHandler('annotation-create', onCreate);
                     document.removeEventListener('keydown', onEscape, true);
                     reject(new Error('cancelled'));
@@ -260,19 +277,26 @@ addPlugin('analyze', class extends XOpatPlugin {
                 annot.addHandler('annotation-create', onCreate);
                 document.addEventListener('keydown', onEscape, true);
             });
+            console.log('[analyze] annotation-create resolved with object:', annotObj);
         } finally {
-            if (prevModeId !== undefined) annot.setModeById(prevModeId);
+            VIEWER.removeHandler('canvas-press', debugPress);
+            annot.removeHandler('canvas-release', debugRelease);
+            console.log('[analyze] _captureAnnotation finally block, annotObj:', annotObj);
             if (annot.presets.left) annot.presets.left.objectFactory = prevFactory;
+            try { if (prevModeId !== undefined) annot.setModeById(prevModeId); } catch (_) {}
             if (!wasEnabled) annot.enableInteraction(false);
             // Restore window on cancel/error immediately; success path restores after ID polling
             if (!annotObj && fw._rootEl) fw._rootEl.style.display = '';
         }
 
+        console.log('[analyze] waiting for annotation ID...');
         try {
             const id = await this._waitForAnnotationId(annotObj);
+            console.log('[analyze] got annotation ID:', id);
             if (!id) throw new Error('Annotation ID not assigned within timeout');
             return id;
         } finally {
+            console.log('[analyze] restoring FloatingWindow after ID polling');
             if (fw._rootEl) fw._rootEl.style.display = '';
         }
     }
@@ -435,6 +459,7 @@ addPlugin('analyze', class extends XOpatPlugin {
             }
 
             const requiredInputs = window.EmpaiaStandaloneJobs?.getRequiredInputs?.(ead, mode) || [];
+            console.log('[analyze] requiredInputs:', requiredInputs);
             if (requiredInputs.length === 0) {
                 container.innerHTML = '<div class="text-xs opacity-50">No inputs required</div>';
                 return { container, getInputs: () => ({}) };
@@ -469,6 +494,7 @@ addPlugin('analyze', class extends XOpatPlugin {
     }
 
     _createInputRow(input, currentSlideId, inputFields, onCapture) {
+        console.log("input.type:", input.type)
         if (input.type === 'wsi') {
             // Auto-fill with current slide — no UI row needed
             inputFields[input.key] = { value: currentSlideId };
@@ -483,7 +509,7 @@ addPlugin('analyze', class extends XOpatPlugin {
         label.textContent = `${input.key} (${input.type})`;
         row.appendChild(label);
 
-        if (input.type === 'roi') {
+        if (input.type === 'rectangle') {
             const valueHolder = { value: '' };
             inputFields[input.key] = valueHolder;
 

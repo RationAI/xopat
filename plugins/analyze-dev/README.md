@@ -1,4 +1,6 @@
 
+> **IN DEVELOPMENT — NOT YET FUNCTIONAL.** This plugin is under active development and is not ready for use in production or testing environments. Features may be incomplete, broken, or subject to change without notice.
+
 Analyze plugin
 ========================
 
@@ -21,4 +23,3 @@ Implementation notes
 --------------------
 - UI behaviors (menu, positioning, hover) are implemented in `SidePanel` (`setMenu`, `showNear`, `scheduleHide`, `cancelHide`) — reuse it for other flyouts.
 - `SidePanel.hide()` currently removes the element; consider switching to `display:none` if you need faster show/hide cycles.
-

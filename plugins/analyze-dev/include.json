@@ -1,6 +1,6 @@
 {
-    "id": "analyze",
-    "name": "Analyze dropdown in Main Menu",
+    "id": "analyze-dev",
+    "name": "Analyze dropdown in Main Menu (dev)",
     "author": "Filip Vrubel",
     "version": "1.0.0",
     "description": "Plugin for creating and running jobs",
