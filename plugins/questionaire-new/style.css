@@ -1,24 +1,43 @@
 .questionnaire-runtime .form-control {
   @apply gap-1;
 }
+
 .questionnaire-runtime .alert + .grid {
   @apply pt-2;
 }
+
 .questionnaire-runtime .prose {
   @apply rounded-box border border-base-300 bg-base-200/40 p-4;
 }
+
 .questionnaire-runtime select[multiple] {
   min-height: 10rem;
 }
-.questionnaire-preview .tab {
-  @apply no-underline;
+
+.questionnaire-preview .rating input {
+  cursor: pointer;
 }
-.questionnaire-rating .btn {
-  min-width: 2.5rem;
+
+.questionnaire-runtime .table :where(th, td) {
+  @apply align-middle;
 }
-.questionnaire-root .card-title {
-  @apply items-center justify-between;
+
+.questionnaire-runtime .file-input {
+  @apply max-w-full;
 }
-.questionnaire-root textarea {
-  @apply font-mono text-sm;
+
+.questionnaire-page-setup-box .label {
+  @apply py-1;
+}
+
+.questionnaire-designer-shell {
+  @apply rounded-box border border-base-300 bg-base-200/40 p-3 shadow-inner;
+}
+
+.questionnaire-designer-sidebar {
+  @apply min-w-0;
+}
+
+.questionnaire-designer-shell .card {
+  @apply bg-base-100;
 }

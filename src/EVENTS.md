@@ -44,7 +44,7 @@ should be provided. These events should be invoked on the parent instance of the
 Events have their name (for which you register) and when invoked, a parameter is passed
 to the handler function that might contain a lot of useful data.
 ## Global Events ``VIEWER_MANAGER``
-#### async `before-first-open` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
+#### async `before-app-init` | e: {data: [string], background: [BackgroundItem], visualizations: [VisualizationItem], fromLocalStorage: boolean}
 Fired before the first open of the viewer happens. Apps can perform
 custom functionality just before the viewer gets initialized.
 ``fromLocalStorage`` is true when the data was loaded from the user browser cache, but the viewer

@@ -40,7 +40,9 @@ WORKDIR /usr/app
 
 RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
     # User Id 1000 for kubernetes
-    && usermod --non-unique --uid 1000 node
+    && usermod --non-unique --uid 1000 node \
+    && mkdir -p /app \
+    && chown -R node:node /app
 
 EXPOSE 9000
 USER node
@@ -57,9 +59,7 @@ WORKDIR /app
 USER root
 
 COPY --chown=node:node . /app
-
-RUN mkdir -p /app/server/.cache \
-    && chown -R node:node /app
+COPY --chown=node:node --from=viewer-build /tmp/openseadragon/build/openseadragon /app/openseadragon/build/openseadragon
 
 USER node
 

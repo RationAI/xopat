@@ -257,7 +257,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * contained in
          * @param menuName menu type it is contained in, the name of the menu as in USER_INTERFACE
          * @param {(string|string[])} menuId id of the menu to focus, applicable for menus that can switch between
-         *   different contents, AdvancedMenu can specify both string (menuId to open) or array ([menuId, submenuId])
+         *   different contents
          * @param id element ID to highlight
          * @param timeout highlight timeout in ms, default 2000
          * @param animated default true

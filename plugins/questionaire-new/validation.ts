@@ -1,29 +1,119 @@
-import type { QuestionnaireAnswers, QuestionnaireElement, QuestionnaireFileElement, QuestionnairePage, QuestionnaireSchema, QuestionnaireValue } from "./types";
-import { isConditionVisible } from "./utils";
-export function validatePage(page: QuestionnairePage, answers: QuestionnaireAnswers, schema: QuestionnaireSchema): Record<string, string> {
+import type {
+  QuestionnaireAnswers,
+  QuestionnaireElement,
+  QuestionnaireMatrixElement,
+  QuestionnairePage,
+  QuestionnaireRepeatElement,
+  QuestionnaireValue,
+} from "./types";
+import { answerFor, conditionMatches } from "./utils";
+
+function isEmpty(value: QuestionnaireValue): boolean {
+  return value == null || value === "" || value === false || (Array.isArray(value) && value.length === 0);
+}
+
+export function validatePage(page: QuestionnairePage, answers: QuestionnaireAnswers): Record<string, string> {
   const errors: Record<string, string> = {};
-  page.elements.filter((element) => element.kind !== "content").filter((element) => isConditionVisible(element.visibleWhen, (name) => answers[name])).forEach((element) => {
-    const value = answerFor(element, answers);
-    const message = validateElement(element, value, answers);
-    if (message) errors[element.name] = message;
+  page.elements.filter((e) => conditionMatches(e.visibleWhen, answers)).forEach((element) => {
+    validateElement(element, answers, errors);
   });
   return errors;
 }
-export function validateElement(element: QuestionnaireElement, value: QuestionnaireValue, answers: QuestionnaireAnswers): string | undefined {
-  const isRequired = !!element.required || isConditionVisible(element.requiredWhen, (name) => answers[name]);
-  const empty = value == null || value === "" || value === false || (Array.isArray(value) && value.length === 0);
-  if (isRequired && empty) return element.validation?.message || "This field is required.";
-  if (empty) return undefined;
-  const textValue = Array.isArray(value) ? value.join(",") : String(value);
-  if (element.kind === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(textValue)) return element.validation?.message || "Please enter a valid email.";
-  if (element.kind === "url") { try { new URL(textValue); } catch { return element.validation?.message || "Please enter a valid URL."; } }
-  if (element.kind === "tel" && !/^[0-9+\-().\s]{5,}$/.test(textValue)) return element.validation?.message || "Please enter a valid phone number.";
-  const v = element.validation;
-  if (v?.minLength != null && textValue.length < v.minLength) return v.message || `Minimum length is ${v.minLength}.`;
-  if (v?.maxLength != null && textValue.length > v.maxLength) return v.message || `Maximum length is ${v.maxLength}.`;
-  if (v?.pattern) { try { const re = new RegExp(v.pattern); if (!re.test(textValue)) return v.message || "This field does not match the required pattern."; } catch { return "Validation pattern is invalid."; } }
-  if (element.kind === "number" || element.kind === "rating") { const n = Number(value); if (Number.isNaN(n)) return "Please enter a valid number."; if (v?.min != null && n < v.min) return v.message || `Minimum value is ${v.min}.`; if (v?.max != null && n > v.max) return v.message || `Maximum value is ${v.max}.`; }
-  if (element.kind === "file") { const fileElement = element as QuestionnaireFileElement; if (!fileElement.multiple && Array.isArray(value) && value.length > 1) return "Only one file is allowed."; }
-  return undefined;
+
+export function validateElement(
+  element: QuestionnaireElement,
+  answers: QuestionnaireAnswers,
+  errors: Record<string, string>,
+  parentKey = "",
+): void {
+  const key = parentKey ? `${parentKey}.${element.name}` : element.name;
+  const validation = element.validation || {};
+  const value = answerFor(element, answers);
+
+  if (element.kind === "content") return;
+
+  const required = !!validation.required || (!!validation.requiredWhen && conditionMatches(validation.requiredWhen, answers));
+  if (required && isEmpty(value)) {
+    errors[key] = validation.message || "This field is required.";
+    return;
+  }
+  if (isEmpty(value)) return;
+
+  if (typeof value === "string") {
+    if (validation.minLength != null && value.length < validation.minLength) {
+      errors[key] = validation.message || `Minimum length is ${validation.minLength}.`;
+      return;
+    }
+    if (validation.maxLength != null && value.length > validation.maxLength) {
+      errors[key] = validation.message || `Maximum length is ${validation.maxLength}.`;
+      return;
+    }
+    if (validation.pattern) {
+      try {
+        const re = new RegExp(validation.pattern);
+        if (!re.test(value)) {
+          errors[key] = validation.message || "Value format is invalid.";
+          return;
+        }
+      } catch {}
+    }
+  }
+
+  if (typeof value === "number") {
+    if (validation.min != null && value < validation.min) {
+      errors[key] = validation.message || `Minimum value is ${validation.min}.`;
+      return;
+    }
+    if (validation.max != null && value > validation.max) {
+      errors[key] = validation.message || `Maximum value is ${validation.max}.`;
+      return;
+    }
+  }
+
+  if (element.kind === "email" && typeof value === "string") {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      errors[key] = validation.message || "Please enter a valid email.";
+      return;
+    }
+  }
+
+  if (element.kind === "url" && typeof value === "string") {
+    try {
+      new URL(value);
+    } catch {
+      errors[key] = validation.message || "Please enter a valid URL.";
+      return;
+    }
+  }
+
+  if (element.kind === "repeat") {
+    const repeatElement = element as QuestionnaireRepeatElement;
+    const rows = Array.isArray(value) ? value : [];
+    if (repeatElement.minItems != null && rows.length < repeatElement.minItems) {
+      errors[key] = validation.message || `At least ${repeatElement.minItems} items are required.`;
+      return;
+    }
+    if (repeatElement.maxItems != null && rows.length > repeatElement.maxItems) {
+      errors[key] = validation.message || `At most ${repeatElement.maxItems} items are allowed.`;
+      return;
+    }
+    rows.forEach((row, rowIndex) => {
+      if (!row || typeof row !== "object") return;
+      repeatElement.elements.forEach((child) => {
+        validateElement(child, row as QuestionnaireAnswers, errors, `${key}[${rowIndex}]`);
+      });
+    });
+    return;
+  }
+
+  if (element.kind === "matrix") {
+    const matrix = element as QuestionnaireMatrixElement;
+    const record = (value && typeof value === "object" ? value : {}) as Record<string, string>;
+    if (required) {
+      const missing = matrix.rows.some((row) => !record[row.value]);
+      if (missing) {
+        errors[key] = validation.message || "Please complete all matrix rows.";
+      }
+    }
+  }
 }
-export function answerFor(element: QuestionnaireElement, answers: QuestionnaireAnswers): QuestionnaireValue { const explicit = answers[element.name]; return explicit !== undefined ? explicit : element.defaultValue; }

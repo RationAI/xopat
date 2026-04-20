@@ -32,7 +32,7 @@ addPlugin(
 
     loadForm() {
       if (window.YTFeedbackForm) {
-        USER_INTERFACE.AdvancedMenu.setMenu(
+        UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
           "Feedback Form",
@@ -55,7 +55,7 @@ addPlugin(
 
         //todo a bit hacky, we should ensure each plugin does not damage dom by this procedure, e.g. it is reversible, we use ${pluginId}-plugin-root which gets trimmed
         const formNode =
-          $(`<span id="add-plugins" class="btn-pointer py-2 pr-1 ${this.id}-plugin-root" onclick="USER_INTERFACE.AdvancedMenu.openMenu('${this.id}');" data-i18n="[title]main.bar.explainPlugins">
+          $(`<span id="add-plugins" class="btn-pointer py-2 pr-1 ${this.id}-plugin-root" onclick="UI.Services.FullscreenMenus.openMenu('${this.id}');" data-i18n="[title]main.bar.explainPlugins">
                 <span class="material-icons pr-0" style="font-size: 22px;">feedback</span>
                 <span class="pl-1">Feedback</span>
             </span>`);
@@ -84,7 +84,7 @@ addPlugin(
         });
         this.observer.observe(container, { childList: true, subtree: true });
       } else {
-        USER_INTERFACE.AdvancedMenu.setMenu(
+        UI.Services.FullscreenMenus.setMenu(
           this.id,
           "youtrack-feedback",
           "Feedback Form",
