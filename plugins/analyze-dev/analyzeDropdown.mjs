@@ -1,5 +1,5 @@
-import { Dropdown } from "../../ui/classes/elements/dropdown.mjs";
 import { NewAppForm } from "./newAppForm.mjs";
+const { Dropdown } = globalThis.UI;
 
 addPlugin('analyze-dev', class extends XOpatPlugin {
     constructor(id, params) {
@@ -310,7 +310,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             console.warn('[analyze] failed to fetch apps, showing empty list', e);
         }
 
-        const { FloatingWindow } = await import('../../ui/classes/components/floatingWindow.mjs');
+        const { FloatingWindow } = globalThis.UI;
         const fw = new FloatingWindow({
             id: `${this.id}-apps-window`,
             title: tOr('analyze.apps', 'Apps'),
