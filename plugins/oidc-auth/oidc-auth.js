@@ -1,10 +1,8 @@
 // 'oidc-auth' plugin
 addPlugin('oidc-auth', class extends XOpatPlugin {
     constructor(id) { 
-        super(id); 
-    }
+        super(id);
 
-    async pluginReady() {
         try {
             const oidcConfig = this.getStaticMeta('oidc', {});
 
