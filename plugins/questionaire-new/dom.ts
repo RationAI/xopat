@@ -1,10 +1,16 @@
-export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string, children?: HTMLElement[]): HTMLElementTagNameMap[K] {
+export function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+  children?: HTMLElement[],
+): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   if (children?.length) children.forEach((child) => node.append(child));
   return node;
 }
+
 export function button(text: string, className: string, onClick: () => void): HTMLButtonElement {
   const node = document.createElement("button");
   node.type = "button";
@@ -13,6 +19,7 @@ export function button(text: string, className: string, onClick: () => void): HT
   node.addEventListener("click", onClick);
   return node;
 }
+
 export function card(title: string): HTMLElement {
   const node = el("div", "card border border-base-300 bg-base-100 shadow-sm");
   const body = el("div", "card-body p-3");
@@ -20,7 +27,11 @@ export function card(title: string): HTMLElement {
   node.append(body);
   return node;
 }
-export function cardBody(cardEl: HTMLElement): HTMLElement { return cardEl.querySelector(".card-body") as HTMLElement; }
+
+export function cardBody(node: HTMLElement): HTMLElement {
+  return node.querySelector(".card-body") as HTMLElement;
+}
+
 export function textInput(label: string, value: string, onInput: (value: string) => void): HTMLElement {
   const wrap = el("div", "mb-3 form-control");
   wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));
@@ -32,18 +43,25 @@ export function textInput(label: string, value: string, onInput: (value: string)
   wrap.append(input);
   return wrap;
 }
-export function numberInput(label: string, value: number | undefined, onInput: (value: number | undefined) => void): HTMLElement {
+
+export function numberInput(label: string, value: number, onInput: (value: number) => void): HTMLElement {
   const wrap = el("div", "mb-3 form-control");
   wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));
   const input = document.createElement("input");
   input.type = "number";
   input.className = "input input-bordered w-full";
-  input.value = value == null ? "" : String(value);
-  input.addEventListener("input", () => onInput(input.value === "" ? undefined : Number(input.value)));
+  input.value = String(value ?? 0);
+  input.addEventListener("input", () => onInput(Number(input.value || 0)));
   wrap.append(input);
   return wrap;
 }
-export function textAreaInput(label: string, value: string, onInput: (value: string) => void, rows = 4): HTMLElement {
+
+export function textAreaInput(
+  label: string,
+  value: string,
+  onInput: (value: string) => void,
+  rows = 4,
+): HTMLElement {
   const wrap = el("div", "mb-3 form-control");
   wrap.append(el("label", "label", undefined, [el("span", "label-text", label)]));
   const input = document.createElement("textarea");
@@ -54,6 +72,7 @@ export function textAreaInput(label: string, value: string, onInput: (value: str
   wrap.append(input);
   return wrap;
 }
+
 export function toggleInput(label: string, checked: boolean, onChange: (checked: boolean) => void): HTMLElement {
   const wrap = el("label", "mb-3 label cursor-pointer justify-start gap-3");
   const input = document.createElement("input");

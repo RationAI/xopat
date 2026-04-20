@@ -15,7 +15,7 @@ const { div, h3, span } = van.tags
  *                       {id: "s2", icon: settingsIcon, title: "Content2", body: "Settings2"});
  * menu.attachTo(document.body);
  * 
- * //class to simulate original mainMenu and AdvancedMenu components from previous versions of xOpat
+ * //class to simulate original mainMenu and FullscreenMenu components from previous versions of xOpat
  * // WIP
  */
 export class MainPanel extends Menu {
@@ -80,7 +80,7 @@ export class MainPanel extends Menu {
         if (tissueMenuBuilder) tissueMenuBuilder.context.style.width = width;
     }
 
-    // AdvancedMenu
+    // FullscreenMenu
     setMenu(ownerPluginId, toolsMenuId, title, html, icon, withSubmenu, container) {
     }
     openMenu(atPluginId, toggle) {

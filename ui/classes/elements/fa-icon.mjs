@@ -15,7 +15,7 @@ const { i } = van.tags
  * //then we need to add it as an child to the another component:
  * const settings = new Button({
  *   onClick: () => {
- *      USER_INTERFACE.AdvancedMenu.openMenu(APPLICATION_CONTEXT.settingsMenuId);
+ *      UI.Services.FullscreenMenus.openMenu(APPLICATION_CONTEXT.settingsMenuId);
  *  },
  * id: "settingsButton",
  * }, settingsIcon);
