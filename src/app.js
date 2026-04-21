@@ -1048,13 +1048,25 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @param background
      * @param visualizations
      */
-    APPLICATION_CONTEXT.openViewerWith = function (
+    APPLICATION_CONTEXT.openViewerWith = async function (
         data,
         background,
         visualizations=[],
     ) {
         USER_INTERFACE.Loading.show(true);
         VIEWER.close();
+
+        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
+
+        /**
+         * Allows plugins to modify the config before rendering
+         * @memberOf VIEWER
+         * @event before-open-with
+         */
+        await VIEWER.tools.raiseAwaitEvent(VIEWER, 'before-open-with', { data, background, visualizations });
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
         let renderingWithWebGL = visualizations?.length > 0;
@@ -1072,13 +1084,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 renderingWithWebGL = false;
             }
         }
+
         loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-
-        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-        config.data = data;
-        config.background = background;
-        config.visualizations = visualizations;
-
         if (reopenCounter > 0) {
             APPLICATION_CONTEXT.disableVisualization();
         } else {
