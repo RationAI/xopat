@@ -197,7 +197,7 @@ const BuildLogic = {
             );
             await spawnAsync("npx", buildArgs);
         } else {
-            logger.warn(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
+            logger.log(`${logPrefix} No scripts or "buildEntry" entry point found. Skipping JS build.`);
         }
 
         // todo consider rebuilding only server parts that actually changed

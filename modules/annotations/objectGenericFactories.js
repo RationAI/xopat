@@ -624,7 +624,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         delete visualProperties["stroke"];
         delete visualProperties["fill"];
         delete visualProperties["strokeWidth"];
@@ -932,12 +932,12 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         // visualProperties.modeOutline = false;
         visualProperties.stroke = preset.color;
         // delete visualProperties.strokeWidth;
         // delete visualProperties.stroke;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     edit(theObject) {
@@ -1444,9 +1444,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2"];
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     /**
@@ -1731,9 +1731,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return instance;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     getDescription(ofObject) {
@@ -1892,10 +1892,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         ofObject.forEachObject(o => {
             const factory = o._factory();
-            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
+            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties, targetCanvas);
         });
     }
 

@@ -468,12 +468,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
         },
 
         /**
-         * Status bar
-         * @namespace USER_INTERFACE.Status
-         */
-        Status: new UI.StatusBar(),
-
-        /**
          * UI Fullscreen Loading
          */
         Loading: {
@@ -724,8 +718,6 @@ ${label}
             }));
         }, 200);
     });
-    // todo better way, some layout api
-    USER_INTERFACE.Status.attachTo(document.getElementById('osd'));
     // todo: maybe allow contextual override (based on http client)
     window.XOpatSessionRecovery = {
         isReloading: false,

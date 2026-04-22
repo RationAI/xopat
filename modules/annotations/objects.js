@@ -852,8 +852,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {OSDAnnotations.Preset} preset
      * @param {OSDAnnotations.CommonAnnotationVisuals} visualProperties must be a modifiable object, will be used
      * @param {OSDAnnotations.CommonAnnotationVisuals} defaultVisualProperties will not be touched
+     * @param {fabric.canvas} targetCanvas
      */
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         //todo possible issue if someone sets manually single object prop
         // (e.g. show borders) and then system triggers update (open history window)
 
@@ -873,8 +874,8 @@ OSDAnnotations.AnnotationObjectFactory = class {
             }
 
             if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
-                // Todo optimize this to avoid re-computation of the values... maybe set the value on object zooming event
-                const canvas = this._context.fabric.canvas;
+                // Use the target viewer canvas when updating multiview annotations.
+                const canvas = targetCanvas || this._context.fabric.canvas;
                 props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
             } else {
                 // Shared props object carries over the value

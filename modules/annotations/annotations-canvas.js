@@ -2276,7 +2276,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (preset) {
             const factory = this.module.getAnnotationObjectFactory(object.factoryID);
             const visuals = {...this.module.presets.commonAnnotationVisuals};
-            factory.updateRendering(object, preset, visuals, visuals);
+            factory.updateRendering(object, preset, visuals, visuals, this.canvas);
             factory.renderPresetText(object);
 
             const isSelected = this.isAnnotationSelected(object, selection);
@@ -2411,6 +2411,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 // left click up handles selection for all modes if mode did not handle the event
                 if (fabricEvent.target) {
                     _this._objectClicked(fabricEvent, point);
+                } else {
+                    _this.clearAnnotationSelection(true);
                 }
 
                 //todo better system by e.g. unifying the events, allowing cancellability and providing only interface to modes

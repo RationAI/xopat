@@ -257,8 +257,6 @@ export const globalPluginWindowMethods = {
                 } else {
                     this._gModes.setSelected(`${modeId}`, false);
                 }
-
-                USER_INTERFACE.Status.show(mode.getDescription());
             };
 
             this.context.addHandler('mode-changed', modeChangeHandler);

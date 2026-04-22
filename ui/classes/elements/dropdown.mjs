@@ -50,7 +50,7 @@ class Dropdown extends BaseSelectableComponent {
         this._sectionMap = new Map();
 
         // --- Nested Menu State ---
-        this._activeSubmenu = null;
+        this._activeSubmenus = [];
         this._submenuTimeout = null;
         this._isHoveringParent = false;
         this._isHoveringSubmenu = false;
@@ -111,28 +111,47 @@ class Dropdown extends BaseSelectableComponent {
         return;
     }
 
-    _closeSubmenu() {
+    _getSubmenuLevel(anchorEl) {
+        const parentSubmenu = anchorEl?.closest?.("[data-submenu-level]");
+        const parentLevel = Number(parentSubmenu?.dataset?.submenuLevel || 0);
+        return parentLevel + 1;
+    }
+
+    _getActiveSubmenu(level) {
+        return this._activeSubmenus.find(submenu => submenu.level === level) || null;
+    }
+
+    _closeSubmenusFrom(level = 0) {
         if (this._submenuTimeout) clearTimeout(this._submenuTimeout);
 
-        // Reset flags
+        for (let index = this._activeSubmenus.length - 1; index >= 0; index -= 1) {
+            const submenu = this._activeSubmenus[index];
+            if (submenu.level < level) {
+                continue;
+            }
+
+            if (submenu.anchorEl) {
+                const link = submenu.anchorEl.querySelector("a");
+                if (link) {
+                    link.classList.remove("!bg-base-300");
+                }
+            }
+
+            if (submenu.token) {
+                UI.Services.FloatingManager.unregister(submenu.token);
+            }
+            if (submenu.el) {
+                submenu.el.remove();
+            }
+
+            this._activeSubmenus.splice(index, 1);
+        }
+    }
+
+    _closeSubmenu() {
         this._isHoveringParent = false;
         this._isHoveringSubmenu = false;
-
-        if (this._activeSubmenu) {
-            // Remove highlight from the parent item
-            if (this._activeSubmenu.anchorEl) {
-                const link = this._activeSubmenu.anchorEl.querySelector('a');
-                if (link) link.classList.remove('bg-base-300');
-            }
-
-            if (this._activeSubmenu.token) {
-                UI.Services.FloatingManager.unregister(this._activeSubmenu.token);
-            }
-            if (this._activeSubmenu.el) {
-                this._activeSubmenu.el.remove();
-            }
-            this._activeSubmenu = null;
-        }
+        this._closeSubmenusFrom(0);
     }
 
     _applyDisabledState(item, node = undefined) {
@@ -259,6 +278,58 @@ class Dropdown extends BaseSelectableComponent {
         return true;
     }
 
+    _findItemRecursive(id, items = Object.values(this.items)) {
+        for (const item of items) {
+            if (item.id === id) {
+                return item;
+            }
+            if (Array.isArray(item.children)) {
+                const nested = this._findItemRecursive(id, item.children);
+                if (nested) {
+                    return nested;
+                }
+            }
+        }
+        return null;
+    }
+
+    setItemSelected(id, selected) {
+        const item = this._findItemRecursive(id);
+        if (!item) return false;
+
+        item.selected = !!selected;
+
+        if (!this._contentEl) {
+            return true;
+        }
+
+        const nodes = this._contentEl.querySelectorAll(`[data-item-id="${id}"]`);
+        nodes.forEach(node => {
+            const isTarget = !!selected;
+            const checkEl = node.querySelector(".check-icon");
+            const isCheckStyle = !!checkEl;
+
+            node.setAttribute("aria-current", isTarget ? "true" : "false");
+
+            if (!isCheckStyle) {
+                node.classList.toggle("bg-primary/100", isTarget);
+                node.classList.toggle("text-primary-content", isTarget);
+                node.classList.toggle("hover:bg-primary/200", isTarget);
+                node.classList.toggle("focus:bg-primary/200", isTarget);
+                node.classList.toggle("!bg-primary/100", isTarget);
+                node.classList.toggle("!hover:bg-primary/200", isTarget);
+                node.classList.toggle("!focus:bg-primary/200", isTarget);
+            }
+
+            if (isCheckStyle) {
+                if (isTarget) checkEl.classList.remove("invisible");
+                else checkEl.classList.add("invisible");
+            }
+        });
+
+        return true;
+    }
+
     setSelected(id) {
         this.selectedId = id;
 
@@ -275,8 +346,10 @@ class Dropdown extends BaseSelectableComponent {
 
             // 2. Toggle Background Highlight (ONLY if NOT check style)
             if (!isCheckStyle) {
-                node.classList.toggle("bg-primary/20", isTarget);
+                node.classList.toggle("bg-primary/100", isTarget);
                 node.classList.toggle("text-primary-content", isTarget);
+                node.classList.toggle("hover:bg-primary/200", isTarget);
+                node.classList.toggle("focus:bg-primary/200", isTarget);
             }
 
             // 3. Toggle Checkmark Visibility (ONLY if check style)
@@ -289,11 +362,6 @@ class Dropdown extends BaseSelectableComponent {
         // Update items in the root menu
         if (this._contentEl) {
             this._contentEl.querySelectorAll(`[data-item-id]`).forEach(updateNode);
-        }
-
-        // Update items in the active submenu (if open)
-        if (this._activeSubmenu && this._activeSubmenu.el) {
-            this._activeSubmenu.el.querySelectorAll(`[data-item-id]`).forEach(updateNode);
         }
 
         // Update Header
@@ -326,9 +394,8 @@ class Dropdown extends BaseSelectableComponent {
             href: item.href || undefined,
             class: [
                 "flex items-center gap-3 rounded-md px-3 py-2",
-                "hover:bg-base-300 focus:bg-base-300",
                 // Highlight background ONLY if NOT in check mode
-                (selected && !isCheckStyle) ? "bg-primary/20 text-primary-content" : "",
+                (selected && !isCheckStyle) ? "!bg-primary/100 text-primary-content !hover:bg-primary/200 !focus:bg-primary/200" : "!hover:bg-base-300 !focus:bg-base-300",
                 item.disabled ? "opacity-50 select-none cursor-default pointer-events-none" : "",
                 item.pluginRootClass || "",
             ].join(" "),
@@ -397,7 +464,8 @@ class Dropdown extends BaseSelectableComponent {
             // Hover behaviour for desktop
             liEl.addEventListener("mouseenter", () => {
                 self._isHoveringParent = true;
-                if (self._activeSubmenu?.parentId === item.id) {
+                const submenuLevel = self._getSubmenuLevel(liEl);
+                if (self._getActiveSubmenu(submenuLevel)?.parentId === item.id) {
                     self._scheduleSubmenuCheck();
                     return;
                 }
@@ -420,8 +488,9 @@ class Dropdown extends BaseSelectableComponent {
                     e.preventDefault();
                     e.stopPropagation();
 
-                    if (self._activeSubmenu?.parentId === item.id) {
-                        self._closeSubmenu();
+                    const submenuLevel = self._getSubmenuLevel(liEl);
+                    if (self._getActiveSubmenu(submenuLevel)?.parentId === item.id) {
+                        self._closeSubmenusFrom(submenuLevel);
                         return;
                     }
                     self._isHoveringParent = true;
@@ -439,27 +508,33 @@ class Dropdown extends BaseSelectableComponent {
     }
 
     _openSubmenu(parentItem, anchorEl) {
-        this._closeSubmenu();
+        const level = this._getSubmenuLevel(anchorEl);
+        const activeAtLevel = this._getActiveSubmenu(level);
+        if (activeAtLevel?.parentId === parentItem.id && activeAtLevel.anchorEl === anchorEl) {
+            return;
+        }
+        this._closeSubmenusFrom(level);
 
         // Highlight parent anchor
-        const link = anchorEl.querySelector('a');
-        if (link) link.classList.add('bg-base-300');
+        const link = anchorEl.querySelector("a");
+        if (link) link.classList.add("!bg-base-300");
 
         const submenuEl = div({
-            class: "dropdown-content bg-base-200 text-base-content rounded-box shadow-xl border border-base-300 w-52 max-w-full min-w-max z-[9999]",
-            style: "display: block; position: fixed;"
+            class: "dropdown-content dropdown-submenu !bg-base-200 text-base-content rounded-box shadow-xl w-52 p-0 max-w-full min-w-max z-[9999]",
+            style: "display: block; position: absolute;",
+            "data-submenu-level": String(level),
         });
 
         // Determine style for this specific submenu
         const submenuStyle = parentItem.childSelectionStyle || this.selectionStyle;
 
         const listEl = ul(
-            { class: "menu bg-transparent p-0", role: "none" },
+            { class: "menu bg-transparent p-0 m-0", role: "none" },
             ...parentItem.children.map(child => this._renderItem(child, submenuStyle))
         );
         submenuEl.appendChild(listEl);
 
-        this._contentEl.appendChild(submenuEl);
+        anchorEl.appendChild(submenuEl);
         submenuEl.style.visibility = "hidden";
 
         // Hover events
@@ -472,63 +547,55 @@ class Dropdown extends BaseSelectableComponent {
             this._scheduleSubmenuCheck();
         });
 
-        // Positioning: place submenu adjacent to the parent row, prefer to the right.
         const anchorRect = anchorEl.getBoundingClientRect();
-        const margin = 0;
+        const margin = 6;
         const vw = document.documentElement.clientWidth || window.innerWidth;
         const vh = document.documentElement.clientHeight || window.innerHeight;
 
         const submenuWidth = submenuEl.offsetWidth || 0;
         const submenuHeight = submenuEl.offsetHeight || 0;
 
-        // Prefer to place to the right of the anchor
-        let left = Math.round(anchorRect.right) - 6;
-        let top = Math.round(anchorRect.top) - anchorRect.height - 6; // minus height of the self-row to align
+        let left = anchorRect.width - margin;
+        let top = -margin;
 
-        // If overflowing right, try flipping to left of anchor
-        if (left + submenuWidth > vw - margin) {
-            const altLeft = Math.round(anchorRect.left - submenuWidth);
-            if (altLeft >= margin) left = altLeft;
-            else left = Math.max(margin, vw - margin - submenuWidth);
+        const initialVpLeft = anchorRect.left + left;
+        if (initialVpLeft + submenuWidth > vw - margin) {
+            left = -submenuWidth + margin;
         }
 
-        // Clamp left to viewport
-        if (left < margin) left = margin;
-
-        // Vertical: ensure submenu fits; prefer aligned to anchor top, else align bottom
-        if (top + submenuHeight > vh - margin) {
-            const altTop = Math.round(anchorRect.bottom - submenuHeight);
-            if (altTop >= margin) top = altTop;
-            else top = Math.max(margin, vh - margin - submenuHeight);
+        let vpLeft = anchorRect.left + left;
+        if (vpLeft < margin) {
+            left += margin - vpLeft;
+            vpLeft = margin;
         }
-        if (top < margin) top = margin;
 
-        const submenuRect = submenuEl.getBoundingClientRect();
-        const viewportWidth = window.innerWidth;
+        let vpTop = anchorRect.top + top;
+        if (vpTop + submenuHeight > vh - margin) {
+            top -= (vpTop + submenuHeight) - (vh - margin);
+            vpTop = anchorRect.top + top;
+        }
+        if (vpTop < margin) {
+            top += margin - vpTop;
+        }
 
         // Apply coordinates and show
-        submenuEl.style.top = `${top}px`;
+        submenuEl.style.left = `${Math.round(left)}px`;
+        submenuEl.style.top = `${Math.round(top)}px`;
         submenuEl.style.visibility = "visible";
-
-        if (left + submenuRect.width > viewportWidth - anchorRect.left - margin) {
-            left = Math.round(anchorRect.left) - submenuRect.width - 6;
-            submenuEl.style.right = `${anchorRect.width}px`;
-        } else {
-            submenuEl.style.left = `${left}px`;
-        }
 
         const token = UI.Services.FloatingManager.register({
             el: submenuEl,
             owner: this,
-            onEscape: () => this._closeSubmenu()
+            onEscape: () => this._closeSubmenusFrom(level)
         });
 
-        this._activeSubmenu = {
+        this._activeSubmenus.push({
             el: submenuEl,
             token,
+            level,
             parentId: parentItem.id,
             anchorEl
-        };
+        });
     }
 
     _buildSectionBlock(section, itemsInSection) {
@@ -558,7 +625,7 @@ class Dropdown extends BaseSelectableComponent {
         for (const s of this.sections) {
             const group = bySection.get(s.id) || [];
             if (!group.length && !s.title) continue;
-            if (!firstBlock) this._contentEl.appendChild(div({ class: "mx-1 my-1 border-t border-base-300/70" }));
+            if (!firstBlock) this._contentEl.appendChild(div({ class: "mx-1 my-1" }));
             const { nodes, listEl } = this._buildSectionBlock(s, group);
             nodes.forEach(n => this._contentEl.appendChild(n));
             this._sectionMap.set(s.id, listEl);
@@ -580,7 +647,7 @@ class Dropdown extends BaseSelectableComponent {
             id: this.parentId + "-ul-" + this.id,
             class: [
                 "dropdown-content",
-                "bg-base-200 text-base-content rounded-box shadow-xl border border-base-300",
+                "!bg-base-200 text-base-content rounded-box shadow-xl border border-base-300",
                 this.widthClass,
                 "max-w-full min-w-max"
             ].join(" "),

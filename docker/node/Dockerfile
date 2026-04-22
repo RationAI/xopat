@@ -1,13 +1,3 @@
-##################
-# VIEWER: BUILD###
-##################
-FROM node:20 AS viewer-build
-WORKDIR /tmp
-RUN git clone https://github.com/RationAI/openseadragon.git \
-    && cd openseadragon \
-    && npm i \
-    && cd ..
-
 #############################
 # VIEWER: PROD GIT       ####
 #############################
@@ -59,7 +49,6 @@ WORKDIR /app
 USER root
 
 COPY --chown=node:node . /app
-COPY --chown=node:node --from=viewer-build /tmp/openseadragon/build/openseadragon /app/openseadragon/build/openseadragon
 
 USER node
 
