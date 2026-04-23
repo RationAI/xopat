@@ -250,28 +250,83 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         return ref;
     }
 
+    _cloneValue(value) {
+        if (value === undefined || value === null) {
+            return value;
+        }
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (e) {
+            return value;
+        }
+    }
+
+    _sameDataEntry(a, b) {
+        if (a === b) return true;
+        if (a == null || b == null) return a === b;
+        if (typeof a !== "object" && typeof b !== "object") {
+            return String(a) === String(b);
+        }
+        try {
+            return JSON.stringify(a) === JSON.stringify(b);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _ensureDataEntry(data, entry) {
+        if (entry === undefined) return undefined;
+
+        const existingIndex = data.findIndex(existing => this._sameDataEntry(existing, entry));
+        if (existingIndex >= 0) {
+            return existingIndex;
+        }
+
+        data.push(this._cloneValue(entry));
+        return data.length - 1;
+    }
+
     _buildViewerPayload(entries) {
         const normalized = this._dedupeEntries(entries);
-        const data = [];
-        const background = [];
+        const data = Array.isArray(APPLICATION_CONTEXT.config.data)
+            ? APPLICATION_CONTEXT.config.data.map(entry => this._cloneValue(entry))
+            : [];
+        const background = Array.isArray(APPLICATION_CONTEXT.config.background)
+            ? APPLICATION_CONTEXT.config.background.map(entry =>
+                typeof entry?.toJSON === "function" ? entry.toJSON() : this._cloneValue(entry)
+            )
+            : [];
+        const bgSpec = [];
 
-        normalized.forEach((entry, idx) => {
+        normalized.forEach((entry) => {
             const conf = entry.config || this._getConfig(entry.item);
             if (!conf) return;
 
-            const raw = typeof conf.toJSON === "function" ? conf.toJSON() : { ...conf };
+            const raw = typeof conf.toJSON === "function" ? conf.toJSON() : this._cloneValue(conf);
             const dataEntry = this._resolveDataEntry(conf);
-            const bgCopy = { ...raw, dataReference: idx };
+            const dataIndex = this._ensureDataEntry(data, dataEntry);
+            const bgCopy = { ...raw, dataReference: dataIndex };
 
-            data.push(dataEntry);
-            background.push(bgCopy);
+            let backgroundIndex = background.findIndex(existing => existing?.id && bgCopy?.id && existing.id === bgCopy.id);
+            if (backgroundIndex < 0) {
+                backgroundIndex = background.findIndex(existing => APPLICATION_CONTEXT.sameBackground(existing, bgCopy));
+            }
+
+            if (backgroundIndex >= 0) {
+                background[backgroundIndex] = bgCopy;
+            } else {
+                background.push(bgCopy);
+                backgroundIndex = background.length - 1;
+            }
+
+            bgSpec.push(backgroundIndex);
         });
 
         return {
             entries: normalized,
             data,
             background,
-            bgSpec: background.length ? background.map((_, i) => i) : null,
+            bgSpec: bgSpec.length ? bgSpec : null,
         };
     }
 
@@ -284,7 +339,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             undefined,
             payload.bgSpec,
             payload.background.length ? undefined : null,
-            { deriveOverlayFromBackgroundGoals: true },
+            {
+                deriveOverlayFromBackgroundGoals: true,
+                dataMode: "merge",
+                backgroundMode: "merge",
+            },
         );
 
         this._syncWithViewer();

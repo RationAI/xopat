@@ -4,6 +4,7 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
+import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 
 
 /** Token symbols for internal element storage */
@@ -1332,11 +1333,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (state) {
                 for (const [eventName, perHandler] of state.entries()) {
                     for (const [, record] of perHandler.entries()) {
-                        const wrapper = record.wrappers.get(this);
+                        const wrappers = record?.wrappers;
+                        if (!wrappers?.get || !wrappers?.delete) {
+                            continue;
+                        }
+                        const wrapper = wrappers.get(this);
                         if (wrapper) {
                             try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
                         }
-                        record.wrappers.delete(this);
+                        wrappers.delete(this);
                     }
                 }
             }
@@ -2901,6 +2906,165 @@ form.submit();
         return VIEWER_MANAGER.getMenu(this);
     };
 
+    /**
+     * Monkey-patches drawer/renderer methods to log the flex-renderer init/reload sequence.
+     * Enabled by APPLICATION_CONTEXT.getOption("webglDebugMode").
+     * Each log line is tagged with [flex:<drawer>] so the full transcript is grep-friendly.
+     */
+    function installFlexRendererDiagnostics(viewer: OpenSeadragon.Viewer) {
+        const seq = (() => { let i = 0; return () => String(++i).padStart(3, "0"); })();
+        const log = (tag: string, msg: string, data?: any) => {
+            if (data !== undefined) console.log(`[flex:${tag}] #${seq()} ${msg}`, data);
+            else console.log(`[flex:${tag}] #${seq()} ${msg}`);
+        };
+
+        const instrumentDrawer = (drawer: any, tag: string) => {
+            if (!drawer || drawer.__xopatInstrumented) return;
+            drawer.__xopatInstrumented = true;
+
+            const summarize = () => ({
+                worldCount: drawer.viewer?.world?.getItemCount?.() ?? null,
+                canvas: drawer.canvas ? `${drawer.canvas.width}x${drawer.canvas.height}` : null,
+                configuredExternally: drawer._configuredExternally,
+                suspendDepth: drawer._suspendRenderingDepth,
+                pendingRebuild: !!drawer._pendingRebuildRequest,
+                shaders: Object.keys(drawer.renderer?._shaders || {}),
+                shaderOrder: drawer.renderer?._shadersOrder,
+            });
+
+            const wrap = (name: string, extra?: (args: any[]) => any) => {
+                const orig = drawer[name];
+                if (typeof orig !== "function") return;
+                drawer[name] = function (...args: any[]) {
+                    log(tag, `${name} CALL`, { args: extra ? extra(args) : args, state: summarize() });
+                    try {
+                        const r = orig.apply(this, args);
+                        log(tag, `${name} RET`, { state: summarize() });
+                        return r;
+                    } catch (e) {
+                        log(tag, `${name} THREW`, { error: String(e), state: summarize() });
+                        throw e;
+                    }
+                };
+            };
+
+            wrap("overrideConfigureAll", args => ({
+                shaderIds: args[0] ? Object.keys(args[0]) : null,
+                order: args[1],
+            }));
+            wrap("tiledImageCreated", args => ({
+                idx: drawer.viewer?.world?.getIndexOfItem?.(args[0]),
+                priorShaderId: args[0]?.__shaderConfig?.id,
+            }));
+            wrap("configureTiledImage", args => ({
+                shaderId: args[1]?.id,
+                shaderType: args[1]?.type,
+            }));
+            wrap("_requestRebuild", args => ({ timeout: args[0], force: args[1], bypassSuspend: args[2] }));
+            wrap("suspendRendering", args => ({ reason: args[0] }));
+            wrap("resumeRendering", args => ({ reason: args[0] }));
+
+            // Classify each incoming shader-source-request so we can tell
+            // whether the library short-circuited (int/descriptor) or fell
+            // through to our resolver.
+            const originalHandleShaderSourceRequest = drawer._handleShaderSourceRequest;
+            if (typeof originalHandleShaderSourceRequest === "function") {
+                drawer._handleShaderSourceRequest = function (request: any = {}) {
+                    const entry = request.entry;
+                    let branch = "resolver";
+                    const directInt = Number.parseInt(entry, 10);
+                    if (Number.isFinite(directInt) && String(directInt) === String(entry).trim()) {
+                        branch = "integer";
+                    } else if (entry && typeof entry === "object" && (
+                        entry.tileSource !== undefined ||
+                        entry.source !== undefined ||
+                        entry.open !== undefined ||
+                        entry.openOptions !== undefined
+                    )) {
+                        branch = "descriptor";
+                    } else if (entry && typeof entry === "object" && entry.__xopatSourceRef) {
+                        branch = "resolver(token)";
+                    }
+                    log(tag, "shader-source-request", {
+                        branch,
+                        shaderId: request.shaderId,
+                        sourceIndex: request.sourceIndex,
+                        reason: request.reason,
+                        entryType: entry === null ? "null" : typeof entry,
+                        loadKey: entry && entry.loadKey,
+                    });
+                    return originalHandleShaderSourceRequest.apply(this, arguments as any);
+                };
+            }
+
+            const r = drawer.renderer;
+            if (r) {
+                r.addHandler("program-used", (e: any) => {
+                    log(tag, "event program-used", {
+                        name: e.name,
+                        shaderIds: Object.keys(e.shaderLayers || {}),
+                        state: summarize(),
+                    });
+                });
+                r.addHandler("html-controls-created", (e: any) => {
+                    log(tag, "event html-controls-created", {
+                        shaderIds: Object.keys(e.shaderLayers || {}),
+                    });
+                });
+                r.addHandler("visualization-change", (e: any) => {
+                    log(tag, "event visualization-change", {
+                        reason: e.reason,
+                        order: e.snapshot?.order,
+                    });
+                });
+            }
+
+            // Observe world changes for this drawer's viewer
+            drawer.viewer?.world?.addHandler("add-item", (e: any) => {
+                log(tag, "world add-item", {
+                    idx: drawer.viewer.world.getIndexOfItem(e.item),
+                    count: drawer.viewer.world.getItemCount(),
+                });
+            });
+            drawer.viewer?.world?.addHandler("remove-item", (e: any) => {
+                log(tag, "world remove-item", {
+                    count: drawer.viewer.world.getItemCount(),
+                });
+            });
+        };
+
+        instrumentDrawer(viewer.drawer, "main");
+        // Navigator drawer is sometimes created later; retry a few frames.
+        let attempts = 0;
+        const waitForNav = () => {
+            const nd = (viewer.navigator as any)?.drawer;
+            if (nd) {
+                instrumentDrawer(nd, "nav");
+            } else if (attempts++ < 30) {
+                setTimeout(waitForNav, 50);
+            } else {
+                log("main", "navigator drawer never appeared (instrumentation skipped)");
+            }
+        };
+        waitForNav();
+
+        // Surface GL errors from either context so they're interleaved with the log.
+        const tapGl = (gl: any, tag: string) => {
+            if (!gl || gl.__xopatErrorTapInstalled) return;
+            gl.__xopatErrorTapInstalled = true;
+            const origGetError = gl.getError.bind(gl);
+            // Can't easily hook every gl call; instead poll briefly around events below.
+            (gl as any).__xopatGetError = origGetError;
+        };
+        tapGl(viewer.drawer?._gl, "main-gl");
+        tapGl((viewer.navigator as any)?.drawer?._gl, "nav-gl");
+
+        log("main", "instrumentation installed", {
+            webglDebugMode: true,
+            showNavigator: !!viewer.navigator,
+        });
+    }
+
     // 2) Manager that tracks the active viewer
     /**
      * Manages one or more OpenSeadragon viewers, keeps track of the active viewer,
@@ -3238,6 +3402,34 @@ form.submit();
                 viewerOptions
             ));
             (viewer as any).__renderingCapability = renderingCapability;
+
+            // Per-viewer broker for shader source (time-series) rebind requests.
+            // The resolver must be installed on the drawer's options so the
+            // flex-renderer dispatches scrub requests into xOpat instead of
+            // blindly appending to viewer.world.
+            const shaderSourceController = new ViewerShaderSourceController(viewer);
+            (viewer as any).__shaderSourceController = shaderSourceController;
+            const attachResolver = (drawer: any) => {
+                if (!drawer || drawer.__xopatShaderResolverAttached) return;
+                drawer.options = drawer.options || {};
+                drawer.options.shaderSourceResolver = shaderSourceController.resolver;
+                drawer.__xopatShaderResolverAttached = true;
+            };
+            attachResolver(viewer.drawer);
+            let navResolverAttempts = 0;
+            const waitForNavResolver = () => {
+                const nd = (viewer.navigator as any)?.drawer;
+                if (nd) {
+                    attachResolver(nd);
+                } else if (navResolverAttempts++ < 30) {
+                    setTimeout(waitForNavResolver, 50);
+                }
+            };
+            waitForNavResolver();
+
+            if (APPLICATION_CONTEXT.getOption("webglDebugMode")) {
+                installFlexRendererDiagnostics(viewer);
+            }
 
             viewer.makeScalebar({
                 pixelsPerMeter: 1,

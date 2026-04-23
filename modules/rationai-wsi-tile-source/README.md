@@ -29,8 +29,8 @@ But this approach has its limitations.
 ### Options
 
 Options include:
-``format`` - one of `jpeg, png, tiff, bmp, gif`.
+``format`` - one of `jpeg, png, tiff, bmp, gif`. If omitted, non-RGB/RGBA slides default to `tiff`.
 ``quality`` - for e.g. jpeg the image quality to request.
-``channels`` - if format is `tiff`, the channels to request (array of indexes) or `all` literal.
+``channels`` - if format is `tiff`, the channels to request (array of indexes) or `all` literal. If omitted, all channels are requested by default.
 
 You can set these optiosn

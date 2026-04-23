@@ -337,9 +337,20 @@ First, get familiar with (sorted in importance order):
  - ``window.HTTPClient`` for seamless auth integration
     - Third party code (see below)
  - `window.APPLICATION_CONTEXT`
-    - note that this interface is meant for inner logic and you probably do not need to access it
+    - supported runtime entrypoint for session/viewer transactions
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`
-    - to access the viewer parameters, use `[set|get]Option(...)` method
+    - to access viewer parameters, use `[set|get]Option(...)`
+    - to mutate viewer/session opening state, use:
+      - `APPLICATION_CONTEXT.openViewerWith(...)`
+      - `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, selection, opts?)`
+      - `APPLICATION_CONTEXT.replaceVisualizations(...)`
+    - `APPLICATION_CONTEXT.updateVisualization(...)` still exists for compatibility, but prefer `replaceVisualizations(...)` in new code
+ - `window.plugin(id)`
+   - preferred way to access another plugin instance when it is already active
+ - `window.singletonModule(id)` and `window.viewerSingletonModule(className, viewerRef)`
+   - preferred lazy accessors for singleton modules and viewer singletons
+ - `window.registerViewerSingleton(...)` and `window.requireViewerSingletonPresence(...)`
+   - register and auto-materialize viewer-scoped helpers from plugins/modules
  - ``window.LAYOUT`` 
    - the main app layout
   
@@ -391,6 +402,8 @@ or an object to specify a file on the web. The object properties (almost) map to
 There can be multiple viewers open at once. You might need to create:
 - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
 - custom viewer-oriented data models: use `XOpatViewerSingleton` if you need only instance per viewer.
+
+If your plugin needs to switch only one viewer, do not rebuild the whole session manually. Use `APPLICATION_CONTEXT.updateViewerSelection(...)`, which goes through the same synchronized open pipeline as full session opens.
 
 ### ``XOpatViewerSingleton``
 The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT

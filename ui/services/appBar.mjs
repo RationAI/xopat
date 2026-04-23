@@ -493,6 +493,89 @@ export class AppBar {
                 }
             });
 
+            this.subMenu.addSection({
+                id: 'visualization-inspector',
+            });
+
+            this.subMenu.addItem({
+                id: 'value-inspector',
+                icon: 'fa-crosshairs',
+                label: 'Value inspector',
+                section: 'visualization-inspector',
+                onClick: () => {
+                    UTILITIES.toggleValueInspector();
+                    this.refresh();
+                    return true;
+                },
+            });
+
+            this.subMenu.addItem({
+                id: 'visualization-inspector',
+                icon: 'fa-eye',
+                label: 'Visualization inspector',
+                section: 'visualization-inspector',
+                children: [
+                    {
+                        id: 'visualization-inspector-toggle',
+                        icon: 'fa-power-off',
+                        label: 'Toggle inspector',
+                        onClick: () => {
+                            UTILITIES.toggleVisualizationInspector();
+                            this.refresh();
+                            return true;
+                        }
+                    },
+                    {
+                        id: 'visualization-inspector-mode',
+                        icon: 'fa-circle-half-stroke',
+                        label: 'Reveal mode',
+                        childSelectionStyle: 'check',
+                        children: [
+                            {
+                                id: 'visualization-inspector-mode-inclusive',
+                                icon: 'fa-circle',
+                                label: 'Inclusive reveal',
+                                onClick: () => {
+                                    UTILITIES.setVisualizationInspectorMode('reveal-inside');
+                                    this.refresh();
+                                    return true;
+                                }
+                            },
+                            {
+                                id: 'visualization-inspector-mode-exclusive',
+                                icon: 'fa-circle-notch',
+                                label: 'Exclusive reveal',
+                                onClick: () => {
+                                    UTILITIES.setVisualizationInspectorMode('reveal-outside');
+                                    this.refresh();
+                                    return true;
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        id: 'visualization-inspector-radius-down',
+                        icon: 'fa-minus',
+                        label: 'Smaller radius',
+                        onClick: () => {
+                            UTILITIES.adjustVisualizationInspectorRadius(-24);
+                            this.refresh();
+                            return true;
+                        }
+                    },
+                    {
+                        id: 'visualization-inspector-radius-up',
+                        icon: 'fa-plus',
+                        label: 'Larger radius',
+                        onClick: () => {
+                            UTILITIES.adjustVisualizationInspectorRadius(24);
+                            this.refresh();
+                            return true;
+                        }
+                    }
+                ],
+            });
+
             const history = APPLICATION_CONTEXT.history;
             if (history) {
                 const deferredRefresh = () => queueMicrotask(() => this.refresh());
@@ -517,19 +600,85 @@ export class AppBar {
 
         refresh() {
             const history = APPLICATION_CONTEXT.history;
-            if (!history) return;
-            const busy = this._isBusy(history);
-            const canUndo = !busy && !!history.canUndo?.();
-            const canRedo = !busy && !!history.canRedo?.();
+            if (history) {
+                const busy = this._isBusy(history);
+                const canUndo = !busy && !!history.canUndo?.();
+                const canRedo = !busy && !!history.canRedo?.();
 
-            this.subMenu.setItemDisabled('history-undo', !canUndo);
-            this.subMenu.setItemDisabled('history-redo', !canRedo);
+                this.subMenu.setItemDisabled('history-undo', !canUndo);
+                this.subMenu.setItemDisabled('history-redo', !canRedo);
 
-            const undoName = canUndo ? (history.currentUndoMeta()?.name ?? '') : '';
-            const redoName = canRedo ? (history.currentRedoMeta()?.name ?? '') : '';
-            console.log("History refresh:", { canUndo, canRedo, undoName, redoName, undo: history.currentUndoMeta(), redo: history.currentRedoMeta() });
-            this.subMenu.setItemLabel('history-undo', $.t('main.bar.undo', { action: undoName }));
-            this.subMenu.setItemLabel('history-redo', $.t('main.bar.redo', { action: redoName }));
+                const undoName = canUndo ? (history.currentUndoMeta()?.name ?? '') : '';
+                const redoName = canRedo ? (history.currentRedoMeta()?.name ?? '') : '';
+                console.log("History refresh:", { canUndo, canRedo, undoName, redoName, undo: history.currentUndoMeta(), redo: history.currentRedoMeta() });
+                this.subMenu.setItemLabel('history-undo', $.t('main.bar.undo', { action: undoName || "" }));
+                this.subMenu.setItemLabel('history-redo', $.t('main.bar.redo', { action: redoName || "" }));
+            }
+
+            const inspectorEnabled = !!APPLICATION_CONTEXT.getOption('visualizationInspectorEnabled', false, true);
+            const inspectorMode = APPLICATION_CONTEXT.getOption('visualizationInspectorMode', 'reveal-inside', true);
+            const inspectorRadius = Number(APPLICATION_CONTEXT.getOption('visualizationInspectorRadiusPx', 96, true)) || 96;
+            const valueInspectorEnabled = !!APPLICATION_CONTEXT.getOption('valueInspectorEnabled', false, true);
+            const inspectorItem = this.subMenu.getItem('visualization-inspector');
+
+            this.subMenu.setItemLabel(
+                'value-inspector',
+                valueInspectorEnabled ? 'Value inspector: on' : 'Value inspector: off'
+            );
+
+            if (inspectorItem && Array.isArray(inspectorItem.children)) {
+                for (const child of inspectorItem.children) {
+                    child.selected = false;
+                }
+
+                const modeParent = inspectorItem.children.find(child => child.id === 'visualization-inspector-mode');
+                if (modeParent && Array.isArray(modeParent.children)) {
+                    for (const child of modeParent.children) {
+                        child.selected = false;
+                    }
+
+                    this.subMenu.setItemSelected('visualization-inspector-mode-inclusive', false);
+                    this.subMenu.setItemSelected('visualization-inspector-mode-exclusive', false);
+
+                    const inclusiveChild = modeParent.children.find(child => child.id === 'visualization-inspector-mode-inclusive');
+                    const exclusiveChild = modeParent.children.find(child => child.id === 'visualization-inspector-mode-exclusive');
+                    if (inspectorMode === 'reveal-outside') {
+                        if (exclusiveChild) exclusiveChild.selected = true;
+                        this.subMenu.setItemSelected('visualization-inspector-mode-exclusive', true);
+                    } else {
+                        if (inclusiveChild) inclusiveChild.selected = true;
+                        this.subMenu.setItemSelected('visualization-inspector-mode-inclusive', true);
+                    }
+
+                    modeParent.label = inspectorMode === 'reveal-outside'
+                        ? 'Reveal mode: exclusive'
+                        : 'Reveal mode: inclusive';
+                }
+
+                const toggleChild = inspectorItem.children.find(child => child.id === 'visualization-inspector-toggle');
+                if (toggleChild) {
+                    toggleChild.label = inspectorEnabled ? 'Turn inspector off' : 'Turn inspector on';
+                }
+
+                const radiusDownChild = inspectorItem.children.find(child => child.id === 'visualization-inspector-radius-down');
+                if (radiusDownChild) {
+                    radiusDownChild.label = `Smaller radius (${inspectorRadius}px)`;
+                    radiusDownChild.disabled = inspectorRadius <= 24;
+                }
+
+                const radiusUpChild = inspectorItem.children.find(child => child.id === 'visualization-inspector-radius-up');
+                if (radiusUpChild) {
+                    radiusUpChild.label = `Larger radius (${inspectorRadius}px)`;
+                    radiusUpChild.disabled = inspectorRadius >= 320;
+                }
+            }
+
+            this.subMenu.setItemLabel(
+                'visualization-inspector',
+                inspectorEnabled
+                    ? `Visualization inspector: ${inspectorMode === 'reveal-outside' ? 'exclusive' : 'inclusive'}`
+                    : 'Visualization inspector: off'
+            );
         }
     }
 

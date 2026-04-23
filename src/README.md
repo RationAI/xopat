@@ -98,7 +98,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
-    - [O]`statusBar` - whether to show user action and system status hints, default `true`
+    - [O]`valueInspectorEnabled` - enable the hover value inspector, default `false`
     - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can also be an array of indices for multi-view mode
     - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can also be an array for multi-view mode
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
@@ -243,6 +243,39 @@ For CORE UI, look into `../ui/` folder.``user_interface.js`` serves as definitio
 these definitions to CORE UI services.
 
 Many features are available through ``modules`` that implement additional important functionality.
+
+### Viewer Open API
+The runtime opening pipeline is class-based and lives under `src/classes/app/`. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
+
+- `APPLICATION_CONTEXT.openViewerWith(data?, background?, visualizations?, bgSpec?, vizSpec?, opts?)`
+  - Main transaction entrypoint.
+  - Can replace or merge session `data` / `background`.
+  - Can create additional viewers when multiple backgrounds are targeted.
+  - Rebinds navigator title, scalebar reference, measurements, visualization menu, history, and synthetic open events.
+- `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, { backgroundIndex?, visualizationIndex? }, opts?)`
+  - Use when one existing viewer should switch background and/or visualization without rebuilding unrelated viewers.
+  - The method delegates to the same open pipeline and therefore keeps history/session synchronization consistent.
+- `APPLICATION_CONTEXT.replaceVisualizations(visualizations, newData?, activeVizIndex?)`
+  - Replaces the session visualization list while preserving the rest of the session.
+  - Preferred over the older `updateVisualization(...)` name.
+
+The pipeline options are ambiently typed as `ViewerOpenOptions`, and the per-viewer patch object as `ViewerSelectionPatch`, so plugins/modules can use them without importing from core files.
+
+### Session Restore and Lifecycle
+Session bootstrap and restore now live in `ApplicationLifecycleController`.
+
+- Startup still restores the last successful session from browser storage when no explicit hash session is provided.
+- `beginApplicationLifecycle(...)` loads required plugins, initializes layers, raises `before-app-init`, and then opens the requested viewer state.
+- Inspector registration is no longer mixed into `app.ts`; it is centralized in `ViewerInspectorController`.
+
+### Inspector Utilities
+The following global utility methods are part of the supported runtime surface and are ambiently typed:
+
+- `UTILITIES.toggleVisualizationInspector(enabled?)`
+- `UTILITIES.setVisualizationInspectorRadius(radiusPx)`
+- `UTILITIES.adjustVisualizationInspectorRadius(deltaPx)`
+- `UTILITIES.setVisualizationInspectorMode(mode)`
+- `UTILITIES.toggleValueInspector(enabled?)`
 
 ### UI
 **You should use new UI components, see [this README](../ui/README.md)**.

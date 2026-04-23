@@ -6,6 +6,12 @@ declare global {
     var APPLICATION_CONTEXT: ApplicationContext;
     var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton) => void;
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
+    var plugin: (id: string) => IXOpatPlugin | undefined;
+    var pluginMeta: (id: string, metaKey: string) => any;
+    var singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
+    var viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
+    var registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
+    var requireViewerSingletonPresence: (singletonClass: XOpatViewerSingletonClass) => void;
     var XOpatModuleSingleton: new () => IXOpatModuleSingleton;
     var XOpatPlugin: new (id: string) => IXOpatPlugin;
     var VIEWER_MANAGER: any;
@@ -14,6 +20,7 @@ declare global {
     var van: any;
     var UI: any;
     var UTILITIES: XOpatUtilities;
+    var xmodules: Record<string, any>;
 
     // Third-party globals loaded at runtime
     var i18next: any;
@@ -32,6 +39,13 @@ declare global {
         APPLICATION_CONTEXT: ApplicationContext;
         VIEWER_MANAGER: any;
         VIEWER: OpenSeadragon.Viewer;
+        plugin: (id: string) => IXOpatPlugin | undefined;
+        pluginMeta: (id: string, metaKey: string) => any;
+        singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
+        viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
+        registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
+        requireViewerSingletonPresence: (singletonClass: XOpatViewerSingletonClass) => void;
+        xmodules: Record<string, any>;
         HTTPError: any;
         UI: any;
         van: any;

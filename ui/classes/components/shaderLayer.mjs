@@ -444,7 +444,7 @@ export class ShaderLayer extends BaseComponent {
             };
             rows.push(
                 div(
-                    { class: "shader-controls-row flex items-center px-2" },
+                    { class: "shader-controls-row shader-controls-row--grid px-2", "data-columns": "2" },
                     label({ class: "text-xs mr-2" }, f.name + ":"),
                     input({
                         type: "number",
@@ -457,6 +457,50 @@ export class ShaderLayer extends BaseComponent {
             );
         }
         return div({}, ...rows);
+    }
+
+    _wrapShaderControlRow(html) {
+        if (typeof html !== "string") {
+            return "";
+        }
+
+        const content = html.trim();
+        if (!content) {
+            return "";
+        }
+
+        return `<div class="shader-controls-row shader-controls-row--renderer w-full px-2 pb-1">${content}</div>`;
+    }
+
+    _renderShaderControls(shader) {
+        if (!shader) {
+            return "";
+        }
+
+        const fragments = [];
+        const controls = shader._controls || {};
+        for (const controlName in controls) {
+            const control = shader[controlName] || controls[controlName];
+            if (!control || typeof control.toHtml !== "function") {
+                continue;
+            }
+
+            const wrapped = this._wrapShaderControlRow(control.toHtml());
+            if (wrapped) {
+                fragments.push(wrapped);
+            }
+        }
+
+        if (shader._renderer) {
+            fragments.push(`<h4>Rendering as ${shader._renderer.constructor.name()}</h4>`);
+            fragments.push(this._renderShaderControls(shader._renderer));
+        }
+
+        if (shader._delegateShader) {
+            fragments.push(this._renderShaderControls(shader._delegateShader));
+        }
+
+        return fragments.filter(Boolean).join("");
     }
 
     // ---- cache icon + submenu
@@ -549,11 +593,11 @@ export class ShaderLayer extends BaseComponent {
     }
 
     _buildMainControls() {
-        const htmlControls = this.layer?.htmlControls
-            ? this.layer.htmlControls(html =>
-                `<div class="shader-controls-row w-full px-2 pb-1">${html}</div>`
-            )
-            : "";
+        const htmlControls = this._renderShaderControls(this.layer) || (
+            this.layer?.htmlControls
+                ? this.layer.htmlControls(html => this._wrapShaderControlRow(html))
+                : ""
+        );
 
         const hasHtmlControls = typeof htmlControls === "string"
             ? htmlControls.trim().length > 0

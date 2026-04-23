@@ -106,12 +106,18 @@ export class RightSideViewerMenu extends BaseComponent {
             opacity: 1,
             onShaderChange: (value) => {
                 // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
-                let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false);
+                const parsedValue = Number.parseInt(value, 10);
+                const nextValue = Number.isInteger(parsedValue) ? parsedValue : undefined;
+                let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false, true);
                 if (Array.isArray(activeViz)) {
                     const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
-                    activeViz[index] = value;
-                } else if (Number.isInteger(activeViz)) {
-                    activeViz = value;
+                    if (Number.isInteger(index) && index >= 0) {
+                        activeViz[index] = nextValue;
+                    } else {
+                        activeViz[0] = nextValue;
+                    }
+                } else if (Number.isInteger(activeViz) || activeViz === undefined) {
+                    activeViz = nextValue;
                 }
                 APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
             },
@@ -129,7 +135,7 @@ export class RightSideViewerMenu extends BaseComponent {
         delete this.visibility;
         delete this.copy;
 
-        this.menu.destroy();
+        this.menu?.destroy?.();
         this.menu = undefined;
     }
 

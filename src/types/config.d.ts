@@ -47,6 +47,11 @@ type XOpatSetup = {
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    valueInspectorEnabled?: boolean | null;
+    visualizationInspectorEnabled?: boolean | null;
+    visualizationInspectorMode?: string | null;
+    visualizationInspectorRadiusPx?: number | null;
+    visualizationInspectorLensZoom?: number | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;

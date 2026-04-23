@@ -51,6 +51,24 @@ Please, visit <https://xopat.readthedocs.io/>.
 ## API
 Please, see <https://rationai.github.io/xopat/>.
 
+## Runtime Architecture
+xOpat now treats viewer opening as an explicit transaction instead of a loose mix of config mutation and OpenSeadragon world edits.
+
+- Session-level changes go through `window.APPLICATION_CONTEXT.openViewerWith(...)`.
+- Per-viewer retargeting goes through `window.APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, selection, opts?)`.
+- Session visualization-list replacement goes through `window.APPLICATION_CONTEXT.replaceVisualizations(...)`.
+- `updateVisualization(...)` remains available as a compatibility alias, but new code should prefer `replaceVisualizations(...)`.
+
+The runtime keeps viewer rebinding, visualization runtime checks, synthetic open handling, inspector integration, and session lifecycle handling inside `src/classes/app/`. `src/app.ts` is intentionally reduced to bootstrap/composition.
+
+## Multi-Viewer Notes
+xOpat supports multiple simultaneously open viewers with independent background/visualization selection.
+
+- Do not store long-lived `TiledImage` references unless you own them.
+- Do not assume `window.VIEWER` identifies the logical viewer relevant to your plugin/module action.
+- Prefer `VIEWER_MANAGER` events and resolve the concrete viewer from `eventSource`.
+- When you need to change only one viewer, use `updateViewerSelection(...)` instead of rebuilding the entire session yourself.
+
 <!--Icon finder: https://awes0mem4n.github.io/-->
 
 ## Sponsors

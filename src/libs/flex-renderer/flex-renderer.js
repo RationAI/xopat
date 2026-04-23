@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-16
-//! Git commit: --13cbce3-dirty
+//! Built on 2026-04-23
+//! Git commit: --6fac1f2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -54,6 +54,34 @@
      * @typedef {Object} RenderOutput
      * @property {Number} textureDepth
      * @property {Number} stencilDepth
+     */
+
+    /**
+     * @typedef {Object} InspectorState
+     * @property {boolean} enabled master switch for inspector logic
+     * @property {"reveal-inside"|"reveal-outside"|"lens-zoom"} mode interaction mode
+     * @property {{x: number, y: number}} centerPx inspector center in canvas pixel space
+     * @property {number} radiusPx inspector radius in canvas pixels
+     * @property {number} featherPx soft edge width in canvas pixels
+     * @property {number} lensZoom magnification used by lens mode, clamped to >= 1
+     * @property {number} shaderSplitIndex first shader slot affected by reveal modes
+     */
+
+    /**
+     * @typedef {Object} InspectorStateUpdateOptions
+     * @property {boolean} [notify=true] emit the `inspector-change` event
+     * @property {boolean} [redraw=true] request a redraw after the state change
+     * @property {string} [reason="set-inspector-state"] semantic reason included in the emitted event
+     */
+
+    /**
+     * @typedef {Object} SecondPassTextureOptions
+     * @property {GLint|null} [framebuffer] optional framebuffer override for the final draw call
+     * @property {Object|string} [target] backend-owned render target object or stable target key
+     * @property {string} [targetKey] stable target key used when `target` is omitted
+     * @property {number} [width] target width in physical pixels
+     * @property {number} [height] target height in physical pixels
+     * @property {number[]} [clearColor=[0, 0, 0, 0]] RGBA color used when rendering an empty second pass
      */
 
     /**
@@ -129,6 +157,7 @@
             this._shadersOrder = null;
             this._programImplementations = {};
             this.__firstPassResult = null;
+            this._inspectorState = this.constructor.normalizeInspectorState();
 
             this.canvasContextOptions = incomingOptions.canvasOptions;
             const canvas = document.createElement("canvas");
@@ -166,6 +195,59 @@
             }
 
             throw new Error("$.FlexRenderer::determineContext: Could not find WebGLImplementation with version " + version);
+        }
+
+        /**
+         * Pre-compilation shader configuration cleanup
+         * @param {ShaderConfig} config
+         * @param {NormalizationContext} context
+         * @return {ShaderConfig}
+         */
+        static normalizeShaderConfig(config, context = {}) {
+            if (!config || typeof config !== "object") {
+                return config;
+            }
+
+            let normalized = config;
+            const Shader = normalized.type ? $.FlexRenderer.ShaderMediator.getClass(normalized.type) : null;
+
+            if (Shader && typeof Shader.normalizeConfig === "function") {
+                const next = Shader.normalizeConfig(normalized, context);
+                if (next && typeof next === "object") {
+                    normalized = next;
+                }
+            }
+
+            if (normalized.shaders && typeof normalized.shaders === "object" && !Array.isArray(normalized.shaders)) {
+                normalized.shaders = $.FlexRenderer.normalizeShaderMap(normalized.shaders, {
+                    ...context,
+                    parentConfig: normalized
+                });
+            }
+
+            return normalized;
+        }
+
+        /**
+         * Normalize shader configuration map - all shaders at once.
+         * @param {Record<string, ShaderConfig>} shaderMap
+         * @param {NormalizationContext} context
+         * @return {Record<string, ShaderConfig>}
+         */
+        static normalizeShaderMap(shaderMap, context = {}) {
+            if (!shaderMap || typeof shaderMap !== "object" || Array.isArray(shaderMap)) {
+                return shaderMap;
+            }
+
+            for (const shaderId of Object.keys(shaderMap)) {
+                shaderMap[shaderId] = $.FlexRenderer.normalizeShaderConfig(shaderMap[shaderId], {
+                    ...context,
+                    shaderId,
+                    path: Array.isArray(context.path) ? context.path.concat([shaderId]) : [shaderId]
+                });
+            }
+
+            return shaderMap;
         }
 
         /**
@@ -240,12 +322,26 @@
         }
 
         /**
-         * Call to second-pass draw
+         * Execute the second pass for the already prepared first-pass result.
+         *
+         * Responsibility split:
+         * - the renderer owns inspector state and decides whether the active inspector mode
+         *   can be executed inline in the normal second pass
+         * - reveal modes stay in the normal second-pass program
+         * - lens mode may delegate to the backend-specific inspector compositor path
+         *
          * @param {SPRenderPackage[]} renderArray
          * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
          */
         secondPassProcessData(renderArray, options = undefined) {
+            if (this.webglContext && typeof this.webglContext.processSecondPassWithInspector === "function") {
+                const inspectorState = this.getInspectorState();
+                if (inspectorState && inspectorState.enabled && inspectorState.mode === "lens-zoom") {
+                    return this.webglContext.processSecondPassWithInspector(renderArray, options);
+                }
+            }
+
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
 
             if (this.useProgram(program, "second-pass")) {
@@ -417,6 +513,9 @@
             if (!implementation) {
                 return;
             }
+            if (this._program === implementation) {
+                this._program = null;
+            }
             implementation.unload();
             implementation.destroy();
             this.gl.deleteProgram(implementation._webGLProgram);
@@ -481,13 +580,23 @@
                 rebuild: () => {
                     this.registerProgram(null, this.webglContext.secondPassProgramKey);
                 },
+                // callback to recreate the shader when control topology changes
+                refresh: () => {
+                    this.refreshShaderLayer(id, { rebuildProgram: true });
+                },
                 // callback to reinitialize the drawer; NOT USED
                 refetch: this.refetchCallback
             });
 
-            shader.construct();
-            this._shaders[id] = shader;
-            return shader;
+            try {
+                this._shaders[id] = shader;
+                shader.construct();
+                return shader;
+            } catch (e) {
+                delete this._shaders[id];
+                console.error(`Failed to construct shader '${id}' (${shaderConfig.type}).`, e, shaderConfig);
+                return undefined;
+            }
         }
 
         getAllShaders() {
@@ -633,6 +742,32 @@
         }
 
         /**
+         * Recreate an existing shader layer while preserving its bound config object
+         * and current order. This is needed when the set of owned controls changes.
+         * @param {string} id
+         * @param {object} options
+         * @param {boolean} [options.rebuildProgram=true]
+         * @returns {ShaderLayer|null}
+         */
+        refreshShaderLayer(id, options = {}) {
+            id = $.FlexRenderer.sanitizeKey(id);
+            const shader = this._shaders[id];
+            if (!shader) {
+                return null;
+            }
+
+            const config = shader.getConfig();
+            const rebuiltShader = this.createShaderLayer(id, config, false);
+            const shouldRebuild = options.rebuildProgram !== false;
+
+            if (shouldRebuild) {
+                this.registerProgram(null, this.webglContext.secondPassProgramKey);
+            }
+
+            return rebuiltShader;
+        }
+
+        /**
          * Clear all shaders
          */
         deleteShaders() {
@@ -703,11 +838,138 @@
             }, payload));
         }
 
+        /**
+         * Normalize inspector state to the canonical backend-agnostic shape.
+         *
+         * Backends must consume this logical state, not an implementation-specific variant.
+         * The values are defined in canvas pixel space so WebGL, WebGPU, or CPU implementations
+         * can produce the same visual result.
+         *
+         * @param {Partial<InspectorState>|undefined} state
+         * @return {InspectorState}
+         */
+        static normalizeInspectorState(state = undefined) {
+            const defaults = {
+                enabled: false,
+                mode: "reveal-inside",
+                centerPx: { x: 0, y: 0 },
+                radiusPx: 96,
+                featherPx: 16,
+                lensZoom: 2,
+                shaderSplitIndex: 0,
+            };
+
+            if (!state || typeof state !== "object") {
+                return $.extend(true, {}, defaults);
+            }
+
+            const normalized = $.extend(true, {}, defaults, state);
+            const allowedModes = ["reveal-inside", "reveal-outside", "lens-zoom"];
+
+            if (!allowedModes.includes(normalized.mode)) {
+                normalized.mode = defaults.mode;
+            }
+            normalized.enabled = !!normalized.enabled;
+            normalized.radiusPx = Math.max(0, Number(normalized.radiusPx) || 0);
+            normalized.featherPx = Math.max(0, Number(normalized.featherPx) || 0);
+            normalized.lensZoom = Math.max(1, Number(normalized.lensZoom) || 1);
+            normalized.shaderSplitIndex = Math.max(0, Math.floor(Number(normalized.shaderSplitIndex) || 0));
+
+            const center = normalized.centerPx || {};
+            normalized.centerPx = {
+                x: Number(center.x) || 0,
+                y: Number(center.y) || 0,
+            };
+
+            return normalized;
+        }
+
+        /**
+         * Update the canonical inspector state stored by the renderer.
+         *
+         * This method is the public write API for all backends. It does not perform rendering
+         * itself; it stores normalized state, emits `inspector-change`, and optionally triggers
+         * a redraw so the active backend can consume the new state during the next second pass.
+         *
+         * @param {Partial<InspectorState>|undefined} state
+         * @param {InspectorStateUpdateOptions} [options={}]
+         * @return {InspectorState}
+         */
+        setInspectorState(state = undefined, options = {}) {
+            const previous = this.getInspectorState();
+            this._inspectorState = this.constructor.normalizeInspectorState(state);
+
+            if (options.notify !== false) {
+                this.raiseEvent('inspector-change', {
+                    previous: previous,
+                    current: this.getInspectorState(),
+                    reason: options.reason || 'set-inspector-state'
+                });
+            }
+
+            if (options.redraw !== false && typeof this.redrawCallback === 'function') {
+                this.redrawCallback();
+            }
+
+            return this.getInspectorState();
+        }
+
+        /**
+         * Return a defensive copy of the current canonical inspector state.
+         * Backends should read inspector state through this method instead of caching mutable references.
+         *
+         * @return {InspectorState}
+         */
+        getInspectorState() {
+            return $.extend(true, {}, this._inspectorState || this.constructor.normalizeInspectorState());
+        }
+
+        /**
+         * Reset the inspector to the normalized disabled state.
+         *
+         * @param {InspectorStateUpdateOptions} [options={}]
+         * @return {InspectorState}
+         */
+        clearInspectorState(options = {}) {
+            return this.setInspectorState(undefined, $.extend(true, {
+                reason: 'clear-inspector-state'
+            }, options));
+        }
+
+        /**
+         * Reuse the current first-pass result and render the second pass into an offscreen target.
+         *
+         * This is the public contract used by features that need a texture copy of the composed
+         * second pass. The renderer delegates the target management details to the active backend.
+         *
+         * @param {SPRenderPackage[]} renderArray
+         * @param {SecondPassTextureOptions} [options={}]
+         * @return {Object}
+         */
+        renderSecondPassToTexture(renderArray, options = {}) {
+            if (!this.webglContext || typeof this.webglContext.renderSecondPassToTexture !== 'function') {
+                throw new Error('Active WebGL implementation does not support second-pass texture targets.');
+            }
+            return this.webglContext.renderSecondPassToTexture(renderArray, options);
+        }
+
         destroy() {
             this.htmlReset();
             this.deleteShaders();
             for (let pId in this._programImplementations) {
                 this.deleteProgram(pId);
+            }
+            if (this._extractionFB) {
+                this.gl.deleteFramebuffer(this._extractionFB);
+                this._extractionFB = null;
+            }
+            if (this._debugPreviewFB) {
+                this.gl.deleteFramebuffer(this._debugPreviewFB);
+                this._debugPreviewFB = null;
+            }
+            if (this._debugPreviewColorRB) {
+                this.gl.deleteRenderbuffer(this._debugPreviewColorRB);
+                this._debugPreviewColorRB = null;
             }
             this.webglContext.destroy();
             this._programImplementations = {};
@@ -1148,7 +1410,8 @@
             scale = 1,
             pad = 8,
             drawLabels = true,
-            background = '#111'
+            background = '#111',
+            maxCellSize = 160
         } = {}) {
             const colorLayers = renderOutput.textureDepth || 0;
             const stencilLayers = renderOutput.stencilDepth || 0;
@@ -1163,8 +1426,11 @@
 
             const width = Math.max(1, Math.floor(this.canvas.width));
             const height = Math.max(1, Math.floor(this.canvas.height));
-            const cellW = Math.max(1, Math.floor(width * scale));
-            const cellH = Math.max(1, Math.floor(height * scale));
+            const scaledCellW = Math.max(1, Math.floor(width * scale));
+            const scaledCellH = Math.max(1, Math.floor(height * scale));
+            const cellScale = Math.min(1, maxCellSize / Math.max(scaledCellW, scaledCellH));
+            const cellW = Math.max(1, Math.floor(scaledCellW * cellScale));
+            const cellH = Math.max(1, Math.floor(scaledCellH * cellScale));
 
             const sectionGap = 28;
             const headerH = drawLabels ? 18 : 0;
@@ -1198,8 +1464,8 @@
                 this._debugStage = document.createElement('canvas');
             }
             const stage = this._debugStage;
-            stage.width = width;
-            stage.height = height;
+            stage.width = cellW;
+            stage.height = cellH;
             const stageCtx = stage.getContext('2d', { willReadFrequently: true });
 
             const outputCanvas = ctx.canvas;
@@ -1213,12 +1479,12 @@
             ctx.imageSmoothingEnabled = false;
 
             let pixels = this._readbackBuffer;
-            if (!pixels || pixels.length !== width * height * 4) {
-                pixels = this._readbackBuffer = new Uint8ClampedArray(width * height * 4);
+            if (!pixels || pixels.length !== cellW * cellH * 4) {
+                pixels = this._readbackBuffer = new Uint8ClampedArray(cellW * cellH * 4);
             }
 
-            if (!this._imageData || this._imageData.width !== width || this._imageData.height !== height) {
-                this._imageData = new ImageData(width, height);
+            if (!this._imageData || this._imageData.width !== cellW || this._imageData.height !== cellH) {
+                this._imageData = new ImageData(cellW, cellH);
             }
             const imageData = this._imageData;
 
@@ -1226,12 +1492,30 @@
             if (!this._extractionFB) {
                 this._extractionFB = gl.createFramebuffer();
             }
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this._extractionFB);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this._extractionFB);
+
+            if (!this._debugPreviewFB) {
+                this._debugPreviewFB = gl.createFramebuffer();
+            }
+            if (!this._debugPreviewColorRB) {
+                this._debugPreviewColorRB = gl.createRenderbuffer();
+            }
+
+            gl.bindRenderbuffer(gl.RENDERBUFFER, this._debugPreviewColorRB);
+            if (this._debugPreviewSizeW !== cellW || this._debugPreviewSizeH !== cellH) {
+                gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, cellW, cellH);
+                this._debugPreviewSizeW = cellW;
+                this._debugPreviewSizeH = cellH;
+            }
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._debugPreviewFB);
+            gl.framebufferRenderbuffer(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this._debugPreviewColorRB);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, null);
 
             // Small helpers to attach a layer/texture
             const attachLayer = (texArray, layerIndex) => {
                 // WebGL2 texture array
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this._extractionFB);
+                gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
             };
 
             const drawEmptyCell = (x, y, text = '—') => {
@@ -1256,16 +1540,31 @@
 
                 attachLayer(texArray, layerIndex);
 
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                if (gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
                     console.error(`Framebuffer incomplete for ${kind} layer`, layerIndex);
                     drawEmptyCell(x, y, 'fb err');
                     return;
                 }
 
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._debugPreviewFB);
+                if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                    console.error(`Preview framebuffer incomplete for ${kind} layer`, layerIndex);
+                    drawEmptyCell(x, y, 'fb err');
+                    return;
+                }
+
+                gl.blitFramebuffer(
+                    0, 0, width, height,
+                    0, 0, cellW, cellH,
+                    gl.COLOR_BUFFER_BIT,
+                    gl.NEAREST
+                );
+
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this._debugPreviewFB);
+                gl.readPixels(0, 0, cellW, cellH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
                 imageData.data.set(pixels);
                 stageCtx.putImageData(imageData, 0, 0);
-                ctx.drawImage(stage, 0, 0, width, height, x, y, cellW, cellH);
+                ctx.drawImage(stage, x, y, cellW, cellH);
             };
 
             const rawHeaderY = pad;
@@ -1345,6 +1644,8 @@
                 }
             }
 
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         }
 
@@ -2077,7 +2378,8 @@
          * @param {Object} privateOptions.cache
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
-         * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
+         * @param {Function} privateOptions.refresh     // callback to recreate the ShaderLayer when control layout changes
+         * @param {Function} privateOptions.refetch     // callback to request source/config refetch work from the owning drawer
          *
          * @constructor
          * @memberOf FlexRenderer.ShaderLayer
@@ -2099,6 +2401,7 @@
 
             this.invalidate = privateOptions.invalidate;
             this._rebuild = privateOptions.rebuild;
+            this._refresh = privateOptions.refresh;
             this._refetch = privateOptions.refetch;
             this._controls = {};
 
@@ -2203,6 +2506,20 @@
          *     }, ...
          * }
          *
+         * Repeated control arrays are also supported:
+         * get defaultControls () => {
+         *     items: {
+         *         array: {
+         *             count: (layer) => <number>,
+         *             name: (index, layer, baseName) => <controlName>,   // OPTIONAL
+         *             item: (index, layer, baseName) => ({
+         *                 default: {...},
+         *                 accepts: (type, instance) => <>
+         *             })
+         *         }
+         *     }
+         * }
+         *
          * use: controlId: false to disable a specific control (e.g. all shaders
          *  support opacity by default - use to remove this feature)
          *
@@ -2234,6 +2551,30 @@
                     accepts: (type, instance) => type === "float"
                 }
             };
+        }
+
+        /**
+         * @typedef {Object} NormalizationContext
+         * @property {function} [expandDataSourceRef] - function that maps synthetic source references to real references usable by openseadragon
+         */
+
+        /**
+         * Modification of the configuration object before it is used.
+         * @param {ShaderConfig} config
+         * @param {NormalizationContext} context
+         * @returns {ShaderConfig}
+         */
+        static normalizeConfig(config, context = {}) {
+            return config;
+        }
+
+        /**
+         * Instance-level control definition hook.
+         * Override when the available controls depend on current config/state.
+         * @returns {object}
+         */
+        getControlDefinitions() {
+            return $.extend(true, {}, this.constructor.defaultControls);
         }
 
         /**
@@ -2287,7 +2628,7 @@
          * Build the ShaderLayer's controls.
          */
         _buildControls() {
-            const defaultControls = this.constructor.defaultControls;
+            const defaultControls = this.getControlDefinitions();
 
             // add opacity control manually to every ShaderLayer; if not already defined
             if (defaultControls.opacity === undefined || (typeof defaultControls.opacity === "object" && !defaultControls.opacity.accepts("float"))) {
@@ -2297,14 +2638,16 @@
                 };
             }
 
-            for (let controlName in defaultControls) {
+            const expandedControls = this._expandControlDefinitions(defaultControls);
+
+            for (let controlName in expandedControls) {
                 // with use_ prefix are defined not UI controls but filters, blend modes, etc.
                 if (controlName.startsWith("use_")) {
                     continue;
                 }
 
                 // control is manually disabled
-                const controlConfig = defaultControls[controlName];
+                const controlConfig = expandedControls[controlName];
                 if (controlConfig === false) {
                     continue;
                 }
@@ -2315,6 +2658,51 @@
                 // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
                 this[controlName] = control;
             }
+        }
+
+        _expandControlDefinitions(controlDefinitions) {
+            const expanded = {};
+
+            for (const [baseName, controlConfig] of Object.entries(controlDefinitions || {})) {
+                if (!controlConfig || typeof controlConfig !== "object" || !controlConfig.array) {
+                    expanded[baseName] = controlConfig;
+                    continue;
+                }
+
+                const arrayConfig = controlConfig.array;
+                const countValue = typeof arrayConfig.count === "function" ?
+                    arrayConfig.count(this, baseName) :
+                    arrayConfig.count;
+                const count = Math.max(0, Number.parseInt(countValue, 10) || 0);
+
+                for (let index = 0; index < count; index++) {
+                    const itemConfig = typeof arrayConfig.item === "function" ?
+                        arrayConfig.item(index, this, baseName) :
+                        $.extend(true, {}, arrayConfig.item || {});
+
+                    if (!itemConfig || itemConfig === false) {
+                        continue;
+                    }
+
+                    const expandedName = itemConfig.name || (
+                        typeof arrayConfig.name === "function" ?
+                            arrayConfig.name(index, this, baseName) :
+                            `${baseName}${index}`
+                    );
+
+                    if (!expandedName) {
+                        continue;
+                    }
+
+                    if (itemConfig.name !== undefined) {
+                        delete itemConfig.name;
+                    }
+
+                    expanded[expandedName] = itemConfig;
+                }
+            }
+
+            return expanded;
         }
 
         /**
@@ -2386,6 +2774,9 @@
         includeGlobalCode(key, code) {
             const container = this.constructor.__globalIncludes;
             if (container[key]) {
+                if (container[key] === code) {
+                    return;
+                }
                 console.warn('$.FlexRenderer.ShaderLayer::includeGlobalCode: Global code with key', key, 'already exists in this.__globalIncludes. Overwriting the content!');
             }
             container[key] = code;
@@ -2536,6 +2927,7 @@
          *   sampleChannel("v_texCoord")                      // sourceIndex=0, baseChannel=0
          *   sampleChannel("v_texCoord", 1)                   // sourceIndex=1, baseChannel=0
          *   sampleChannel("v_texCoord", { baseChannel: 4 })  // sourceIndex=0, baseChannel=4
+         *   sampleChannel("v_texCoord", { baseChannel: "my_uniform" })  // sourceIndex=0, runtime GLSL expression
          *   sampleChannel("v_texCoord", 0, { baseChannel: 8, raw: true })
          *
          * Returns GLSL:
@@ -2567,7 +2959,7 @@
 
             // Override from options if provided
             if (opt) {
-                if (typeof opt.baseChannel === "number") {
+                if (typeof opt.baseChannel === "number" || typeof opt.baseChannel === "string") {
                     baseChannel = opt.baseChannel;
                 }
                 if (opt.raw != null) { // eslint-disable-line eqeqeq
@@ -2587,7 +2979,7 @@
          * @return {number|*|number}
          */
         getSourceChannelCount(sourceIndex = 0) {
-            const cfg = this.getConfig();
+            const cfg = this.getConfig() || {};
             if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
                 return 4;
             }
@@ -2597,6 +2989,133 @@
                 return 4;
             }
             return drawer.getChannelCount(worldIndex);
+        }
+
+        /**
+         * Resolve the tiled image used by a given shader source slot.
+         * @param {number} sourceIndex
+         * @return {OpenSeadragon.TiledImage|null}
+         */
+        getSourceTiledImage(sourceIndex = 0) {
+            const cfg = this.getConfig() || {};
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return null;
+            }
+
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.webglContext.renderer.drawer;
+            const world = drawer && drawer.viewer ? drawer.viewer.world : null;
+            if (!world || worldIndex == null) {  // eslint-disable-line eqeqeq
+                return null;
+            }
+
+            return world.getItemAt(worldIndex) || null;
+        }
+
+        /**
+         * Get pack count for a given sourceIndex.
+         * @param {number} sourceIndex
+         * @return {number}
+         */
+        getSourcePackCount(sourceIndex = 0) {
+            const cfg = this.getConfig() || {};
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return 1;
+            }
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.webglContext.renderer.drawer;
+            if (!drawer || worldIndex == null) {  // eslint-disable-line eqeqeq
+                return 1;
+            }
+            return drawer.getPackCount(worldIndex);
+        }
+
+        /**
+         * Get source dimensions when available from the tile source metadata.
+         * @param {number} sourceIndex
+         * @return {{width:number, height:number}}
+         */
+        getSourceDimensions(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            const dimensions = source && source.dimensions;
+
+            return {
+                width: dimensions && typeof dimensions.x === "number" ? dimensions.x : (source && source.width) || 0,
+                height: dimensions && typeof dimensions.y === "number" ? dimensions.y : (source && source.height) || 0,
+            };
+        }
+
+        /**
+         * Get source level metadata.
+         * @param {number} sourceIndex
+         * @return {{minLevel:number, maxLevel:number, levelCount:number}}
+         */
+        getSourceLevels(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            const minLevel = Number.isInteger(source && source.minLevel) ? source.minLevel : 0;
+            const maxLevel = Number.isInteger(source && source.maxLevel) ? source.maxLevel : minLevel;
+
+            return {
+                minLevel,
+                maxLevel,
+                levelCount: Math.max(0, maxLevel - minLevel + 1),
+            };
+        }
+
+        /**
+         * Get source metadata object from the tile source when available.
+         * @param {number} sourceIndex
+         * @return {object|null}
+         */
+        getSourceMetadata(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            if (!source) {
+                return null;
+            }
+
+            if (typeof source.getMetadata === "function") {
+                return source.getMetadata();
+            }
+            return source;
+        }
+
+        /**
+         * Get consolidated source information for the given source slot.
+         * metadataReady becomes true after the drawer has observed tile payload metadata
+         * for this source, which matters for gpuTextureSet inputs where channel/pack counts
+         * are only known after data arrives.
+         *
+         * @param {number} sourceIndex
+         * @return {{
+         *   tiledImage: OpenSeadragon.TiledImage|null,
+         *   metadata: object|null,
+         *   metadataReady: boolean,
+         *   channelCount: number,
+         *   packCount: number,
+         *   dimensions: {width:number, height:number},
+         *   minLevel: number,
+         *   maxLevel: number,
+         *   levelCount: number
+         * }}
+         */
+        getSourceInfo(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const levels = this.getSourceLevels(sourceIndex);
+
+            return {
+                tiledImage,
+                metadata: this.getSourceMetadata(sourceIndex),
+                metadataReady: !!(tiledImage && tiledImage.__flexMetadataReady),
+                channelCount: this.getSourceChannelCount(sourceIndex),
+                packCount: this.getSourcePackCount(sourceIndex),
+                dimensions: this.getSourceDimensions(sourceIndex),
+                minLevel: levels.minLevel,
+                maxLevel: levels.maxLevel,
+                levelCount: levels.levelCount,
+            };
         }
 
         /**
@@ -2610,6 +3129,16 @@
                 baseChannel = 0;
             }
             return baseChannel;
+        }
+
+        /**
+         * Get how many logical channels the configured swizzle consumes for a source.
+         * @param {number} sourceIndex
+         * @return {number}
+         */
+        getConfiguredChannelWidth(sourceIndex = 0) {
+            const pattern = this.__channels[sourceIndex];
+            return typeof pattern === "string" && pattern.length > 0 ? pattern.length : 1;
         }
 
         /**
@@ -2675,6 +3204,7 @@
 
             // If this is the common simple case (baseChannel==0, contiguous, canonical "xyz"):
             const contiguous =
+                typeof baseChannel === "number" &&
                 baseChannel === 0 &&
                 offsets.length <= 4 &&
                 offsets.every((o, i) => o === i);
@@ -2686,7 +3216,11 @@
 
             // TODO: we should call here API of the underlying engine to get sampling method, not hardcoding it here!
             //       we should also rely on osd_channel_pack instead of calling X times osd_channel
-            const comps = offsets.map(off => `osd_channel(${sourceIndex}, ${baseChannel + off}, ${uv})`);
+            const baseExpr = typeof baseChannel === "string" ? `(${baseChannel})` : `${baseChannel}`;
+            const comps = offsets.map(off => {
+                const channelExpr = off === 0 ? baseExpr : `((${baseExpr}) + ${off})`;
+                return `osd_channel(${sourceIndex}, ${channelExpr}, ${uv})`;
+            });
 
             if (comps.length === 1) {
                 return comps[0];
@@ -2768,6 +3302,56 @@ ${code}
          */
         getConfig() {
             return this.__shaderConfig;
+        }
+
+        /**
+         * Request a config mutation that may require drawer/world level re-fetch or shader refresh.
+         * The drawer owns how this request is fulfilled.
+         * @param {Function|Object} mutation function(config, shaderLayer) or plain patch object
+         * @param {Object} options
+         * @return {*}
+         */
+        requestConfigMutation(mutation, options = {}) {
+            if (typeof this._refetch !== "function") {
+                return undefined;
+            }
+
+            let apply = mutation;
+            if (mutation && typeof mutation === "object" && typeof mutation !== "function") {
+                apply = (config) => Object.assign(config, mutation);
+            }
+
+            return this._refetch({
+                kind: "shader-config-mutation",
+                shaderId: this.id,
+                shaderType: this.constructor.type(),
+                mutation: apply,
+                ...options
+            });
+        }
+
+        /**
+         * Request source rebinding for one shader source slot.
+         * The entry can be a direct world index or any opaque descriptor
+         * resolved later by the owning drawer/application.
+         * @param {number} sourceIndex
+         * @param {*} entry
+         * @param {Object} options
+         * @return {*}
+         */
+        requestSourceBinding(sourceIndex, entry, options = {}) {
+            if (typeof this._refetch !== "function") {
+                return undefined;
+            }
+
+            return this._refetch({
+                kind: "shader-source-request",
+                shaderId: this.id,
+                shaderType: this.constructor.type(),
+                sourceIndex,
+                entry,
+                ...options
+            });
         }
 
         // FILTERS LOGIC
@@ -3112,6 +3696,31 @@ $.FlexRenderer.UIControls = class {
         //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
         // }
     }
+
+    static joinClasses(...values) {
+        return values.filter(value => typeof value === "string" && value.trim()).join(" ").trim();
+    }
+
+    static styleAttr(css = "") {
+        return css && String(css).trim() ? ` style="${css}"` : "";
+    }
+
+    static renderTitle(title, type) {
+        if (!title) {
+            return "";
+        }
+        return `<span class="er-control__title er-control__title--${type}">${title}</span>`;
+    }
+
+    static renderControl(type, title, bodyHtml, classes = "", columns = undefined, extraAttrs = "") {
+        const resolvedColumns = Number(columns) || (title ? 2 : 1);
+        return `<div class="${this.joinClasses("er-control", `er-control--${type}`, classes)}" data-columns="${resolvedColumns}" ${extraAttrs}>${this.renderTitle(title, type)}<div class="er-control__body
+  er-control__body--${type}">${bodyHtml}</div></div>`;
+    }
+
+    static renderInput(inputTag, type, uniqueId, attrs = "", css = "") {
+        return `<${inputTag} id="${uniqueId}" class="er-control__input er-control__input--${type}"${attrs}${this.styleAttr(css)}>`;
+    }
 };
 
 // Definitions of possible controls' types, simple functionalities:
@@ -3122,9 +3731,9 @@ $.FlexRenderer.UIControls._items = {
         },
         // returns string corresponding to html code for injection
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
-step="${params.step}" type="number" id="${uniqueId}">`;
+            const input = `<input class="er-control__input er-control__input--number" min="${params.min}" max="${params.max}"
+step="${params.step}" type="number" id="${uniqueId}"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("number", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -3161,9 +3770,8 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input type="range" style="${css}"
-class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
+            const input = `<input type="range" class="er-control__input er-control__input--range" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("range", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -3200,8 +3808,8 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return { title: "Color", interactive: true, default: "#fff900" };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
+            const input = `<input type="color" id="${uniqueId}" class="er-control__input er-control__input--color"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("color", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform3fv";
@@ -3244,11 +3852,11 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return { title: "Checkbox", interactive: true, default: true };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
             let value = this.decode(params.default) ? "checked" : "";
             //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
-            return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
-class="${classes}" onchange="this.value=this.checked; return true;">`;
+            const input = `<input type="checkbox" id="${uniqueId}" ${value}
+class="er-control__input er-control__input--bool" onchange="this.value=this.checked; return true;"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("bool", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -3288,8 +3896,6 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            const title = params.title ? `<span>${params.title}</span>` : "";
-
             let options = [];
             if (Array.isArray(params.options)) {
                 options = params.options.map(opt => {
@@ -3314,7 +3920,8 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
                 return `<option value="${opt.value}"${selected}>${opt.label}</option>`;
             }).join("");
 
-            return `${title} <select id="${uniqueId}" class="${classes}" style="${css}">${optionHtml}</select>`;
+            const input = `<select id="${uniqueId}" class="er-control__input er-control__input--select"${$.FlexRenderer.UIControls.styleAttr(css)}>${optionHtml}</select>`;
+            return $.FlexRenderer.UIControls.renderControl("select", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -3574,6 +4181,19 @@ $.FlexRenderer.UIControls.IControl = class IControl {
     }
 
     /**
+     * Get how many columns UI requires. Usually 2 if title showing.
+     * The general design is that UI control should be a ROW element,
+     * and show:
+     *  - 1 column if content control shown only
+     *  - 2 columns if title shown, and content control shown
+     *  - 3 columns if title shown, and two content elements shown side-by-side (two methods of controlling the parameter synchronized)
+     * @return {number}
+     */
+    get layoutColumns() {
+        return this.params && this.params.title ? 2 : 1;
+    }
+
+    /**
      * Handles how the variable is being defined in GLSL
      *  - should use variable names derived from this.webGLVariableName
      */
@@ -3747,6 +4367,10 @@ $.FlexRenderer.UIControls.IControl = class IControl {
             this.__onchange[event](value, encodedValue, context);
         }
 
+        if (this._suppressVisualizationChanged) {
+            return;
+        }
+
         this.owner.webglContext.renderer.notifyVisualizationChanged({
             reason: "control-change",
             shaderId: this.owner.id,
@@ -3848,8 +4472,8 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
                 // TODO: some elements do not have 'value' attribute, but 'checked' or 'selected' instead
                 node.value = this.encodedValue;
                 node.addEventListener('change', updater);
-            } else {
-                console.error('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
+            } else if (this.owner._renderer.htmlHandler) {
+                console.warn('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
             }
         }
     }
@@ -3948,6 +4572,8 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         params.title = "";
         this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
             owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
+        this._c1._suppressVisualizationChanged = true;
+        this._c2._suppressVisualizationChanged = true;
     }
 
     init() {
@@ -3956,12 +4582,18 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         this._c1.init();
         this._c2.init();
         this._c1.on("default", function(value, encoded, owner) {
-            document.getElementById(_this._c2.id).value = encoded;
+            const c2 = document.getElementById(_this._c2.id);
+            if (c2) {
+                c2.value = encoded;
+            }
             _this._c2.value = value;
             _this.changed("default", value, encoded, owner);
         }, true); //silently fail if registered
         this._c2.on("default", function(value, encoded, owner) {
-            document.getElementById(_this._c1.id).value = encoded;
+            const c1 = document.getElementById(_this._c1.id);
+            if (c1) {
+                c1.value = encoded;
+            }
             _this._c1.value = value;
             // Only C1 loads values to gpu, request change
             _this._c1._needsLoad = true;
@@ -3981,7 +4613,40 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         if (!this._c1.params.interactive) {
             return "";
         }
-        return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
+
+        const titleHtml = this._c1.params.title
+            ? `<span class="er-control__title er-control__title--slider-with-input">${this._c1.params.title}</span>`
+            : "";
+
+        const rangeHtml = $.FlexRenderer.UIControls.getUiElement("range").html(
+            this._c1.id,
+            { ...this._c1.params, title: "" },
+            classes,
+            `${css}width:100%;`
+        );
+
+        const numberHtml = $.FlexRenderer.UIControls.getUiElement("number").html(
+            this._c2.id,
+            { ...this._c2.params, title: "" },
+            classes,
+            css
+        );
+
+        return [
+            `<div class="er-control er-control--slider-with-input" data-columns="${this.layoutColumns}">`,
+            titleHtml,
+            `<div class="er-control__body er-control__body--slider-with-input">`,
+            rangeHtml,
+            `</div>`,
+            `<div class="er-control__aux er-control__aux--slider-with-input">`,
+            numberHtml,
+            `</div>`,
+            `</div>`
+        ].join("");
+    }
+
+    get layoutColumns() {
+        return this._c1.params.title ? 3 : 2;
     }
 
     define() {
@@ -4041,6 +4706,7 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
 
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
+        this._params = this.getParams(params);
         this.prepare();
     }
 
@@ -4074,11 +4740,11 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
-                let self = $(e.target),
-                    selected = self.val();
+                const self = e.target;
+                const selected = self.value;
                 _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
                 _this._setPallete(_this.colorPallete);
-                self.css("background", _this.cssGradient(_this.colorPallete));
+                self.style.background = _this.cssGradient(_this.colorPallete);
                 _this.value = selected;
                 _this.store(selected);
                 _this.changed("default", _this.pallete, _this.value, _this);
@@ -4092,9 +4758,9 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
             for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
                 schemas.push(`<option value="${pallete}">${pallete}</option>`);
             }
-            node.html(schemas.join(""));
-            node.val(this.value);
-            node.on('change', updater);
+            node.innerHTML = schemas.join("");
+            node.value = this.value;
+            node.addEventListener("change", updater);
         } else {
             this._setPallete(this.colorPallete);
             this.updateColormapUI();
@@ -4132,8 +4798,10 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
     }
 
     updateColormapUI() {
-        let node = $(`#${this.id}`);
-        node.css("background", this.cssGradient(this.colorPallete));
+        let node = document.getElementById(this.id);
+        if (node) {
+            node.style.background = this.cssGradient(this.colorPallete);
+        }
         return node;
     }
 
@@ -4225,12 +4893,12 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
 
     toHtml(classes = "", css = "") {
         if (!this.params.interactive) {
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2"
-style="width: 60%;">${this.load(this.params.default)}</span></div>`;
+            const display = `<span id="${this.id}" class="er-control__display er-control__display--colormap"${$.FlexRenderer.UIControls.styleAttr(css)}>${this.load(this.params.default)}</span>`;
+            return $.FlexRenderer.UIControls.renderControl("colormap", this.params.title, display, classes);
         }
 
-        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow"
-style="width: 60%;"></select></div>`;
+        const input = `<select id="${this.id}" class="er-control__input er-control__input--colormap"${$.FlexRenderer.UIControls.styleAttr(css)}></select>`;
+        return $.FlexRenderer.UIControls.renderControl("colormap", this.params.title, input, classes);
     }
 
     define() {
@@ -4325,14 +4993,16 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
-                let self = $(e.target),
-                    index = Number.parseInt(e.target.dataset.index, 10),
-                    selected = self.val();
+                const self = e.target;
+                const index = Number.parseInt(e.target.dataset.index, 10);
+                const selected = self.value;
 
                 if (Number.isInteger(index)) {
                     _this.colorPallete[index] = selected;
                     _this._setPallete(_this.colorPallete);
-                    self.parent().css("background", _this.cssGradient(_this.colorPallete));
+                    if (self.parentElement) {
+                        self.parentElement.style.background = _this.cssGradient(_this.colorPallete);
+                    }
                     _this.value = _this.colorPallete;
                     _this.store(_this.colorPallete);
                     _this.changed("default", _this.pallete, _this.value, _this);
@@ -4344,9 +5014,8 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
             let node = this.updateColormapUI();
 
             const width = 1 / this.colorPallete.length * 100;
-            node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
-            node.val(this.value);
-            node.children().on('change', updater);
+            node.innerHTML = this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join("");
+            Array.from(node.children).forEach(child => child.addEventListener("change", updater));
         } else {
             this._setPallete(this.colorPallete);
             this.updateColormapUI();
@@ -4360,12 +5029,12 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
 
     toHtml(classes = "", css = "") {
         if (!this.params.interactive) {
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block"
-style="width: 60%;">&emsp;</span></div>`;
+            const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${$.FlexRenderer.UIControls.styleAttr(css)}>&emsp;</span>`;
+            return $.FlexRenderer.UIControls.renderControl("custom-colormap", this.params.title, display, classes);
         }
 
-        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block"
-style="width: 60%;"></span></div>`;
+        const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${$.FlexRenderer.UIControls.styleAttr(css)}></span>`;
+        return $.FlexRenderer.UIControls.renderControl("custom-colormap", this.params.title, display, classes);
     }
 
     get supports() {
@@ -4420,6 +5089,7 @@ $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIContro
 
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
+        this._params = this.getParams(params);
         this.MAX_SLIDERS = 12;
 
         this.owner.includeGlobalCode('advanced_slider', `
@@ -4556,7 +5226,7 @@ return masked * bigger / actualLength;
                         /* eslint-disable eqeqeq */
                         this.style.background = (!_this.params.inverted && _this.mask[idx] > 0) ||
                             (_this.params.inverted && _this.mask[idx] == 0) ?
-                                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                                "oklch(var(--er))" : "";
                         _this.owner.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize - 1;
                         _this.changed("mask", _this.mask, _this.mask, _this);
@@ -4612,9 +5282,41 @@ return masked * bigger / actualLength;
             /* eslint-disable eqeqeq */
             pips[i].style.background = (!this.params.inverted && this.mask[i] > 0) ||
                 (this.params.inverted && this.mask[i] == 0) ?
-                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                "oklch(var(--er))" : "";
             pips[i].dataset.index = (i).toString();
         }
+    }
+
+    getIntervalCount() {
+        const breaks = Array.isArray(this.encodedValues) ? this.encodedValues : [];
+        return Math.max(1, breaks.length + 1);
+    }
+
+    setMask(maskValues, store = true) {
+        const values = Array.isArray(maskValues) ? maskValues.slice(0, this.MAX_SLIDERS + 1) : [];
+        while (values.length < this.MAX_SLIDERS + 1) {
+            values.push(-1);
+        }
+
+        this.mask = values;
+        this._originalMask = this.mask.map(x => x > 0 ? x : 1);
+
+        if (store) {
+            this.store(this.mask, "mask");
+        }
+
+        if (this.params.interactive) {
+            this._updateConnectStyles();
+        }
+    }
+
+    syncMaskToIntervals(mapper = undefined, store = true) {
+        const intervalCount = this.getIntervalCount();
+        const values = [];
+        for (let index = 0; index < intervalCount; index++) {
+            values.push(typeof mapper === "function" ? mapper(index, intervalCount) : index);
+        }
+        this.setMask(values, store);
     }
 
     glDrawing(program, gl) {
@@ -4633,8 +5335,8 @@ return masked * bigger / actualLength;
         if (!this.params.interactive) {
             return "";
         }
-        return `<div style="${css}" class="${classes}"><span>${this.params.title}: </span><div id="${this.id}" style="height: 9px;
-margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
+        const slider = `<div id="${this.id}" class="er-control__widget er-control__widget--advanced-slider"${$.FlexRenderer.UIControls.styleAttr(`height: 9px; display: inline-block;${css}`)}></div>`;
+        return $.FlexRenderer.UIControls.renderControl("advanced-slider", this.params.title, slider, classes);
     }
 
     define() {
@@ -4714,6 +5416,7 @@ $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.ICo
 
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
+        this._params = this.getParams(params);
     }
 
     init() {
@@ -4746,9 +5449,9 @@ $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.ICo
 
     toHtml(classes = "", css = "") {
         let disabled = this.params.interactive ? "" : "disabled";
-        let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
-        return `<div class="${classes}">${title}<textarea id="${this.id}" class="form-control"
-style="width: 100%; display: block; resize: vertical; ${css}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
+        const textarea = `<textarea id="${this.id}" class="er-control__input er-control__input--textarea"
+${$.FlexRenderer.UIControls.styleAttr(`width: 100%; display: block; resize: vertical; ${css}`)} ${disabled} placeholder="${this.params.placeholder}"></textarea>`;
+        return $.FlexRenderer.UIControls.renderControl("text-area", this.params.title, textarea, classes);
     }
 
     define() {
@@ -4807,6 +5510,7 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
+        this._params = this.getParams(params);
     }
 
     init() {
@@ -4838,8 +5542,12 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 
     toHtml(classes = "", css = "") {
         let disabled = this.params.interactive ? "" : "disabled";
-        css = `style="${css ? css : ""}float: right;"`;
-        return `<button id="${this.id}" ${css} class="${classes}" ${disabled}></button>`;
+        const button = `<button id="${this.id}" class="er-control__button er-control__button--action"${$.FlexRenderer.UIControls.styleAttr(`${css ? css : ""}float: right;`)} ${disabled}></button>`;
+        return $.FlexRenderer.UIControls.renderControl("button", this.params.title, button, classes);
+    }
+
+    get layoutColumns() {
+        return 1;
     }
 
     define() {
@@ -4876,79 +5584,52 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 };
 $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
 
-$.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IControl {
-    static docs() {
-        return {
-            summary: "Atlas-backed image sampling control.",
-            description: "Stores an integer texture id for the second-pass atlas, optionally allows adding PNG images through a file input, and samples atlas textures when given vec2 texture coordinates.",
-            kind: "ui-control",
-            parameters: [
-                { name: "title", type: "string", default: "Images" },
-                { name: "interactive", type: "boolean", default: true },
-                { name: "default", type: "number", default: -1 }
-            ],
-            glType: "vec4"
-        };
-    }
-
+$.FlexRenderer.IAtlasTextureControl = class IAtlasTextureControl extends $.FlexRenderer.UIControls.IControl {
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
-        this.atlas = owner.webglContext.secondAtlas;
+        this.atlas = owner.webglContext ? owner.webglContext.secondAtlas : null;
         this._params = this.getParams(params);
+        this.textureId = -1;
+        this.encodedValue = this.params.default;
+        this._needsLoad = true;
     }
 
-    init() {
-        this.encodedTextureId = this.load(this.params.default);
+    _setTexture(encodedValue, textureId, opts = {}) {
+        const emitChange = opts.emitChange !== false;
+        const store = opts.store !== false;
+        this.encodedValue = encodedValue;
+        this.textureId = Number.isInteger(textureId) ? textureId : -1;
 
-        this.textureId = Number.parseInt(this.encodedTextureId, 10);
+        if (emitChange) {
+            this.changed("default", this.textureId, this.encodedValue, this);
+        }
+        if (store) {
+            this.store(this.encodedValue);
+        }
+        this._needsLoad = true;
+    }
 
-        if (this.params.interactive) {
-            const _this = this;
+    _uploadAtlasEntry(source, opts = {}) {
+        if (!this.atlas) {
+            return -1;
+        }
 
-            let number = document.getElementById(`${this.id}_number`);
-            if (number) {
-                let updater = function(e) {
-                    _this.set(e.target.value);
-                    _this.owner.invalidate();
-                };
-
-                number.value = this.encodedTextureId;
-                number.addEventListener("change", updater);
-            }
-
-            let button = document.getElementById(`${this.id}_button`);
-            if (button) {
-                let updater = function(e) {
-                    let file = document.getElementById(`${_this.id}_file`);
-
-                    if (file.files && file.files.length) {
-                        const fr = new FileReader();
-                        fr.onload = function() {
-                            const image = new Image();
-                            image.onload = function() {
-                                _this.atlas.addImage(image);
-                                _this.atlas._commitUploads();
-                            };
-                            image.src = fr.result;
-                        };
-                        fr.readAsDataURL(file.files[0]);
-                    } else {
-                        alert("No file selected");
-                    }
-                };
-
-                button.addEventListener("click", updater);
+        const cacheKey = opts.cacheKey ? String(opts.cacheKey) : null;
+        if (cacheKey) {
+            this.atlas.__flexRendererCache = this.atlas.__flexRendererCache || {};
+            if (Number.isInteger(this.atlas.__flexRendererCache[cacheKey])) {
+                return this.atlas.__flexRendererCache[cacheKey];
             }
         }
-    }
 
-    set(encodedTextureId) {
-        this.encodedTextureId = encodedTextureId;
-        this.textureId = Number.parseInt(this.encodedTextureId, 10);
+        const textureId = this.atlas.addImage(source, opts);
+        this.atlas._commitUploads();
 
-        this.changed("default", this.textureId, this.encodedTextureId, this);
-        this.store(this.encodedTextureId);
-        this._needsLoad = true;
+        if (cacheKey) {
+            this.atlas.__flexRendererCache[cacheKey] = textureId;
+        }
+
+        return textureId;
     }
 
     define() {
@@ -4967,15 +5648,6 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IContr
         }
     }
 
-    toHtml(classes = "", css = "") {
-        return `<span>${this.params.title}</span>
-        <div class="${classes}" style="${css}">
-            Selected: <input type="number" id="${this.id}_number" min="-1" max="16" step="1"><br>
-            <input type="file" id="${this.id}_file" accept="image/png"><br>
-            <button id="${this.id}_button">Add Image</button>
-        </div>`;
-    }
-
     sample(value = undefined, valueGlType = 'void') {
         if (!value) {
             throw new Error("Requires a vec2 value/variable specifying the texture coordinate to sample at");
@@ -4985,19 +5657,7 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IContr
             return `osd_atlas_texture(${this.webGLVariableName}_textureId, ${value})`;
         }
 
-        throw new Error(`Incompatible parameter type '${valueGlType}' for image sampling control '${this.name}'; only vec2 is supported`);
-    }
-
-    get supports() {
-        return {
-            title: "Images",
-            interactive: true,
-            default: -1,
-        };
-    }
-
-    get supportsAll() {
-        return {};
+        throw new Error(`Incompatible parameter type '${valueGlType}' for atlas sampling control '${this.name}'; only vec2 is supported`);
     }
 
     get raw() {
@@ -5005,21 +5665,1264 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IContr
     }
 
     get encoded() {
-        return this.encodedTextureId;
+        return this.encodedValue;
     }
 
     get type() {
         return "vec4";
     }
 };
+
+$.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.IAtlasTextureControl {
+    static docs() {
+        return {
+            summary: "Atlas-backed image sampling control.",
+            description: "Stores an integer texture id for the second-pass atlas, starts empty by default, allows uploading arbitrary images through a file input, and samples atlas textures when given vec2 texture coordinates.",
+            kind: "ui-control",
+            parameters: [
+                { name: "title", type: "string", default: "Images" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "default", type: "number", default: -1 },
+                { name: "accept", type: "string", default: "image/*" }
+            ],
+            glType: "vec4"
+        };
+    }
+
+    init() {
+        this.encodedValue = this.load(this.params.default);
+        this.textureId = Number.parseInt(this.encodedValue, 10);
+        if (!Number.isInteger(this.textureId)) {
+            this.textureId = -1;
+        }
+
+        if (this.params.interactive) {
+            const _this = this;
+
+            let number = document.getElementById(`${this.id}_number`);
+            if (number) {
+                let updater = function(e) {
+                    _this.set(e.target.value);
+                    _this.owner.invalidate();
+                };
+
+                number.value = this.encodedValue;
+                number.addEventListener("change", updater);
+            }
+
+            let button = document.getElementById(`${this.id}_button`);
+            if (button) {
+                let updater = function(e) {
+                    let file = document.getElementById(`${_this.id}_file`);
+
+                    if (file.files && file.files.length) {
+                        const fr = new FileReader();
+                        fr.onload = function() {
+                            const image = new Image();
+                            image.onload = function() {
+                                const textureId = _this._uploadAtlasEntry(image, {
+                                    width: image.naturalWidth || image.width,
+                                    height: image.naturalHeight || image.height
+                                });
+                                _this.set(textureId);
+                                if (number) {
+                                    number.value = String(textureId);
+                                }
+                                file.value = "";
+                                _this.owner.invalidate();
+                            };
+                            image.src = fr.result;
+                        };
+                        fr.readAsDataURL(file.files[0]);
+                    } else {
+                        alert("No file selected");
+                    }
+                };
+
+                button.addEventListener("click", updater);
+            }
+        }
+    }
+
+    set(encodedTextureId) {
+        const parsed = Number.parseInt(encodedTextureId, 10);
+        if (Number.isNaN(parsed)) {
+            this._setTexture(-1, -1);
+            return;
+        }
+        this._setTexture(String(parsed), parsed);
+    }
+
+    toHtml(classes = "", css = "") {
+        const disabled = this.params.interactive ? "" : "disabled";
+        const body = `
+        <div id="${this.id}_root" class="er-control__widget er-control__widget--image"${$.FlexRenderer.UIControls.styleAttr(`${css}; position: relative;`)}>
+            <div class="er-control__hint er-control__hint--image">The atlas starts empty. Upload an image to create a new atlas entry.</div>
+            <label class="er-control__row er-control__row--image-number">Selected: <input type="number" id="${this.id}_number" class="er-control__input er-control__input--image-number" min="-1" step="1" ${disabled}></label>
+            <input type="file" id="${this.id}_file" class="er-control__input er-control__input--image-file" accept="${this.params.accept}" ${disabled}>
+            <button id="${this.id}_button" class="er-control__button er-control__button--image-upload" ${disabled}>Upload Image</button>
+        </div>`;
+        return $.FlexRenderer.UIControls.renderControl("image", this.params.title, body, classes);
+    }
+
+    get supports() {
+        return {
+            title: "Images",
+            interactive: true,
+            default: -1,
+            accept: "image/*",
+        };
+    }
+
+    get supportsAll() {
+        return {};
+    }
+};
 $.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image);
+
+$.FlexRenderer.UIControls.IconLibrary = {
+    sets: {
+        core: [
+            { name: "house", glyph: "⌂", aliases: ["home", "fa-house", "fa-home"], tags: ["building", "ui"] },
+            { name: "location-pin", glyph: "⌖", aliases: ["pin", "map-pin", "marker", "fa-location-dot", "fa-map-marker-alt"], tags: ["map", "place"] },
+            { name: "flag", glyph: "⚑", aliases: ["banner", "fa-flag"], tags: ["marker", "state"] },
+            { name: "star", glyph: "★", aliases: ["favorite", "fa-star"], tags: ["rating", "bookmark"] },
+            { name: "heart", glyph: "♥", aliases: ["like", "fa-heart"], tags: ["favorite"] },
+            { name: "circle", glyph: "●", aliases: ["dot", "fa-circle"], tags: ["shape"] },
+            { name: "square", glyph: "■", aliases: ["fa-square"], tags: ["shape"] },
+            { name: "triangle", glyph: "▲", aliases: ["warning", "fa-triangle-exclamation", "fa-exclamation-triangle"], tags: ["shape", "alert"] },
+            { name: "diamond", glyph: "◆", aliases: ["gem", "fa-diamond"], tags: ["shape"] },
+            { name: "plus", glyph: "✚", aliases: ["add", "cross", "fa-plus"], tags: ["action"] },
+            { name: "check", glyph: "✓", aliases: ["ok", "success", "fa-check"], tags: ["action"] },
+            { name: "xmark", glyph: "✕", aliases: ["close", "times", "fa-xmark", "fa-times"], tags: ["action"] },
+            { name: "info", glyph: "ℹ", aliases: ["information", "fa-circle-info", "fa-info-circle"], tags: ["status"] },
+            { name: "gear", glyph: "⚙", aliases: ["settings", "cog", "fa-gear", "fa-cog"], tags: ["ui"] },
+            { name: "search", glyph: "⌕", aliases: ["magnifier", "fa-magnifying-glass", "fa-search"], tags: ["ui"] },
+            { name: "mail", glyph: "✉", aliases: ["envelope", "fa-envelope"], tags: ["communication"] },
+            { name: "phone", glyph: "☎", aliases: ["call", "fa-phone"], tags: ["communication"] },
+            { name: "user", glyph: "☺", aliases: ["person", "profile", "fa-user"], tags: ["people"] },
+            { name: "lock", glyph: "🔒", aliases: ["secure", "fa-lock"], tags: ["security"] },
+            { name: "unlock", glyph: "🔓", aliases: ["fa-unlock"], tags: ["security"] },
+            { name: "eye", glyph: "◉", aliases: ["view", "show", "fa-eye"], tags: ["visibility"] },
+            { name: "sun", glyph: "☀", aliases: ["brightness", "fa-sun"], tags: ["weather"] },
+            { name: "cloud", glyph: "☁", aliases: ["fa-cloud"], tags: ["weather"] },
+            { name: "umbrella", glyph: "☂", aliases: ["rain", "fa-umbrella"], tags: ["weather"] },
+            { name: "music", glyph: "♫", aliases: ["note", "fa-music"], tags: ["media"] }
+        ]
+    },
+
+    getSetNames() {
+        return Object.keys(this.sets);
+    },
+
+    getIcons(setName = "core") {
+        if (setName === "all") {
+            return Object.values(this.sets).flat();
+        }
+        return this.sets[setName] || this.sets.core || [];
+    },
+
+    resolveIconSpec(query, setName = "core") {
+        const value = String(query === undefined || query === null ? "" : query).trim();
+        if (!value) {
+            return null;
+        }
+
+        const normalized = this._normalizeName(value);
+        const directChar = this._resolveDirectGlyph(value);
+        if (directChar) {
+            return {
+                key: `glyph:${directChar}`,
+                glyph: directChar,
+                label: value,
+                set: normalized.startsWith("&#") || normalized.startsWith("&") ? "entity" : "literal"
+            };
+        }
+
+        const icons = this.getIcons(setName);
+        for (const icon of icons) {
+            const haystack = [icon.name].concat(icon.aliases || []);
+            if (haystack.map(item => this._normalizeName(item)).includes(normalized)) {
+                return {
+                    key: `${setName}:${icon.name}`,
+                    glyph: icon.glyph,
+                    label: icon.name,
+                    set: setName,
+                    icon: icon
+                };
+            }
+        }
+
+        return null;
+    },
+
+    search(query = "", setName = "core") {
+        const value = this._normalizeName(query);
+        const icons = this.getIcons(setName);
+        if (!value) {
+            return icons.slice(0, 24);
+        }
+
+        return icons.filter(icon => {
+            const tokens = [icon.name].concat(icon.aliases || [], icon.tags || []);
+            return tokens.some(token => this._normalizeName(token).includes(value));
+        }).slice(0, 48);
+    },
+
+    _normalizeName(value) {
+        let normalized = String(value || "").trim().toLowerCase();
+        normalized = normalized.replace(/\s+/g, " ");
+        normalized = normalized.replace(/\b(?:fa-solid|fa-regular|fa-light|fa-thin|fa-brands|fa-duotone)\b/g, "");
+        normalized = normalized.replace(/\b(?:fas|far|fal|fat|fab|fad)\b/g, "");
+        normalized = normalized.replace(/\s+/g, " ").trim();
+
+        if (normalized.includes(" ")) {
+            const tokens = normalized.split(" ").filter(Boolean);
+            normalized = tokens[tokens.length - 1];
+        }
+
+        return normalized;
+    },
+
+    _resolveDirectGlyph(value) {
+        if (!value) {
+            return null;
+        }
+
+        const entityGlyph = this._decodeHtmlEntity(value);
+        if (entityGlyph) {
+            return entityGlyph;
+        }
+
+        const codeMatch =
+            value.match(/^&#x([0-9a-f]+);?$/i) ||
+            value.match(/^&#([0-9]+);?$/i) ||
+            value.match(/^0x([0-9a-f]+)$/i) ||
+            value.match(/^u\+([0-9a-f]+)$/i) ||
+            value.match(/^\\u\{?([0-9a-f]+)\}?$/i);
+
+        if (codeMatch) {
+            const radix = /^[0-9]+$/.test(codeMatch[1]) && value.startsWith("&#") && !/x/i.test(value) ? 10 : 16;
+            const codePoint = Number.parseInt(codeMatch[1], radix);
+            if (Number.isInteger(codePoint)) {
+                try {
+                    return String.fromCodePoint(codePoint);
+                } catch (_) {
+                    return null;
+                }
+            }
+        }
+
+        const symbols = [...value];
+        if (symbols.length === 1) {
+            return symbols[0];
+        }
+
+        return null;
+    },
+
+    _decodeHtmlEntity(value) {
+        if (typeof document === "undefined" || !String(value).includes("&")) {
+            return null;
+        }
+
+        const textarea = document.createElement("textarea");
+        textarea.innerHTML = String(value);
+        const decoded = textarea.value;
+        if (decoded && decoded !== value && [...decoded].length === 1) {
+            return decoded;
+        }
+        return null;
+    }
+};
+
+$.FlexRenderer.UIControls.IconLibrary = (() => {
+    const makeGlyph = (name, glyph, aliases = [], tags = []) => ({
+        name,
+        glyph,
+        aliases,
+        tags
+    });
+
+    const makeClass = (name, className, aliases = [], tags = []) => ({
+        name,
+        className,
+        aliases,
+        tags
+    });
+
+    const htmlGlyphs = [
+        makeGlyph("star", "★", ["favourite", "favorite", "&starf;", "filled star"], ["shape", "rating"]),
+        makeGlyph("star-outline", "☆", ["&star;", "outline star"], ["shape", "rating"]),
+        makeGlyph("heart", "♥", ["love", "&hearts;"], ["shape", "status"]),
+        makeGlyph("diamond", "◆", ["gem", "&diams;"], ["shape"]),
+        makeGlyph("circle", "●", ["dot", "&bull;"], ["shape"]),
+        makeGlyph("circle-outline", "○", ["ring"], ["shape"]),
+        makeGlyph("square", "■", ["block"], ["shape"]),
+        makeGlyph("square-outline", "□", ["outline square"], ["shape"]),
+        makeGlyph("triangle-up", "▲", ["caret-up"], ["shape", "direction"]),
+        makeGlyph("triangle-down", "▼", ["caret-down"], ["shape", "direction"]),
+        makeGlyph("triangle-right", "▶", ["play", "caret-right"], ["shape", "direction", "media"]),
+        makeGlyph("triangle-left", "◀", ["caret-left"], ["shape", "direction"]),
+        makeGlyph("plus", "✚", ["add", "cross"], ["action"]),
+        makeGlyph("minus", "−", ["subtract"], ["action"]),
+        makeGlyph("multiply", "✕", ["times", "close", "xmark"], ["action"]),
+        makeGlyph("check", "✓", ["ok", "done"], ["action", "status"]),
+        makeGlyph("warning", "⚠", ["alert", "&warning;"], ["status"]),
+        makeGlyph("info", "ℹ", ["information"], ["status"]),
+        makeGlyph("question", "?", ["help"], ["status"]),
+        makeGlyph("flag", "⚑", ["banner"], ["marker"]),
+        makeGlyph("location-pin", "⌖", ["pin", "marker"], ["map", "marker"]),
+        makeGlyph("house", "⌂", ["home"], ["building", "ui"]),
+        makeGlyph("gear", "⚙", ["settings", "cog"], ["ui"]),
+        makeGlyph("search", "⌕", ["magnifier"], ["ui"]),
+        makeGlyph("mail", "✉", ["envelope"], ["communication"]),
+        makeGlyph("phone", "☎", ["call"], ["communication"]),
+        makeGlyph("user", "☺", ["person", "profile"], ["people"]),
+        makeGlyph("lock", "🔒", ["secure"], ["security"]),
+        makeGlyph("unlock", "🔓", [], ["security"]),
+        makeGlyph("eye", "◉", ["view", "visible"], ["visibility"]),
+        makeGlyph("sun", "☀", [], ["weather"]),
+        makeGlyph("cloud", "☁", [], ["weather"]),
+        makeGlyph("umbrella", "☂", [], ["weather"]),
+        makeGlyph("snowflake", "❄", [], ["weather"]),
+        makeGlyph("lightning", "⚡", ["bolt"], ["energy", "status"]),
+        makeGlyph("music", "♫", ["note"], ["media"]),
+        makeGlyph("scissors", "✂", ["cut"], ["action"]),
+        makeGlyph("pencil", "✎", ["edit"], ["action"]),
+        makeGlyph("trash", "🗑", ["delete", "bin"], ["action"]),
+        makeGlyph("folder", "🗀", ["directory"], ["ui"]),
+        makeGlyph("document", "🗎", ["file"], ["ui"]),
+        makeGlyph("camera", "📷", ["photo"], ["media"]),
+        makeGlyph("clock", "🕒", ["time"], ["ui"]),
+        makeGlyph("leaf", "🍃", [], ["nature"]),
+        makeGlyph("fire", "🔥", [], ["status"]),
+        makeGlyph("droplet", "💧", ["water"], ["nature"]),
+        makeGlyph("microscope", "🔬", [], ["science"]),
+        makeGlyph("dna", "🧬", [], ["science"]),
+        makeGlyph("pill", "💊", [], ["medical"]),
+        makeGlyph("crosshair", "⌖", ["target"], ["marker"]),
+        makeGlyph("ruler", "📏", ["measure"], ["tools"])
+    ];
+
+    const faSolidCommon = [
+        makeClass("house", "fa-solid fa-house", ["home"], ["building", "ui"]),
+        makeClass("location-dot", "fa-solid fa-location-dot", ["map-marker", "pin"], ["map", "marker"]),
+        makeClass("flag", "fa-solid fa-flag", [], ["marker"]),
+        makeClass("star", "fa-solid fa-star", [], ["rating"]),
+        makeClass("heart", "fa-solid fa-heart", [], ["status"]),
+        makeClass("circle", "fa-solid fa-circle", ["dot"], ["shape"]),
+        makeClass("square", "fa-solid fa-square", [], ["shape"]),
+        makeClass("triangle-exclamation", "fa-solid fa-triangle-exclamation", ["warning", "alert"], ["status"]),
+        makeClass("diamond", "fa-solid fa-gem", ["gem"], ["shape"]),
+        makeClass("plus", "fa-solid fa-plus", ["add"], ["action"]),
+        makeClass("minus", "fa-solid fa-minus", ["subtract"], ["action"]),
+        makeClass("xmark", "fa-solid fa-xmark", ["close", "times"], ["action"]),
+        makeClass("check", "fa-solid fa-check", ["ok"], ["action"]),
+        makeClass("circle-info", "fa-solid fa-circle-info", ["info", "information"], ["status"]),
+        makeClass("circle-question", "fa-solid fa-circle-question", ["question", "help"], ["status"]),
+        makeClass("gear", "fa-solid fa-gear", ["cog", "settings"], ["ui"]),
+        makeClass("magnifying-glass", "fa-solid fa-magnifying-glass", ["search"], ["ui"]),
+        makeClass("envelope", "fa-solid fa-envelope", ["mail"], ["communication"]),
+        makeClass("phone", "fa-solid fa-phone", ["call"], ["communication"]),
+        makeClass("user", "fa-solid fa-user", ["person", "profile"], ["people"]),
+        makeClass("users", "fa-solid fa-users", ["group"], ["people"]),
+        makeClass("lock", "fa-solid fa-lock", [], ["security"]),
+        makeClass("unlock", "fa-solid fa-unlock", [], ["security"]),
+        makeClass("eye", "fa-solid fa-eye", ["visible"], ["visibility"]),
+        makeClass("eye-slash", "fa-solid fa-eye-slash", ["hidden"], ["visibility"]),
+        makeClass("sun", "fa-solid fa-sun", [], ["weather"]),
+        makeClass("moon", "fa-solid fa-moon", [], ["weather"]),
+        makeClass("cloud", "fa-solid fa-cloud", [], ["weather"]),
+        makeClass("cloud-rain", "fa-solid fa-cloud-rain", ["rain"], ["weather"]),
+        makeClass("umbrella", "fa-solid fa-umbrella", [], ["weather"]),
+        makeClass("snowflake", "fa-solid fa-snowflake", [], ["weather"]),
+        makeClass("bolt", "fa-solid fa-bolt", ["lightning"], ["energy"]),
+        makeClass("music", "fa-solid fa-music", ["note"], ["media"]),
+        makeClass("play", "fa-solid fa-play", [], ["media"]),
+        makeClass("pause", "fa-solid fa-pause", [], ["media"]),
+        makeClass("stop", "fa-solid fa-stop", [], ["media"]),
+        makeClass("backward", "fa-solid fa-backward", [], ["media"]),
+        makeClass("forward", "fa-solid fa-forward", [], ["media"]),
+        makeClass("image", "fa-solid fa-image", ["photo"], ["media"]),
+        makeClass("camera", "fa-solid fa-camera", [], ["media"]),
+        makeClass("video", "fa-solid fa-video", [], ["media"]),
+        makeClass("folder", "fa-solid fa-folder", [], ["ui"]),
+        makeClass("file", "fa-solid fa-file", ["document"], ["ui"]),
+        makeClass("file-lines", "fa-solid fa-file-lines", ["file-text"], ["ui"]),
+        makeClass("trash", "fa-solid fa-trash", ["delete", "bin"], ["action"]),
+        makeClass("pen", "fa-solid fa-pen", ["edit", "pencil"], ["action"]),
+        makeClass("scissors", "fa-solid fa-scissors", ["cut"], ["action"]),
+        makeClass("copy", "fa-solid fa-copy", [], ["action"]),
+        makeClass("paste", "fa-solid fa-paste", [], ["action"]),
+        makeClass("download", "fa-solid fa-download", [], ["action"]),
+        makeClass("upload", "fa-solid fa-upload", [], ["action"]),
+        makeClass("share-nodes", "fa-solid fa-share-nodes", ["share"], ["action"]),
+        makeClass("link", "fa-solid fa-link", [], ["action"]),
+        makeClass("filter", "fa-solid fa-filter", [], ["ui"]),
+        makeClass("sliders", "fa-solid fa-sliders", ["adjust"], ["ui"]),
+        makeClass("palette", "fa-solid fa-palette", ["color"], ["ui"]),
+        makeClass("brush", "fa-solid fa-brush", [], ["tools"]),
+        makeClass("ruler", "fa-solid fa-ruler", ["measure"], ["tools"]),
+        makeClass("crop", "fa-solid fa-crop", [], ["tools"]),
+        makeClass("crosshairs", "fa-solid fa-crosshairs", ["target"], ["marker"]),
+        makeClass("bullseye", "fa-solid fa-bullseye", [], ["marker"]),
+        makeClass("tag", "fa-solid fa-tag", ["label"], ["ui"]),
+        makeClass("bookmark", "fa-solid fa-bookmark", [], ["ui"]),
+        makeClass("clock", "fa-solid fa-clock", ["time"], ["ui"]),
+        makeClass("calendar", "fa-solid fa-calendar", ["date"], ["ui"]),
+        makeClass("microscope", "fa-solid fa-microscope", [], ["science"]),
+        makeClass("flask", "fa-solid fa-flask", [], ["science"]),
+        makeClass("dna", "fa-solid fa-dna", [], ["science"]),
+        makeClass("leaf", "fa-solid fa-leaf", [], ["nature"]),
+        makeClass("fire", "fa-solid fa-fire", [], ["status"]),
+        makeClass("droplet", "fa-solid fa-droplet", ["water"], ["nature"]),
+        makeClass("seedling", "fa-solid fa-seedling", [], ["nature"]),
+        makeClass("hospital", "fa-solid fa-hospital", [], ["medical"]),
+        makeClass("stethoscope", "fa-solid fa-stethoscope", [], ["medical"]),
+        makeClass("syringe", "fa-solid fa-syringe", [], ["medical"]),
+        makeClass("pills", "fa-solid fa-pills", ["pill"], ["medical"]),
+        makeClass("bug", "fa-solid fa-bug", [], ["status"]),
+        makeClass("shield-halved", "fa-solid fa-shield-halved", ["shield"], ["security"]),
+        makeClass("database", "fa-solid fa-database", [], ["data"]),
+        makeClass("server", "fa-solid fa-server", [], ["data"]),
+        makeClass("chart-line", "fa-solid fa-chart-line", ["analytics"], ["data"]),
+        makeClass("chart-pie", "fa-solid fa-chart-pie", [], ["data"]),
+        makeClass("layer-group", "fa-solid fa-layer-group", ["layers"], ["ui"]),
+        makeClass("grid", "fa-solid fa-table-cells", ["table", "cells"], ["ui"])
+    ];
+
+    const faRegularCommon = [
+        makeClass("star", "fa-regular fa-star", [], ["rating"]),
+        makeClass("heart", "fa-regular fa-heart", [], ["status"]),
+        makeClass("circle", "fa-regular fa-circle", [], ["shape"]),
+        makeClass("square", "fa-regular fa-square", [], ["shape"]),
+        makeClass("bookmark", "fa-regular fa-bookmark", [], ["ui"]),
+        makeClass("bell", "fa-regular fa-bell", [], ["ui"]),
+        makeClass("calendar", "fa-regular fa-calendar", [], ["ui"]),
+        makeClass("clock", "fa-regular fa-clock", [], ["ui"]),
+        makeClass("file", "fa-regular fa-file", [], ["ui"]),
+        makeClass("file-lines", "fa-regular fa-file-lines", [], ["ui"]),
+        makeClass("folder", "fa-regular fa-folder", [], ["ui"]),
+        makeClass("image", "fa-regular fa-image", [], ["media"]),
+        makeClass("message", "fa-regular fa-message", ["comment"], ["communication"]),
+        makeClass("circle-question", "fa-regular fa-circle-question", ["help"], ["status"]),
+        makeClass("circle-user", "fa-regular fa-circle-user", ["profile"], ["people"])
+    ];
+
+    const faBrandsCommon = [
+        makeClass("github", "fa-brands fa-github", [], ["brand"]),
+        makeClass("gitlab", "fa-brands fa-gitlab", [], ["brand"]),
+        makeClass("docker", "fa-brands fa-docker", [], ["brand"]),
+        makeClass("chrome", "fa-brands fa-chrome", [], ["brand"]),
+        makeClass("firefox", "fa-brands fa-firefox", [], ["brand"]),
+        makeClass("edge", "fa-brands fa-edge", [], ["brand"]),
+        makeClass("linux", "fa-brands fa-linux", [], ["brand"]),
+        makeClass("windows", "fa-brands fa-windows", [], ["brand"]),
+        makeClass("apple", "fa-brands fa-apple", [], ["brand"]),
+        makeClass("google", "fa-brands fa-google", [], ["brand"]),
+        makeClass("python", "fa-brands fa-python", [], ["brand"]),
+        makeClass("js", "fa-brands fa-js", ["javascript"], ["brand"]),
+        makeClass("html5", "fa-brands fa-html5", [], ["brand"]),
+        makeClass("css3", "fa-brands fa-css3-alt", ["css3-alt"], ["brand"]),
+        makeClass("node", "fa-brands fa-node-js", ["node-js"], ["brand"]),
+        makeClass("npm", "fa-brands fa-npm", [], ["brand"]),
+        makeClass("slack", "fa-brands fa-slack", [], ["brand"]),
+        makeClass("discord", "fa-brands fa-discord", [], ["brand"]),
+        makeClass("figma", "fa-brands fa-figma", [], ["brand"]),
+        makeClass("twitter", "fa-brands fa-x-twitter", ["x-twitter"], ["brand"])
+    ];
+
+    const sets = {
+        "html-glyphs": {
+            kind: "glyph",
+            fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
+            fontWeight: "400",
+            items: htmlGlyphs
+        },
+        "fa-solid-common": {
+            kind: "font-class",
+            fontFamily: "'Font Awesome 6 Free','Font Awesome 5 Free'",
+            fontWeight: "900",
+            items: faSolidCommon
+        },
+        "fa-regular-common": {
+            kind: "font-class",
+            fontFamily: "'Font Awesome 6 Free','Font Awesome 5 Free'",
+            fontWeight: "400",
+            items: faRegularCommon
+        },
+        "fa-brands-common": {
+            kind: "font-class",
+            fontFamily: "'Font Awesome 6 Brands','Font Awesome 5 Brands'",
+            fontWeight: "400",
+            items: faBrandsCommon
+        }
+    };
+
+    return {
+        sets,
+
+        getSetNames() {
+            return Object.keys(this.sets);
+        },
+
+        getSet(setName = "fa-solid-common") {
+            if (setName === "core") {
+                return this.sets["html-glyphs"];
+            }
+            return this.sets[setName] || this.sets["fa-solid-common"];
+        },
+
+        getIcons(setName = "fa-solid-common") {
+            return this.getSet(setName).items || [];
+        },
+
+        getIconEntries(setName = undefined) {
+            if (setName) {
+                const set = this.getSet(setName);
+                return (set.items || []).map(icon => ({ icon, setName, set }));
+            }
+
+            return this.getSetNames().flatMap((name) => {
+                const set = this.getSet(name);
+                return (set.items || []).map(icon => ({ icon, setName: name, set }));
+            });
+        },
+
+        search(query = "", setName = "fa-solid-common", maxResults = 120) {
+            const set = this.getSet(setName);
+            const normalized = this._normalizeName(query);
+
+            if (!normalized) {
+                return set.items.slice(0, maxResults);
+            }
+
+            return set.items.filter(icon => {
+                const tokens = [
+                    icon.name,
+                    icon.className || "",
+                    ...(icon.aliases || []),
+                    ...(icon.tags || [])
+                ];
+                return tokens.some(token => this._normalizeName(token).includes(normalized));
+            }).slice(0, maxResults);
+        },
+
+        searchAll(query = "", maxResults = 120) {
+            const normalized = this._normalizeName(query);
+            const entries = this.getIconEntries();
+
+            if (!normalized) {
+                return entries.slice(0, maxResults).map(({ icon, setName }) => ({
+                    ...icon,
+                    set: setName
+                }));
+            }
+
+            return entries.filter(({ icon }) => {
+                const tokens = [
+                    icon.name,
+                    icon.className || "",
+                    ...(icon.aliases || []),
+                    ...(icon.tags || [])
+                ];
+                return tokens.some(token => this._normalizeName(token).includes(normalized));
+            }).slice(0, maxResults).map(({ icon, setName }) => ({
+                ...icon,
+                set: setName
+            }));
+        },
+
+        resolveIconSpec(query, setName = "fa-solid-common") {
+            const raw = String(query === undefined || query === null ? "" : query).trim();
+            if (!raw) {
+                return null;
+            }
+
+            const qualifiedMatch = raw.match(/^([a-z0-9_-]+):(.*)$/i);
+            if (qualifiedMatch && this.sets[qualifiedMatch[1]]) {
+                setName = qualifiedMatch[1];
+                return this.resolveIconSpec(qualifiedMatch[2], setName);
+            }
+
+            const set = this.getSet(setName);
+            const normalized = this._normalizeName(raw);
+
+            const directGlyph = this._resolveDirectGlyph(raw);
+            if (directGlyph) {
+                return {
+                    key: `${setName}:glyph:${directGlyph}`,
+                    label: raw,
+                    set: setName,
+                    renderMode: "glyph",
+                    glyph: directGlyph,
+                    fontFamily: set.fontFamily,
+                    fontWeight: set.fontWeight
+                };
+            }
+
+            for (const icon of set.items) {
+                const tokens = [
+                    icon.name,
+                    icon.className || "",
+                    ...(icon.aliases || [])
+                ];
+                if (!tokens.some(token => this._normalizeName(token) === normalized)) {
+                    continue;
+                }
+
+                if (set.kind === "glyph") {
+                    return {
+                        key: `${setName}:${icon.name}`,
+                        label: icon.name,
+                        set: setName,
+                        renderMode: "glyph",
+                        glyph: icon.glyph,
+                        fontFamily: set.fontFamily,
+                        fontWeight: set.fontWeight,
+                        icon
+                    };
+                }
+
+                return {
+                    key: `${setName}:${icon.name}`,
+                    label: icon.name,
+                    set: setName,
+                    renderMode: "class",
+                    className: icon.className,
+                    fontFamily: set.fontFamily,
+                    fontWeight: set.fontWeight,
+                    icon
+                };
+            }
+
+            return null;
+        },
+
+        resolveAnyIconSpec(query, preferredSetName = "fa-solid-common") {
+            const raw = String(query === undefined || query === null ? "" : query).trim();
+            if (!raw) {
+                return null;
+            }
+
+            const preferred = this.resolveIconSpec(raw, preferredSetName);
+            if (preferred) {
+                return preferred;
+            }
+
+            for (const setName of this.getSetNames()) {
+                if (setName === preferredSetName) {
+                    continue;
+                }
+                const resolved = this.resolveIconSpec(raw, setName);
+                if (resolved) {
+                    return resolved;
+                }
+            }
+
+            return null;
+        },
+
+        _normalizeName(value) {
+            let normalized = String(value || "").trim().toLowerCase();
+            normalized = normalized.replace(/\s+/g, " ");
+            normalized = normalized.replace(/\b(?:fa-solid|fa-regular|fa-light|fa-thin|fa-brands|fa-duotone)\b/g, "");
+            normalized = normalized.replace(/\b(?:fas|far|fal|fat|fab|fad)\b/g, "");
+            normalized = normalized.replace(/\s+/g, " ").trim();
+
+            if (normalized.includes(" ")) {
+                const tokens = normalized.split(" ").filter(Boolean);
+                normalized = tokens[tokens.length - 1];
+            }
+
+            return normalized;
+        },
+
+        _resolveDirectGlyph(value) {
+            if (!value) {
+                return null;
+            }
+
+            const entityGlyph = this._decodeHtmlEntity(value);
+            if (entityGlyph) {
+                return entityGlyph;
+            }
+
+            const codeMatch =
+                value.match(/^&#x([0-9a-f]+);?$/i) ||
+                value.match(/^&#([0-9]+);?$/i) ||
+                value.match(/^0x([0-9a-f]+)$/i) ||
+                value.match(/^u\+([0-9a-f]+)$/i) ||
+                value.match(/^\\u\{?([0-9a-f]+)\}?$/i);
+
+            if (codeMatch) {
+                const radix = /^[0-9]+$/.test(codeMatch[1]) && value.startsWith("&#") && !/x/i.test(value) ? 10 : 16;
+                const codePoint = Number.parseInt(codeMatch[1], radix);
+                if (Number.isInteger(codePoint)) {
+                    try {
+                        return String.fromCodePoint(codePoint);
+                    } catch (_) {
+                        return null;
+                    }
+                }
+            }
+
+            const symbols = [...value];
+            if (symbols.length === 1) {
+                return symbols[0];
+            }
+
+            return null;
+        },
+
+        _decodeHtmlEntity(value) {
+            if (typeof document === "undefined" || !String(value).includes("&")) {
+                return null;
+            }
+
+            const textarea = document.createElement("textarea");
+            textarea.innerHTML = String(value);
+            const decoded = textarea.value;
+            if (decoded && decoded !== value && [...decoded].length === 1) {
+                return decoded;
+            }
+            return null;
+        }
+    };
+})();
+
+$.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureControl {
+    static docs() {
+        return {
+            summary: "Atlas-backed icon control with separate HTML-glyph and Font Awesome sets.",
+            description: "Searches curated icon sets, previews Font Awesome entries by rendering the actual font-backed class in DOM, converts the selected icon to atlas texture content, and samples the second-pass atlas from GLSL.",
+            kind: "ui-control",
+            iconSets: $.FlexRenderer.UIControls.IconLibrary.getSetNames(),
+            parameters: [
+                { name: "title", type: "string", default: "Icon" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "default", type: "string", default: "" },
+                { name: "iconSet", type: "string", default: "fa-solid-common", allowedValues: $.FlexRenderer.UIControls.IconLibrary.getSetNames() },
+                { name: "size", type: "number", default: 160 },
+                { name: "padding", type: "number", default: 4 },
+                { name: "color", type: "string", default: "#111111" },
+                { name: "backgroundColor", type: "string", default: "#00000000" },
+                { name: "previewSize", type: "number", default: 34 },
+                { name: "maxResults", type: "number", default: 120 },
+                { name: "glyphFontFamily", type: "string", default: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif" },
+                { name: "glyphFontWeight", type: "string", default: "400" }
+            ],
+            glType: "vec4"
+        };
+    }
+
+    init() {
+        this.selectedSet = this.load(this.params.iconSet || "fa-solid-common", "set") || (this.params.iconSet || "fa-solid-common");
+        this.currentColor = this.params.color || "#111111";
+        this.encodedValue = this.load(this.params.default);
+        this.textureId = -1;
+
+        if (this.encodedValue) {
+            this._applyEncodedIcon(this.encodedValue, false);
+        }
+
+        if (!this.params.interactive) {
+            return;
+        }
+
+        const queryInput = document.getElementById(`${this.id}_query`);
+        const results = document.getElementById(`${this.id}_results`);
+        const preview = document.getElementById(`${this.id}_preview`);
+        const popup = document.getElementById(`${this.id}_popup`);
+        const closeButton = document.getElementById(`${this.id}_close`);
+        const triggerButton = document.getElementById(`${this.id}_trigger`);
+        const colorInput = document.getElementById(`${this.id}_color`);
+
+        if (triggerButton) {
+            triggerButton.addEventListener("click", () => {
+                if (!popup) {
+                    return;
+                }
+                popup.style.display = "block";
+                const decoded = this._decodeStoredValue(this.encodedValue || "");
+                this._renderIconResults(results, queryInput ? queryInput.value : decoded.icon);
+                if (queryInput) {
+                    queryInput.focus();
+                    queryInput.select();
+                }
+            });
+        }
+
+        if (queryInput) {
+            queryInput.value = this._decodeStoredValue(this.encodedValue || "").icon;
+            queryInput.addEventListener("input", () => {
+                if (popup) {
+                    popup.style.display = "block";
+                }
+                this._renderIconResults(results, queryInput.value);
+            });
+            queryInput.addEventListener("keydown", (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    this._applyIconSelection(queryInput.value, preview, popup);
+                }
+                if (event.key === "Escape" && popup) {
+                    popup.style.display = "none";
+                }
+            });
+        }
+
+        if (colorInput) {
+            colorInput.value = this.currentColor;
+            colorInput.addEventListener("input", () => {
+                this._applyUiState(queryInput ? queryInput.value : "", colorInput.value, preview, false);
+            });
+            colorInput.addEventListener("change", () => {
+                this._applyUiState(queryInput ? queryInput.value : "", colorInput.value, preview, true);
+            });
+        }
+
+        if (closeButton && popup) {
+            closeButton.addEventListener("click", () => {
+                popup.style.display = "none";
+            });
+        }
+
+        if (!this._outsideClickHandler) {
+            this._outsideClickHandler = (event) => {
+                if (!popup || popup.style.display === "none") {
+                    return;
+                }
+                const root = document.getElementById(`${this.id}_root`);
+                if (root && !root.contains(event.target)) {
+                    popup.style.display = "none";
+                }
+            };
+            document.addEventListener("click", this._outsideClickHandler);
+        }
+
+        this._renderIconPreview(preview, this._decodeStoredValue(this.encodedValue || "").icon);
+    }
+
+    destroy() {
+        if (this._outsideClickHandler) {
+            document.removeEventListener("click", this._outsideClickHandler);
+            this._outsideClickHandler = null;
+        }
+    }
+
+    set(encodedValue) {
+        this._applyEncodedIcon(encodedValue, true);
+    }
+
+    _applyEncodedIcon(encodedValue, emitChange) {
+        const decoded = this._decodeStoredValue(encodedValue);
+        this.currentColor = decoded.color;
+
+        const resolved = $.FlexRenderer.UIControls.IconLibrary.resolveAnyIconSpec(decoded.icon, this.selectedSet);
+        if (!resolved) {
+            this.encodedValue = this._encodeStoredValue(decoded.icon, this.currentColor);
+            this.textureId = -1;
+            if (emitChange) {
+                this.changed("default", this.textureId, this.encodedValue, this);
+            }
+            this.store(this.encodedValue);
+            this._needsLoad = true;
+            return;
+        }
+
+        this.selectedSet = resolved.set || this.selectedSet;
+        this.store(this.selectedSet, "set");
+
+        const renderSpec = this._resolveRenderSpec(resolved);
+        if (!renderSpec || !renderSpec.text) {
+            this.encodedValue = this._encodeStoredValue(decoded.icon, this.currentColor);
+            this.textureId = -1;
+            if (emitChange) {
+                this.changed("default", this.textureId, this.encodedValue, this);
+            }
+            this.store(this.encodedValue);
+            this._needsLoad = true;
+            return;
+        }
+
+        const canvas = this._renderIconCanvas(renderSpec);
+        const cacheKey = JSON.stringify({
+            key: resolved.key,
+            text: renderSpec.text,
+            size: this.params.size,
+            padding: this.params.padding,
+            color: this.currentColor,
+            backgroundColor: this.params.backgroundColor,
+            fontFamily: renderSpec.fontFamily,
+            fontWeight: renderSpec.fontWeight
+        });
+
+        const textureId = this._uploadAtlasEntry(canvas, {
+            width: canvas.width,
+            height: canvas.height,
+            cacheKey: cacheKey
+        });
+
+        this._setTexture(this._encodeStoredValue(decoded.icon, this.currentColor), textureId, { emitChange });
+    }
+
+    _decodeStoredValue(encodedValue) {
+        const fallbackColor = this._normalizeColor(this.currentColor || this.params.color || "#111111");
+        if (encodedValue && typeof encodedValue === "object") {
+            return {
+                icon: String(encodedValue.icon || encodedValue.default || ""),
+                color: this._normalizeColor(encodedValue.color || fallbackColor)
+            };
+        }
+
+        const raw = String(encodedValue || "").trim();
+        if (!raw) {
+            return { icon: "", color: fallbackColor };
+        }
+
+        if (raw.startsWith("{")) {
+            try {
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === "object") {
+                    return {
+                        icon: String(parsed.icon || parsed.default || ""),
+                        color: this._normalizeColor(parsed.color || fallbackColor)
+                    };
+                }
+            } catch (_) {
+                // Legacy plain-string values remain supported.
+            }
+        }
+
+        return { icon: raw, color: fallbackColor };
+    }
+
+    _encodeStoredValue(iconValue, colorValue) {
+        return JSON.stringify({
+            icon: String(iconValue || ""),
+            color: this._normalizeColor(colorValue || this.currentColor || this.params.color || "#111111")
+        });
+    }
+
+    _normalizeColor(colorValue) {
+        const raw = String(colorValue || "").trim();
+        if (/^#[0-9a-f]{6}$/i.test(raw)) {
+            return raw.toLowerCase();
+        }
+        if (/^#[0-9a-f]{3}$/i.test(raw)) {
+            return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase();
+        }
+        return String(this.params.color || "#111111").toLowerCase();
+    }
+
+    _applyUiState(iconQuery, colorValue, preview, invalidate) {
+        const nextEncodedValue = this._encodeStoredValue(iconQuery, colorValue);
+        this.set(nextEncodedValue);
+        this._renderIconPreview(preview, iconQuery);
+        if (invalidate) {
+            this.owner.invalidate();
+        }
+    }
+
+    _resolveRenderSpec(resolved) {
+        if (resolved.renderMode === "glyph") {
+            return {
+                text: resolved.glyph,
+                fontFamily: resolved.fontFamily || this.params.glyphFontFamily,
+                fontWeight: resolved.fontWeight || this.params.glyphFontWeight
+            };
+        }
+
+        if (resolved.renderMode === "class") {
+            return this._resolveFontClassRenderSpec(resolved.className, resolved);
+        }
+
+        return null;
+    }
+
+    _resolveFontClassRenderSpec(className, resolved) {
+        if (typeof document === "undefined") {
+            return null;
+        }
+
+        const probe = document.createElement("i");
+        probe.className = className;
+        probe.setAttribute("aria-hidden", "true");
+        probe.style.position = "absolute";
+        probe.style.left = "-10000px";
+        probe.style.top = "-10000px";
+        probe.style.fontSize = `${Math.max(16, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
+        document.body.appendChild(probe);
+
+        try {
+            const pseudo = window.getComputedStyle(probe, "::before");
+            let content = pseudo.getPropertyValue("content");
+            if (!content || content === "none" || content === "normal") {
+                const base = window.getComputedStyle(probe);
+                content = base.getPropertyValue("content");
+            }
+
+            const text = this._decodeCssContent(content);
+            if (!text) {
+                return null;
+            }
+
+            return {
+                text,
+                fontFamily: pseudo.fontFamily || resolved.fontFamily,
+                fontWeight: pseudo.fontWeight || resolved.fontWeight || "900"
+            };
+        } finally {
+            probe.remove();
+        }
+    }
+
+    _decodeCssContent(content) {
+        if (!content || content === "none" || content === "normal") {
+            return null;
+        }
+
+        let value = String(content).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+
+        value = value.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
+            try {
+                return String.fromCodePoint(Number.parseInt(hex, 16));
+            } catch (_) {
+                return "";
+            }
+        });
+
+        value = value.replace(/\\\\/g, "\\");
+        value = value.replace(/\\"/g, '"');
+        value = value.replace(/\\'/g, "'");
+
+        return value || null;
+    }
+
+    _renderIconCanvas(renderSpec) {
+        const size = Math.max(16, Number.parseInt(this.params.size, 10) || 160);
+        const padding = Math.max(0, Number.parseInt(this.params.padding, 10) || 0);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, size, size);
+
+        if (this.params.backgroundColor && this.params.backgroundColor !== "#00000000") {
+            ctx.fillStyle = this.params.backgroundColor;
+            ctx.fillRect(0, 0, size, size);
+        }
+
+        const availableSize = Math.max(8, size - (padding * 2));
+        const measureAt = (fontSize) => {
+            ctx.font = `${renderSpec.fontWeight || "400"} ${fontSize}px ${renderSpec.fontFamily || this.params.glyphFontFamily}`;
+            return ctx.measureText(renderSpec.text);
+        };
+
+        let metrics = measureAt(size);
+        let boundsWidth = Math.max(
+            1,
+            (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
+            metrics.width || 0
+        );
+        let boundsHeight = Math.max(
+            1,
+            (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
+            size * 0.7
+        );
+        const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight);
+        const fontSize = Math.max(8, Math.floor(size * fitScale));
+        metrics = measureAt(fontSize);
+
+        ctx.fillStyle = this.currentColor;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.lineJoin = "round";
+        ctx.miterLimit = 2;
+
+        const left = metrics.actualBoundingBoxLeft || 0;
+        const right = metrics.actualBoundingBoxRight || metrics.width || 0;
+        const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75;
+        const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25;
+        const x = (size / 2) + ((left - right) / 2);
+        const y = (size / 2) + ((ascent - descent) / 2);
+
+        const strokeWidth = Math.max(1, fontSize * 0.035);
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = this.currentColor;
+        ctx.strokeText(renderSpec.text, x, y);
+        ctx.fillText(renderSpec.text, x, y);
+
+        return canvas;
+    }
+
+    _renderIconPreview(node, query) {
+        if (!node) {
+            return;
+        }
+
+        node.innerHTML = "";
+
+        const resolved = $.FlexRenderer.UIControls.IconLibrary.resolveAnyIconSpec(query, this.selectedSet);
+        if (!resolved) {
+            node.textContent = "?";
+            node.title = "Unknown icon";
+            return;
+        }
+
+        node.title = `${resolved.label} (${resolved.set})`;
+
+        if (resolved.renderMode === "class") {
+            const icon = document.createElement("i");
+            icon.className = resolved.className;
+            icon.setAttribute("aria-hidden", "true");
+            icon.style.fontSize = `${Math.max(18, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
+            icon.style.color = this.currentColor;
+            node.appendChild(icon);
+            return;
+        }
+
+        const span = document.createElement("span");
+        span.textContent = resolved.glyph;
+        span.style.fontFamily = resolved.fontFamily || this.params.glyphFontFamily;
+        span.style.fontWeight = resolved.fontWeight || this.params.glyphFontWeight;
+        span.style.fontSize = `${Math.max(18, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
+        span.style.lineHeight = "1";
+        span.style.color = this.currentColor;
+        node.appendChild(span);
+    }
+
+    _renderIconResults(node, query) {
+        if (!node) {
+            return;
+        }
+
+        const maxResults = Math.max(20, Number.parseInt(this.params.maxResults, 10) || 120);
+        const icons = $.FlexRenderer.UIControls.IconLibrary.searchAll(query, maxResults);
+
+        node.innerHTML = icons.map(icon => {
+            const previewHtml = icon.className
+                ? `<i class="${icon.className}" aria-hidden="true" style="font-size: 24px;"></i>`
+                : `<span style="font-size: 24px; line-height: 1;">${icon.glyph}</span>`;
+
+            return `
+<button type="button"
+    class="icon-search-result"
+    data-icon-name="${icon.name}"
+    data-icon-set="${icon.set || ""}"
+    title="${icon.name}"
+    style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; padding: 10px; border: 1px solid #d8e2d9; border-radius: 10px; background: #fff;">
+<span style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;">${previewHtml}</span>
+<span style="font-size: 12px; text-align: center; line-height: 1.2;">${icon.name}</span>
+<span style="font-size: 11px; text-align: center; line-height: 1.2; opacity: 0.6;">${icon.set || ""}</span>
+</button>`;
+        }).join("");
+
+        node.querySelectorAll("[data-icon-name]").forEach(button => {
+            button.addEventListener("click", () => {
+                const queryInput = document.getElementById(`${this.id}_query`);
+                const preview = document.getElementById(`${this.id}_preview`);
+                const popup = document.getElementById(`${this.id}_popup`);
+
+                if (queryInput) {
+                    queryInput.value = button.dataset.iconName;
+                }
+
+                this._applyIconSelection(button.dataset.iconName, preview, popup, button.dataset.iconSet || undefined);
+            });
+        });
+    }
+
+    _applyIconSelection(query, preview, popup, preferredSet = undefined) {
+        if (preferredSet) {
+            this.selectedSet = preferredSet;
+            this.store(this.selectedSet, "set");
+        }
+        const colorInput = document.getElementById(`${this.id}_color`);
+        this._applyUiState(query, colorInput ? colorInput.value : this.currentColor, preview, true);
+
+        if (popup) {
+            popup.style.display = "none";
+        }
+    }
+
+    toHtml(classes = "", css = "") {
+        const disabled = this.params.interactive ? "" : "disabled";
+        const body = `<div id="${this.id}_root" class="er-control__widget er-control__widget--icon"${$.FlexRenderer.UIControls.styleAttr(`${css}; position: relative;`)}>
+<div class="er-control__toolbar er-control__toolbar--icon" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+    <button id="${this.id}_trigger" type="button" class="er-control__button er-control__button--icon-trigger" ${disabled}
+        style="width: 52px; height: 52px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer;">
+        <span id="${this.id}_preview" class="er-control__preview er-control__preview--icon" style="display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;">?</span>
+    </button>
+</div>
+<div id="${this.id}_popup" class="er-control__popup er-control__popup--icon"
+     style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(420px, 90vw); padding: 12px; border: 1px solid #c9d5ca; border-radius: 12px; background: #fdfefd; box-shadow: 0 16px 36px rgba(18, 32, 24, 0.12);">
+    <div class="er-control__popup-header er-control__popup-header--icon" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <strong style="font-size: 13px;">Icon picker</strong>
+        <button id="${this.id}_close" type="button" class="er-control__button er-control__button--icon-close" ${disabled}>Close</button>
+    </div>
+    <div class="er-control__search er-control__search--icon" style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; align-items: end;">
+        <input type="text" id="${this.id}_query" class="er-control__input er-control__input--icon-query" placeholder="Search icons, aliases, glyphs" style="width: 100%;" ${disabled}>
+        <label class="er-control__color-picker er-control__color-picker--icon" style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #4e5d52;">
+            <span>Color</span>
+            <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color" value="${this._decodeStoredValue(this.encodedValue || this.params.default).color}" style="width: 44px; height: 38px; padding: 2px;" ${disabled}>
+        </label>
+    </div>
+    <div id="${this.id}_results" class="er-control__results er-control__results--icon"
+         style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-height: 360px; overflow: auto;"></div>
+</div>
+</div>`;
+        return $.FlexRenderer.UIControls.renderControl("icon", this.params.title, body, classes);
+    }
+
+    get layoutColumns() {
+        return 1;
+    }
+
+    get supports() {
+        return {
+            title: "Icon",
+            interactive: true,
+            default: "",
+            iconSet: "fa-solid-common",
+            size: 160,
+            padding: 4,
+            color: "#111111",
+            backgroundColor: "#00000000",
+            previewSize: 34,
+            maxResults: 120,
+            glyphFontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif",
+            glyphFontWeight: "400"
+        };
+    }
+
+    get supportsAll() {
+        return {
+            iconSet: $.FlexRenderer.UIControls.IconLibrary.getSetNames()
+        };
+    }
+};
+$.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
 
 })(OpenSeadragon);
 
 (function($) {
     /**
      * @interface OpenSeadragon.FlexRenderer.WebGLImplementation
-     * Interface for the WebGL rendering implementation which can run on various GLSL versions.
+     * Backend rendering contract used by `FlexRenderer`.
+     *
+     * Despite the historical name, this interface documents responsibilities that any GPU backend
+     * is expected to match, including future WebGPU implementations. The concrete backend owns GPU
+     * resources and shader programs. The outer renderer owns normalized inspector state, shader
+     * ordering, and the decision of whether inspector behavior stays inline in the second pass or
+     * is delegated to a backend-specific compositor path.
      */
     $.FlexRenderer.WebGLImplementation = class {
         /**
@@ -5062,6 +6965,10 @@ $.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image
 
         get secondPassProgramKey() {
             throw("$.FlexRenderer.WebGLImplementation::secondPassProgram must be implemented!");
+        }
+
+        get inspectorCompositorProgramKey() {
+            throw("$.FlexRenderer.WebGLImplementation::inspectorCompositorProgram must be implemented!");
         }
 
         /**
@@ -5194,6 +7101,51 @@ $.FlexRenderer.UIControls.registerClass("image", $.FlexRenderer.UIControls.Image
          */
         get supportedUseModes() {
             return ["show", "blend", "clip", "mask", "clip_mask"];
+        }
+
+        /**
+         * Reuse the current first-pass result and render the normal second pass into an offscreen target.
+         *
+         * Contract:
+         * - consumes the same `renderArray` that would be passed to `secondPassProcessData(...)`
+         * - must not mutate renderer-owned inspector state
+         * - should render the normal second-pass composition, not apply special lens logic here
+         * - returns a backend-owned target object that can later be consumed by compositor logic
+         *
+         * @param {SPRenderPackage[]} renderArray second-pass draw packages
+         * @param {Object} [options={}]
+         * @param {Object|string} [options.target] backend-owned render target object or stable target key
+         * @param {string} [options.targetKey] stable target key used when `target` is omitted
+         * @param {number} [options.width] target width in physical pixels
+         * @param {number} [options.height] target height in physical pixels
+         * @param {number[]} [options.clearColor] RGBA used when `renderArray` is empty
+         * @return {Object}
+         */
+        renderSecondPassToTexture(renderArray, options = {}) {
+            throw("$.FlexRenderer.WebGLImplementation::renderSecondPassToTexture() must be implemented!");
+        }
+
+        /**
+         * Execute the backend-specific inspector compositor path for modes that cannot be expressed
+         * inline in the normal second pass.
+         *
+         * Phase-1 contract:
+         * - this hook is used only for `lens-zoom`
+         * - reveal/A-B behavior must stay inside the normal second-pass program
+         * - the backend should render the full second pass to an offscreen target and then run a
+         *   cheap compositor over that full result
+         * - no base/alternate texture semantics are part of the public contract
+         *
+         * The backend must read the canonical state from `renderer.getInspectorState()` and produce
+         * the same visible result as the reference WebGL2 implementation for `lens-zoom`.
+         *
+         * @param {SPRenderPackage[]} renderArray second-pass draw packages
+         * @param {Object} [options={}]
+         * @param {GLint|null} [options.framebuffer]
+         * @return {RenderOutput|Object}
+         */
+        processSecondPassWithInspector(renderArray, options = {}) {
+            throw("$.FlexRenderer.WebGLImplementation::processSecondPassWithInspector() must be implemented!");
         }
 
         /**
@@ -5441,6 +7393,10 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         return "secondPass";
     }
 
+    get inspectorCompositorProgramKey() {
+        return "inspectorCompositor";
+    }
+
     init() {
         this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
 
@@ -5465,9 +7421,11 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         };
 
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+        this._namedColorTargets = {};
 
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.InspectorCompositorProgram(this, this.gl, this.secondAtlas), "inspectorCompositor");
     }
 
     getVersion() {
@@ -5490,6 +7448,10 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     setDimensions(x, y, width, height, levels, tiledImageCount) {
         this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
         this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
+        const compositor = this.renderer.getProgram(this.inspectorCompositorProgramKey);
+        if (compositor) {
+            compositor.setDimensions(x, y, width, height, levels, tiledImageCount);
+        }
         //todo consider some elimination of too many calls
     }
 
@@ -5515,8 +7477,150 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     }
 
     destroy() {
+        if (this._namedColorTargets) {
+            for (const key of Object.keys(this._namedColorTargets)) {
+                this._destroyColorTarget(this._namedColorTargets[key]);
+            }
+            this._namedColorTargets = {};
+        }
         this.firstAtlas.destroy();
         this.secondAtlas.destroy();
+    }
+
+    _createColorTarget(width, height, options = {}) {
+        const gl = this.gl;
+        const target = {
+            key: options.key,
+            width: width,
+            height: height,
+            ownsTexture: true,
+            ownsFramebuffer: true,
+        };
+        const filter = options.filter || gl.LINEAR;
+        target.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, target.texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+        target.framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
+
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            this._destroyColorTarget(target);
+            throw new Error(`FlexRenderer color target is incomplete: 0x${status.toString(16)}`);
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        return target;
+    }
+
+    _destroyColorTarget(target) {
+        if (!target) {
+            return;
+        }
+        const gl = this.gl;
+        if (target.ownsFramebuffer && target.framebuffer) {
+            gl.deleteFramebuffer(target.framebuffer);
+            target.framebuffer = null;
+        }
+        if (target.ownsTexture && target.texture) {
+            gl.deleteTexture(target.texture);
+            target.texture = null;
+        }
+    }
+
+    _ensureColorTarget(targetOrKey, width, height, options = {}) {
+        let target = typeof targetOrKey === 'string' ? this._namedColorTargets[targetOrKey] : targetOrKey;
+        const key = typeof targetOrKey === 'string' ? targetOrKey : (target && target.key);
+
+        if (!target || target.width !== width || target.height !== height || !target.texture || !target.framebuffer) {
+            if (target) {
+                this._destroyColorTarget(target);
+            }
+            target = this._createColorTarget(width, height, {
+                ...options,
+                key: key,
+            });
+            if (key) {
+                this._namedColorTargets[key] = target;
+            }
+        }
+
+        return target;
+    }
+
+    _clearColorTarget(target, rgba = [0, 0, 0, 0]) {
+        if (!target || !target.framebuffer) {
+            return;
+        }
+        const gl = this.gl;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.clearColor(rgba[0], rgba[1], rgba[2], rgba[3]);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    /**
+     * Reference implementation of the backend offscreen second-pass contract.
+     * This renders the normal second pass exactly as it would appear on screen,
+     * but into a reusable color target.
+     */
+    renderSecondPassToTexture(renderArray, options = {}) {
+        const width = options.width || this.renderer.canvas.width || this.gl.drawingBufferWidth;
+        const height = options.height || this.renderer.canvas.height || this.gl.drawingBufferHeight;
+        const target = options.target ?
+            this._ensureColorTarget(options.target, width, height, options) :
+            this._ensureColorTarget(options.targetKey || '__second_pass_texture', width, height, options);
+
+        if (!renderArray || !renderArray.length) {
+            this._clearColorTarget(target, options.clearColor || [0, 0, 0, 0]);
+            return target;
+        }
+
+        const program = this.renderer.getProgram(this.secondPassProgramKey);
+        if (this.renderer.useProgram(program, 'second-pass')) {
+            program.load(renderArray);
+        }
+        program.use(this.renderer.__firstPassResult, renderArray, {
+            framebuffer: target.framebuffer
+        });
+        return target;
+    }
+
+    /**
+     * Reference implementation of the phase-1 inspector compositor contract.
+     * Only `lens-zoom` is routed here by the outer renderer. Reveal/A-B behavior
+     * stays inside the normal second-pass shader.
+     */
+    processSecondPassWithInspector(renderArray, options = undefined) {
+        const width = this.renderer.canvas.width || this.gl.drawingBufferWidth;
+        const height = this.renderer.canvas.height || this.gl.drawingBufferHeight;
+
+        const fullTarget = this._ensureColorTarget("__inspector_full", width, height, { filter: this.gl.LINEAR });
+
+        this.renderSecondPassToTexture(renderArray, {
+            target: fullTarget,
+            width,
+            height
+        });
+
+        const compositor = this.renderer.getProgram(this.inspectorCompositorProgramKey);
+        if (this.renderer.useProgram(compositor, "inspector-compositor")) {
+            compositor.load();
+        }
+
+        return compositor.use(undefined, undefined, {
+            framebuffer: options ? options.framebuffer : null,
+            inspectorState: this.renderer.getInspectorState(),
+            fullTarget: fullTarget
+        });
     }
 
     getBlendingFunction(name) {
@@ -5738,6 +7842,28 @@ uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
 uniform sampler2DArray u_inputTextures;
 uniform sampler2DArray u_stencilTextures;
 
+//  u_inspectorA = [
+//     centerPx.x,
+//     centerPx.y,
+//     radiusPx,
+//     featherPx
+//   ];
+//
+//   u_inspectorB = [
+//     enabled ? 1 : 0,
+//     modeInt,
+//     shaderSplitIndex,
+//     lensZoom
+//   ];
+//
+//   Mode mapping:
+//   - 0 disabled
+//   - 1 reveal-inside
+//   - 2 reveal-outside
+//   - 3 lens-zoom
+uniform vec4 u_inspectorA;
+uniform vec4 u_inspectorB;
+
 
 // INPUT VARIABLES
 
@@ -5811,6 +7937,48 @@ ${this.atlas.getFragmentShaderDefinition()}
 // UTILITY FUNCTION
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
+}
+
+bool inspector_enabled() {
+    return u_inspectorB.x > 0.5;
+}
+
+int inspector_mode() {
+    return int(round(u_inspectorB.y));
+}
+
+int inspector_shader_split_index() {
+    return int(round(u_inspectorB.z));
+}
+
+float inspector_lens_zoom() {
+    return max(u_inspectorB.w, 1.0);
+}
+
+float inspector_mask(vec2 fragPx) {
+    float feather = max(u_inspectorA.w, 0.0001);
+    float distPx = distance(fragPx, u_inspectorA.xy);
+    float inner = max(u_inspectorA.z - feather, 0.0);
+    float outer = max(u_inspectorA.z + feather, feather);
+    return 1.0 - smoothstep(inner, outer, distPx);
+}
+
+float inspector_layer_alpha(int shaderSlot) {
+    if (!inspector_enabled()) {
+        return 1.0;
+    }
+
+    int mode = inspector_mode();
+    if (mode != 1 && mode != 2) {
+        return 1.0;
+    }
+
+    if (shaderSlot < inspector_shader_split_index()) {
+        return 1.0;
+    }
+
+    float mask = inspector_mask(gl_FragCoord.xy);
+    return mode == 1 ? mask : (1.0 - mask);
 }
 
 
@@ -5923,7 +8091,8 @@ ${getStencilPassCode(remainingBlendShader)}
             const shaderLayer = shaderMap[shaderLayerId];
             const shaderLayerConfig = shaderLayer.getConfig();
             const slot = shaderLayer.__renderSlot;
-            const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+            const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+            const opacityModifier = `(${opacityModifierBase}) * inspector_layer_alpha(${slot})`;
 
             execution += `\n    // ${shaderLayer.uid}\n`;
 
@@ -6005,6 +8174,8 @@ ${getStencilPassCode(shaderLayer)}
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
 
         this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
+        this._inspectorALocation = gl.getUniformLocation(program, "u_inspectorA");
+        this._inspectorBLocation = gl.getUniformLocation(program, "u_inspectorB");
         this.vao = gl.createVertexArray();
 
         // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
@@ -6021,25 +8192,7 @@ ${getStencilPassCode(shaderLayer)}
             renderInfo.shader.glLoaded(this.webGLProgram, gl);
         }
         this.atlas.load(this.webGLProgram);
-
-        const renderer = this.context.renderer;
-        const packInfo = renderer.__flexPackInfo || {};
-        const layout = packInfo.layout || {};
-        const baseLayer = layout.baseLayer || [];
-        const packCount = layout.packCount || [];
-        const channelCount = packInfo.channelCount || [];
-
-        const maxTI = this._tiledImageCount;
-        const tiInfo = new Int32Array(maxTI * 3);
-        for (let i = 0; i < maxTI; i++) {
-            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
-            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
-            tiInfo[i * 3] = base;
-            tiInfo[i * 3 + 1] = pc;
-            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
-        }
-
-        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
+        this._uploadTiledImageInfo();
     }
 
     /**
@@ -6050,7 +8203,10 @@ ${getStencilPassCode(shaderLayer)}
         gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
         gl.bindVertexArray(this.vao);
 
-        // TODO: is this refreshing logic necessary?
+        // TODO: is refreshing necessary here?
+        // Second-pass source layout can change without recompiling the program.
+        // Refresh texture metadata uniforms every draw so helper wrappers around
+        // osd_texture()/osd_channel() see the same layout as inline sampling.
         // this._uploadTiledImageInfo();
 
         const shaderVariables = [];
@@ -6080,6 +8236,29 @@ ${getStencilPassCode(shaderLayer)}
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
+        const inspectorState = this.context.renderer.getInspectorState();
+        const inspectorMode = {
+            "reveal-inside": 1,
+            "reveal-outside": 2,
+            "lens-zoom": 3
+        }[inspectorState.mode] || 0;
+
+        gl.uniform4f(
+            this._inspectorALocation,
+            inspectorState.centerPx.x,
+            inspectorState.centerPx.y,
+            inspectorState.radiusPx,
+            inspectorState.featherPx
+        );
+
+        gl.uniform4f(
+            this._inspectorBLocation,
+            inspectorState.enabled ? 1 : 0,
+            inspectorMode,
+            inspectorState.shaderSplitIndex,
+            inspectorState.lensZoom
+        );
+
         this.atlas.bind(gl.TEXTURE2, 2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -6094,37 +8273,28 @@ ${getStencilPassCode(shaderLayer)}
         return renderOutput;
     }
 
-    // TODO: is this refreshing logic necessary?
-    // _uploadTiledImageInfo() {
-    //     const renderer = this.context.renderer;
-    //     const packInfo = renderer.__flexPackInfo || {};
-    //     const version = packInfo.version || 0;
-    //
-    //     if (this._uploadedPackInfoVersion === version) {
-    //         return;
-    //     }
-    //
-    //     const gl = this.gl;
-    //     const layout = packInfo.layout || {};
-    //     const baseLayer = layout.baseLayer || [];
-    //     const packCount = layout.packCount || [];
-    //     const channelCount = packInfo.channelCount || [];
-    //
-    //     const maxTI = this._tiledImageCount;
-    //     const tiInfo = new Int32Array(maxTI * 3);
-    //
-    //     for (let i = 0; i < maxTI; i++) {
-    //         const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
-    //         const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
-    //
-    //         tiInfo[i * 3 + 0] = base;
-    //         tiInfo[i * 3 + 1] = pc;
-    //         tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
-    //     }
-    //
-    //     gl.uniform3iv(this._tiInfoLoc, tiInfo);
-    //     this._uploadedPackInfoVersion = version;
-    // }
+    _uploadTiledImageInfo() {
+        const renderer = this.context.renderer;
+        const packInfo = renderer.__flexPackInfo || {};
+        const layout = packInfo.layout || {};
+        const baseLayer = layout.baseLayer || [];
+        const packCount = layout.packCount || [];
+        const channelCount = packInfo.channelCount || [];
+
+        const maxTI = this._tiledImageCount;
+        const tiInfo = new Int32Array(maxTI * 3);
+
+        for (let i = 0; i < maxTI; i++) {
+            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
+            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+
+            tiInfo[i * 3 + 0] = base;
+            tiInfo[i * 3 + 1] = pc;
+            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+        }
+
+        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
+    }
 
     /**
      * Destroy program. No arguments.
@@ -6139,6 +8309,160 @@ ${getStencilPassCode(shaderLayer)}
         this._tiledImageCount = tiledImageCount;
     }
 };
+
+$.FlexRenderer.WebGL20.InspectorCompositorProgram = class extends $.FlexRenderer.WGLProgram {
+    constructor(context, gl, atlas) {
+        super(context, gl, atlas);
+        this._width = 1;
+        this._height = 1;
+    }
+
+    _getVertexShaderSource() {
+        return `#version 300 es
+precision mediump float;
+
+out vec2 v_texture_coords;
+
+const vec2 viewport[4] = vec2[4](
+    vec2(-1.0,  1.0),
+    vec2(-1.0, -1.0),
+    vec2( 1.0,  1.0),
+    vec2( 1.0, -1.0)
+);
+
+void main() {
+    vec2 clip = viewport[gl_VertexID];
+    v_texture_coords = clip * 0.5 + 0.5;
+    gl_Position = vec4(clip, 0.0, 1.0);
+}
+`;
+    }
+
+    _getFragmentShaderSource() {
+        return `#version 300 es
+precision mediump float;
+precision mediump int;
+precision mediump sampler2D;
+
+uniform sampler2D u_fullTexture;
+uniform vec2 u_viewportSize;
+uniform vec2 u_lensCenterPx;
+uniform float u_radiusPx;
+uniform float u_featherPx;
+uniform float u_lensZoom;
+uniform int u_mode;
+uniform int u_enabled;
+
+in vec2 v_texture_coords;
+out vec4 final_color;
+
+float inspector_mask(vec2 fragPx) {
+  float feather = max(u_featherPx, 0.0001);
+  float distPx = distance(fragPx, u_lensCenterPx);
+  float inner = max(u_radiusPx - feather, 0.0);
+  float outer = max(u_radiusPx + feather, feather);
+  return 1.0 - smoothstep(inner, outer, distPx);
+}
+
+vec2 inspector_lens_uv(vec2 uv) {
+  vec2 viewportSize = max(u_viewportSize, vec2(1.0));
+  vec2 centerUv = u_lensCenterPx / viewportSize;
+  float zoom = max(u_lensZoom, 1.0);
+  return clamp(centerUv + (uv - centerUv) / zoom, vec2(0.0), vec2(1.0));
+}
+
+void main() {
+  vec4 fullColor = texture(u_fullTexture, v_texture_coords);
+  vec4 result = fullColor;
+
+  if (u_enabled == 1 && u_mode == 3) {
+      float mask = inspector_mask(gl_FragCoord.xy);
+      vec4 lensColor = texture(u_fullTexture, inspector_lens_uv(v_texture_coords));
+      result = mix(fullColor, lensColor, mask);
+  }
+
+  final_color = result;
+}
+`;
+    }
+
+    build() {
+        this.vertexShader = this._getVertexShaderSource();
+        this.fragmentShader = this._getFragmentShaderSource();
+    }
+
+    created(width, height) {
+        const gl = this.gl;
+        const program = this.webGLProgram;
+        this._width = width;
+        this._height = height;
+        this._fullTextureLoc = gl.getUniformLocation(program, 'u_fullTexture');
+        this._viewportSizeLoc = gl.getUniformLocation(program, 'u_viewportSize');
+        this._lensCenterLoc = gl.getUniformLocation(program, 'u_lensCenterPx');
+        this._radiusLoc = gl.getUniformLocation(program, 'u_radiusPx');
+        this._featherLoc = gl.getUniformLocation(program, 'u_featherPx');
+        this._lensZoomLoc = gl.getUniformLocation(program, 'u_lensZoom');
+        this._modeLoc = gl.getUniformLocation(program, 'u_mode');
+        this._enabledLoc = gl.getUniformLocation(program, 'u_enabled');
+        this.vao = gl.createVertexArray();
+    }
+
+    load() {
+    }
+
+    _modeToInt(mode) {
+        return {
+            'reveal-inside': 1,
+            'reveal-outside': 2,
+            'lens-zoom': 3,
+        }[mode] || 0;
+    }
+
+    use(renderOutput, renderArray, options = {}) {
+        const gl = this.gl;
+        const fullTarget = options.fullTarget;
+        const inspectorState = options.inspectorState || {};
+
+        if (!fullTarget || !fullTarget.texture) {
+            throw new Error('Inspector compositor requires a full color target.');
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options.framebuffer === undefined ? null : options.framebuffer);
+        gl.bindVertexArray(this.vao);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fullTarget.texture);
+        gl.uniform1i(this._fullTextureLoc, 0);
+
+        gl.uniform2f(this._viewportSizeLoc, this._width, this._height);
+        gl.uniform2f(this._lensCenterLoc, inspectorState.centerPx ? inspectorState.centerPx.x || 0 : 0, inspectorState.centerPx ? inspectorState.centerPx.y || 0 : 0);
+        gl.uniform1f(this._radiusLoc, inspectorState.radiusPx || 0);
+        gl.uniform1f(this._featherLoc, inspectorState.featherPx || 0);
+        gl.uniform1f(this._lensZoomLoc, inspectorState.lensZoom || 1);
+        gl.uniform1i(this._modeLoc, this._modeToInt(inspectorState.mode));
+        gl.uniform1i(this._enabledLoc, inspectorState.enabled ? 1 : 0);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.bindVertexArray(null);
+
+        return {
+            texture: fullTarget.texture,
+        };
+    }
+
+    destroy() {
+        this.gl.deleteVertexArray(this.vao);
+    }
+
+    setDimensions(x, y, width, height) {
+        this._width = width;
+        this._height = height;
+    }
+};
+
 
 $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgram {
 
@@ -6642,6 +8966,11 @@ void main() {
     }
 
     setDimensions(x, y, width, height, dataLayerCount, tiledImageCount) {
+        if (!width || !height || !dataLayerCount || !tiledImageCount) {
+            // Defer — GL resources will be reallocated when real dimensions arrive.
+            return;
+        }
+
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
         // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
@@ -6707,8 +9036,9 @@ void main() {
 
     _createOffscreenTexture(name, width, height, layerCount, filter) {
         const gl = this.gl;
+        const previousActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
 
-            layerCount = Math.max(layerCount, 1);
+        layerCount = Math.max(layerCount, 1);
 
         let texRef = this[name];
         if (texRef) {
@@ -6722,402 +9052,486 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.activeTexture(previousActiveTexture);
     }
 };
 
-// todo: support no-atlas mode (dont bind anything if not used at all)
-$.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.TextureAtlas {
+})(OpenSeadragon);
 
-    constructor(gl, opts) {
-        super(gl, opts);
+(function ($) {
+    // todo: support no-atlas mode (dont bind anything if not used at all)
+    $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.TextureAtlas {
 
-        this.version = 1;
-        this._atlasUploadedVersion = -1;
+        constructor(gl, opts) {
+            super(gl, opts);
 
-        /** @type {{ id:number, source:any, w:number, h:number, layer:number, x:number, y:number }[]} */
-        this._entries = [];
-        this._pendingUploads = [];
+            this.version = 1;
+            this._atlasUploadedVersion = -1;
+            this._metadataDirty = true;
 
-        /** @type {{ shelves: { y:number, h:number, x:number }[], nextY:number }[]} */
-        this._layerState = [];
+            /** @type {{ id:number, source:any, w:number, h:number, layer:number, x:number, y:number }[]} */
+            this._entries = [];
+            this._pendingUploads = [];
 
-        // Per-id uniforms for the shader
-        this._scale = new Float32Array(this.maxIds * 2);   // sx, sy
-        this._offset = new Float32Array(this.maxIds * 2);  // ox, oy
-        this._layer = new Int32Array(this.maxIds);         // layer index
-        this._createTexture(this.layerWidth, this.layerHeight, this.layers);
-    }
-
-
-    /**
-     * Add an image. Returns a stable textureId.
-     * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
-     * @param {{
-     *   width?: number,
-     *   height?: number,
-     * }} [opts]
-     * @returns {number}
-     */
-    addImage(source, opts) {
-        const width = (opts && opts.width && typeof opts.width === 'number') ? opts.width :
-            (source && (source.width || source.naturalWidth || (source.canvas && source.canvas.width) || source.w));
-        const height = (opts && opts.height && typeof opts.height === 'number') ? opts.height :
-            (source && (source.height || source.naturalHeight || (source.canvas && source.canvas.height) || source.h));
-
-        if (!width || !height) {
-            throw new Error('TextureAtlas2DArray.addImage: width or height missing');
-        }
-
-        const place = this._ensureCapacityFor(width, height);
-
-        const id = this._entries.length;
-
-        // uniforms for shader (can be uploaded later; we just fill CPU buffers now)
-        this._layer[id] = place.layer;
-        this._scale[id * 2 + 0] = width / this.layerWidth;
-        this._scale[id * 2 + 1] = height / this.layerHeight;
-        this._offset[id * 2 + 0] = (place.x + this.padding) / this.layerWidth;
-        this._offset[id * 2 + 1] = (place.y + this.padding) / this.layerHeight;
-
-        // remember for re-pack / re-upload
-        this._entries.push({
-            id: id,
-            source: source,
-            w: width,
-            h: height,
-            layer: place.layer,
-            x: place.x,
-            y: place.y
-        });
-
-        // enqueue GPU upload (performed later in load()/commitUploads())
-        this._pendingUploads.push({
-            source: source,
-            w: width,
-            h: height,
-            layer: place.layer,
-            x: place.x,
-            y: place.y
-        });
-
-        if (id + 1 > this.maxIds) {
-            throw new Error('TextureAtlas2DArray: exceeded maxIds capacity');
-        }
-
-        this.version++;
-        return id;
-    }
-
-    /**
-     * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
-     * @param textureUnit
-     */
-    bind(textureUnit, textureUnitIndex) {
-        const gl = this.gl;
-
-        // textureUnit is the numeric unit index (0..N-1)
-        gl.activeTexture(textureUnit);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
-
-        // only push uniform arrays when changed (fast and harmless during draw)
-
-        if (this._atlasUploadedVersion !== this.version) {
-            gl.uniform1i(this._atlasTexLoc, textureUnitIndex);
-            gl.uniform2fv(this._atlasScaleLoc, this._scale);
-            gl.uniform2fv(this._atlasOffsetLoc, this._offset);
-            gl.uniform1iv(this._atlasLayerLoc, this._layer);
-            this._atlasUploadedVersion = this.version;
-        }
-    }
-
-    /**
-     * Get WebGL Atlas shader code. This code must define the following function:
-     * vec4 osd_atlas_texture(int, vec2)
-     * which selects texture ID (1st arg) and returns the color at the uv position (2nd arg)
-     *
-     * @return {string}
-     */
-    getFragmentShaderDefinition() {
-        return `
-uniform sampler2DArray u_atlasTex;
-uniform vec2  u_atlasScale[${this.maxIds}];
-uniform vec2  u_atlasOffset[${this.maxIds}];
-uniform int   u_atlasLayer[${this.maxIds}];
-
-vec4 osd_atlas_texture(int textureId, vec2 uv) {
-    if (textureId < 0) {
-        // return purple for non-existent texture
-        return vec4(1.0, 0.0, 1.0, 1.0);
-    }
-
-    // enable mirroring
-    uv = mod(uv, 2.0);
-    uv = uv - 1.0;
-    uv = sign(uv) * uv;
-    uv = 1.0 - uv;
-
-    vec2 st = u_atlasOffset[textureId] + uv * u_atlasScale[textureId];
-    float layer = float(u_atlasLayer[textureId]);
-
-    return texture(u_atlasTex, vec3(st, layer));
-}
-`;
-    }
-
-    /**
-     * Load the current atlas uniform locations.
-     * @param {WebGLProgram} program
-     */
-    load(program) {
-        const gl = this.gl;
-
-        // fetch uniform locations (existing behavior)
-        this._atlasTexLoc    = gl.getUniformLocation(program, "u_atlasTex");
-        this._atlasScaleLoc  = gl.getUniformLocation(program, "u_atlasScale[0]");
-        this._atlasOffsetLoc = gl.getUniformLocation(program, "u_atlasOffset[0]");
-        this._atlasLayerLoc  = gl.getUniformLocation(program, "u_atlasLayer[0]");
-
-        // commit all staged texSubImage3D uploads in a single pass
-        this._commitUploads();
-
-        // (optional) you can also pre-upload the uniform arrays here once right after commit
-        // if (this._atlasUploadedVersion !== this.version) {
-        //     gl.uniform2fv(this._atlasScaleLoc, this._scale);
-        //     gl.uniform2fv(this._atlasOffsetLoc, this._offset);
-        //     gl.uniform1iv(this._atlasLayerLoc, this._layer);
-        //     this._atlasUploadedVersion = this.version;
-        // }
-    }
-
-    /**
-     * Destroy the atlas.
-     */
-    destroy() {
-        const gl = this.gl;
-
-        if (this.texture) {
-            gl.deleteTexture(this.texture);
-            this.texture = null;
-        }
-
-        this._entries.length = 0;
-        this._layerState.length = 0;
-    }
-
-    _commitUploads() {
-        if (!this.texture) {
-            // allocate storage if not created yet
+            /** @type {{ shelves: { y:number, h:number, x:number }[], nextY:number }[]} */
+            this._layerState = [];
             this._createTexture(this.layerWidth, this.layerHeight, this.layers);
         }
 
-        if (!this._pendingUploads.length) {
-            return;
-        }
 
-        const gl = this.gl;
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+        /**
+         * Add an image. Returns a stable textureId.
+         * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
+         * @param {{
+         *   width?: number,
+         *   height?: number,
+         * }} [opts]
+         * @returns {number}
+         */
+        addImage(source, opts) {
+            const width = (opts && opts.width && typeof opts.width === 'number') ? opts.width :
+                (source && (source.width || source.naturalWidth || (source.canvas && source.canvas.width) || source.w));
+            const height = (opts && opts.height && typeof opts.height === 'number') ? opts.height :
+                (source && (source.height || source.naturalHeight || (source.canvas && source.canvas.height) || source.h));
 
-        for (const u of this._pendingUploads) {
-            const x = u.x + this.padding;
-            const y = u.y + this.padding;
-
-            if (u.source instanceof ImageBitmap ||
-                (typeof HTMLImageElement !== 'undefined' && u.source instanceof HTMLImageElement) ||
-                (typeof HTMLCanvasElement !== 'undefined' && u.source instanceof HTMLCanvasElement)) {
-                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source);
-            } else if (u.source && u.source.data && typeof u.source.width === 'number' && typeof u.source.height === 'number') {
-                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source.data);
-            } else if (u.source && (u.source instanceof Uint8Array || u.source instanceof Uint8ClampedArray)) {
-                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source);
-            } else {
-                gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-                throw new Error('Unsupported image source for atlas');
+            if (!width || !height) {
+                throw new Error('TextureAtlas2DArray.addImage: width or height missing');
             }
-        }
 
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            const place = this._ensureCapacityFor(width, height);
 
-        // all uploads done; clear queue
-        this._pendingUploads.length = 0;
-    }
+            const id = this._entries.length;
 
-    _createTexture(w, h, depth) {
-        const gl = this.gl;
-
-        if (this.texture) {
-            gl.deleteTexture(this.texture);
-            this.texture = null;
-        }
-
-        this.texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
-        gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, this.internalFormat, w, h, Math.max(depth, 1));
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-
-        this.layerWidth = w;
-        this.layerHeight = h;
-        this.layers = depth;
-
-        // reset packer state sized to current depth
-        this._layerState = [];
-        for (let i = 0; i < depth; i++) {
-            this._layerState.push({ shelves: [], nextY: 0 });
-        }
-    }
-
-    _ensureCapacityFor(width, height) {
-        const paddedWidth = width + 2 * this.padding;
-        const paddedHeight = height + 2 * this.padding;
-
-        // try current layers first
-        for (let li = 0; li < this.layers; li++) {
-            const pos = this._tryPlaceRect(li, paddedWidth, paddedHeight);
-            if (pos) {
-                return { layer: li, x: pos.x, y: pos.y, willRealloc: false };
-            }
-        }
-
-        // if rectangle is bigger than layer extent, grow extent (power of 2)
-        let newW = this.layerWidth;
-        let newH = this.layerHeight;
-        if (paddedWidth > newW || paddedHeight > newH) {
-            while (newW < paddedWidth) {
-                newW *= 2;
-            }
-            while (newH < paddedHeight) {
-                newH *= 2;
-            }
-            // reallocate texture with same layer count but bigger extent
-            this._resizeAndReupload(newW, newH, this.layers);
-        }
-
-        // try again after extent growth
-        for (let li = 0; li < this.layers; li++) {
-            const pos2 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
-            if (pos2) {
-                return { layer: li, x: pos2.x, y: pos2.y, willRealloc: false };
-            }
-        }
-
-        // still not fitting due to fragmentation / filled layers: add one or more layers
-        let newLayers = Math.max(this.layers * 2, this.layers + 1);
-        this._resizeAndReupload(this.layerWidth, this.layerHeight, newLayers);
-
-        // after adding layers there will be empty layers to place into
-        const li = this._firstEmptyLayer();
-        const pos3 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
-        return { layer: li, x: pos3.x, y: pos3.y, willRealloc: false };
-    }
-
-    _firstEmptyLayer() {
-        for (let i = 0; i < this.layers; i++) {
-            const st = this._layerState[i];
-            if ((st.nextY === 0) && st.shelves.length === 0) {
-                return i;
-            }
-        }
-        return 0;
-    }
-
-    _resizeAndReupload(newW, newH, newLayers) {
-        // keep old entries and repack from scratch
-        const oldEntries = this._entries.slice();
-
-        this._createTexture(newW, newH, newLayers);
-
-        // clear packing and pending upload queues
-        this._entries.length = 0;
-        this._pendingUploads.length = 0;
-
-        // re-place each entry; update uniforms; enqueue for upload
-        for (const ent of oldEntries) {
-            const pos = this._ensureCapacityFor(ent.w, ent.h);
-            ent.layer = pos.layer;
-            ent.x = pos.x;
-            ent.y = pos.y;
-
-            const id = ent.id;
-
-            this._layer[id] = ent.layer;
-            this._scale[id * 2 + 0] = ent.w / this.layerWidth;
-            this._scale[id * 2 + 1] = ent.h / this.layerHeight;
-            this._offset[id * 2 + 0] = (ent.x + this.padding) / this.layerWidth;
-            this._offset[id * 2 + 1] = (ent.y + this.padding) / this.layerHeight;
-
-            this._entries.push(ent);
-            this._pendingUploads.push({
-                source: ent.source,
-                w: ent.w,
-                h: ent.h,
-                layer: ent.layer,
-                x: ent.x,
-                y: ent.y
+            // remember for re-pack / re-upload
+            this._entries.push({
+                id: id,
+                source: source,
+                w: width,
+                h: height,
+                layer: place.layer,
+                x: place.x,
+                y: place.y
             });
+
+            // enqueue GPU upload (performed later in load()/commitUploads())
+            this._pendingUploads.push({
+                source: source,
+                w: width,
+                h: height,
+                layer: place.layer,
+                x: place.x,
+                y: place.y
+            });
+
+            if (id + 1 > this.maxIds) {
+                throw new Error('TextureAtlas2DArray: exceeded maxIds capacity');
+            }
+
+            this._metadataDirty = true;
+            this.version++;
+            return id;
         }
 
-        // mark uniforms changed; actual GPU uploads will occur in load()/commitUploads()
-        this.version++;
-    }
+        /**
+         * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
+         * @param textureUnit
+         */
+        bind(textureUnit, textureUnitIndex) {
+            const gl = this.gl;
 
-    _tryPlaceRect(layerIndex, w, h) {
-        const W = this.layerWidth;
-        const H = this.layerHeight;
-        let st = this._layerState[layerIndex];
-
-        if (!st) {
-            // todo it happens that the _layerState is empty but plaing called! this is a bug
-            $.console.error('TextureAtlas2DArray._tryPlaceRect: invalid layerIndex');
-            this._createTexture(W, H, this.layers);
-            st = this._layerState[layerIndex];
+            // textureUnit is the numeric unit index (0..N-1)
+            gl.activeTexture(textureUnit);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            gl.uniform1i(this._atlasTexLoc, textureUnitIndex);
+            gl.uniform1i(this._atlasWidthLoc, this.layerWidth);
+            gl.uniform1i(this._atlasHeightLoc, this.layerHeight);
+            gl.uniform1i(this._atlasMetadataRowsLoc, this._metadataRows());
+            this._atlasUploadedVersion = this.version;
         }
 
-        // try existing shelves
-        for (const shelf of st.shelves) {
-            if (h <= shelf.h && shelf.x + w <= W) {
-                const x = shelf.x;
-                const y = shelf.y;
-                shelf.x += w;
-                return { x: x, y: y };
+        /**
+         * Get WebGL Atlas shader code. This code must define the following function:
+         * vec4 osd_atlas_texture(int, vec2)
+         * which selects texture ID (1st arg) and returns the color at the uv position (2nd arg)
+         *
+         * @return {string}
+         */
+        getFragmentShaderDefinition() {
+            const metadataTexelsPerEntry = 3;
+            return `
+uniform sampler2DArray u_atlasTex;
+uniform int u_atlasWidth;
+uniform int u_atlasHeight;
+uniform int u_atlasMetadataRows;
+
+const int OSD_ATLAS_MAX_IDS = ${this.maxIds};
+const int OSD_ATLAS_METADATA_TEXELS_PER_ENTRY = ${metadataTexelsPerEntry};
+const int OSD_ATLAS_PADDING = ${this.padding};
+
+int osd_atlas_unpack_u16(vec2 normalizedPair) {
+ivec2 bytes = ivec2(round(clamp(normalizedPair, 0.0, 1.0) * 255.0));
+return bytes.x | (bytes.y << 8);
+}
+
+ivec2 osd_atlas_meta_coord(int linearIndex, int atlasWidth) {
+return ivec2(linearIndex % atlasWidth, linearIndex / atlasWidth);
+}
+
+vec4 osd_atlas_texture(int textureId, vec2 uv) {
+if (textureId < 0 || textureId >= OSD_ATLAS_MAX_IDS) {
+    // return purple for non-existent texture
+    return vec4(1.0, 0.0, 1.0, 1.0);
+}
+
+int baseIndex = textureId * OSD_ATLAS_METADATA_TEXELS_PER_ENTRY;
+ivec2 meta0Coord = osd_atlas_meta_coord(baseIndex, u_atlasWidth);
+ivec2 meta1Coord = osd_atlas_meta_coord(baseIndex + 1, u_atlasWidth);
+ivec2 meta2Coord = osd_atlas_meta_coord(baseIndex + 2, u_atlasWidth);
+
+if (meta2Coord.y >= u_atlasMetadataRows) {
+    return vec4(1.0, 0.0, 1.0, 1.0);
+}
+
+vec4 meta0 = texelFetch(u_atlasTex, ivec3(meta0Coord, 0), 0);
+vec4 meta1 = texelFetch(u_atlasTex, ivec3(meta1Coord, 0), 0);
+vec4 meta2 = texelFetch(u_atlasTex, ivec3(meta2Coord, 0), 0);
+
+int packedLayer = osd_atlas_unpack_u16(meta2.rg);
+if (packedLayer <= 0) {
+    return vec4(1.0, 0.0, 1.0, 1.0);
+}
+
+int x = osd_atlas_unpack_u16(meta0.rg);
+int y = osd_atlas_unpack_u16(meta0.ba);
+int w = osd_atlas_unpack_u16(meta1.rg);
+int h = osd_atlas_unpack_u16(meta1.ba);
+
+// enable mirroring
+uv = mod(uv, 2.0);
+uv = uv - 1.0;
+uv = sign(uv) * uv;
+uv = 1.0 - uv;
+
+vec2 atlasSize = vec2(float(u_atlasWidth), float(u_atlasHeight));
+vec2 offset = vec2(float(x + OSD_ATLAS_PADDING), float(y + OSD_ATLAS_PADDING)) / atlasSize;
+vec2 scale = vec2(float(w), float(h)) / atlasSize;
+vec2 st = offset + uv * scale;
+
+return texture(u_atlasTex, vec3(st, float(packedLayer)));
+}
+`;
+        }
+
+        /**
+         * Load the current atlas uniform locations.
+         * @param {WebGLProgram} program
+         */
+        load(program) {
+            const gl = this.gl;
+
+            this._atlasTexLoc    = gl.getUniformLocation(program, "u_atlasTex");
+            this._atlasWidthLoc = gl.getUniformLocation(program, "u_atlasWidth");
+            this._atlasHeightLoc = gl.getUniformLocation(program, "u_atlasHeight");
+            this._atlasMetadataRowsLoc = gl.getUniformLocation(program, "u_atlasMetadataRows");
+            this._commitUploads();
+        }
+
+        /**
+         * Destroy the atlas.
+         */
+        destroy() {
+            const gl = this.gl;
+
+            if (this.texture) {
+                gl.deleteTexture(this.texture);
+                this.texture = null;
+            }
+
+            this._entries.length = 0;
+            this._layerState.length = 0;
+        }
+
+        _commitUploads() {
+            if (!this.texture) {
+                // allocate storage if not created yet
+                this._createTexture(this.layerWidth, this.layerHeight, this.layers);
+            }
+
+            if (!this._pendingUploads.length && !this._metadataDirty) {
+                return;
+            }
+
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+
+            for (const u of this._pendingUploads) {
+                const x = u.x + this.padding;
+                const y = u.y + this.padding;
+                const physicalLayer = u.layer + 1;
+                this._uploadSubImage(gl, u.source, u.w, u.h, physicalLayer, x, y);
+            }
+
+            if (this._metadataDirty) {
+                this._uploadMetadata(gl);
+                this._metadataDirty = false;
+            }
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            // all uploads done; clear queue
+            this._pendingUploads.length = 0;
+        }
+
+        _createTexture(w, h, depth) {
+            const gl = this.gl;
+
+            if (this.texture) {
+                gl.deleteTexture(this.texture);
+                this.texture = null;
+            }
+
+            this.texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            const metadataRows = Math.ceil((this.maxIds * 3) / Math.max(w, 1));
+            const height = Math.max(h, metadataRows || 1);
+            const physicalDepth = Math.max(depth + 1, 2);
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, this.internalFormat, w, height, physicalDepth);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            this.layerWidth = w;
+            this.layerHeight = height;
+            this.layers = depth;
+            this._physicalLayers = physicalDepth;
+            this._metadataDirty = true;
+
+            // reset packer state sized to current depth
+            this._layerState = [];
+            for (let i = 0; i < depth; i++) {
+                this._layerState.push({ shelves: [], nextY: 0 });
             }
         }
 
-        // start a new shelf
-        if (st.nextY + h <= H) {
-            const y = st.nextY;
-            st.shelves.push({ y: y, h: h, x: w });
-            st.nextY += h;
-            return { x: 0, y: y };
+        _ensureCapacityFor(width, height) {
+            const paddedWidth = width + 2 * this.padding;
+            const paddedHeight = height + 2 * this.padding;
+
+            // try current layers first
+            for (let li = 0; li < this.layers; li++) {
+                const pos = this._tryPlaceRect(li, paddedWidth, paddedHeight);
+                if (pos) {
+                    return { layer: li, x: pos.x, y: pos.y, willRealloc: false };
+                }
+            }
+
+            // if rectangle is bigger than layer extent, grow extent (power of 2)
+            let newW = this.layerWidth;
+            let newH = this.layerHeight;
+            if (paddedWidth > newW || paddedHeight > newH) {
+                while (newW < paddedWidth) {
+                    newW *= 2;
+                }
+                while (newH < paddedHeight) {
+                    newH *= 2;
+                }
+                // reallocate texture with same layer count but bigger extent
+                this._resizeAndReupload(newW, newH, this.layers);
+            }
+
+            // try again after extent growth
+            for (let li = 0; li < this.layers; li++) {
+                const pos2 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
+                if (pos2) {
+                    return { layer: li, x: pos2.x, y: pos2.y, willRealloc: false };
+                }
+            }
+
+            // still not fitting due to fragmentation / filled layers: add one or more layers
+            let newLayers = Math.max(this.layers * 2, this.layers + 1);
+            this._resizeAndReupload(this.layerWidth, this.layerHeight, newLayers);
+
+            // after adding layers there will be empty layers to place into
+            const li = this._firstEmptyLayer();
+            const pos3 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
+            return { layer: li, x: pos3.x, y: pos3.y, willRealloc: false };
         }
 
-        return null;
-    }
+        _firstEmptyLayer() {
+            for (let i = 0; i < this.layers; i++) {
+                const st = this._layerState[i];
+                if ((st.nextY === 0) && st.shelves.length === 0) {
+                    return i;
+                }
+            }
+            return 0;
+        }
 
-    _uploadSource(source, w, h, layer, x, y) {
-        const gl = this.gl;
+        _resizeAndReupload(newW, newH, newLayers) {
+            // keep old entries and repack from scratch
+            const oldEntries = this._entries.slice();
 
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            this._createTexture(newW, newH, newLayers);
 
-        if (source instanceof ImageBitmap ||
-            (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) ||
-            (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement)) {
-            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source);
-        } else if (source && source.data && typeof source.width === 'number' && typeof source.height === 'number') {
-            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source.data);
-        } else if (source && (source instanceof Uint8Array || source instanceof Uint8ClampedArray)) {
-            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source);
-        } else {
+            // clear packing and pending upload queues
+            this._entries.length = 0;
+            this._pendingUploads.length = 0;
+
+            // re-place each entry; update uniforms; enqueue for upload
+            for (const ent of oldEntries) {
+                const pos = this._ensureCapacityFor(ent.w, ent.h);
+                ent.layer = pos.layer;
+                ent.x = pos.x;
+                ent.y = pos.y;
+
+                this._entries.push(ent);
+                this._pendingUploads.push({
+                    source: ent.source,
+                    w: ent.w,
+                    h: ent.h,
+                    layer: ent.layer,
+                    x: ent.x,
+                    y: ent.y
+                });
+            }
+
+            this._metadataDirty = true;
+            this.version++;
+        }
+
+        _tryPlaceRect(layerIndex, w, h) {
+            const W = this.layerWidth;
+            const H = this.layerHeight;
+            let st = this._layerState[layerIndex];
+
+            if (!st) {
+                // todo it happens that the _layerState is empty but plaing called! this is a bug
+                $.console.error('TextureAtlas2DArray._tryPlaceRect: invalid layerIndex');
+                this._createTexture(W, H, this.layers);
+                st = this._layerState[layerIndex];
+            }
+
+            // try existing shelves
+            for (const shelf of st.shelves) {
+                if (h <= shelf.h && shelf.x + w <= W) {
+                    const x = shelf.x;
+                    const y = shelf.y;
+                    shelf.x += w;
+                    return { x: x, y: y };
+                }
+            }
+
+            // start a new shelf
+            if (st.nextY + h <= H) {
+                const y = st.nextY;
+                st.shelves.push({ y: y, h: h, x: w });
+                st.nextY += h;
+                return { x: 0, y: y };
+            }
+
+            return null;
+        }
+
+        _uploadSource(source, w, h, layer, x, y) {
+            const gl = this.gl;
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+            const physicalLayer = layer + 1;
+            this._uploadSubImage(gl, source, w, h, physicalLayer, x, y);
+
+            // optional: no mipmaps for now (icon UI)
             gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        }
+
+        _uploadSubImage(gl, source, w, h, physicalLayer, x, y) {
+            const isDomImageSource = source instanceof ImageBitmap ||
+                (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) ||
+                (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement);
+
+            if (isDomImageSource) {
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+                try {
+                    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, physicalLayer, w, h, 1, this.format, this.type, source);
+                } finally {
+                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                }
+                return;
+            }
+
+            if (source && source.data && typeof source.width === 'number' && typeof source.height === 'number') {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, physicalLayer, w, h, 1, this.format, this.type, source.data);
+                return;
+            }
+
+            if (source && (source instanceof Uint8Array || source instanceof Uint8ClampedArray)) {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, physicalLayer, w, h, 1, this.format, this.type, source);
+                return;
+            }
+
             throw new Error('Unsupported image source for atlas');
         }
 
-        // optional: no mipmaps for now (icon UI)
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-    }
-};
+        _metadataRows() {
+            return Math.ceil((this.maxIds * 3) / Math.max(this.layerWidth, 1));
+        }
+
+        _metadataCoord(linearIndex) {
+            return {
+                x: linearIndex % this.layerWidth,
+                y: Math.floor(linearIndex / this.layerWidth)
+            };
+        }
+
+        _uploadMetadata(gl) {
+            const rows = this._metadataRows();
+            if (rows < 1) {
+                return;
+            }
+
+            const texels = new Uint8Array(this.layerWidth * rows * 4);
+            const pack16 = (value) => {
+                const safe = Math.max(0, Math.min(65535, Number.parseInt(value, 10) || 0));
+                return [safe & 255, (safe >> 8) & 255];
+            };
+
+            for (const ent of this._entries) {
+                const baseIndex = ent.id * 3;
+                const coords = [
+                    this._metadataCoord(baseIndex),
+                    this._metadataCoord(baseIndex + 1),
+                    this._metadataCoord(baseIndex + 2)
+                ];
+                const texelOffset0 = (coords[0].y * this.layerWidth + coords[0].x) * 4;
+                const texelOffset1 = (coords[1].y * this.layerWidth + coords[1].x) * 4;
+                const texelOffset2 = (coords[2].y * this.layerWidth + coords[2].x) * 4;
+                const x = pack16(ent.x);
+                const y = pack16(ent.y);
+                const w = pack16(ent.w);
+                const h = pack16(ent.h);
+                const physicalLayer = pack16(ent.layer + 1);
+
+                texels[texelOffset0 + 0] = x[0];
+                texels[texelOffset0 + 1] = x[1];
+                texels[texelOffset0 + 2] = y[0];
+                texels[texelOffset0 + 3] = y[1];
+
+                texels[texelOffset1 + 0] = w[0];
+                texels[texelOffset1 + 1] = w[1];
+                texels[texelOffset1 + 2] = h[0];
+                texels[texelOffset1 + 3] = h[1];
+
+                texels[texelOffset2 + 0] = physicalLayer[0];
+                texels[texelOffset2 + 1] = physicalLayer[1];
+                texels[texelOffset2 + 2] = 0;
+                texels[texelOffset2 + 3] = 255;
+            }
+
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, this.layerWidth, rows, 1, this.format, this.type, texels);
+        }
+    };
 
 })(OpenSeadragon);
 
@@ -7156,15 +9570,27 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             this._destroyed = false;
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
+            this._managedShaderSourceSlots = new Map();
+            this._managedShaderSourceNextIndex = null;
             // We have 'undefined' extra format for blank tiles
             this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
+
+            this._suspendRenderingDepth = 0;
+            this._pendingRebuildRequest = null;
+            this._drawReady = false;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
             this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
             this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
             this.viewer.world.addHandler("remove-item", (e) => {
                 const tiledImage = e.item;
+                if (tiledImage && tiledImage.__flexManagedShaderSourceSlotKey) {
+                    const slot = this._managedShaderSourceSlots.get(tiledImage.__flexManagedShaderSourceSlotKey);
+                    if (slot && slot.item === tiledImage) {
+                        slot.item = null;
+                    }
+                }
                 // if managed internally on the instance (regardless of renderer state), handle removal
                 if (tiledImage.__shaderConfig) {
                     this.renderer.removeShader(tiledImage.__shaderConfig.id);
@@ -7203,6 +9629,7 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 preloadCache: true,
                 copyShaderConfig: false,
                 handleNavigator: true,
+                shaderSourceResolver: null,
                 // hex bg color, by default transparent
                 backgroundColor: undefined
             };
@@ -7239,11 +9666,16 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             this._configuredExternally = true;
             this.renderer.deleteShaders();
 
-            for (let shaderID in shaders) {
-                let config = shaders[shaderID];
-                $.console.log("Creating shader layer", shaderID, config, this._isNavigatorDrawer);
-                this.renderer.createShaderLayer(shaderID, config, this.options.copyShaderConfig);
+            const requestedOrder = shaderOrder || Object.keys(shaders);
+            const createdOrder = [];
+
+            for (const shaderId of requestedOrder) {
+                const shader = this.renderer.createShaderLayer(shaderId, shaders[shaderId], true);
+                if (shader) {
+                    createdOrder.push(shaderId);
+                }
             }
+            this.renderer.setShaderLayerOrder(createdOrder);
 
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
@@ -7279,7 +9711,7 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 shader = $.extend(true, {}, shader);
             }
 
-            shader.id = shader.id || tiledImage.__shaderConfig.id || this.constructor.idGenerator;
+            shader.id = shader.id || (tiledImage.__shaderConfig && tiledImage.__shaderConfig.id) || this.constructor.idGenerator;
             tiledImage.__shaderConfig = shader;
 
             // if already configured, request re-configuration
@@ -7321,6 +9753,10 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             // Always attempt to clean up
             if (tiledImage.__wglCompositeHandler) {
                 tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
+            }
+
+            if (tiledImage.__flexManagedShaderSourceSlotKey) {
+                return this._requestRebuild();
             }
 
             // If we configure externally the renderer, simply bypass
@@ -7419,6 +9855,427 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             return this._requestRebuild();
         }
 
+        _applyShaderConfigMutationRequest(request = {}, syncNavigator = true) {
+            const {
+                shaderId,
+                mutation,
+                refreshShader = true,
+                rebuildProgram = true,
+                rebuildDrawer = true,
+                resetItems = true,
+                reason = "shader-config-mutation"
+            } = request;
+
+            if (!shaderId) {
+                return $.Promise.resolve();
+            }
+
+            const shader = this.renderer.getShaderLayer(shaderId);
+            if (!shader) {
+                return $.Promise.resolve();
+            }
+
+            const config = shader.getConfig();
+            if (typeof mutation === "function") {
+                mutation(config, shader);
+            } else if (mutation && typeof mutation === "object") {
+                Object.assign(config, mutation);
+            }
+
+            if (refreshShader) {
+                this.renderer.refreshShaderLayer(shaderId, { rebuildProgram });
+            } else if (rebuildProgram) {
+                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+            }
+
+            this.renderer.notifyVisualizationChanged({
+                reason,
+                shaderId,
+                shaderType: shader.constructor.type()
+            });
+
+            if (
+                syncNavigator &&
+                !request.drawerLocalWorldIndex &&
+                this.options.handleNavigator &&
+                this.viewer.navigator &&
+                this.viewer.navigator.drawer
+            ) {
+                this.viewer.navigator.drawer._applyShaderConfigMutationRequest(request, false);
+            }
+
+            if (resetItems && this.viewer.world && typeof this.viewer.world.resetItems === "function") {
+                this.viewer.world.resetItems();
+            }
+
+            if (rebuildDrawer) {
+                return this._requestRebuild(0, true);
+            }
+            this.viewer.forceRedraw();
+            return $.Promise.resolve();
+        }
+
+        _handleRefetchRequest(request = undefined) {
+            if (!request) {
+                return this.viewer.world.resetItems();
+            }
+
+            if (request.kind === "shader-source-request") {
+                return this._handleShaderSourceRequest(request);
+            }
+
+            if (request.kind === "shader-config-mutation") {
+                return this._applyShaderConfigMutationRequest(request);
+            }
+
+            return this.viewer.world.resetItems();
+        }
+
+        _getManagedShaderSourceSlotKey(request = {}) {
+            return `${request.shaderId || "shader"}:${Number.parseInt(request.sourceIndex, 10) || 0}`;
+        }
+
+        _allocateManagedShaderSourceWorldIndex() {
+            const worldCount = this.viewer && this.viewer.world ? this.viewer.world.getItemCount() : 0;
+            if (!Number.isInteger(this._managedShaderSourceNextIndex)) {
+                this._managedShaderSourceNextIndex = worldCount;
+            } else {
+                this._managedShaderSourceNextIndex = Math.max(this._managedShaderSourceNextIndex, worldCount);
+            }
+            return this._managedShaderSourceNextIndex++;
+        }
+
+        _isManagedShaderSourceDescriptor(entry) {
+            return !!(entry && typeof entry === "object" && (
+                entry.tileSource !== undefined ||
+                entry.source !== undefined ||
+                entry.open !== undefined ||
+                entry.openOptions !== undefined
+            ));
+        }
+
+        _normalizeManagedShaderSourceDescriptor(entry = {}) {
+            const descriptor = $.extend(true, {}, entry);
+            const openOptions = $.extend(true, {},
+                descriptor.openOptions || descriptor.open || {}
+            );
+            const tileSource = descriptor.tileSource !== undefined ? descriptor.tileSource : descriptor.source;
+
+            delete descriptor.openOptions;
+            delete descriptor.open;
+            delete descriptor.tileSource;
+            delete descriptor.source;
+
+            return {
+                tileSource,
+                openOptions,
+                meta: descriptor
+            };
+        }
+
+        _openManagedShaderSourceAtSlot(slot, descriptor, request = {}) {
+            const normalized = this._normalizeManagedShaderSourceDescriptor(descriptor);
+            if (normalized.tileSource === undefined) {
+                return $.Promise.reject(new Error("Managed shader source descriptor requires tileSource or source."));
+            }
+
+            const shader = request.shaderId ? this.renderer.getShaderLayer(request.shaderId) : null;
+            const sourceIndex = Number.parseInt(request.sourceIndex, 10) || 0;
+            const referenceItem = shader && typeof shader.getSourceTiledImage === "function"
+                ? shader.getSourceTiledImage(sourceIndex)
+                : null;
+
+            const openOptions = $.extend(true, {
+                opacity: 0,
+                preload: false,
+                preserveViewport: true
+            }, normalized.openOptions || {}, {
+                tileSource: normalized.tileSource
+            });
+
+            delete openOptions.index;
+            delete openOptions.replace;
+
+            if (referenceItem) {
+                const bounds = referenceItem.getBoundsNoRotate(true);
+
+                if (openOptions.x === undefined && openOptions.y === undefined && !openOptions.position) {
+                    openOptions.x = bounds.x;
+                    openOptions.y = bounds.y;
+                }
+
+                if (openOptions.width === undefined && openOptions.height === undefined) {
+                    openOptions.width = bounds.width;
+                }
+
+                if (openOptions.clip === undefined && referenceItem.getClip) {
+                    const clip = referenceItem.getClip();
+                    if (clip) {
+                        openOptions.clip = clip;
+                    }
+                }
+
+                if (openOptions.rotation === undefined && typeof referenceItem.getRotation === "function") {
+                    openOptions.rotation = referenceItem.getRotation();
+                }
+
+                if (openOptions.flipped === undefined && typeof referenceItem.getFlip === "function") {
+                    openOptions.flipped = referenceItem.getFlip();
+                }
+            }
+
+            return new $.Promise((resolve, reject) => {
+                const success = openOptions.success;
+                const error = openOptions.error;
+
+                openOptions.success = (event) => {
+                    const item = event && event.item ? event.item : null;
+                    const worldIndex = item && this.viewer.world
+                        ? this.viewer.world.getIndexOfItem(item)
+                        : -1;
+
+                    if (item) {
+                        item.__flexManagedShaderSourceSlotKey = slot.key;
+                        slot.item = item;
+                        slot.worldIndex = worldIndex;
+                    }
+
+                    if (typeof success === "function") {
+                        success(event);
+                    }
+
+                    resolve({
+                        worldIndex,
+                        tiledImage: item
+                    });
+                };
+
+                openOptions.error = (event) => {
+                    if (typeof error === "function") {
+                        error(event);
+                    }
+                    reject(new Error(event && event.message ? event.message : "Failed to open managed shader source."));
+                };
+
+                this.viewer.addTiledImage(openOptions);
+            });
+        }
+
+        realizeShaderSourceDescriptor(request = {}, descriptor = undefined) {
+            const entry = descriptor === undefined ? request.entry : descriptor;
+            if (!this._isManagedShaderSourceDescriptor(entry)) {
+                return $.Promise.resolve(null);
+            }
+
+            const slotKey = this._getManagedShaderSourceSlotKey(request);
+            let slot = this._managedShaderSourceSlots.get(slotKey);
+            if (!slot) {
+                slot = {
+                    key: slotKey,
+                    worldIndex: this._allocateManagedShaderSourceWorldIndex(),
+                    item: null
+                };
+                this._managedShaderSourceSlots.set(slotKey, slot);
+            }
+
+            return this._openManagedShaderSourceAtSlot(slot, entry, request).then(result => ({
+                worldIndex: result.worldIndex,
+                refreshShader: false,
+                rebuildProgram: false,
+                rebuildDrawer: true,
+                resetItems: false,
+                drawerLocalWorldIndex: true
+            }));
+        }
+
+        _resolveSourceRequestResult(request, result) {
+            if (result === undefined || result === null || result === false) {
+                return null;
+            }
+
+            if (Number.isInteger(result)) {
+                return {
+                    mutation: (config) => {
+                        const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                        tiledImages[request.sourceIndex || 0] = result;
+                        config.tiledImages = tiledImages;
+                    }
+                };
+            }
+
+            if (Array.isArray(result)) {
+                return {
+                    mutation: (config) => {
+                        config.tiledImages = result.slice();
+                    }
+                };
+            }
+
+            if (typeof result === "object") {
+                if (Array.isArray(result.tiledImages)) {
+                    return {
+                        ...result,
+                        mutation: result.mutation || ((config) => {
+                            config.tiledImages = result.tiledImages.slice();
+                        })
+                    };
+                }
+                if (Number.isInteger(result.worldIndex)) {
+                    return {
+                        ...result,
+                        mutation: result.mutation || ((config) => {
+                            const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                            tiledImages[request.sourceIndex || 0] = result.worldIndex;
+                            config.tiledImages = tiledImages;
+                        })
+                    };
+                }
+                if (typeof result.mutation === "function") {
+                    return result;
+                }
+            }
+
+            return null;
+        }
+
+        _handleShaderSourceRequest(request = {}) {
+            const shader = request.shaderId ? this.renderer.getShaderLayer(request.shaderId) : null;
+            if (!shader) {
+                return $.Promise.resolve();
+            }
+
+            const directWorldIndex = Number.parseInt(request.entry, 10);
+            if (Number.isFinite(directWorldIndex) && String(directWorldIndex) === String(request.entry).trim()) {
+                return this._applyShaderConfigMutationRequest({
+                    ...request,
+                    kind: "shader-config-mutation",
+                    mutation: (config) => {
+                        const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                        tiledImages[request.sourceIndex || 0] = directWorldIndex;
+                        config.tiledImages = tiledImages;
+                    },
+                    reason: request.reason || "shader-source-request",
+                    refreshShader: request.refreshShader !== false,
+                    rebuildProgram: request.rebuildProgram !== false,
+                    rebuildDrawer: request.rebuildDrawer !== false,
+                    resetItems: request.resetItems !== false
+                });
+            }
+
+            if (this._isManagedShaderSourceDescriptor(request.entry)) {
+                return this.realizeShaderSourceDescriptor(request).then(resolved => {
+                    if (!resolved) {
+                        return $.Promise.resolve();
+                    }
+                    const mutationSpec = this._resolveSourceRequestResult(request, resolved);
+                    if (!mutationSpec) {
+                        return $.Promise.resolve();
+                    }
+                    return this._applyShaderConfigMutationRequest({
+                        ...request,
+                        ...resolved,
+                        ...mutationSpec,
+                        kind: "shader-config-mutation",
+                        reason: request.reason || resolved.reason || "shader-source-request"
+                    });
+                });
+            }
+
+            const resolver = this.options.shaderSourceResolver;
+            if (typeof resolver !== "function") {
+                $.console.warn("Shader source request received but no drawer.options.shaderSourceResolver is configured.", request);
+                return $.Promise.resolve();
+            }
+
+            const outcome = resolver({
+                request,
+                drawer: this,
+                viewer: this.viewer,
+                renderer: this.renderer,
+                shader,
+                shaderConfig: shader.getConfig()
+            });
+
+            return $.Promise.resolve(outcome).then(result => {
+                if (this._isManagedShaderSourceDescriptor(result)) {
+                    return this.realizeShaderSourceDescriptor(request, result).then(realized =>
+                        realized ? (() => {
+                            const mutationSpec = this._resolveSourceRequestResult(request, realized);
+                            if (!mutationSpec) {
+                                return $.Promise.resolve();
+                            }
+                            return this._applyShaderConfigMutationRequest({
+                                ...request,
+                                ...realized,
+                                ...mutationSpec,
+                                kind: "shader-config-mutation",
+                                reason: request.reason || realized.reason || "shader-source-request"
+                            });
+                        })() : $.Promise.resolve()
+                    );
+                }
+
+                const resolved = this._resolveSourceRequestResult(request, result);
+                if (!resolved) {
+                    return $.Promise.resolve();
+                }
+
+                return this._applyShaderConfigMutationRequest({
+                    ...request,
+                    ...resolved,
+                    kind: "shader-config-mutation",
+                    reason: request.reason || resolved.reason || "shader-source-request",
+                    refreshShader: resolved.refreshShader !== false,
+                    rebuildProgram: resolved.rebuildProgram !== false,
+                    rebuildDrawer: resolved.rebuildDrawer !== false,
+                    resetItems: resolved.resetItems !== false
+                });
+            });
+        }
+
+        suspendRendering(reason = "manual") {
+            this._suspendRenderingDepth++;
+            this._drawReady = false;
+            if (this._rebuildHandle) {
+                clearTimeout(this._rebuildHandle);
+                this._rebuildHandle = null;
+            }
+        }
+
+        resumeRendering(reason = "manual") {
+            if (this._suspendRenderingDepth > 0) {
+                this._suspendRenderingDepth--;
+            }
+            if (this._suspendRenderingDepth > 0) {
+                return;
+            }
+
+            const pending = this._pendingRebuildRequest;
+            this._pendingRebuildRequest = null;
+
+            if (pending) {
+                this._requestRebuild(pending.timeout, pending.force, true);
+            } else {
+                this._refreshDrawReadyState();
+                this.viewer.forceRedraw();
+            }
+        }
+
+        _isRenderingSuspended() {
+            return this._suspendRenderingDepth > 0;
+        }
+
+        _refreshDrawReadyState() {
+            const canvas = this.canvas;
+            this._drawReady = !this._isRenderingSuspended() &&
+                !!canvas &&
+                canvas.width > 0 &&
+                canvas.height > 0 &&
+                !this._hasInvalidBuildState();
+            return this._drawReady;
+        }
+
+
         /**
          * Clean up the FlexDrawer, removing all resources.
          */
@@ -7511,8 +10368,18 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             return this._requestBuildStamp > this._buildStamp;
         }
 
-        _requestRebuild(timeout = 30, force = false) {
+        _requestRebuild(timeout = 30, force = false, bypassSuspend = false) {
             this._requestBuildStamp = Date.now();
+            this._drawReady = false;
+
+            if (!bypassSuspend && this._isRenderingSuspended()) {
+                const pending = this._pendingRebuildRequest || { timeout, force };
+                pending.timeout = Math.min(pending.timeout, timeout);
+                pending.force = pending.force || force;
+                this._pendingRebuildRequest = pending;
+                return $.Promise.resolve();
+            }
+
             if (this._rebuildHandle) {
                 if (!force) {
                     return $.Promise.resolve();
@@ -7520,35 +10387,41 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 clearTimeout(this._rebuildHandle);
             }
 
-            if (timeout === 0) {
+            this._rebuildHandle = setTimeout(() => {
+                if (this._isRenderingSuspended()) {
+                    this._pendingRebuildRequest = { timeout: 0, force: true };
+                    this._rebuildHandle = null;
+                    this._drawReady = false;
+                    return;
+                }
+
+                if (!this._configuredExternally) {
+                    this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item => item.__shaderConfig.id));
+                }
+
                 this._buildStamp = Date.now();
-                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
-                // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
+                this.renderer.setDimensions(
+                    0,
+                    0,
+                    this.canvas.width,
+                    this.canvas.height,
+                    this._computeOffscreenLayerCount(),
+                    this.viewer.world.getItemCount()
+                );
                 this._updatePackLayout();
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                 this.rebuildCounter++;
-                return $.Promise.resolve();
-            }
+                this._rebuildHandle = null;
+                this._refreshDrawReadyState();
 
-            return new $.Promise((success, _) => {
-                this._rebuildHandle = setTimeout(() => {
-                    if (!this._configuredExternally) {
-                        this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
-                            item.__shaderConfig.id));
-                    }
-                    this._buildStamp = Date.now();
-                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
-                    // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
-                    this._updatePackLayout();
-                    this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
-                    this.rebuildCounter++;
-                    this._rebuildHandle = null;
-                    success();
-                    setTimeout(() => {
+                setTimeout(() => {
+                    if (!this._isRenderingSuspended()) {
                         this.viewer.forceRedraw();
-                    });
-                }, timeout);
-            });
+                    }
+                });
+            }, timeout);
+
+            return $.Promise.resolve();
         }
 
         /**
@@ -7589,8 +10462,82 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 //todo batched?
                 this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 this._size = viewportSize;
+                this._refreshDrawReadyState();
             };
             this.viewer.addHandler("resize", this._resizeHandler);
+        }
+
+        _resolveRenderView(view = undefined) {
+            if (view) {
+                return view;
+            }
+
+            const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
+            return {
+                bounds: bounds,
+                center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                rotation: this.viewport.getRotation(true) * Math.PI / 180,
+                zoom: this.viewport.getZoom(true)
+            };
+        }
+
+        /**
+         * Build the current second-pass uniform payload for a set of shaders.
+         * The returned array is backend-neutral input for `renderer.secondPassProcessData(...)`
+         * and `renderer.renderSecondPassToTexture(...)`.
+         * @param {Object} [view=undefined]
+         * @param {Object.<string, ShaderLayer>} [shaderMap=this.renderer.getAllShaders()]
+         * @param {string[]} [shaderOrder=this.renderer.getShaderLayerOrder()]
+         * @return {SPRenderPackage[]}
+         */
+        getCurrentShaderRenderArray(view = undefined, shaderMap = undefined, shaderOrder = undefined) {
+            view = this._resolveRenderView(view);
+            shaderMap = shaderMap || this.renderer.getAllShaders();
+            shaderOrder = shaderOrder || this.renderer.getShaderLayerOrder();
+            return this._collectShaderUniforms(shaderMap, shaderOrder, view);
+        }
+
+        /**
+         * Render the current visualization into an offscreen target using the active backend's
+         * `renderSecondPassToTexture(...)` implementation.
+         *
+         * This is the public drawer-level convenience wrapper for callers that want a texture
+         * result but do not want to assemble the second-pass render array themselves.
+         *
+         * @param {Object} [options]
+         * @return {Object}
+         */
+        renderVisualizationToTexture(options = {}) {
+            const view = this._resolveRenderView(options.view);
+            const shaderMap = options.shaderMap || this.renderer.getAllShaders();
+            const shaderOrder = options.shaderOrder || this.renderer.getShaderLayerOrder();
+            const renderArray = this._collectShaderUniforms(shaderMap, shaderOrder, view);
+            return this.renderer.renderSecondPassToTexture(renderArray, options);
+        }
+
+        /**
+         * Drawer-level convenience API for updating the renderer-owned inspector state.
+         *
+         * The drawer does not implement inspector rendering itself and does not synchronize
+         * inspector state to the navigator. Backend implementations must consume the state
+         * through `renderer.getInspectorState()`.
+         *
+         * @param {Partial<InspectorState>|undefined} state
+         * @return {InspectorState}
+         */
+        setInspectorState(state) {
+            return this.renderer.setInspectorState(state, {
+                reason: "drawer-set-inspector-state"
+            });
+        }
+
+        /**
+         * Reset inspector state through the renderer-owned API.
+         *
+         * @return {InspectorState}
+         */
+        clearInspectorState() {
+            return this.setInspectorState(undefined);
         }
 
         // DRAWING METHODS
@@ -7604,8 +10551,7 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
          * @param view.zoom {Number} zoom of the viewport
          */
         draw(tiledImages, view = undefined) {
-            // If we did not rebuild yet, avoid rendering - invalid program
-            if (this._hasInvalidBuildState()) {
+            if (!this._drawReady && !this._refreshDrawReadyState()) {
                 this.viewer.forceRedraw();
                 return;
             }
@@ -8000,13 +10946,13 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 // Required
                 {
                     redrawCallback: () => this.viewer.forceRedraw(),
-                    refetchCallback: () => this.viewer.world.resetItems(),
+                    refetchCallback: (request) => this._handleRefetchRequest(request),
                     uniqueId: "osd_" + this._id,
                     // TODO: problem when navigator renders first
                     // Navigator must not have the handler since it would attempt to define the controls twice
                     htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,
                     // However, navigator must have interactive same as parent renderer to bind events to the controls
-                    interactive: !!this.options.htmlHandler,
+                    interactive: this._isNavigatorDrawer ? false : !!this.options.htmlHandler,
                     canvasOptions: {
                         stencil: true
                     }
@@ -8026,6 +10972,7 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
 
             canvas.width = viewportSize.x;
             canvas.height = viewportSize.y;
+            this._refreshDrawReadyState();
             return canvas;
         }
 
@@ -8212,14 +11159,20 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                 return;
             }
 
+            const metadataWasReady = !!tiledImage.__flexMetadataReady;
+            let metadataChanged = !metadataWasReady;
+
             if (tiledImage.__flexPackCount !== packCount) {
                 tiledImage.__flexPackCount = packCount;
                 this._packLayoutDirty = true;
+                metadataChanged = true;
             }
             if (tiledImage.__flexChannelCount !== channelCount) {
                 tiledImage.__flexChannelCount = channelCount;
                 this._packLayoutDirty = true;
+                metadataChanged = true;
             }
+            tiledImage.__flexMetadataReady = true;
 
             if (this.renderer && !this.renderer.__flexPackInfo) {
                 this.renderer.__flexPackInfo = {
@@ -8235,6 +11188,39 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
                     this.renderer.__flexPackInfo.channelCount[tiIndex] = channelCount;
                 }
             }
+
+            if (metadataChanged) {
+                this._refreshShadersForTiledImage(tiledImage);
+            }
+        }
+
+        _refreshShadersForTiledImage(tiledImage) {
+            if (!this.renderer || !this.viewer || !this.viewer.world || !tiledImage) {
+                return;
+            }
+
+            const tiIndex = this.viewer.world.getIndexOfItem(tiledImage);
+            if (tiIndex < 0) {
+                return;
+            }
+
+            const idsToRefresh = [];
+            this.renderer.forEachShaderLayer(undefined, undefined, shader => {
+                const config = shader.getConfig();
+                if (config && Array.isArray(config.tiledImages) && config.tiledImages.includes(tiIndex)) {
+                    idsToRefresh.push(shader.id);
+                }
+            });
+
+            if (!idsToRefresh.length) {
+                return;
+            }
+
+            for (const shaderId of idsToRefresh) {
+                this.renderer.refreshShaderLayer(shaderId, { rebuildProgram: false });
+            }
+
+            this._requestRebuild(0, true);
         }
 
         _buildVectorTileInfo(data, gl) {
@@ -8390,6 +11376,8 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             const width = bitmap.width;
             const height = bitmap.height;
 
+            this._updatePackMetadata(tiledImage, 1, 4);
+
             const tileInfo = {
                 position: this._computeTilePosition(tile, tiledImage, width, height),
                 texture: null,
@@ -8434,6 +11422,243 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
 
 (function($) {
 
+    function createLock() {
+        let locked = false;
+        const waiters = [];
+
+        return {
+            async lock() {
+                if (!locked) {
+                    locked = true;
+                    return;
+                }
+                await new $.Promise(resolve => waiters.push(resolve));
+            },
+            unlock() {
+                const next = waiters.shift();
+                if (next) {
+                    next();
+                } else {
+                    locked = false;
+                }
+            }
+        };
+    }
+
+    function installExtractionApi(target, renderer, readCurrentCanvas) {
+        target._extractScratch = {
+            canvas: null,
+            ctx: null,
+            framebuffer: null,
+            imageData: null,
+            u8: null,
+            f32: null,
+        };
+
+        target._ensureExtract2D = function(width, height) {
+            const scratch = this._extractScratch;
+            if (!scratch.canvas) {
+                scratch.canvas = document.createElement('canvas');
+                scratch.ctx = scratch.canvas.getContext('2d', { willReadFrequently: true });
+            }
+            if (scratch.canvas.width !== width) {
+                scratch.canvas.width = width;
+            }
+            if (scratch.canvas.height !== height) {
+                scratch.canvas.height = height;
+            }
+            return scratch.ctx;
+        };
+
+        target._ensureExtractImageData = function(width, height) {
+            const scratch = this._extractScratch;
+            if (!scratch.imageData || scratch.imageData.width !== width || scratch.imageData.height !== height) {
+                scratch.imageData = new ImageData(width, height);
+            }
+            return scratch.imageData;
+        };
+
+        target._ensureExtractBuffer = function(width, height, type = "uint8") {
+            const scratch = this._extractScratch;
+            const len = width * height * 4;
+
+            if (type === "float32") {
+                if (!(scratch.f32 instanceof Float32Array) || scratch.f32.length !== len) {
+                    scratch.f32 = new Float32Array(len);
+                }
+                return scratch.f32;
+            }
+
+            if (!(scratch.u8 instanceof Uint8Array) || scratch.u8.length !== len) {
+                scratch.u8 = new Uint8Array(len);
+            }
+            return scratch.u8;
+        };
+
+        target._readCanvasResult = function(ctx, result = "imageData") {
+            const canvas = ctx.canvas;
+
+            switch (result) {
+                case "ctx":
+                    return ctx;
+                case "canvas":
+                    return canvas;
+                case "imageData":
+                    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+                case "uint8": {
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    return new Uint8Array(imageData.data.buffer.slice(0));
+                }
+                default:
+                    throw new Error(`Unsupported extract result "${result}"`);
+            }
+        };
+
+        target._readCurrentCanvas = function(sourceCanvas, result = "imageData") {
+            const ctx = this._ensureExtract2D(sourceCanvas.width, sourceCanvas.height);
+            ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+            ctx.drawImage(sourceCanvas, 0, 0);
+            return this._readCanvasResult(ctx, result);
+        };
+
+        target._getExtractionFramebuffer = function() {
+            const gl = renderer.gl;
+            const scratch = this._extractScratch;
+            if (!scratch.framebuffer) {
+                scratch.framebuffer = gl.createFramebuffer();
+            }
+            return scratch.framebuffer;
+        };
+
+        target._readTextureArrayLayer = function(texArray, layerIndex, {
+            width = renderer.canvas.width,
+            height = renderer.canvas.height,
+            level = 0,
+            format = null,
+            type = null,
+            result = "imageData",
+        } = {}) {
+            const gl = renderer.gl;
+
+            format = format || gl.RGBA;
+            type = type || gl.UNSIGNED_BYTE;
+
+            const fb = this._getExtractionFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, level, layerIndex);
+
+            const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+            if (status !== gl.FRAMEBUFFER_COMPLETE) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                throw new Error(`Extraction framebuffer incomplete: 0x${status.toString(16)}`);
+            }
+
+            const pixels = this._ensureExtractBuffer(width, height, type === gl.FLOAT ? "float32" : "uint8");
+            gl.readPixels(0, 0, width, height, format, type, pixels);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+            if (result === "uint8" || result === "float32") {
+                return pixels.slice(0);
+            }
+
+            const imageData = this._ensureExtractImageData(width, height);
+            imageData.data.set(type === gl.FLOAT ? new Uint8ClampedArray(pixels.buffer) : pixels);
+            if (result === "imageData") {
+                return new ImageData(new Uint8ClampedArray(imageData.data), width, height);
+            }
+
+            const ctx = this._ensureExtract2D(width, height);
+            ctx.putImageData(imageData, 0, 0);
+            if (result === "canvas") {
+                return ctx.canvas;
+            }
+            if (result === "ctx") {
+                return ctx;
+            }
+
+            throw new Error(`Unsupported extract result "${result}"`);
+        };
+
+        target.extractCurrentViewport = async function({
+            result = "imageData"
+        } = {}) {
+            return readCurrentCanvas.call(this, result);
+        };
+    }
+
+    async function rasterizeStandaloneSource(source) {
+        if (!source) {
+            throw new Error("Invalid standalone input source.");
+        }
+
+        if (typeof source === "string") {
+            source = await new Promise((resolve, reject) => {
+                const image = document.createElement("img");
+                image.decoding = "async";
+                image.onload = () => resolve(image);
+                image.onerror = () => reject(new Error(`Failed to load standalone input source '${source}'.`));
+                image.src = source;
+            });
+        } else if (source && typeof source === "object" && typeof source.src === "string" &&
+            !(typeof HTMLImageElement !== "undefined" && source instanceof HTMLImageElement)) {
+            return rasterizeStandaloneSource(source.src);
+        }
+
+        if (typeof HTMLImageElement !== "undefined" && source instanceof HTMLImageElement) {
+            if (!source.complete || source.naturalWidth <= 0 || source.naturalHeight <= 0) {
+                await new Promise((resolve, reject) => {
+                    source.addEventListener("load", resolve, { once: true });
+                    source.addEventListener("error", () => reject(new Error("Failed to load standalone image input.")), { once: true });
+                });
+            }
+
+            const width = source.naturalWidth || source.width;
+            const height = source.naturalHeight || source.height;
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            ctx.drawImage(source, 0, 0, width, height);
+            return {
+                width,
+                height,
+                pixels: ctx.getImageData(0, 0, width, height).data
+            };
+        }
+
+        if (typeof HTMLCanvasElement !== "undefined" && source instanceof HTMLCanvasElement) {
+            const ctx = source.getContext("2d", { willReadFrequently: true });
+            return {
+                width: source.width,
+                height: source.height,
+                pixels: ctx.getImageData(0, 0, source.width, source.height).data
+            };
+        }
+
+        if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+            const canvas = document.createElement("canvas");
+            canvas.width = source.width;
+            canvas.height = source.height;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            ctx.drawImage(source, 0, 0);
+            return {
+                width: source.width,
+                height: source.height,
+                pixels: ctx.getImageData(0, 0, source.width, source.height).data
+            };
+        }
+
+        if (typeof ImageData !== "undefined" && source instanceof ImageData) {
+            return {
+                width: source.width,
+                height: source.height,
+                pixels: source.data
+            };
+        }
+
+        throw new Error("Unsupported standalone input source.");
+    }
+
     $.makeStandaloneFlexDrawer = function(viewer) {
         const Drawer = OpenSeadragon.FlexDrawer;
 
@@ -8453,21 +11678,109 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             options:            options
         });
 
-        let locked = false;
-        const waiters = [];
-        const lock = async() => {
-            if (!locked) {
-                locked = true;
+        const mutex = createLock();
+        const lock = () => mutex.lock();
+        const unlock = () => mutex.unlock();
+
+        drawer._captureViewerState = function() {
+            const viewport = viewer.viewport;
+            return {
+                widthStyle: viewer.container.style.width,
+                heightStyle: viewer.container.style.height,
+                bounds: viewport ? viewport.getBoundsNoRotate(true) : null,
+                rotation: viewport ? viewport.getRotation(true) : 0,
+                flipped: viewport ? viewport.getFlip() : false,
+            };
+        };
+
+        drawer._restoreViewerState = async function(state) {
+            if (!state) {
                 return;
             }
-            await new $.Promise(resolve => waiters.push(resolve));
+
+            const viewport = viewer.viewport;
+            const widthChanged = viewer.container.style.width !== state.widthStyle;
+            const heightChanged = viewer.container.style.height !== state.heightStyle;
+
+            if (widthChanged || heightChanged) {
+                viewer.container.style.width = state.widthStyle;
+                viewer.container.style.height = state.heightStyle;
+                viewer.forceResize();
+            }
+
+            if (viewport && state.bounds) {
+                viewport.fitBounds(state.bounds, true);
+                if (typeof state.rotation === "number") {
+                    viewport.setRotation(state.rotation, true);
+                }
+                if (typeof viewport.setFlip === "function") {
+                    viewport.setFlip(state.flipped);
+                }
+                viewport.applyConstraints(true);
+            }
+
+            viewer.forceRedraw();
+            await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
         };
-        const unlock = () => {
-            const next = waiters.shift();
-            if (next) {
-                next();
+
+        drawer._syncViewerViewport = async function(view, size) {
+            if (!view || view instanceof OpenSeadragon.FlexDrawer) {
+                return;
+            }
+
+            const viewport = viewer.viewport;
+            if (!viewport) {
+                return;
+            }
+
+            if (size && typeof size.x === "number" && typeof size.y === "number") {
+                viewer.container.style.width = `${size.x}px`;
+                viewer.container.style.height = `${size.y}px`;
+                viewer.forceResize();
+            }
+
+            if (view.bounds) {
+                viewport.fitBounds(view.bounds, true);
             } else {
-                locked = false;
+                if (typeof view.zoom === "number") {
+                    viewport.zoomTo(view.zoom, null, true);
+                }
+                if (view.center) {
+                    viewport.panTo(view.center, true);
+                }
+            }
+
+            if (typeof view.rotation === "number") {
+                viewport.setRotation(view.rotation * 180 / Math.PI, true);
+            }
+
+            viewport.applyConstraints(true);
+            viewer.forceRedraw();
+
+            await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
+        };
+
+        drawer._collectReadyTiles = async function(tiledImages, view, size) {
+            const viewerState = this._captureViewerState();
+            try {
+                await this._syncViewerViewport(view, size);
+
+                let tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                if (tiles.length) {
+                    return tiles;
+                }
+
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    viewer.forceRedraw();
+                    await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
+                    tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                    if (tiles.length) {
+                        return tiles;
+                    }
+                }
+                return [];
+            } finally {
+                await this._restoreViewerState(viewerState);
             }
         };
 
@@ -8503,7 +11816,10 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
             }
 
             if (fullDrawPass) {
-                tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                tiles = await drawer._collectReadyTiles(tiledImages, view, size);
+                if (!tiles.length) {
+                    throw new Error("Standalone extraction found no tiles to draw for the requested view.");
+                }
                 tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
             }
 
@@ -8595,147 +11911,9 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
         // Extraction API
         // ---------------------------------------------------------------------
 
-        drawer._extractScratch = {
-            canvas: null,
-            ctx: null,
-            framebuffer: null,
-            imageData: null,
-            u8: null,
-        };
-
-        drawer._ensureExtract2D = function(width, height) {
-            const scratch = this._extractScratch;
-            if (!scratch.canvas) {
-                scratch.canvas = document.createElement('canvas');
-                scratch.ctx = scratch.canvas.getContext('2d', { willReadFrequently: true });
-            }
-            if (scratch.canvas.width !== width) {
-                scratch.canvas.width = width;
-            }
-            if (scratch.canvas.height !== height) {
-                scratch.canvas.height = height;
-            }
-            return scratch.ctx;
-        };
-
-        drawer._ensureExtractImageData = function(width, height) {
-            const scratch = this._extractScratch;
-            if (!scratch.imageData || scratch.imageData.width !== width || scratch.imageData.height !== height) {
-                scratch.imageData = new ImageData(width, height);
-            }
-            return scratch.imageData;
-        };
-
-        drawer._ensureExtractBuffer = function(width, height, type = "uint8") {
-            const scratch = this._extractScratch;
-            const len = width * height * 4;
-
-            if (type === "float32") {
-                if (!(scratch.f32 instanceof Float32Array) || scratch.f32.length !== len) {
-                    scratch.f32 = new Float32Array(len);
-                }
-                return scratch.f32;
-            }
-
-            if (!(scratch.u8 instanceof Uint8Array) || scratch.u8.length !== len) {
-                scratch.u8 = new Uint8Array(len);
-            }
-            return scratch.u8;
-        };
-
-        drawer._readCanvasResult = function(ctx, result = "imageData") {
-            const canvas = ctx.canvas;
-
-            switch (result) {
-                case "ctx":
-                    return ctx;
-                case "canvas":
-                    return canvas;
-                case "imageData":
-                    return ctx.getImageData(0, 0, canvas.width, canvas.height);
-                case "uint8": {
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    return new Uint8Array(imageData.data.buffer.slice(0));
-                }
-                default:
-                    throw new Error(`Unsupported extract result "${result}"`);
-            }
-        };
-
-        drawer._readCurrentCanvas = function(sourceCanvas, result = "imageData") {
-            const ctx = this._ensureExtract2D(sourceCanvas.width, sourceCanvas.height);
-            ctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
-            ctx.drawImage(sourceCanvas, 0, 0);
-            return this._readCanvasResult(ctx, result);
-        };
-
-        drawer._getExtractionFramebuffer = function() {
-            const gl = this.renderer.gl;
-            const scratch = this._extractScratch;
-            if (!scratch.framebuffer) {
-                scratch.framebuffer = gl.createFramebuffer();
-            }
-            return scratch.framebuffer;
-        };
-
-        drawer._readTextureArrayLayer = function(texArray, layerIndex, {
-            width = this.renderer.canvas.width,
-            height = this.renderer.canvas.height,
-            level = 0,
-            format = null,
-            type = null,
-            result = "imageData",
-        } = {}) {
-            const gl = this.renderer.gl;
-
-            format = format || gl.RGBA;
-            type = type || gl.UNSIGNED_BYTE;
-
-            const fb = this._getExtractionFramebuffer();
-            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, level, layerIndex);
-
-            const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-            if (status !== gl.FRAMEBUFFER_COMPLETE) {
-                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-                throw new Error(`Extraction framebuffer incomplete: 0x${status.toString(16)}`);
-            }
-
-            const pixels = this._ensureExtractBuffer(width, height, type === gl.FLOAT ? "float32" : "uint8");
-            gl.readPixels(0, 0, width, height, format, type, pixels);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-            if (result === "uint8" || result === "float32") {
-                return pixels.slice(0);
-            }
-
-            const imageData = this._ensureExtractImageData(width, height);
-            imageData.data.set(type === gl.FLOAT ? new Uint8ClampedArray(pixels.buffer) : pixels);
-            if (result === "imageData") {
-                return new ImageData(new Uint8ClampedArray(imageData.data), width, height);
-            }
-
-            const ctx = this._ensureExtract2D(width, height);
-            ctx.putImageData(imageData, 0, 0);
-            if (result === "canvas") {
-                return ctx.canvas;
-            }
-            if (result === "ctx") {
-                return ctx;
-            }
-
-            throw new Error(`Unsupported extract result "${result}"`);
-        };
-
-        /**
-         * Copy the currently visible viewer canvas exactly as displayed.
-         * Good for "what user sees now", not for layer isolation.
-         */
-        drawer.extractCurrentViewport = async function({
-                                                           result = "imageData"
-                                                       } = {}) {
+        installExtractionApi(drawer, drawer.renderer, function(result = "imageData") {
             return this._readCurrentCanvas(viewer.drawer.canvas, result);
-        };
+        });
 
         /**
          * Extract a single first-pass layer directly from the standalone renderer state.
@@ -8823,6 +12001,350 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
         };
 
         return drawer;
+    };
+
+    $.makeStandaloneFlexRenderer = function({
+        uniqueId = `standalone_renderer_${Date.now()}`,
+        width = 256,
+        height = 256,
+        webGLPreferredVersion = "2.0",
+        backgroundColor = "#00000000",
+        debug = false,
+        interactive = false,
+        canvasOptions = { stencil: true }
+    } = {}) {
+        const runtime = {};
+        const mutex = createLock();
+        const lock = () => mutex.lock();
+        const unlock = () => mutex.unlock();
+
+        runtime.renderer = new $.FlexRenderer({
+            uniqueId: $.FlexRenderer.sanitizeKey(uniqueId),
+            webGLPreferredVersion,
+            redrawCallback: () => {},
+            refetchCallback: () => {},
+            debug: !!debug,
+            interactive: !!interactive,
+            backgroundColor,
+            canvasOptions
+        });
+        runtime.renderer.setDataBlendingEnabled(true);
+        runtime.renderer.setDimensions(0, 0, width, height, 1, 1);
+        runtime.canvas = runtime.renderer.canvas;
+        runtime._inputState = {
+            key: null,
+            count: 0,
+            width,
+            height
+        };
+
+        installExtractionApi(runtime, runtime.renderer, function(result = "imageData") {
+            return this._readCurrentCanvas(this.renderer.canvas, result);
+        });
+
+        runtime.setSize = function(nextWidth, nextHeight) {
+            const safeWidth = Math.max(1, Math.round(Number(nextWidth) || 1));
+            const safeHeight = Math.max(1, Math.round(Number(nextHeight) || 1));
+            this._inputState.width = safeWidth;
+            this._inputState.height = safeHeight;
+            const depth = Math.max(this._inputState.count || 1, 1);
+            this.renderer.setDimensions(0, 0, safeWidth, safeHeight, depth, depth);
+        };
+
+        runtime._clearInputTextures = function() {
+            const gl = this.renderer.gl;
+            if (this._inputState.colorTexture) {
+                gl.deleteTexture(this._inputState.colorTexture);
+            }
+
+            this._inputState.colorTexture = null;
+            this.renderer.__firstPassResult = null;
+        };
+
+        runtime._buildSyntheticFirstPassSource = function() {
+            if (!this._inputState.colorTexture || !this._inputState.count) {
+                return [];
+            }
+
+            const fullScreenMatrix = new Float32Array([
+                2, 0, 0,
+                0, 2, 0,
+                -1, -1, 1
+            ]);
+            const fullUv = new Float32Array([
+                0, 0,
+                0, 1,
+                1, 0,
+                1, 1
+            ]);
+
+            const source = [];
+            for (let i = 0; i < this._inputState.count; i++) {
+                source.push({
+                    tiles: [{
+                        transformMatrix: fullScreenMatrix,
+                        dataIndex: i,
+                        stencilIndex: i,
+                        texture: this._inputState.colorTexture,
+                        position: fullUv,
+                        tile: null
+                    }],
+                    vectors: [],
+                    polygons: [],
+                    dataIndex: i,
+                    stencilIndex: i,
+                    packIndex: 0,
+                    _temp: { values: fullScreenMatrix }
+                });
+            }
+
+            return source;
+        };
+
+        runtime._renderFirstPass = function() {
+            if (!this._inputState.colorTexture || !this._inputState.count) {
+                throw new Error("Standalone renderer has no input textures. Call setInputs(...) first.");
+            }
+
+            this.renderer.__flexPackInfo = {
+                layout: {
+                    baseLayer: Array.from({ length: this._inputState.count }, (_, i) => i),
+                    packCount: Array.from({ length: this._inputState.count }, () => 1),
+                    totalLayers: this._inputState.count
+                },
+                channelCount: Array.from({ length: this._inputState.count }, () => 4)
+            };
+
+            this.renderer.setDimensions(
+                0,
+                0,
+                this._inputState.width,
+                this._inputState.height,
+                this._inputState.count,
+                this._inputState.count
+            );
+
+            const source = this._buildSyntheticFirstPassSource();
+            this.renderer.firstPassProcessData(source);
+            return this.renderer.__firstPassResult;
+        };
+
+        runtime.setInputs = async function(inputs, options = {}) {
+            const sourceList = Array.isArray(inputs) ? inputs.filter(Boolean) : (inputs ? [inputs] : []);
+            const rasterized = await Promise.all(sourceList.map(source => rasterizeStandaloneSource(source)));
+            if (!rasterized.length) {
+                this._clearInputTextures();
+                this._inputState.count = 0;
+                this.renderer.__flexPackInfo = {
+                    layout: { baseLayer: [], packCount: [], totalLayers: 0 },
+                    channelCount: []
+                };
+                this.setSize(options.width || this._inputState.width, options.height || this._inputState.height);
+                return;
+            }
+
+            const targetWidth = Math.max(1, Math.round(Number(options.width) || rasterized[0].width || this._inputState.width || 1));
+            const targetHeight = Math.max(1, Math.round(Number(options.height) || rasterized[0].height || this._inputState.height || 1));
+            const layerCount = rasterized.length;
+            const colorPixels = new Uint8Array(targetWidth * targetHeight * 4 * layerCount);
+
+            const canvas = document.createElement("canvas");
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+            rasterized.forEach((entry, layerIndex) => {
+                ctx.clearRect(0, 0, targetWidth, targetHeight);
+                const imageData = new ImageData(new Uint8ClampedArray(entry.pixels), entry.width, entry.height);
+                if (entry.width === targetWidth && entry.height === targetHeight) {
+                    ctx.putImageData(imageData, 0, 0);
+                } else {
+                    const tmp = document.createElement("canvas");
+                    tmp.width = entry.width;
+                    tmp.height = entry.height;
+                    tmp.getContext("2d", { willReadFrequently: true }).putImageData(imageData, 0, 0);
+                    ctx.drawImage(tmp, 0, 0, targetWidth, targetHeight);
+                }
+
+                const rgbaPixels = ctx.getImageData(0, 0, targetWidth, targetHeight).data;
+                colorPixels.set(rgbaPixels, layerIndex * targetWidth * targetHeight * 4);
+            });
+
+            this._clearInputTextures();
+
+            const gl = this.renderer.gl;
+            this._inputState.colorTexture = $.FlexRenderer._createSelfTestTextureArray(gl, targetWidth, targetHeight, layerCount, colorPixels);
+            this._inputState.count = layerCount;
+            this._inputState.width = targetWidth;
+            this._inputState.height = targetHeight;
+            this._inputState.key = `${targetWidth}x${targetHeight}:${layerCount}`;
+
+            this.renderer.setDimensions(0, 0, targetWidth, targetHeight, layerCount, layerCount);
+        };
+
+        runtime.overrideConfigureAll = async function(shaders, shaderOrder = undefined) {
+            this.renderer.deleteShaders();
+            this.renderer.__firstPassResult = null;
+            if (!shaders) {
+                this.renderer.setShaderLayerOrder([]);
+                return;
+            }
+
+            const normalized = $.FlexRenderer.normalizeShaderMap(
+                $.extend(true, {}, shaders),
+                { source: "standalone-runtime" }
+            ) || {};
+
+            for (const shaderId in normalized) {
+                this.renderer.createShaderLayer(shaderId, normalized[shaderId], false);
+            }
+
+            this.renderer.setShaderLayerOrder(shaderOrder || Object.keys(normalized));
+            this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+        };
+
+        runtime.getOverriddenShaderConfig = function(key) {
+            const shaderLayer = this.renderer.getAllShaders()[key];
+            return shaderLayer ? shaderLayer.getConfig() : undefined;
+        };
+
+        runtime._buildRenderArray = function({
+            zoom = 1,
+            pixelSize = 1,
+            opacity = 1
+        } = {}) {
+            const renderArray = [];
+            for (const shader of this.renderer.getFlatShaderLayers(this.renderer.getAllShaders(), this.renderer.getShaderLayerOrder())) {
+                renderArray.push({
+                    zoom,
+                    pixelSize,
+                    opacity,
+                    shader
+                });
+            }
+            return renderArray;
+        };
+
+        runtime.drawWithConfiguration = async function(inputs = undefined, configuration = undefined, _view = undefined, size = undefined) {
+            await lock();
+            try {
+                if (inputs !== undefined) {
+                    await this.setInputs(inputs, size ? {
+                        width: size.width || size.x,
+                        height: size.height || size.y
+                    } : {});
+                } else if (size && typeof size.x === "number" && typeof size.y === "number") {
+                    this.setSize(size.x, size.y);
+                }
+
+                if (configuration) {
+                    await this.overrideConfigureAll(configuration);
+                }
+
+                const gl = this.renderer.gl;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.clearColor(1.0, 1.0, 1.0, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                this._renderFirstPass();
+
+                const renderArray = this._buildRenderArray();
+                if (!renderArray.length) {
+                    throw new Error("Standalone renderer has no configured shader layers.");
+                }
+
+                this.renderer.secondPassProcessData(renderArray);
+                this.renderer.gl.finish();
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = this.renderer.canvas.width;
+                canvas.height = this.renderer.canvas.height;
+                ctx.drawImage(this.renderer.canvas, 0, 0);
+                return ctx;
+            } finally {
+                unlock();
+            }
+        };
+
+        runtime.extractFirstPassLayer = async function(kind, layerIndex, opts = {}) {
+            await lock();
+            try {
+                const fp = this.renderer.__firstPassResult || this._renderFirstPass();
+                if (!fp) {
+                    throw new Error("No first-pass result available in standalone renderer.");
+                }
+
+                const tex = kind === "stencil" ? fp.stencil : fp.texture;
+                const depth = kind === "stencil" ? fp.stencilDepth : fp.textureDepth;
+
+                if (!tex) {
+                    throw new Error(`No ${kind} texture available.`);
+                }
+                if (layerIndex < 0 || layerIndex >= depth) {
+                    throw new Error(`Invalid ${kind} layer index ${layerIndex}; depth=${depth}`);
+                }
+
+                return this._readTextureArrayLayer(tex, layerIndex, {
+                    width: opts.width || this.renderer.canvas.width,
+                    height: opts.height || this.renderer.canvas.height,
+                    level: opts.level || 0,
+                    format: opts.format,
+                    type: opts.type,
+                    result: opts.result || "imageData",
+                });
+            } finally {
+                unlock();
+            }
+        };
+
+        runtime.extract = async function({
+            mode = "second-pass",
+            inputs = undefined,
+            sources = undefined,
+            configuration = undefined,
+            size = undefined,
+            result = "imageData",
+            kind = "texture",
+            layerIndex = 0,
+            level = 0,
+            format = undefined,
+            type = undefined,
+        } = {}) {
+            if (mode === "viewport-copy") {
+                return this.extractCurrentViewport({ result });
+            }
+
+            if (mode === "first-pass-layer") {
+                return this.extractFirstPassLayer(kind, layerIndex, {
+                    width: size && size.x,
+                    height: size && size.y,
+                    level,
+                    format,
+                    type,
+                    result,
+                });
+            }
+
+            const ctx = await this.drawWithConfiguration(
+                sources !== undefined ? sources : inputs,
+                configuration,
+                undefined,
+                size
+            );
+            return this._readCanvasResult(ctx, result);
+        };
+
+        runtime.destroy = function() {
+            if (this._extractScratch && this._extractScratch.framebuffer) {
+                this.renderer.gl.deleteFramebuffer(this._extractScratch.framebuffer);
+                this._extractScratch.framebuffer = null;
+            }
+            this._clearInputTextures();
+            this.renderer.destroy();
+        };
+
+        return runtime;
     };
 
 }(OpenSeadragon));
@@ -9369,7 +12891,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
-        return "edge";
+        return "edge_isoline";
     }
 
     static name() {
@@ -9427,20 +12949,20 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return `
 ${super.getFragmentShaderDefinition()}
 
-//todo try replace with step function
-float clipToThresholdf_${this.uid}(float value) {
-    //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > ${this.threshold.sample('value', 'float')}
-        || close(value, ${this.threshold.sample('value', 'float')}))) return 1.0;
-    return 0.0;
+float edge_threshold_${this.uid}() {
+    return ${this.threshold.sample("0.0", "float")};
 }
 
-//todo try replace with step function
-int clipToThresholdi_${this.uid}(float value) {
-     //for some reason the condition > 0.02 is crucial to render correctly...
-    if ((value > ${this.threshold.sample('value', 'float')}
-        || close(value, ${this.threshold.sample('value', 'float')}))) return 1;
-    return 0;
+float edge_softness_${this.uid}(float centerValue, float neighborhoodMin, float neighborhoodMax) {
+    float localSpan = max(neighborhoodMax - neighborhoodMin, 0.0);
+    float derivSpan = abs(dFdx(centerValue)) + abs(dFdy(centerValue));
+    return max(0.01, max(localSpan * 0.35, derivSpan * 2.0));
+}
+
+float edge_crossing_${this.uid}(float thresholdValue, float neighborhoodMin, float neighborhoodMax, float softness) {
+    float low = smoothstep(thresholdValue - softness, thresholdValue, neighborhoodMax);
+    float high = 1.0 - smoothstep(thresholdValue, thresholdValue + softness, neighborhoodMin);
+    return clamp(low * high, 0.0, 1.0);
 }`;
     }
 
@@ -9448,32 +12970,194 @@ int clipToThresholdi_${this.uid}(float value) {
         return `
     float mid = ${this.sampleChannel('v_texture_coords')};
     if (mid < 1e-6) return vec4(.0);
-    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom_level) * 0.005 + 0.008;
+    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom) * 0.005 + 0.008;
+    float thresholdValue = edge_threshold_${this.uid}();
 
     float u = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y)')};
     float b = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y)')};
     float l = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - dist)')};
     float r = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + dist)')};
-    int counter = clipToThresholdi_${this.uid}(u) +
-                clipToThresholdi_${this.uid}(b) +
-                clipToThresholdi_${this.uid}(l) +
-                clipToThresholdi_${this.uid}(r);
-    if (counter == 2 || counter == 3) {  //two or three points hit the region
-        return vec4(${this.color.sample()}, 1.0); //border
+    float ul = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y - dist)')};
+    float ur = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y + dist)')};
+    float bl = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y - dist)')};
+    float br = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y + dist)')};
+
+    float nearMin = min(min(min(u, b), min(l, r)), min(min(ul, ur), min(bl, br)));
+    float nearMax = max(max(max(u, b), max(l, r)), max(max(ul, ur), max(bl, br)));
+    float outerSoftness = edge_softness_${this.uid}(mid, nearMin, nearMax);
+    float outerEdge = edge_crossing_${this.uid}(thresholdValue, min(nearMin, mid), max(nearMax, mid), outerSoftness);
+
+    if (outerEdge > 0.01) {
+        return vec4(${this.color.sample()}, outerEdge);
     }
 
-    float u2 = ${this.sampleChannel('vec2(v_texture_coords.x - 3.0*dist, v_texture_coords.y)')};
-    float b2 = ${this.sampleChannel('vec2(v_texture_coords.x + 3.0*dist, v_texture_coords.y)')};
-    float l2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - 3.0*dist)')};
-    float r2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + 3.0*dist)')};
+    float innerDist = 2.5 * dist;
+    float u2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y)')};
+    float b2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y)')};
+    float l2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - innerDist)')};
+    float r2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + innerDist)')};
+    float ul2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y - innerDist)')};
+    float ur2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y + innerDist)')};
+    float bl2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y - innerDist)')};
+    float br2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y + innerDist)')};
 
-    float mid2 = clipToThresholdf_${this.uid}(mid);
-    float dx = min(clipToThresholdf_${this.uid}(u2) - mid2, clipToThresholdf_${this.uid}(b2) - mid2);
-    float dy = min(clipToThresholdf_${this.uid}(l2) - mid2, clipToThresholdf_${this.uid}(r2) - mid2);
-    if ((dx < -0.5 || dy < -0.5)) {
-        return vec4(${this.color.sample()} * 0.7, .7); //inner border
+    float farMin = min(min(min(u2, b2), min(l2, r2)), min(min(ul2, ur2), min(bl2, br2)));
+    float farMax = max(max(max(u2, b2), max(l2, r2)), max(max(ul2, ur2), max(bl2, br2)));
+    float innerSoftness = edge_softness_${this.uid}(mid, farMin, farMax);
+    float innerEdge = edge_crossing_${this.uid}(thresholdValue, min(farMin, mid), max(farMax, mid), innerSoftness);
+
+    if (mid >= thresholdValue && innerEdge > 0.01) {
+        return vec4(${this.color.sample()} * 0.7, innerEdge * 0.7); //inner border
     }
     return vec4(.0);
+`;
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Threshold edge shader with derivative-aware smoothing.
+ *
+ * Operates only through the public sample(...) contract of the threshold control.
+ * A plain range behaves like a single threshold, while advanced controls can provide
+ * more complex sampled behavior without this shader caring about their internals.
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "edge";
+    }
+
+    static name() {
+        return "Edge";
+    }
+
+    static description() {
+        return "highlights threshold boundaries with separate inner and outer styling";
+    }
+
+    static docs() {
+        return {
+            summary: "Derivative-aware threshold edge shader for one scalar input channel.",
+            description: "Detects threshold-boundary crossings over a local neighborhood by evaluating a signed field derived from value - threshold.sample(value). Keeps adjustable edge thickness, works with any float threshold control, and renders lower-side and higher-side boundaries with separate colors.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D scalar data to detect threshold edges on"
+            }],
+            controls: [
+                { name: "use_channel0", default: "r" },
+                {
+                    name: "threshold",
+                    ui: "range_input",
+                    valueType: "float",
+                    default: 50,
+                    min: 1,
+                    max: 100,
+                    step: 1,
+                    description: "Any float-producing threshold control. Advanced sliders are supported through their sample() behavior."
+                },
+                { name: "outer_color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "inner_color", ui: "color", valueType: "vec3", default: "#b2a800" },
+                { name: "edgeThickness", ui: "range", valueType: "float", default: 1, min: 0.5, max: 3, step: 0.1 }
+            ]
+        };
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (x) => x === 1,
+            description: "1D scalar data to detect threshold edges on"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: { // eslint-disable-line camelcase
+                default: "r"
+            },
+            threshold: {
+                default: { type: "range_input", default: 50, min: 1, max: 100, step: 1, title: "Threshold: " },
+                accepts: (type) => type === "float",
+            },
+            outer_color: { // eslint-disable-line camelcase
+                default: { type: "color", default: "#fff700", title: "Outer color: " },
+                accepts: (type) => type === "vec3"
+            },
+            inner_color: { // eslint-disable-line camelcase
+                default: { type: "color", default: "#b2a800", title: "Inner color: " },
+                accepts: (type) => type === "vec3"
+            },
+            edgeThickness: {
+                default: { type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: " },
+                accepts: (type) => type === "float"
+            },
+        };
+    }
+
+    getFragmentShaderDefinition() {
+        const uid = this.uid;
+
+        return `
+${super.getFragmentShaderDefinition()}
+
+float edge_softness_${uid}(float centerScore, float neighborhoodMin, float neighborhoodMax) {
+    float localSpan = max(neighborhoodMax - neighborhoodMin, 0.0);
+    float derivSpan = abs(dFdx(centerScore)) + abs(dFdy(centerScore));
+    return max(0.01, max(localSpan * 0.35, derivSpan * 2.0));
+}
+
+float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float softness) {
+    float low = smoothstep(-softness, 0.0, neighborhoodMax);
+    float high = 1.0 - smoothstep(0.0, softness, neighborhoodMin);
+    return clamp(low * high, 0.0, 1.0);
+}`;
+    }
+
+    getFragmentShaderExecution() {
+        const uid = this.uid;
+
+        return `
+    float mid = ${this.sampleChannel("v_texture_coords")};
+    if (mid < 1e-6) return vec4(.0);
+
+    float dist = ${this.edgeThickness.sample("mid", "float")} * sqrt(zoom) * 0.005 + 0.008;
+    float midScore = mid - (${this.threshold.sample("mid", "float")});
+
+    float u = ${this.sampleChannel("vec2(v_texture_coords.x - dist, v_texture_coords.y)")};
+    float b = ${this.sampleChannel("vec2(v_texture_coords.x + dist, v_texture_coords.y)")};
+    float l = ${this.sampleChannel("vec2(v_texture_coords.x, v_texture_coords.y - dist)")};
+    float r = ${this.sampleChannel("vec2(v_texture_coords.x, v_texture_coords.y + dist)")};
+    float ul = ${this.sampleChannel("vec2(v_texture_coords.x - dist, v_texture_coords.y - dist)")};
+    float ur = ${this.sampleChannel("vec2(v_texture_coords.x - dist, v_texture_coords.y + dist)")};
+    float bl = ${this.sampleChannel("vec2(v_texture_coords.x + dist, v_texture_coords.y - dist)")};
+    float br = ${this.sampleChannel("vec2(v_texture_coords.x + dist, v_texture_coords.y + dist)")};
+
+    float uScore = u - (${this.threshold.sample("u", "float")});
+    float bScore = b - (${this.threshold.sample("b", "float")});
+    float lScore = l - (${this.threshold.sample("l", "float")});
+    float rScore = r - (${this.threshold.sample("r", "float")});
+    float ulScore = ul - (${this.threshold.sample("ul", "float")});
+    float urScore = ur - (${this.threshold.sample("ur", "float")});
+    float blScore = bl - (${this.threshold.sample("bl", "float")});
+    float brScore = br - (${this.threshold.sample("br", "float")});
+
+    float neighborhoodMin = min(midScore, min(min(min(uScore, bScore), min(lScore, rScore)), min(min(ulScore, urScore), min(blScore, brScore))));
+    float neighborhoodMax = max(midScore, max(max(max(uScore, bScore), max(lScore, rScore)), max(max(ulScore, urScore), max(blScore, brScore))));
+    float softness = edge_softness_${uid}(midScore, neighborhoodMin, neighborhoodMax);
+    float crossing = edge_crossing_${uid}(neighborhoodMin, neighborhoodMax, softness);
+    float outerAlpha = midScore < 0.0 ? crossing : 0.0;
+    float innerAlpha = midScore >= 0.0 ? crossing : 0.0;
+
+    float edgeAlpha = max(outerAlpha, innerAlpha);
+    if (edgeAlpha <= 0.01) {
+        return vec4(0.0);
+    }
+
+    vec3 edgeColor = outerAlpha >= innerAlpha ? ${this.outer_color.sample()} : ${this.inner_color.sample()};
+    return vec4(edgeColor, edgeAlpha);
 `;
     }
 });
@@ -9816,6 +13500,415 @@ return vec4(.0);
 })(OpenSeadragon);
 
 (function($) {
+    /**
+     * Class-icon shader
+     *
+     * Scalar input is classified by the advanced slider control.
+     * Each interval is mapped to its own icon texture.
+     * The icon is then repeated over the visible class area using a configurable grid.
+     */
+    class IconMapShader extends $.FlexRenderer.ShaderLayer {
+        static type() {
+            return "iconmap";
+        }
+
+        static name() {
+            return "IconMap";
+        }
+
+        static description() {
+            return "maps scalar classes to repeated per-class icons";
+        }
+
+        static docs() {
+            return {
+                summary: "Scalar-to-icon class shader.",
+                description: "Samples one scalar channel, classifies each sparse screen-space marker cell by the value at its center, maps each interval to its own icon texture, and renders the whole icon for that class.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "1D scalar data used for class selection"
+                }],
+                controls: [
+                    { name: "use_channel0", default: "r" },
+                    {
+                        name: "threshold",
+                        ui: "advanced_slider",
+                        valueType: "float",
+                        default: {
+                            default: [0.25, 0.75],
+                            mask: [1, 1, 1]
+                        },
+                        required: {
+                            type: "advanced_slider",
+                            inverted: false
+                        }
+                    },
+                    {
+                        name: "iconN",
+                        ui: "icon",
+                        valueType: "vec4",
+                        description: "One icon control is generated per class interval."
+                    },
+                    { name: "grid_layout", ui: "select_int", valueType: "int", default: { default: 0 } },
+                    { name: "cell_size", ui: "float", valueType: "float", default: { default: 15 } },
+                    { name: "jitter", ui: "float", valueType: "float", default: { default: 0 } },
+                    { name: "icon_scale", ui: "float", valueType: "float", default: { default: 0.82 } },
+                    { name: "clip_icons", ui: "bool", valueType: "bool", default: { default: false } }
+                ]
+            };
+        }
+
+        static sources() {
+            return [{
+                acceptsChannelCount: (x) => x === 1,
+                description: "1D scalar data used for class selection"
+            }];
+        }
+
+        static get defaultControls() {
+            return {
+                use_channel0: {  // eslint-disable-line camelcase
+                    default: "r"
+                },
+                threshold: {
+                    default: {
+                        type: "advanced_slider",
+                        default: [0.25, 0.75],
+                        mask: [1, 1, 1],
+                        title: "Breaks",
+                        pips: {
+                            mode: "positions",
+                            values: [0, 25, 50, 75, 100],
+                            density: 4
+                        }
+                    },
+                    accepts: (type) => type === "float",
+                    required: { type: "advanced_slider", inverted: false }
+                },
+                icons: {
+                    array: {
+                        count: (layer) => layer._getClassCount(),
+                        name: (index) => `icon${index}`,
+                        item: (index, layer) => ({
+                            default: {
+                                type: "icon",
+                                title: `Icon ${index + 1}`,
+                                default: layer._getDefaultIconName(index),
+                                size: 384,
+                                padding: 10,
+                                previewSize: 40
+                            },
+                            accepts: (type) => type === "vec4"
+                        })
+                    }
+                },
+                grid_layout: {  // eslint-disable-line camelcase
+                    default: {
+                        type: "select",
+                        title: "Grid Layout",
+                        default: 0,
+                        options: [
+                            { value: 0, label: "Square" },
+                            { value: 1, label: "Brick" },
+                            { value: 2, label: "Hex" }
+                        ]
+                    },
+                    accepts: (type) => type === "int"
+                },
+                cell_size: { // eslint-disable-line camelcase
+                    default: {
+                        type: "range_input",
+                        title: "Cell Size (px)",
+                        default: 15,
+                        min: 3,
+                        max: 50,
+                        step: 1
+                    },
+                    accepts: (type) => type === "float"
+                },
+                jitter: {
+                    default: {
+                        type: "range_input",
+                        title: "Jitter",
+                        default: 0,
+                        min: 0,
+                        max: 0.45,
+                        step: 0.01
+                    },
+                    accepts: (type) => type === "float"
+                },
+                icon_scale: { // eslint-disable-line camelcase
+                    default: {
+                        type: "range_input",
+                        title: "Icon Size",
+                        default: 0.82,
+                        min: 0.3,
+                        max: 1.0,
+                        step: 0.01
+                    },
+                    accepts: (type) => type === "float"
+                },
+                clip_icons: { // eslint-disable-line camelcase
+                    default: {
+                        type: "bool",
+                        title: "Clip To Data",
+                        default: false
+                    },
+                    accepts: (type) => type === "bool"
+                }
+            };
+        }
+
+        init() {
+            if (this.threshold) {
+                this.threshold.on("breaks", (raw) => {
+                    const nextClassCount = Array.isArray(raw) ? raw.length + 1 : this._getClassCount();
+                    if (nextClassCount !== this._getIconControlCount() && typeof this._refresh === "function") {
+                        this._refresh();
+                        return;
+                    }
+                    if (typeof this.threshold.syncMaskToIntervals === "function") {
+                        this.threshold.syncMaskToIntervals((index) => index, true);
+                    }
+                    this.invalidate();
+                }, true);
+            }
+
+            super.init();
+
+            if (this.threshold && typeof this.threshold.syncMaskToIntervals === "function") {
+                this.threshold.syncMaskToIntervals((index) => index, true);
+                this.invalidate();
+            }
+        }
+
+        _getClassCount() {
+            if (this.threshold && Array.isArray(this.threshold.encodedValues)) {
+                return this.threshold.getIntervalCount();
+            }
+            const configuredBreaks = this._getConfiguredThresholdBreaks();
+            if (configuredBreaks) {
+                return Math.max(1, configuredBreaks.length + 1);
+            }
+            const fallbackBreaks = this.constructor.defaultControls.threshold.default.default || [];
+            return Math.max(1, fallbackBreaks.length + 1);
+        }
+
+        _getConfiguredThresholdBreaks() {
+            const configured = this._customControls && this._customControls.threshold;
+            if (!configured || typeof configured !== "object") {
+                return null;
+            }
+
+            if (Array.isArray(configured.breaks)) {
+                return configured.breaks;
+            }
+
+            if (Array.isArray(configured.default)) {
+                return configured.default;
+            }
+
+            if (configured.default && typeof configured.default === "object" && Array.isArray(configured.default.default)) {
+                return configured.default.default;
+            }
+
+            return null;
+        }
+
+        _getIconControlCount() {
+            let count = 0;
+            while (this._getIconControl(count)) {
+                count++;
+            }
+            return count;
+        }
+
+        _getDefaultIconName(index) {
+            const defaultIcons = ["diamond", "circle", "triangle-up", "square", "star", "flag", "plus", "check"];
+            return defaultIcons[index % defaultIcons.length];
+        }
+
+        _getIconControl(index) {
+            const control = this[`icon${index}`];
+            return control && typeof control.sample === "function" ? control : null;
+        }
+
+        _buildGridHelpers() {
+            const uid = this.uid;
+
+            return `
+float iconmap_decodeCellSize_${uid}(float rawValue) {
+        return rawValue <= 1.0 ? mix(${this.cell_size.params.min}.0, ${this.cell_size.params.max}.0, clamp(rawValue, 0.0, 1.0)) : rawValue;
+    }
+
+float iconmap_hash_${uid}(vec2 value) {
+        return fract(sin(dot(value, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+vec2 iconmap_hash2_${uid}(vec2 value) {
+        return vec2(
+            iconmap_hash_${uid}(value),
+            iconmap_hash_${uid}(value + vec2(19.19, 73.73))
+        );
+    }
+
+vec2 iconmap_jitterOffset_${uid}(vec2 cellId, vec2 spacing, float amount) {
+        if (amount <= 0.0) {
+            return vec2(0.0);
+        }
+        vec2 rnd = iconmap_hash2_${uid}(cellId) * 2.0 - 1.0;
+        return rnd * amount * spacing;
+    }
+
+vec3 iconmap_squarePlacement_${uid}(vec2 fragCoord, float cellSize, float jitterAmount, bool brickLayout) {
+        float row = floor(fragCoord.y / cellSize);
+        float shift = brickLayout ? 0.5 * cellSize * mod(row, 2.0) : 0.0;
+        float col = floor((fragCoord.x + shift) / cellSize);
+        vec2 centerPx = vec2((col + 0.5) * cellSize - shift, (row + 0.5) * cellSize);
+        centerPx += iconmap_jitterOffset_${uid}(vec2(col, row), vec2(cellSize), jitterAmount);
+        return vec3(centerPx, cellSize);
+    }
+
+vec3 iconmap_hexPlacement_${uid}(vec2 fragCoord, float cellSize, float jitterAmount) {
+        float rowHeight = cellSize * 0.8660254037844386;
+        float baseRow = floor(fragCoord.y / rowHeight);
+        vec2 bestCenter = fragCoord;
+        float bestDist2 = 1e30;
+
+        for (int rowOffset = -1; rowOffset <= 1; rowOffset++) {
+            float row = baseRow + float(rowOffset);
+            float shift = 0.5 * cellSize * mod(row, 2.0);
+            float colBase = floor((fragCoord.x + shift) / cellSize);
+
+            for (int colOffset = -1; colOffset <= 1; colOffset++) {
+                float col = colBase + float(colOffset);
+                vec2 centerPx = vec2((col + 0.5) * cellSize - shift, (row + 0.5) * rowHeight);
+                centerPx += iconmap_jitterOffset_${uid}(vec2(col, row), vec2(cellSize, rowHeight), jitterAmount);
+                vec2 delta = fragCoord - centerPx;
+                float dist2 = dot(delta, delta);
+                if (dist2 < bestDist2) {
+                    bestDist2 = dist2;
+                    bestCenter = centerPx;
+                }
+            }
+        }
+
+        return vec3(bestCenter, rowHeight);
+    }
+
+vec3 iconmap_gridPlacement_${uid}(vec2 fragCoord) {
+        int layoutMode = ${this.grid_layout.sample()};
+        float cellSize = max(iconmap_decodeCellSize_${uid}(${this.cell_size.sample()}), 1.0);
+        float jitterAmount = clamp(${this.jitter.sample()}, 0.0, 0.45);
+
+        if (layoutMode == 2) {
+            return iconmap_hexPlacement_${uid}(fragCoord, cellSize, jitterAmount);
+        }
+
+        return iconmap_squarePlacement_${uid}(fragCoord, cellSize, jitterAmount, layoutMode == 1);
+    }
+
+vec3 iconmap_gridUv_${uid}(vec2 fragCoord) {
+        vec3 placement = iconmap_gridPlacement_${uid}(fragCoord);
+        float iconScale = clamp(${this.icon_scale.sample()}, 0.3, 1.0);
+        float padding = clamp((1.0 - iconScale) * 0.5, 0.0, 0.49);
+        vec2 centerPx = placement.xy;
+        float footprint = max(placement.z, 1.0);
+        vec2 local = (fragCoord - centerPx) / vec2(footprint) + 0.5;
+
+        vec2 spacingVec = vec2(padding);
+        vec2 feather = max(fwidth(local), vec2(1e-4));
+
+        vec2 lowMask = smoothstep(spacingVec - feather, spacingVec + feather, local);
+        vec2 highMask = 1.0 - smoothstep(vec2(1.0) - spacingVec - feather, vec2(1.0) - spacingVec + feather, local);
+        float inside = lowMask.x * lowMask.y * highMask.x * highMask.y;
+
+        vec2 denom = max(vec2(1.0) - 2.0 * spacingVec, vec2(1e-5));
+        vec2 paddedUv = clamp((local - spacingVec) / denom, 0.0, 1.0);
+
+        return vec3(paddedUv, inside);
+    }
+
+vec2 iconmap_cellCenterUv_${uid}(vec2 dataUv) {
+        vec2 centerPx = iconmap_gridPlacement_${uid}(gl_FragCoord.xy).xy;
+        vec2 deltaPx = centerPx - gl_FragCoord.xy;
+        return dataUv + dFdx(dataUv) * deltaPx.x + dFdy(dataUv) * deltaPx.y;
+    }`;
+        }
+
+        _buildIconSamplerFunction() {
+            const uid = this.uid;
+            const classCount = this._getClassCount();
+            const branches = [];
+            let fallbackExpr = "vec4(0.0)";
+
+            for (let index = 0; index < classCount; index++) {
+                const control = this._getIconControl(index);
+                if (!control) {
+                    continue;
+                }
+                const sampleExpr = control.sample("localUv", "vec2");
+                fallbackExpr = sampleExpr;
+                if (index === 0) {
+                    branches.push(`if (classIndex <= 0) { return ${sampleExpr}; }`);
+                } else {
+                    branches.push(`if (classIndex == ${index}) { return ${sampleExpr}; }`);
+                }
+            }
+
+            return `
+vec4 iconmap_sampleIcon_${uid}(int classIndex, vec2 localUv) {
+        ${branches.join("\n        ")}
+        return ${fallbackExpr};
+    }`;
+        }
+
+        getFragmentShaderDefinition() {
+            return `
+${super.getFragmentShaderDefinition()}
+${this._buildGridHelpers()}
+${this._buildIconSamplerFunction()}
+`;
+        }
+
+        getFragmentShaderExecution() {
+            const uid = this.uid;
+            const thresholdMaskAtCenter = `sample_advanced_slider(centerChan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
+            const thresholdMaskAtPoint = `sample_advanced_slider(chan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
+
+            return `
+float chan = ${this.sampleChannel("v_texture_coords")};
+vec3 grid = iconmap_gridUv_${uid}(gl_FragCoord.xy);
+
+if (grid.z <= 0.0) {
+    return vec4(0.0);
+}
+
+vec2 centerUv = iconmap_cellCenterUv_${uid}(v_texture_coords);
+float centerChan = ${this.sampleChannel("centerUv")};
+float centerMask = ${thresholdMaskAtCenter};
+float classValue = ${this.threshold.sample("centerChan", "float")};
+float visibleCenter = step(0.05, centerMask);
+
+if (visibleCenter <= 0.0) {
+    return vec4(0.0);
+}
+
+int classIndex = int(floor(classValue + 0.5));
+vec4 icon = iconmap_sampleIcon_${uid}(classIndex, grid.xy);
+float visible = ${this.clip_icons.sample()} ? step(0.05, ${thresholdMaskAtPoint}) : 1.0;
+
+return vec4(icon.rgb, icon.a * visible * grid.z);
+`;
+        }
+    }
+
+    $.FlexRenderer.ShaderMediator.registerLayer(IconMapShader);
+})(OpenSeadragon);
+
+(function($) {
 /**
  * Sobel shader
  */
@@ -10134,59 +14227,8 @@ return blendAlpha(chan, tex, min(chan.rgb, tex.rgb));
 })(OpenSeadragon);
 
 (function($) {
-/**
- * Identity shader
- *
- * data reference must contain one index to the data to render using identity
- */
+
 $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
-
-    construct(options, dataReferences) {
-        //todo supply options clone? options changes are propagated and then break things
-
-        const ShaderClass = $.FlexRenderer.ShaderMediator.getClass(options.seriesRenderer);
-        if (!ShaderClass) {
-            //todo better way of throwing errors to show users
-            throw "";
-        }
-        this._renderer = new ShaderClass(`series_${this.uid}`, {
-            layer: this.__visualizationLayer,
-            webgl: this.webglContext,
-            invalidate: this.invalidate,
-            rebuild: this._rebuild,
-            refetch: this._refetch
-        });
-        this.series = options.series;
-        if (!this.series) {
-            //todo err
-            this.series = [];
-        }
-
-        //parse and correct timeline data
-        let timeline = options.timeline;
-        if (typeof timeline !== "object") {
-            timeline = {type: timeline};
-        }
-        if (!timeline.step) {
-            timeline.step = 1;
-        }
-        const seriesLength = this.series.length;
-        if (timeline.min % timeline.step !== 0) {
-            timeline.min = 0;
-        }
-        if ((timeline.default - timeline.min) % timeline.step !== 0) {
-            timeline.default = timeline.min;
-        }
-        //min is also used as a valid selection: +1
-        const requestedLength = (timeline.max - timeline.min) / timeline.step + 1;
-        if (requestedLength !== seriesLength) {
-            timeline.max = (seriesLength - 1) * timeline.step + timeline.min;
-        }
-
-        this._dataReferences = dataReferences;
-        super.construct(options, dataReferences);
-        this._renderer.construct(options, dataReferences);
-    }
 
     static type() {
         return "time-series";
@@ -10197,18 +14239,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 
     static description() {
-        return "internally use different shader to render one of chosen elements";
+        return "Wrap one shader and switch its active source through a timeline control.";
     }
 
-        static docs() {
+    static docs() {
         return {
             summary: "Wrapper shader that delegates rendering to another shader over a selectable series.",
-            description: "Builds an internal renderer selected by seriesRenderer and switches the active data reference through the timeline control. Timeline changes trigger refetch with the selected series item.",
+            description: "The wrapper hosts one delegated shader and rewires its tiledImages source list to the currently selected series item. Series entries can be direct world indexes or lazy descriptors resolved externally through drawer.options.shaderSourceResolver.",
             kind: "shader",
             inputs: [{
                 index: 0,
                 acceptedChannelCounts: null,
-                description: "render selected data source by underlying shader"
+                description: "Logical source slot used by the delegated shader. The active tiled image is picked from the series parameter."
             }],
             customParams: [
                 {
@@ -10218,7 +14260,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 },
                 {
                     name: "series",
-                    description: "Array of data indexes addressable through the timeline control."
+                    description: "Array of source descriptors addressable through the timeline control. Items can be direct world indexes or opaque entries resolved lazily by drawer.options.shaderSourceResolver."
                 }
             ],
             controls: [
@@ -10231,7 +14273,8 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             ],
             notes: [
                 "Opacity is disabled on this wrapper shader.",
-                "The delegated renderer contributes fragment shader definition, execution, GL loading, drawing, and HTML controls."
+                "Series entries can be direct world indexes or lazy descriptors resolved externally.",
+                "Selection changes request source rebinding through the drawer so delegated shaders can react to source metadata changes."
             ]
         };
     }
@@ -10240,11 +14283,12 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return {
             seriesRenderer: {
                 usage: "Specify shader type to use in this series. Attach the shader properties as you would normally do with your desired shader.",
+                type: "string",
                 default: "identity"
             },
             series: {
-                //todo allow using the same data in different channels etc.. now the data must be distinct
-                usage: "Specify data indexes for the series (as if you've specified dataReferences). The dataReferences is expected to be array with single number, the starting data reference. For now, the data indexes must be unique.",
+                type: "json",
+                usage: "Specify source descriptors available through the timeline control. Entries may be direct world tiled-image indexes or arbitrary objects/IDs later resolved by drawer.options.shaderSourceResolver."
             }
         };
     }
@@ -10252,24 +14296,217 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     static get defaultControls() {
         return {
             timeline: {
-                default: {title: "Timeline: "},
-                accepts: (type, instance) => type === "float",
-                required: {type: "range_input"}
+                default: { title: "Timeline: " },
+                accepts: type => type === "float",
+                required: { type: "range_input" }
             },
             opacity: false
         };
     }
 
+    static normalizeConfig(config, context = {}) {
+        if (!config || typeof config !== "object") {
+            return config;
+        }
+
+        const series = Array.isArray(config.series) ? config.series : [];
+        const params = config.params || (config.params = {});
+        const defs = this.defaultControls || {};
+        const required = defs.timeline && defs.timeline.required ? $.extend(true, {}, defs.timeline.required) : {};
+        const fallback = defs.timeline && defs.timeline.default ? $.extend(true, {}, defs.timeline.default) : {};
+        const timeline = $.extend(true, {}, fallback, required, params.timeline || {});
+
+        timeline.type = "range_input";
+
+        const step = Number(timeline.step);
+        timeline.step = Number.isFinite(step) && step > 0 ? step : 1;
+
+        const min = Number(timeline.min);
+        timeline.min = Number.isFinite(min) ? min : 0;
+
+        if ((timeline.min % timeline.step) !== 0) {
+            timeline.min = 0;
+        }
+
+        const maxIndex = Math.max(0, series.length - 1);
+        timeline.max = timeline.min + maxIndex * timeline.step;
+
+        const defaultValue = Number(timeline.default);
+        if (!Number.isFinite(defaultValue) || ((defaultValue - timeline.min) % timeline.step) !== 0) {
+            timeline.default = timeline.min;
+        } else {
+            timeline.default = Math.max(timeline.min, Math.min(timeline.max, defaultValue));
+        }
+
+        params.timeline = timeline;
+
+        if (!Array.isArray(config.series)) {
+            return config;
+        }
+
+        const expand = typeof context.expandDataSourceRef === "function"
+            ? context.expandDataSourceRef
+            : null;
+
+        if (!expand) {
+            return config;
+        }
+
+        config.series = config.series.map((entry, index) => expand(entry, {
+            shaderType: this.type(),
+            param: "series",
+            entryIndex: index,
+            config,
+            context
+        }));
+
+        return config;
+    }
 
     static sources() {
         return [{
-            acceptsChannelCount: (x) => true,
-            description: "render selected data source by underlying shader"
+            acceptsChannelCount: () => true,
+            description: "Render the currently selected series item by the delegated shader."
         }];
     }
 
-    getFragmentShaderDefinition() {
+    getControlDefinitions() {
+        const defs = $.extend(true, {}, this.constructor.defaultControls);
+        const timeline = defs.timeline || (defs.timeline = {});
+        const config = this.getConfig() || {};
+        const params = config.params || {};
+        timeline.default = $.extend(true, {}, timeline.default || {}, params.timeline || {});
+        timeline.required = $.extend(true, {}, timeline.required || {}, { type: "range_input" });
+        return defs;
+    }
 
+    _getActiveSeriesOffset() {
+        const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
+        const timelineConfig = (config.params && config.params.timeline) || {};
+
+        const min = Number(timelineConfig.min) || 0;
+        const step = Number(timelineConfig.step) || 1;
+
+        let encoded;
+        if (this.timeline && this.timeline.encoded !== undefined) {
+            encoded = Number.parseInt(this.timeline.encoded, 10);
+        } else {
+            encoded = Number.parseInt(timelineConfig.default, 10);
+        }
+
+        if (!Number.isFinite(encoded)) {
+            encoded = min;
+        }
+
+        return Math.max(0, Math.round((encoded - min) / step));
+    }
+
+    _getActiveSeriesEntry(series) {
+        if (!series.length) {
+            return null;
+        }
+        const index = Math.max(0, Math.min(series.length - 1, this._getActiveSeriesOffset()));
+        return series[index];
+    }
+
+    _getDelegateShaderConfig(activeEntry) {
+        const config = this.getConfig();
+        const activeWorldIndex = Number.isInteger(activeEntry)
+            ? activeEntry
+            : (Number.isInteger(activeEntry && activeEntry.worldIndex) ? activeEntry.worldIndex : null);
+
+        return {
+            id: `${this.id}_delegate`,
+            name: config.name || "Time series delegate",
+            type: config.seriesRenderer || "identity",
+            visible: 1,
+            fixed: false,
+            tiledImages: activeWorldIndex === null ? [] : [activeWorldIndex],
+            params: config.params || {},
+            cache: config.cache || {}
+        };
+    }
+
+    construct() {
+        const config = this.getConfig();
+        const series = (config && config.series) || [];
+        const timeline = (config.params && config.params.timeline) || {};
+        const min = Number(timeline.min) || 0;
+        const step = Number(timeline.step) || 1;
+        const defaultValue = Number(timeline.default);
+        const initialOffset = Number.isFinite(defaultValue) ? Math.max(0, Math.round((defaultValue - min) / step)) : 0;
+        const activeEntry = series.length ? series[Math.max(0, Math.min(series.length - 1, initialOffset))] : null;
+
+        super.construct();
+
+        timeline.default = this.timeline.encoded || this.timeline.raw || config.params.timeline.default;
+
+        const delegateConfig = this._getDelegateShaderConfig(activeEntry);
+        const DelegateShader = $.FlexRenderer.ShaderMediator.getClass(delegateConfig.type);
+        if (!DelegateShader) {
+            throw new Error(`time-series: unknown child shader type '${delegateConfig.type}'.`);
+        }
+        if (delegateConfig.type === this.constructor.type()) {
+            throw new Error("time-series cannot recursively render itself.");
+        }
+
+        this._renderer = new DelegateShader(`${this.id}_delegate`, {
+            shaderConfig: delegateConfig,
+            webglContext: this.webglContext,
+            params: delegateConfig.params,
+            interactive: this._interactive,
+            invalidate: this.invalidate,
+            rebuild: this._rebuild,
+            refresh: this._refresh,
+            refetch: this._refetch
+        });
+        this._renderer.construct();
+        this._renderer.removeControl("opacity");
+
+        config.tiledImages = delegateConfig.tiledImages;
+
+        if (!delegateConfig.tiledImages || delegateConfig.tiledImages.length < 1) {
+            console.warn("time-series has no initial bound source", {
+                id: this.id,
+                config: this.getConfig(),
+                activeEntry,
+                delegateConfig
+            });
+        }
+    }
+
+    init() {
+        super.init();
+        this._renderer.init();
+
+        let lastOffset = this._getActiveSeriesOffset();
+        this.timeline.on("default", () => {
+            const nextOffset = this._getActiveSeriesOffset();
+
+            if (nextOffset !== lastOffset) {
+                lastOffset = nextOffset;
+
+                this.requestSourceBinding(0, this._getActiveSeriesEntry(this.getConfig().series), {
+                    reason: "time-series-source-change",
+                    refreshShader: false,
+                    rebuildProgram: false,
+                    rebuildDrawer: false,
+                    resetItems: false
+                });
+                return;
+            }
+            this.invalidate();
+        });
+    }
+
+    destroy() {
+        if (this._renderer) {
+            this._renderer.destroy();
+            this._renderer = null;
+        }
+    }
+
+    getFragmentShaderDefinition() {
         return `
 ${super.getFragmentShaderDefinition()}
 ${this._renderer.getFragmentShaderDefinition()}`;
@@ -10289,25 +14526,14 @@ ${this._renderer.getFragmentShaderDefinition()}`;
         this._renderer.glDrawing(program, gl);
     }
 
-    init() {
-        super.init();
-        this._renderer.init();
-
-        const _this = this;
-        this.timeline.on('default', (raw, encoded, ctx) => {
-            const value = (Number.parseInt(encoded, 10) - this.timeline.params.min) / _this.timeline.params.step;
-            _this._dataReferences[0] = _this.series[value];
-            _this._refetch();
-        });
-    }
-
-    htmlControls() {
+    htmlControls(wrapper = null, classes = "", css = "") {
         return `
-${super.htmlControls()}
+${super.htmlControls(wrapper, classes, css)}
 <h4>Rendering as ${this._renderer.constructor.name()}</h4>
-${this._renderer.htmlControls()}`;
+${this._renderer.htmlControls(wrapper, classes, css)}`;
     }
 });
+
 })(OpenSeadragon);
 
 (function($) {
@@ -10403,6 +14629,275 @@ ${this._renderer.htmlControls()}`;
 `;
         }
     });
+
+})(OpenSeadragon);
+
+(function($) {
+
+    $.FlexRenderer.ShaderMediator.registerLayer(
+        class extends $.FlexRenderer.ShaderLayer {
+            static type() {
+                return "channel-series";
+            }
+
+            static name() {
+                return "Channel Series";
+            }
+
+            static description() {
+                return "Wrap one shader and move its source channel base through a runtime control.";
+            }
+
+            static docs() {
+                return {
+                    summary: "Wrapper shader that hosts one delegated shader and drives its channel base with a runtime control.",
+                    description: "Uses source metadata from ShaderLayer.getSourceInfo(sourceIndex) to size a channel-offset control. The delegated shader is instantiated once, and its use_channel_baseN value for the selected source is overridden by a GLSL expression backed by the wrapper control, so offset changes do not require program rebuilds.",
+                    kind: "shader",
+                    inputs: [{
+                        index: 0,
+                        acceptedChannelCounts: null,
+                        description: "Source whose logical channels are browsed through the delegated shader."
+                    }],
+                    customParams: [
+                        {
+                            name: "channelRenderer",
+                            default: "single_channel",
+                            description: "Shader type to instantiate internally."
+                        },
+                        {
+                            name: "channelRendererConfig",
+                            description: "Optional ShaderConfig fragment merged into the delegated child shader."
+                        },
+                        {
+                            name: "sourceIndex",
+                            default: 0,
+                            description: "Which source slot should receive the runtime channel-base override."
+                        }
+                    ],
+                    controls: [
+                        {
+                            name: "channel_offset",
+                            ui: "range_input",
+                            valueType: "float",
+                            description: "Logical channel base offset fed into the delegated shader at draw time."
+                        }
+                    ],
+                    notes: [
+                        "Only the metadata-ready refresh rebuilds the wrapper so the control range can be updated.",
+                        "Moving channel_offset afterwards only updates uniforms and does not rebuild the program."
+                    ]
+                };
+            }
+
+            static sources() {
+                return [{
+                    acceptsChannelCount: () => true,
+                    description: "Source whose logical channels are browsed through the delegated shader."
+                }];
+            }
+
+            static get customParams() {
+                return {
+                    channelRenderer: {
+                        usage: "Shader type used internally for rendering the currently selected logical channel.",
+                        type: "string",
+                        default: "single_channel"
+                    },
+                    channelRendererConfig: {
+                        type: "json",
+                        usage: "Optional ShaderConfig fragment merged into the delegated child shader. Put delegated shader params here."
+                    },
+                    sourceIndex: {
+                        usage: "Source slot whose use_channel_baseN should be overridden by the runtime channel offset control.",
+                        type: "number",
+                        default: 0
+                    }
+                };
+            }
+
+            static get defaultControls() {
+                return {
+                    channel_offset: { // eslint-disable-line camelcase
+                        default: {
+                            type: "range_input",
+                            title: "Channel: ",
+                            default: 0,
+                            min: 0,
+                            max: 0,
+                            step: 1
+                        },
+                        accepts: type => type === "float"
+                    }
+                };
+            }
+
+            _readIntConfig(name, fallback, minimum = null) {
+                const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
+                const raw = config[name];
+                const parsed = Number.parseInt(raw, 10);
+                let value = Number.isFinite(parsed) ? parsed : fallback;
+                if (minimum != null && value < minimum) { // eslint-disable-line eqeqeq
+                    value = minimum;
+                }
+                return value;
+            }
+
+            _getDelegateSettings() {
+                const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
+                const delegateConfig = $.extend(true, {}, config.channelRendererConfig || {});
+                const delegateType = delegateConfig.type || config.channelRenderer || "single_channel";
+
+                if (delegateType === this.constructor.type()) {
+                    throw new Error("channel-series cannot recursively render itself.");
+                }
+                if (!$.FlexRenderer.ShaderMediator.getClass(delegateType)) {
+                    throw new Error(`channel-series: unknown child shader type '${delegateType}'.`);
+                }
+
+                return {
+                    delegateType,
+                    delegateConfig,
+                    sourceIndex: this._readIntConfig("sourceIndex", 0, 0)
+                };
+            }
+
+            _getDelegatedChannelPattern(settings = this._getDelegateSettings()) {
+                const params = settings.delegateConfig.params || {};
+                const controlName = `use_channel${settings.sourceIndex}`;
+                const predefined = $.FlexRenderer.ShaderMediator.getClass(settings.delegateType).defaultControls[controlName];
+
+                let pattern = params[controlName];
+                if (pattern == null && predefined) { // eslint-disable-line eqeqeq
+                    pattern = predefined.required != null ? predefined.required : predefined.default; // eslint-disable-line eqeqeq
+                }
+                if (typeof pattern !== "string" || !pattern) {
+                    return "r";
+                }
+
+                const inlineBase = pattern.match(/^(\d+):(.*)$/);
+                if (inlineBase) {
+                    pattern = inlineBase[2];
+                }
+                return pattern || "r";
+            }
+
+            _getDelegatedChannelWidth(settings = this._getDelegateSettings()) {
+                const pattern = this._getDelegatedChannelPattern(settings);
+                return /^[rgba]{1,4}$/.test(pattern) ? pattern.length : 1;
+            }
+
+            _getMaxChannelOffset(settings = this._getDelegateSettings()) {
+                const sourceInfo = this.getSourceInfo(settings.sourceIndex);
+                const channelCount = Number.parseInt(sourceInfo.channelCount, 10);
+                if (!Number.isFinite(channelCount) || channelCount < 1) {
+                    return 0;
+                }
+                return Math.max(0, channelCount - this._getDelegatedChannelWidth(settings));
+            }
+
+            getControlDefinitions() {
+                const defs = $.extend(true, {}, this.constructor.defaultControls);
+                defs.channel_offset.default.max = this._getMaxChannelOffset();
+                return defs;
+            }
+
+            _buildDelegateShaderConfig(settings) {
+                const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
+                return $.extend(true, {
+                    id: `${this.id}_delegate`,
+                    name: config.name || settings.delegateType,
+                    type: settings.delegateType,
+                    visible: 1,
+                    fixed: false,
+                    tiledImages: (config.tiledImages || []).slice(),
+                    params: {},
+                    cache: {}
+                }, settings.delegateConfig, {
+                    id: `${this.id}_delegate`,
+                    type: settings.delegateType,
+                    tiledImages: Array.isArray(settings.delegateConfig.tiledImages) ?
+                        settings.delegateConfig.tiledImages.slice() :
+                        ((config.tiledImages || []).slice())
+                });
+            }
+
+            _buildRuntimeBaseExpression(settings) {
+                const uniformExpr = this.channel_offset.sample();
+                const maxOffset = this._getMaxChannelOffset(settings);
+                const maxExpr = $.FlexRenderer.ShaderLayer.toShaderFloatString(maxOffset, 0, 1);
+                const encodedExpr = `clamp(${uniformExpr}, 0.0, 1.0) * ${maxExpr}`;
+                return `int(round(clamp(${encodedExpr}, 0.0, ${maxExpr})))`;
+            }
+
+            construct() {
+                super.construct();
+
+                const settings = this._getDelegateSettings();
+                const delegateConfig = this._buildDelegateShaderConfig(settings);
+                const DelegateShader = $.FlexRenderer.ShaderMediator.getClass(settings.delegateType);
+
+                this._delegateShader = new DelegateShader(`${this.id}_delegate`, {
+                    shaderConfig: delegateConfig,
+                    webglContext: this.webglContext,
+                    params: delegateConfig.params,
+                    interactive: this._interactive,
+                    invalidate: this.invalidate,
+                    rebuild: this._rebuild,
+                    refresh: this._refresh,
+                    refetch: this._refetch
+                });
+                this._delegateShader.construct();
+
+                const originalGetDefaultChannelBase = this._delegateShader.getDefaultChannelBase.bind(this._delegateShader);
+                this._delegateShader.getDefaultChannelBase = sourceIndex => {
+                    if (sourceIndex !== settings.sourceIndex) {
+                        return originalGetDefaultChannelBase(sourceIndex);
+                    }
+                    return this._buildRuntimeBaseExpression(settings);
+                };
+
+                this._delegateShader.removeControl("opacity");
+            }
+
+            init() {
+                super.init();
+                this._delegateShader.init();
+            }
+
+            destroy() {
+                if (this._delegateShader) {
+                    this._delegateShader.destroy();
+                    this._delegateShader = null;
+                }
+            }
+
+            glLoaded(program, gl) {
+                super.glLoaded(program, gl);
+                this._delegateShader.glLoaded(program, gl);
+            }
+
+            glDrawing(program, gl) {
+                super.glDrawing(program, gl);
+                this._delegateShader.glDrawing(program, gl);
+            }
+
+            getFragmentShaderDefinition() {
+                return `
+${super.getFragmentShaderDefinition()}
+${this._delegateShader.getFragmentShaderDefinition()}`;
+            }
+
+            getFragmentShaderExecution() {
+                return this._delegateShader.getFragmentShaderExecution();
+            }
+
+            htmlControls(wrapper = null, classes = "", css = "") {
+                return `
+${super.htmlControls(wrapper, classes, css)}
+${this._delegateShader.htmlControls(wrapper, classes, css)}`;
+            }
+        }
+    );
 
 })(OpenSeadragon);
 
@@ -11082,13 +15577,16 @@ function makeWorker() {
                         width = 256,
                         height = 256,
                         backgroundColor = "#00000000",
-                        controlMountResolver
+                        controlMountResolver,
+                        onVisualizationChanged
                     }) {
             this.uniqueId = $.FlexRenderer.sanitizeKey(uniqueId);
             this.width = width;
             this.height = height;
             this.controlMountResolver = controlMountResolver;
+            this.onVisualizationChanged = onVisualizationChanged;
             this._currentShaderId = null;
+            this._suspendVisualizationSync = false;
 
             this.renderer = new $.FlexRenderer({
                 uniqueId: this.uniqueId,
@@ -11118,6 +15616,9 @@ function makeWorker() {
                     const controls = document.createElement("div");
                     controls.id = controlsId;
                     controls.className = "flex flex-col gap-2";
+                    controls.innerHTML = shaderLayer.htmlControls(
+                        html => `<div class="flex flex-col gap-2">${html}</div>`
+                    );
 
                     body.appendChild(title);
                     body.appendChild(controls);
@@ -11140,6 +15641,15 @@ function makeWorker() {
             this.renderer.setDataBlendingEnabled(true);
             this.renderer.setDimensions(0, 0, width, height, 1, 1);
             this.renderer.canvas.classList.add("rounded-box", "border", "border-base-300", "bg-base-100");
+            this.renderer.addHandler("visualization-change", () => {
+                if (this._suspendVisualizationSync || typeof this.onVisualizationChanged !== "function") {
+                    return;
+                }
+                const shader = this.getShader();
+                if (shader) {
+                    this.onVisualizationChanged(deepClone(shader.getConfig()), this);
+                }
+            });
         }
 
         setSize(width, height) {
@@ -11150,16 +15660,21 @@ function makeWorker() {
 
         setShader(shaderConfig) {
             const config = deepClone(shaderConfig);
-            const shaderId = $.FlexRenderer.sanitizeKey(config.id || "preview_layer");
+            const shaderId = $.FlexRenderer.sanitizeKey(config.id || "prl");
             this._currentShaderId = shaderId;
+            this._suspendVisualizationSync = true;
 
-            this.renderer.deleteShaders();
-            this.renderer.createShaderLayer(shaderId, config, true);
-            this.renderer.setShaderLayerOrder([shaderId]);
+            try {
+                this.renderer.deleteShaders();
+                this.renderer.createShaderLayer(shaderId, config, true);
+                this.renderer.setShaderLayerOrder([shaderId]);
 
-            // Rebuild second-pass to regenerate controls and shader JS/GL state.
-            this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
-            this.renderer.useProgram(this.renderer.getProgram(this.renderer.webglContext.secondPassProgramKey), "second-pass");
+                // Rebuild second-pass to regenerate controls and shader JS/GL state.
+                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                this.renderer.useProgram(this.renderer.getProgram(this.renderer.webglContext.secondPassProgramKey), "second-pass");
+            } finally {
+                this._suspendVisualizationSync = false;
+            }
         }
 
         getShader() {
@@ -11202,7 +15717,7 @@ function makeWorker() {
 
         setup: {
             shader: {
-                id: "preview_layer",
+                id: "prl",
                 name: "Shader controls and configuration",
                 type: undefined,
                 visible: 1,
@@ -11299,10 +15814,9 @@ function makeWorker() {
                         acceptedChannelCounts: this._probeAcceptedChannelCounts(src)
                     })),
                     controls,
-                    customParams: Object.entries(customParams).map(([name, meta]) => ({
-                        name,
-                        usage: (meta && meta.usage) || ""
-                    })),
+                    customParams: Object.entries(customParams).map(([name, meta]) =>
+                        this._compileCustomParamDescriptor(name, meta)
+                    ),
                     configNotes,
                     classDocs
                 };
@@ -11516,6 +16030,11 @@ function makeWorker() {
             this._onControlSelectFinish = onFinish;
             this._rootNode = resolveNode(nodeId);
 
+            if (this._previewSession && this.setup.shader.type && this.setup.shader.type !== shaderId) {
+                this._previewSession.destroy();
+                this._previewSession = null;
+            }
+
             const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderId);
             if (!Shader) {
                 throw new Error(`Invalid shader: ${shaderId}. Not present.`);
@@ -11523,7 +16042,7 @@ function makeWorker() {
 
             const srcDecl = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
             this.setup.shader = {
-                id: "preview_layer",
+                id: "prl",
                 name: `Configuration: ${shaderId}`,
                 type: shaderId,
                 visible: 1,
@@ -11560,6 +16079,10 @@ function makeWorker() {
                 this.setup.shader.params[controlId] = {};
             }
             this.setup.shader.params[controlId].type = type;
+            if (this._previewSession) {
+                this._previewSession.destroy();
+                this._previewSession = null;
+            }
             this.refresh();
         },
 
@@ -11603,9 +16126,9 @@ function makeWorker() {
 
         getAvailableControlsForShader(shader) {
             const uiControls = this._buildControls();
-            const controls = { ...(shader.defaultControls || {}) };
+            const controls = this._resolveShaderControlDefinitions(shader);
 
-            if (controls.opacity === undefined || (typeof controls.opacity === "object" && !controls.opacity.accepts("float"))) {
+            if (controls.opacity === undefined || (typeof controls.opacity === "object" && typeof controls.opacity.accepts === "function" && !controls.opacity.accepts("float"))) {
                 controls.opacity = {
                     default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity"},
                     accepts: (type) => type === "float"
@@ -11625,6 +16148,10 @@ function makeWorker() {
                 if (controls[control].required && controls[control].required.type) {
                     supported.push(controls[control].required.type);
                 } else {
+                    if (typeof controls[control].accepts !== "function") {
+                        result[control] = supported;
+                        continue;
+                    }
                     for (let glType in uiControls) {
                         for (let existing of uiControls[glType]) {
                             if (!controls[control].accepts(glType, existing)) {
@@ -11641,7 +16168,7 @@ function makeWorker() {
 
         _compileControlDescriptors(Shader) {
             const supports = this.getAvailableControlsForShader(Shader);
-            const defs = Shader.defaultControls || {};
+            const defs = this._resolveShaderControlDefinitions(Shader);
 
             return Object.keys(supports).map(name => ({
                 name,
@@ -11649,6 +16176,32 @@ function makeWorker() {
                 default: (defs[name] && defs[name].default) || null,
                 required: (defs[name] && defs[name].required) || null
             }));
+        },
+
+        _resolveShaderControlDefinitions(Shader) {
+            const probe = this._createShaderDefinitionProbe(Shader);
+            const baseControls = typeof probe.getControlDefinitions === "function" ?
+                probe.getControlDefinitions() :
+                $.extend(true, {}, Shader.defaultControls || {});
+
+            if (typeof probe._expandControlDefinitions === "function") {
+                return probe._expandControlDefinitions(baseControls);
+            }
+            return baseControls;
+        },
+
+        _createShaderDefinitionProbe(Shader) {
+            const probe = Object.create(Shader.prototype);
+            probe.constructor = Shader;
+            probe._customControls = {};
+            probe._controls = {};
+            probe.loadProperty = (_name, defaultValue) => defaultValue;
+            probe.storeProperty = () => {};
+            probe.invalidate = () => {};
+            probe._rebuild = () => {};
+            probe._refresh = () => {};
+            probe._refetch = () => {};
+            return probe;
         },
 
         _compileAvailableControls() {
@@ -11818,6 +16371,7 @@ function makeWorker() {
             const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
                 key: name,
                 kind: "custom-param",
+                type: this._resolveCustomParamType(meta),
                 usage: (meta && meta.usage) || "",
                 default: meta && meta.default !== undefined ? deepClone(meta.default) : null,
                 required: meta && meta.required !== undefined ? deepClone(meta.required) : null
@@ -11991,6 +16545,14 @@ function makeWorker() {
                 schema.usage = docParam.usage;
             }
 
+            if (docParam && Array.isArray(docParam.allowedValues)) {
+                schema.allowedValues = deepClone(docParam.allowedValues);
+            }
+
+            if (docParam && docParam.examples !== undefined) {
+                schema.examples = deepClone(Array.isArray(docParam.examples) ? docParam.examples : [docParam.examples]);
+            }
+
             return schema;
         },
 
@@ -12102,7 +16664,12 @@ function makeWorker() {
                 if (shader.customParams.length) {
                     out.push(`Custom parameters:`);
                     for (const param of shader.customParams) {
-                        out.push(`- ${param.name}: ${param.usage}`);
+                        const detail = [
+                            param.type ? `type = ${param.type}` : "",
+                            param.default !== undefined ? `default = ${JSON.stringify(param.default)}` : "",
+                            param.required !== undefined ? `required = ${JSON.stringify(param.required)}` : ""
+                        ].filter(Boolean).join(" | ");
+                        out.push(`- ${param.name}: ${param.usage}${detail ? ` | ${detail}` : ""}`);
                     }
                 }
 
@@ -12121,6 +16688,46 @@ function makeWorker() {
             }
 
             return out.join("\n");
+        },
+
+        _inferCustomParamTypeFromValue(value) {
+            if (Array.isArray(value) || value === null) {
+                return "json";
+            }
+            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+                return typeof value;
+            }
+            if (typeof value === "object") {
+                return "json";
+            }
+            return null;
+        },
+
+        _resolveCustomParamType(meta = {}) {
+            if (meta && typeof meta.type === "string" && meta.type.trim()) {
+                return meta.type.trim();
+            }
+            if (meta && meta.required && typeof meta.required === "object" &&
+                typeof meta.required.type === "string" && meta.required.type.trim()) {
+                return meta.required.type.trim();
+            }
+            if (meta && meta.default !== undefined) {
+                return this._inferCustomParamTypeFromValue(meta.default) || "json";
+            }
+            if (meta && meta.required !== undefined) {
+                return this._inferCustomParamTypeFromValue(meta.required) || "json";
+            }
+            return "json";
+        },
+
+        _compileCustomParamDescriptor(name, meta = {}) {
+            return {
+                name,
+                type: this._resolveCustomParamType(meta),
+                usage: (meta && meta.usage) || "",
+                default: meta && meta.default !== undefined ? deepClone(meta.default) : undefined,
+                required: meta && meta.required !== undefined ? deepClone(meta.required) : undefined
+            };
         },
 
         _normalizeClassDocs(rawDocs, fallback = {}) {
@@ -12303,6 +16910,26 @@ function makeWorker() {
         </div>
     </div>` : ""}
 
+    ${shader.customParams && shader.customParams.length ? `
+    <div class="mt-4">
+        <div class="mb-2 font-semibold">Custom Parameters</div>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead><tr><th>Name</th><th>Type</th><th>Usage</th><th>Default</th><th>Required</th></tr></thead>
+                <tbody>
+                    ${shader.customParams.map(param => `
+                    <tr>
+                        <td><code>${escapeHtml(param.name)}</code></td>
+                        <td><code>${escapeHtml(param.type || "json")}</code></td>
+                        <td>${escapeHtml(param.usage || "")}</td>
+                        <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(param.default, null, 2))}</pre></td>
+                        <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(param.required, null, 2))}</pre></td>
+                    </tr>`).join("")}
+                </tbody>
+            </table>
+        </div>
+    </div>` : ""}
+
     ${shader.configNotes && shader.configNotes.length ? `
     <div class="mt-4">
         <div class="mb-2 font-semibold">Configuration notes</div>
@@ -12375,41 +17002,73 @@ function makeWorker() {
                 return;
             }
 
-            await this._ensurePreviewSession();
-            const previewSize = getRenderableDimensions(this._renderData);
-            this._previewSession.setSize(previewSize.width, previewSize.height);
-            this._previewSession.setShader(this.setup.shader);
-
             const previewHost = document.getElementById(`${this._uniqueId}_preview_host`);
-            if (previewHost && this._previewSession.renderer.canvas.parentNode !== previewHost) {
-                previewHost.innerHTML = "";
-                previewHost.appendChild(this._previewSession.renderer.canvas);
-            }
+            await this._ensurePreviewSession(previewHost);
+            const previewSize = getRenderableDimensions(this._renderData);
+            await this._previewSession.setSize(previewSize.width, previewSize.height);
+            await this._previewSession.setShader(this.setup.shader);
 
             this._renderMetaEditors(Shader);
-
-            if (this._previewAdapter && typeof this._previewAdapter.render === "function") {
-                await this._previewAdapter.render({
-                    configurator: this,
-                    session: this._previewSession,
-                    shaderConfig: this.getCurrentShaderConfig(),
-                    data: this._renderData
-                });
-            }
+            await this._renderInteractivePreview(previewHost, previewSize);
         },
 
-        async _ensurePreviewSession() {
+        async _ensurePreviewSession(previewHost = undefined) {
             if (this._previewSession) {
                 return;
             }
 
             const previewSize = getRenderableDimensions(this._renderData);
-            this._previewSession = new PreviewSession({
+            const sessionOptions = {
                 uniqueId: `${this._uniqueId}_preview`,
                 width: previewSize.width,
                 height: previewSize.height,
-                controlMountResolver: () => document.getElementById(`${this._uniqueId}_native_controls`)
-            });
+                controlMountResolver: () => document.getElementById(`${this._uniqueId}_native_controls`),
+                previewHost,
+                data: this._renderData,
+                onVisualizationChanged: (shaderConfig, session) => {
+                    this.setup.shader = deepClone(shaderConfig);
+                    if (this._previewAdapter && typeof this._previewAdapter.onSessionVisualizationChanged === "function") {
+                        this._previewAdapter.onSessionVisualizationChanged({
+                            configurator: this,
+                            session,
+                            shaderConfig: this.getCurrentShaderConfig(),
+                            data: this._renderData,
+                            previewHost: document.getElementById(`${this._uniqueId}_preview_host`),
+                            previewSize: getRenderableDimensions(this._renderData)
+                        });
+                    }
+                }
+            };
+
+            if (this._previewAdapter && typeof this._previewAdapter.createSession === "function") {
+                this._previewSession = await this._previewAdapter.createSession(sessionOptions);
+            } else {
+                this._previewSession = new PreviewSession(sessionOptions);
+            }
+        },
+
+        async _renderInteractivePreview(previewHost, previewSize) {
+            if (this._previewAdapter && typeof this._previewAdapter.render === "function") {
+                const renderedPreview = await this._previewAdapter.render({
+                    configurator: this,
+                    session: this._previewSession,
+                    shaderConfig: this.getCurrentShaderConfig(),
+                    data: this._renderData,
+                    previewHost,
+                    previewSize
+                });
+
+                if (previewHost && isNode(renderedPreview) && renderedPreview.parentNode !== previewHost) {
+                    previewHost.innerHTML = "";
+                    previewHost.appendChild(renderedPreview);
+                }
+            } else if (previewHost) {
+                if (this._previewSession.renderer.canvas.parentNode !== previewHost) {
+                    previewHost.innerHTML = "";
+                    previewHost.appendChild(this._previewSession.renderer.canvas);
+                }
+                this._previewSession.setSize(previewSize.width, previewSize.height);
+            }
         },
 
         _resolvePreviewSrc(fileOrSrc) {
@@ -12534,6 +17193,7 @@ function makeWorker() {
 
             const supports = this.getAvailableControlsForShader(Shader);
             const defs = Shader.defaultControls || {};
+            const customParams = Shader.customParams || {};
 
             for (const [controlName, supported] of Object.entries(supports)) {
                 const current = this.setup.shader.params[controlName] || {};
@@ -12632,6 +17292,88 @@ function makeWorker() {
 <div class="alert alert-warning text-sm">
     No simple editor registered for <code>${escapeHtml(activeType)}</code>.
     Use JSON editor.
+</div>`;
+                }
+
+                mount.appendChild(card);
+            }
+
+            for (const [paramName, meta] of Object.entries(customParams)) {
+                const currentValue = this.setup.shader.params[paramName] !== undefined ?
+                    this.setup.shader.params[paramName] :
+                    (meta && meta.default);
+                const inferredType = this._resolveCustomParamType({
+                    ...(meta || {}),
+                    default: currentValue
+                });
+
+                const card = document.createElement("div");
+                card.className = "card bg-base-200 border border-base-300 shadow-sm";
+                card.innerHTML = `
+<div class="card-body p-4 gap-3">
+    <div>
+        <div class="font-semibold">Parameter <code>${escapeHtml(paramName)}</code></div>
+        <div class="text-xs opacity-70">${escapeHtml((meta && meta.usage) || "")}</div>
+        <div class="text-xs opacity-60">Type: <code>${escapeHtml(inferredType)}</code></div>
+    </div>
+    <div data-role="simple-editor"></div>
+    <details class="collapse collapse-arrow bg-base-100 border border-base-300">
+        <summary class="collapse-title text-sm font-medium">JSON</summary>
+        <div class="collapse-content">
+            <textarea class="textarea textarea-bordered w-full h-40 font-mono text-xs" data-role="json-editor"></textarea>
+        </div>
+    </details>
+</div>`;
+
+                const simpleEditor = card.querySelector(`[data-role="simple-editor"]`);
+                const jsonEditor = card.querySelector(`[data-role="json-editor"]`);
+                jsonEditor.value = JSON.stringify(currentValue, null, 2);
+                jsonEditor.addEventListener("change", () => {
+                    try {
+                        this.setup.shader.params[paramName] = JSON.parse(jsonEditor.value);
+                        jsonEditor.classList.remove("textarea-error");
+                        this.refresh();
+                    } catch (_) {
+                        jsonEditor.classList.add("textarea-error");
+                    }
+                });
+
+                const setValue = (value) => {
+                    this.setup.shader.params[paramName] = value;
+                    this.refresh();
+                };
+
+                if (inferredType === "string") {
+                    simpleEditor.innerHTML = `
+<label class="form-control">
+    <div class="label"><span class="label-text">Value</span></div>
+    <input class="input input-bordered input-sm" type="text" value="${escapeHtml(currentValue === undefined ? "" : String(currentValue))}">
+</label>`;
+                    simpleEditor.querySelector("input").addEventListener("change", (e) => {
+                        setValue(e.target.value);
+                    });
+                } else if (inferredType === "number") {
+                    simpleEditor.innerHTML = `
+<label class="form-control">
+    <div class="label"><span class="label-text">Value</span></div>
+    <input class="input input-bordered input-sm" type="number" value="${escapeHtml(currentValue === undefined ? "" : String(currentValue))}">
+</label>`;
+                    simpleEditor.querySelector("input").addEventListener("change", (e) => {
+                        setValue(Number(e.target.value));
+                    });
+                } else if (inferredType === "boolean") {
+                    simpleEditor.innerHTML = `
+<label class="label cursor-pointer justify-start gap-3">
+    <input type="checkbox" class="toggle toggle-sm" ${currentValue ? "checked" : ""}>
+    <span class="label-text">Enabled</span>
+</label>`;
+                    simpleEditor.querySelector("input").addEventListener("change", (e) => {
+                        setValue(!!e.target.checked);
+                    });
+                } else {
+                    simpleEditor.innerHTML = `
+<div class="alert alert-warning text-sm">
+    No simple typed editor available. Use JSON editor.
 </div>`;
                 }
 
@@ -12789,13 +17531,51 @@ function makeWorker() {
         mount.appendChild(wrap);
     });
 
+    ShaderConfigurator.registerInteractiveRenderer("icon", ({ mount, controlConfig, update }) => {
+        const iconSets = $.FlexRenderer.UIControls.IconLibrary.getSetNames();
+        const wrap = document.createElement("div");
+        wrap.className = "grid grid-cols-2 gap-2";
+        wrap.innerHTML = `
+<label class="form-control col-span-2">
+    <div class="label"><span class="label-text">Default icon query</span></div>
+    <input class="input input-bordered input-sm" data-k="default" type="text" value="${escapeHtml(controlConfig.default || "")}" placeholder="fa-house, &#xf015;, ★">
+</label>
+<label class="form-control">
+    <div class="label"><span class="label-text">Icon set</span></div>
+    <select class="select select-bordered select-sm" data-k="iconSet">
+        ${iconSets.map(name => `<option value="${escapeHtml(name)}" ${name === (controlConfig.iconSet || "core") ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}
+    </select>
+</label>
+<label class="form-control">
+    <div class="label"><span class="label-text">Size</span></div>
+    <input class="input input-bordered input-sm" data-k="size" type="number" min="16" value="${escapeHtml(controlConfig.size || 128)}">
+</label>
+<label class="form-control">
+    <div class="label"><span class="label-text">Padding</span></div>
+    <input class="input input-bordered input-sm" data-k="padding" type="number" min="0" value="${escapeHtml(controlConfig.padding || 16)}">
+</label>
+<label class="form-control">
+    <div class="label"><span class="label-text">Color</span></div>
+    <input class="input input-bordered input-sm p-1" data-k="color" type="color" value="${escapeHtml(controlConfig.color || "#111111")}">
+</label>`;
+
+        wrap.querySelectorAll("input, select").forEach(input => {
+            input.addEventListener("change", () => {
+                const key = input.dataset.k;
+                const value = input.type === "number" ? Number(input.value) : input.value;
+                update({ [key]: value });
+            });
+        });
+        mount.appendChild(wrap);
+    });
+
     OpenSeadragon.FlexRenderer.ShaderConfigurator = ShaderConfigurator;
 
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-16
-//! Git commit: --13cbce3-dirty
+//! Built on 2026-04-23
+//! Git commit: --6fac1f2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -13082,8 +17862,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-16
-//! Git commit: --13cbce3-dirty
+//! Built on 2026-04-23
+//! Git commit: --6fac1f2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

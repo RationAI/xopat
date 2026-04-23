@@ -94,6 +94,17 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
         );
     }
 
+    protected get activeViewerIndex(): number {
+        const viewer = this.activeViewer;
+        const viewerIndex = VIEWER_MANAGER?.getViewerIndex?.(viewer.uniqueId, false);
+
+        if (!Number.isInteger(viewerIndex) || viewerIndex < 0) {
+            throw new Error("The active viewer is not registered in the viewer manager.");
+        }
+
+        return viewerIndex;
+    }
+
     /**
      * Returns true when this scripting context should automatically accept interactive consent prompts.
      * This is intended for trusted automation flows and mirrors the behavior of a CLI "-y" flag.

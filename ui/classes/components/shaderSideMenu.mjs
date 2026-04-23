@@ -133,10 +133,14 @@ export class ShaderSideMenu extends BaseComponent {
     }
 
     _buildHeaderRow() {
-        const shaderGoalList = this.visualizations.map((s) => option({ value: s.value }, s.label));
-        if (shaderGoalList.length === 0) {
-            shaderGoalList.push(option({ value: "", }, $.t('main.shaders.notAvailable')));
-        }
+        const noVisualizationLabel =
+            $.t("main.shaders.noVisualization")
+            || $.t("common.None")
+            || "No visualization";
+        const shaderGoalList = [
+            option({ value: "" }, noVisualizationLabel),
+            ...this.visualizations.map((s) => option({ value: s.value }, s.label))
+        ];
         // Shader select
         this.visualizationSelect = select(
             {
@@ -268,10 +272,17 @@ export class ShaderSideMenu extends BaseComponent {
         this.visualizations = (shaders || []).map((shader, index) => this._normalizeVisualizationEntry(shader, index));
         this.selectedVisualization = selectedValue !== undefined && selectedValue !== null
             ? String(selectedValue)
-            : (this.visualizations[0]?.value ?? "");
+            : "";
         const sel = this.visualizationSelect;
         if (sel) {
             sel.innerHTML = "";
+            const noVisualizationOption = document.createElement("option");
+            noVisualizationOption.value = "";
+            noVisualizationOption.textContent =
+                $.t("main.shaders.noVisualization")
+                || $.t("common.None")
+                || "No visualization";
+            sel.appendChild(noVisualizationOption);
             this.visualizations.forEach((s) => {
                 const opt = document.createElement("option");
                 opt.value = String(s.value);

@@ -159,6 +159,20 @@ The value itself is stored in the `params` object given to the constructor.
 #### `APPLICATION_CONTEXT::getData(key)`
 Return data exported with the viewer if available. Exporting the data is done through events.
 
+#### Viewer/session mutation entrypoints
+Modules that need to drive viewer state should use the public runtime entrypoints instead of mutating config/world state directly.
+
+- `APPLICATION_CONTEXT.openViewerWith(...)`
+  - main transaction entrypoint for opening or synchronizing viewer state
+- `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, selection, opts?)`
+  - viewer-targeted switch of background and/or visualization for one viewer
+- `APPLICATION_CONTEXT.replaceVisualizations(visualizations, newData?, activeVizIndex?)`
+  - session-level visualization-list replacement
+- `APPLICATION_CONTEXT.updateVisualization(...)`
+  - compatibility alias; new code should prefer `replaceVisualizations(...)`
+
+These methods are ambiently declared in `src/types/app.d.ts`, so workspace modules can use them without cross-importing from the core runtime.
+
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
@@ -206,6 +220,8 @@ the functionality appropriately. This includes:
 Also, **do not store reference** to any tiled images or sources you do not control.
 Instead, use ``VIEWER.scalebar.getReferencedTiledImage();`` to get to the _reference_ of a Tiled Image: an image wrt. which
 all measures should be done.
+
+This is especially important now that viewer opening supports surgical world updates: a `TiledImage` that happened to represent some data earlier may be reused, replaced, or removed as the pipeline synchronizes one viewer independently from others.
 
 # Gotchas
 Check plugin's README in case you did not. The available API is described there to greater detail.
@@ -288,3 +304,10 @@ this.integrateWithViewerSingletonModule('MyViewerSingleton', viewerRef, async (m
 const mod = viewerSingletonModule('MyViewerSingleton', viewerRef);
 ````
 
+The following global accessors are part of the supported ambient surface for modules:
+
+- `plugin(id)`
+- `singletonModule(id)`
+- `viewerSingletonModule(className, viewerRef)`
+- `registerViewerSingleton(SingletonClass, className?)`
+- `requireViewerSingletonPresence(SingletonClass)`
