@@ -1094,10 +1094,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
         if (reopenCounter >= 0) {
             /**
-            * Fired before visualization is initialized and loaded.
-            * @memberOf VIEWER
-            * @event before-canvas-reload
-            */
+             * Fired before visualization is initialized and loaded.
+             * @memberOf VIEWER
+             * @event before-canvas-reload
+             */
             VIEWER.raiseEvent('before-canvas-reload');
         }
 
