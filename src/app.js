@@ -1093,13 +1093,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         config.visualizations = visualizations;
 
         if (reopenCounter >= 0) {
-            /**
-             * Fired before visualization is initialized and loaded.
-             * @memberOf VIEWER
-             * @event before-canvas-reload
-             */
-            VIEWER.raiseEvent('before-canvas-reload');
+            APPLICATION_CONTEXT.disableVisualization();
         }
+        /**
+         * Fired before visualization is initialized and loaded.
+         * @memberOf VIEWER
+         * @event before-canvas-reload
+         */
+        VIEWER.raiseEvent('before-canvas-reload');
 
         const toOpen = [];
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
