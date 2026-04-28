@@ -205,6 +205,13 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     getShaderDocsText(): string;
 
     /**
+     * Returns the documentation entry for ONE shader type. Use this to drill into a single
+     * shader after picking it from `getAvailableShaderTypes()`. Avoids the truncation that
+     * can hit `getShaderDocsText()` / `getShaderDocsJson()` when the catalog is large.
+     */
+    getShaderDocs(type: string): VisualizationDocsShader | undefined;
+
+    /**
      * Returns the persisted visualization list for the current viewer session.
      */
     getVisualizations(): VisualizationItem[];

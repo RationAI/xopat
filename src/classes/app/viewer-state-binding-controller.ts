@@ -94,6 +94,11 @@ export class ViewerStateBindingController {
     }
 
     private finishSyntheticEventWithValidData(viewer: OpenSeadragon.Viewer, referenceImage: number) {
+        // Set active viewer as soon as possible
+        if (!window.VIEWER) {
+            VIEWER_MANAGER.setActive(0, "open-complete");
+        }
+
         const eventOpts: Record<string, any> = {};
 
         this.refreshViewerVisualizationBindings(viewer, referenceImage);

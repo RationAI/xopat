@@ -382,6 +382,15 @@ Host automation rules:
 ${methods}`;
     }).join('\n\n');
 
+    const hasVisualization = allowedScriptApi.namespaces.some((ns) => ns.namespace === 'visualization');
+    const visualizationGuidance = hasVisualization ? `
+
+Visualization workflow:
+- Pick a shader with the small-then-detail pattern. Call \`getAvailableShaderTypes()\` to get the list of valid \`type\` strings, then \`getShaderDocs(type)\` for the one you intend to use. Do NOT call \`getShaderDocsText()\` / \`getShaderDocsJson()\` for routine work; the catalog can be large enough to be truncated and lose the entry you actually need.
+- A layer's allowed top-level fields and its \`params\` keys are exactly what the shader's docs entry declares. Anything outside that set is rejected before the user is asked to review the proposal - the LLM gets the validation error, not the user.
+- For tweaks, prefer \`updateVisualizationAt(index, patch)\` over rebuilding the whole list. \`replaceVisualizations\` and \`addVisualization\` reload the renderer.
+- A mutation that fails validation throws with a message listing the offending keys and the valid ones; read it, fix the layer, retry. The user is not prompted unless the proposal is structurally valid.` : '';
+
     return `Viewer scripting is available.
 
 Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
@@ -396,7 +405,7 @@ Critical output rules:
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
 - Your only executable output format is exactly one fenced code block tagged xopat-script like so: \`\`\`xopat-script [executable here] \`\`\`.
 - Even if the scripting definition does not say it, you need to **await** all API method calls as they are being routed through asynchronous gate.
-- You MUST explicitly \`return\` the final value that should be fed back into the conversation. The runtime only captures the async function's return value.
+- You MUST explicitly \`return\` the final value that should be fed back into the conversation. The runtime only captures the async function's return value. But do not use anonymous wrapping - it will discard the return value.
 - A trailing expression such as \`result;\` or \`contexts;\` is not enough. Use \`return result;\`.
 - Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
 - For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
@@ -418,7 +427,7 @@ Recommended patterns:
 - To read metadata from the active viewer: \`const metadata = await viewer.getMetadata(); return metadata;\`
 - To select a context before viewer calls: \`await application.setActiveViewer(contextId); const metadata = await viewer.getMetadata(); return { contextId, metadata };\`
 - To capture a screenshot with metadata: \`const screenshot = await viewer.getViewportScreenshot(); const metadata = await viewer.getMetadata(); return ["Viewport screenshot captured.", screenshot, metadata];\`
-- To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
+- To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`${visualizationGuidance}
 
 If scripting is not needed, answer normally in plain user-facing language.
 

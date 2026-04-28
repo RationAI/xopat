@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-23
-//! Git commit: --6fac1f2-dirty
+//! Built on 2026-04-28
+//! Git commit: --79513a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -2486,6 +2486,88 @@
         }
 
         /**
+         * One-line guidance: when should a caller pick this shader?
+         *
+         * `description()` is technical (what the shader does); `intent()` is "when to use it".
+         * Read by hosts (e.g. xOpat scripting / LLM driven layer construction) when picking
+         * a shader for a given dataset. Keep it generic — no use-case-specific recipes.
+         *
+         * Override per shader; the default returns `undefined`, in which case hosts treat
+         * "no info" as a safe fallback.
+         *
+         * @returns {String|undefined}
+         */
+        static intent() {
+            return undefined;
+        }
+
+        /**
+         * Data-shape hints. Tells the host whether this shader is appropriate for the
+         * source the user has loaded. Hosts match the returned `expects` against source
+         * metadata (e.g. channel count) to filter candidate shaders.
+         *
+         * Shape:
+         * {
+         *   dataKind: "scalar" | "multi-channel" | "rgb" | "mask" | "any",
+         *   channels?: number | "any",   // expected source channel count
+         *   requiresThreshold?: boolean  // true when behavior depends on threshold breaks
+         * }
+         *
+         * Override per shader; the default returns `undefined`.
+         *
+         * @returns {{dataKind?: string, channels?: number|string, requiresThreshold?: boolean}|undefined}
+         */
+        static expects() {
+            return undefined;
+        }
+
+        /**
+         * A minimal valid `params` object for a fresh layer of this shader. Hosts use it
+         * when building a "create from scratch" template so they don't have to invent
+         * values. Keep small — only controls that need a non-default value to render
+         * something sensible. If the shader declares `controlCouplings`, the returned
+         * object MUST satisfy them (it doubles as the canonical example).
+         *
+         * Override per shader; the default returns `undefined`.
+         *
+         * @returns {object|undefined}
+         */
+        static exampleParams() {
+            return undefined;
+        }
+
+        /**
+         * Declares relationships between controls that must hold true on every committed
+         * layer. Hosts use the returned entries for two purposes:
+         *  (a) tell the LLM the rule in plain English so it can construct compliant layers,
+         *  (b) validate submitted layers and reject violations with structured errors.
+         *
+         * Each entry:
+         * {
+         *   name: string,                                  // stable id, e.g. "colormap_class_count"
+         *   summary: string,                               // human-readable rule, shown to the LLM
+         *   controls: string[],                            // control keys involved
+         *   validate: (layer) => {                         // pure, fast, side-effect-free
+         *     ok: boolean,
+         *     expected?: Record<string, any>,              // what the coupling requires
+         *     actual?: Record<string, any>                 // what the layer currently has
+         *   }
+         * }
+         *
+         * The `validate` function is exposed at runtime via
+         * `ShaderConfigurator.getShaderCouplingValidators(shaderType)`; the schema model
+         * only ships `{name, summary, controls}` (JSON-serializable).
+         *
+         * Override per shader when controls are coupled; the default returns `undefined`.
+         * Returning `[]` is also accepted ("declared, but no couplings").
+         *
+         * @returns {Array<{name: string, summary: string, controls: string[], validate: Function}>|undefined}
+         */
+        static controlCouplings() {
+            return undefined;
+        }
+
+        /**
          * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
          * @returns {[channelSettings]}
          */
@@ -4707,7 +4789,40 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this._params = this.getParams(params);
+        this._normalizeParams();
         this.prepare();
+    }
+
+    /**
+     * Coerce caller-supplied params into the shape `init()` and `prepare()` expect.
+     * If the user passed an array `default` they likely meant `type: "custom_colormap"` —
+     * we warn rather than mutate the type, and fall back to a safe palette name so
+     * `init()`'s `schemeGroups[mode].includes(...)` cannot blow up.
+     */
+    _normalizeParams() {
+        const params = this._params || {};
+        const groups = ($.FlexRenderer.ColorMaps && $.FlexRenderer.ColorMaps.schemeGroups) || {};
+        const defaults = ($.FlexRenderer.ColorMaps && $.FlexRenderer.ColorMaps.defaults) || {};
+
+        if (typeof params.mode !== "string" || !groups[params.mode]) {
+            console.warn(
+                `[FlexRenderer.UIControls.ColorMap] params.mode "${params.mode}" is not a known scheme group ` +
+                `(${Object.keys(groups).join(", ")}); falling back to "sequential".`
+            );
+            params.mode = "sequential";
+        }
+
+        if (Array.isArray(params.default)) {
+            console.warn(
+                `[FlexRenderer.UIControls.ColorMap] params.default is an array — ` +
+                `did you mean type: "custom_colormap"? Falling back to the default palette for mode "${params.mode}".`
+            );
+            params.default = defaults[params.mode];
+        }
+
+        if (typeof params.default !== "string" || !params.default) {
+            params.default = defaults[params.mode];
+        }
     }
 
     prepare() {
@@ -4849,6 +4964,9 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
     }
 
     _continuousCssFromPallete(pallete) {
+        if (!pallete || !pallete.length) {
+            return "";
+        }
         let css = [`linear-gradient(90deg`];
         for (let i = 0; i < this.maxSteps; i++) {
             css.push(`, ${pallete[i]} ${Math.round((this.steps[i] + this.steps[i + 1]) * 50)}%`);
@@ -4858,6 +4976,9 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
     }
 
     _discreteCssFromPallete(pallete) {
+        if (!pallete || !pallete.length) {
+            return "";
+        }
         let css = [`linear-gradient(90deg, ${pallete[0]} 0%`];
         for (let i = 1; i < this.maxSteps; i++) {
             css.push(`, ${pallete[i - 1]} ${Math.round(this.steps[i] * 100)}%, ${pallete[i]} ${Math.round(this.steps[i] * 100)}%`);
@@ -7872,7 +7993,7 @@ in vec2 v_texture_coords;
 
 // OUTPUT VARIABLES
 
-out vec4 final_color;
+layout(location=0) out vec4 final_color;
 
 
 // GLOBAL VARIABLES
@@ -8354,7 +8475,7 @@ uniform int u_mode;
 uniform int u_enabled;
 
 in vec2 v_texture_coords;
-out vec4 final_color;
+layout(location=0) out vec4 final_color;
 
 float inspector_mask(vec2 fragPx) {
   float feather = max(u_featherPx, 0.0001);
@@ -9641,14 +9762,18 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
          * @param {Object.<string, ShaderConfig>} shaders map of id -> shader config value
          * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
+         * @param {Object} [options]
+         * @param {Boolean} [options.immediate=false] if true, run the rebuild synchronously
+         *      (program registration + dimensions update) instead of deferring via setTimeout.
+         *      Required when the caller intends to draw immediately after configuring.
          * @return {OpenSeadragon.Promise} promise resolved when the renderer gets rebuilt
          */
-        overrideConfigureAll(shaders, shaderOrder = undefined) {
+        overrideConfigureAll(shaders, shaderOrder = undefined, options = {}) {
             // todo reset also when reordering tiled images!
             // or we could change order only
 
             if (this.options.handleNavigator && this.viewer.navigator) {
-                this.viewer.navigator.drawer.overrideConfigureAll(shaders, shaderOrder);
+                this.viewer.navigator.drawer.overrideConfigureAll(shaders, shaderOrder, options);
             }
 
             const willBeConfigured = !!shaders;
@@ -9685,7 +9810,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 external: true
             });
 
-            return this._requestRebuild(0);
+            return this._requestRebuild(0, false, false, !!(options && options.immediate));
         }
 
         /**
@@ -10233,6 +10358,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             });
         }
 
+        /**
+         * This methods can suspend viewer animation, for example when
+         * you are still in the process of modifying the viewer state
+         * and the viewer is forced to re-render unfinished configuration(s).
+         * @param reason
+         */
         suspendRendering(reason = "manual") {
             this._suspendRenderingDepth++;
             this._drawReady = false;
@@ -10368,7 +10499,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return this._requestBuildStamp > this._buildStamp;
         }
 
-        _requestRebuild(timeout = 30, force = false, bypassSuspend = false) {
+        _requestRebuild(timeout = 30, force = false, bypassSuspend = false, immediate = false) {
             this._requestBuildStamp = Date.now();
             this._drawReady = false;
 
@@ -10381,13 +10512,14 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             if (this._rebuildHandle) {
-                if (!force) {
+                if (!force && !immediate) {
                     return $.Promise.resolve();
                 }
                 clearTimeout(this._rebuildHandle);
+                this._rebuildHandle = null;
             }
 
-            this._rebuildHandle = setTimeout(() => {
+            const runRebuild = () => {
                 if (this._isRenderingSuspended()) {
                     this._pendingRebuildRequest = { timeout: 0, force: true };
                     this._rebuildHandle = null;
@@ -10414,12 +10546,20 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._rebuildHandle = null;
                 this._refreshDrawReadyState();
 
-                setTimeout(() => {
-                    if (!this._isRenderingSuspended()) {
-                        this.viewer.forceRedraw();
-                    }
-                });
-            }, timeout);
+                if (!immediate) {
+                    setTimeout(() => {
+                        if (!this._isRenderingSuspended()) {
+                            this.viewer.forceRedraw();
+                        }
+                    });
+                }
+            };
+
+            if (immediate) {
+                runRebuild();
+            } else {
+                this._rebuildHandle = setTimeout(runRebuild, timeout);
+            }
 
             return $.Promise.resolve();
         }
@@ -11659,8 +11799,96 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         throw new Error("Unsupported standalone input source.");
     }
 
+    function createStandaloneViewportHost(viewer) {
+        return {
+            navigator: null,
+            world: viewer.world,
+            drawer: {
+                canRotate: function() {
+                    return !!(viewer.drawer && typeof viewer.drawer.canRotate === "function" && viewer.drawer.canRotate());
+                }
+            },
+            forceRedraw: function() {},
+            raiseEvent: function() {},
+        };
+    }
+
+    function setStandaloneViewportRotation(viewport, viewer, degrees) {
+        if (typeof degrees !== "number") {
+            return;
+        }
+
+        if (viewport.degreesSpring) {
+            viewport.degreesSpring.resetTo(degrees);
+        }
+        if (viewport._oldDegrees !== undefined) {
+            viewport._oldDegrees = degrees;
+        }
+
+        viewport._setContentBounds(viewer.world.getHomeBounds(), viewer.world.getContentFactor());
+    }
+
+    function syncStandaloneViewportState(viewport, viewer, view, size) {
+        viewport._setContentBounds(viewer.world.getHomeBounds(), viewer.world.getContentFactor());
+
+        if (size && typeof size.x === "number" && typeof size.y === "number") {
+            viewport.resize(new $.Point(size.x, size.y), true);
+        }
+
+        if (view && view.bounds) {
+            viewport.fitBounds(view.bounds, true);
+        } else if (view) {
+            if (typeof view.zoom === "number") {
+                viewport.zoomTo(view.zoom, null, true);
+            }
+            if (view.center) {
+                viewport.panTo(view.center, true);
+            }
+        } else {
+            viewport.fitBounds(viewer.viewport.getBoundsNoRotate(true), true);
+        }
+
+        if (view && typeof view.rotation === "number") {
+            setStandaloneViewportRotation(viewport, viewer, view.rotation * 180 / Math.PI);
+        } else {
+            setStandaloneViewportRotation(viewport, viewer, viewer.viewport.getRotation(true));
+        }
+
+        if (view && typeof view.flipped === "boolean") {
+            viewport.setFlip(view.flipped);
+        } else {
+            viewport.setFlip(viewer.viewport.getFlip());
+        }
+
+        viewport.applyConstraints(true);
+    }
+
     $.makeStandaloneFlexDrawer = function(viewer) {
         const Drawer = OpenSeadragon.FlexDrawer;
+        const viewportHost = createStandaloneViewportHost(viewer);
+        const standaloneViewport = new $.Viewport({
+            containerSize: viewer.viewport.getContainerSize(),
+            springStiffness: viewer.springStiffness,
+            animationTime: viewer.animationTime,
+            minZoomImageRatio: viewer.minZoomImageRatio,
+            maxZoomPixelRatio: viewer.maxZoomPixelRatio,
+            visibilityRatio: viewer.visibilityRatio,
+            wrapHorizontal: viewer.wrapHorizontal,
+            wrapVertical: viewer.wrapVertical,
+            defaultZoomLevel: viewer.defaultZoomLevel,
+            minZoomLevel: viewer.minZoomLevel,
+            maxZoomLevel: viewer.maxZoomLevel,
+            viewer: viewportHost,
+            degrees: viewer.viewport.getRotation(true),
+            flipped: viewer.viewport.getFlip(),
+            overlayPreserveContentDirection: viewer.overlayPreserveContentDirection,
+            navigatorRotate: viewer.navigatorRotate,
+            homeFillsViewer: viewer.homeFillsViewer,
+            margins: viewer.viewportMargins,
+            silenceMultiImageWarnings: viewer.silenceMultiImageWarnings
+        });
+        viewportHost.viewport = standaloneViewport;
+        syncStandaloneViewportState(standaloneViewport, viewer);
 
         const options = $.extend(true, {}, viewer.drawerOptions[Drawer.prototype.getType()]);
         options.debug = false;
@@ -11672,7 +11900,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
         const drawer = new Drawer({
             viewer:             viewer,
-            viewport:           viewer.viewport,
+            viewport:           standaloneViewport,
             element:            viewer.drawer.container,
             debugGridColor:     viewer.debugGridColor,
             options:            options
@@ -11682,45 +11910,24 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         const lock = () => mutex.lock();
         const unlock = () => mutex.unlock();
 
-        drawer._captureViewerState = function() {
-            const viewport = viewer.viewport;
-            return {
-                widthStyle: viewer.container.style.width,
-                heightStyle: viewer.container.style.height,
-                bounds: viewport ? viewport.getBoundsNoRotate(true) : null,
-                rotation: viewport ? viewport.getRotation(true) : 0,
-                flipped: viewport ? viewport.getFlip() : false,
-            };
+        drawer._bindTiledImagesToViewport = function(tiledImages) {
+            const bindings = tiledImages.map(tiledImage => ({
+                tiledImage,
+                viewport: tiledImage.viewport
+            }));
+            for (const binding of bindings) {
+                binding.tiledImage.viewport = this.viewport;
+            }
+            return bindings;
         };
 
-        drawer._restoreViewerState = async function(state) {
-            if (!state) {
+        drawer._restoreTiledImageViewports = function(bindings) {
+            if (!bindings) {
                 return;
             }
-
-            const viewport = viewer.viewport;
-            const widthChanged = viewer.container.style.width !== state.widthStyle;
-            const heightChanged = viewer.container.style.height !== state.heightStyle;
-
-            if (widthChanged || heightChanged) {
-                viewer.container.style.width = state.widthStyle;
-                viewer.container.style.height = state.heightStyle;
-                viewer.forceResize();
+            for (const binding of bindings) {
+                binding.tiledImage.viewport = binding.viewport;
             }
-
-            if (viewport && state.bounds) {
-                viewport.fitBounds(state.bounds, true);
-                if (typeof state.rotation === "number") {
-                    viewport.setRotation(state.rotation, true);
-                }
-                if (typeof viewport.setFlip === "function") {
-                    viewport.setFlip(state.flipped);
-                }
-                viewport.applyConstraints(true);
-            }
-
-            viewer.forceRedraw();
-            await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
         };
 
         drawer._syncViewerViewport = async function(view, size) {
@@ -11728,60 +11935,40 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 return;
             }
 
-            const viewport = viewer.viewport;
+            const viewport = this.viewport;
             if (!viewport) {
                 return;
             }
 
-            if (size && typeof size.x === "number" && typeof size.y === "number") {
-                viewer.container.style.width = `${size.x}px`;
-                viewer.container.style.height = `${size.y}px`;
-                viewer.forceResize();
-            }
-
-            if (view.bounds) {
-                viewport.fitBounds(view.bounds, true);
-            } else {
-                if (typeof view.zoom === "number") {
-                    viewport.zoomTo(view.zoom, null, true);
-                }
-                if (view.center) {
-                    viewport.panTo(view.center, true);
-                }
-            }
-
-            if (typeof view.rotation === "number") {
-                viewport.setRotation(view.rotation * 180 / Math.PI, true);
-            }
-
-            viewport.applyConstraints(true);
-            viewer.forceRedraw();
+            syncStandaloneViewportState(viewport, viewer, view, size);
 
             await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
         };
 
         drawer._collectReadyTiles = async function(tiledImages, view, size) {
-            const viewerState = this._captureViewerState();
-            try {
-                await this._syncViewerViewport(view, size);
+            await this._syncViewerViewport(view, size);
 
-                let tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+            for (const tiledImage of tiledImages) {
+                tiledImage.update(true);
+            }
+
+            let tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+            if (tiles.length) {
+                return tiles;
+            }
+
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
+                for (const tiledImage of tiledImages) {
+                    tiledImage.update(true);
+                }
+                tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
                 if (tiles.length) {
                     return tiles;
                 }
-
-                for (let attempt = 0; attempt < 3; attempt++) {
-                    viewer.forceRedraw();
-                    await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
-                    tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
-                    if (tiles.length) {
-                        return tiles;
-                    }
-                }
-                return [];
-            } finally {
-                await this._restoreViewerState(viewerState);
             }
+
+            return [];
         };
 
         /**
@@ -11799,6 +11986,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         drawer.drawWithConfiguration = (async function (tiledImages, configuration = undefined, view = undefined, size = undefined) {
             let tiles;
             let tasks;
+            let viewportBindings = null;
 
             let fullDrawPass = true;
             if (!view || view instanceof OpenSeadragon.FlexDrawer) {
@@ -11816,17 +12004,24 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             if (fullDrawPass) {
-                tiles = await drawer._collectReadyTiles(tiledImages, view, size);
-                if (!tiles.length) {
-                    throw new Error("Standalone extraction found no tiles to draw for the requested view.");
+                viewportBindings = drawer._bindTiledImagesToViewport(tiledImages);
+                try {
+                    tiles = await drawer._collectReadyTiles(tiledImages, view, size);
+                    if (!tiles.length) {
+                        throw new Error("Standalone extraction found no tiles to draw for the requested view.");
+                    }
+                    tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+                } catch (e) {
+                    drawer._restoreTiledImageViewports(viewportBindings);
+                    viewportBindings = null;
+                    throw e;
                 }
-                tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
             }
 
             await lock();
             try {
                 if (configuration) {
-                    await drawer.overrideConfigureAll(configuration);
+                    await drawer.overrideConfigureAll(configuration, undefined, { immediate: true });
                 }
 
                 // todo: tiledImages.length is not reliable! we can have TI that produces more layers in the color part!
@@ -11853,6 +12048,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         // free data
                         const dId = drawer.getId();
                         tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                        drawer._restoreTiledImageViewports(viewportBindings);
+                        viewportBindings = null;
                     });
                 }
 
@@ -11903,6 +12100,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 ctx.drawImage(this.renderer.canvas, 0, 0);
                 return ctx;
             } finally {
+                if (viewportBindings) {
+                    drawer._restoreTiledImageViewports(viewportBindings);
+                }
                 unlock();
             }
         }).bind(drawer);
@@ -12574,6 +12774,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "values are of two categories, smallest considered in the middle";
     }
 
+    static intent() {
+        return "Render diverging scalar data with separate colors above and below the midpoint (0.5). Pick for signed/centered values.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        return { colorHigh: "#ff1000", colorLow: "#01ff00", threshold: 1 };
+    }
+
     static docs() {
         return {
             summary: "Diverging heatmap shader for a single scalar input channel.",
@@ -12670,7 +12882,48 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 
     static description() {
-        return "data values encoded in color scale";
+        return "data values encoded in color scale. The color control's `steps` (and `custom_colormap` array length) is coerced to `threshold.breaks.length + 1`. When both are set, `custom_colormap.default.length` wins for the `custom_colormap` type, otherwise `color.steps` wins. The `connect` flag (default true) additionally synchronizes step boundaries with break positions.";
+    }
+
+    static intent() {
+        return "Map a scalar value through a discrete color palette. Pick for class maps with explicit thresholds.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        return {
+            color: { type: "colormap", default: "Viridis", steps: 3, mode: "sequential" },
+            threshold: { breaks: [0.33, 0.66] },
+            connect: true
+        };
+    }
+
+    static controlCouplings() {
+        return [{
+            name: "colormap_class_count",
+            summary: "Color class count must equal threshold.breaks.length + 1. Resize palette and breaks together.",
+            controls: ["color", "threshold"],
+            validate: (layer) => {
+                const params = (layer && layer.params) || {};
+                const Configurator = $.FlexRenderer.ShaderConfigurator;
+                const breaksCount = Configurator.resolveEffectiveBreaks(params.threshold).length;
+                const colorSteps = Configurator.resolveEffectiveColorSteps(params.color);
+                const expectedSteps = breaksCount + 1;
+                return colorSteps === expectedSteps
+                    ? { ok: true }
+                    : {
+                        ok: false,
+                        expected: { "color.steps": expectedSteps },
+                        actual: {
+                            "color.steps": colorSteps,
+                            "threshold.breaks.length": breaksCount
+                        }
+                    };
+            }
+        }];
     }
 
     static docs() {
@@ -12708,7 +12961,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                         inverted: false
                     }
                 },
-                { name: "connect", ui: "bool", valueType: "bool", default: false }
+                { name: "connect", ui: "bool", valueType: "bool", default: true }
             ]
         };
     }
@@ -12757,7 +13010,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 required: {type: "advanced_slider", inverted: false}
             },
             connect: {
-                default: {type: "bool", interactive: true, title: "Connect breaks: ", default: false},
+                default: {type: "bool", interactive: true, title: "Connect breaks: ", default: true},
                 accepts: (type, instance) => type === "bool"
             }
         };
@@ -12770,51 +13023,70 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 `;
     }
 
-    defaultColSteps(length) {
-        return [...Array(length).keys()].forEach(x => x + 1);
-    }
-
     init() {
-        const _this = this;
-
         this.opacity.init();
 
-        if (this.connect) {
-            this.connect.on('default', function(raw, encoded, ctx) {
-                _this.color.setSteps(_this.connect.raw ? [0, ..._this.threshold.raw, 1] :
-                    _this.defaultColSteps(_this.color.maxSteps)
+        const Configurator = $.FlexRenderer.ShaderConfigurator;
+        const isColormap = typeof this.color.setSteps === "function";
+
+        // Read breaks through the same canonical accessor the coupling validator uses,
+        // so validation cannot disagree with runtime coercion. Live drag updates pass
+        // their fresh values into syncColor() directly via the 'breaks' callback.
+        const breaksOf = (override) => {
+            if (Array.isArray(override)) {
+                return override.map(v => Number.parseFloat(v)).filter(v => Number.isFinite(v));
+            }
+            return Configurator.resolveEffectiveBreaks(this.threshold && this.threshold.params);
+        };
+        const currentColorSteps = () =>
+            Configurator.resolveEffectiveColorSteps(this.color.params);
+
+        const warnIfMismatched = (expected) => {
+            if (this._coercionWarned) {
+                return;
+            }
+            const current = currentColorSteps();
+            if (current !== expected) {
+                this._coercionWarned = true;
+                console.warn(
+                    `[colormap] color step count ${current} coerced to ${expected} ` +
+                    `to satisfy threshold.breaks.length + 1`
                 );
-                _this.color.updateColormapUI();
+            }
+        };
+
+        const syncColor = (liveBreaks) => {
+            if (!isColormap) {
+                return;
+            }
+            const breaks = breaksOf(liveBreaks);
+            const expected = breaks.length + 1;
+            warnIfMismatched(expected);
+            if (this.connect && this.connect.raw) {
+                this.color.setSteps([0, ...breaks, 1]);
+            } else {
+                this.color.setSteps(expected);
+            }
+            if (typeof this.color.updateColormapUI === "function") {
+                this.color.updateColormapUI();
+            }
+        };
+
+        if (this.connect) {
+            this.connect.on('default', function() {
+                syncColor();
             }, true);
             this.connect.init();
 
-
-            this.threshold.on('breaks', function(raw, encoded, ctx) {
-                if (_this.connect.raw) { //if YES
-                    _this.color.setSteps([0, ...raw, 1]);
-                    _this.color.updateColormapUI();
-                }
+            this.threshold.on('breaks', function(_rawValue, encodedValue) {
+                syncColor(encodedValue);
             }, true);
         }
         this.threshold.init();
 
-        //todo fix this scenario
-        // if (this.threshold.raw.length != this.color.params.steps - 1) {
-        // }
-
-        if (this.connect) {
-            if (this.connect.raw) {
-                this.color.setSteps([0, ...this.threshold.raw, 1]);
-            } else {
-                //default breaks mapping for colormap if connect not enabled
-                this.color.setSteps(this.defaultColSteps(this.color.maxSteps));
-            }
-        }
+        syncColor();
 
         this.color.init();
-        // let steps = this.color.steps.filter(x => x >= 0);
-        // steps.splice(steps.length-1, 1); //last element is 1 not a break
-        // this.storeProperty('threshold_values', steps);
     }
 });
 })(OpenSeadragon);
@@ -12843,6 +13115,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "shows the data AS-IS";
+    }
+
+    static intent() {
+        return "Pass the source through with optional channel swizzle. Pick to render the raw image.";
+    }
+
+    static expects() {
+        return { dataKind: "rgb", channels: "any" };
+    }
+
+    static exampleParams() {
+        return {};
     }
 
     static docs() {
@@ -12900,6 +13184,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "highlights edges at threshold values";
+    }
+
+    static intent() {
+        return "Trace iso-contour edges where a scalar field crosses a threshold. Pick to outline level sets without filling regions.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        return { color: "#fff700", threshold: 50, edgeThickness: 1 };
     }
 
     static docs() {
@@ -13433,6 +13729,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "encode data values in opacity";
+    }
+
+    static intent() {
+        return "Tint a single scalar channel and gate it with a threshold. Pick to highlight \"above/below value\" regions.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        return { color: "#fff700", threshold: 50, inverse: false };
     }
 
     static docs() {
@@ -14564,6 +14872,18 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
         static description() {
             return "Render one selected TIFF channel with a custom color.";
+        }
+
+        static intent() {
+            return "Extract one channel from a multi-channel raster and tint it. Pick when the source has multiple channels and you want exactly one of them rendered.";
+        }
+
+        static expects() {
+            return { dataKind: "multi-channel", channels: "any" };
+        }
+
+        static exampleParams() {
+            return { use_channel_base0: 0, color: "#ffffff" };  // eslint-disable-line camelcase
         }
 
         static docs() {
@@ -15807,6 +16127,10 @@ function makeWorker() {
                     type: Shader.type(),
                     name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
                     description: typeof Shader.description === "function" ? Shader.description() : "",
+                    intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
+                    expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
+                    exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
+                    controlCouplings: this._serializeControlCouplings(Shader),
                     preview: this._resolveShaderPreview(Shader),
                     sources: sources.map((src, index) => ({
                         index,
@@ -15843,6 +16167,10 @@ function makeWorker() {
                     type: Shader.type(),
                     name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
                     description: typeof Shader.description === "function" ? Shader.description() : "",
+                    intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
+                    expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
+                    exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
+                    controlCouplings: this._serializeControlCouplings(Shader),
                     rootConfig: this._compileShaderRootConfigSchema(Shader),
                     params: this._compileShaderParamsSchema(Shader, sources),
                     sources: sources.map((src, index) => ({
@@ -15853,7 +16181,7 @@ function makeWorker() {
                 };
             });
 
-            return {
+            const model = {
                 version: 1,
                 generatedAt: new Date().toISOString(),
                 rendererConfig: {
@@ -15882,10 +16210,142 @@ function makeWorker() {
                 uiControls: this._compileControlSchemas(),
                 shaders
             };
+
+            this._warnIfExampleParamsInconsistent(shaders);
+
+            return model;
         },
 
         async compileConfigSchemaModelAsync() {
             return this.compileConfigSchemaModel();
+        },
+
+        /**
+         * Serialization-friendly view of a shader's `controlCouplings()`.
+         * Returns `undefined` when the shader has none (so JSON output stays clean),
+         * or an array of `{name, summary, controls}` (no functions).
+         */
+        _serializeControlCouplings(Shader) {
+            if (!Shader || typeof Shader.controlCouplings !== "function") {
+                return undefined;
+            }
+            const raw = Shader.controlCouplings();
+            if (!Array.isArray(raw) || raw.length === 0) {
+                return undefined;
+            }
+            return raw.map(c => ({
+                name: c.name,
+                summary: c.summary,
+                controls: c.controls
+            }));
+        },
+
+        /**
+         * Canonical "what are the break positions on this `threshold` control value?".
+         * Single source of truth for couplings and renderer-side syncing — the validator
+         * and the shader's runtime sync logic must read through this so they cannot
+         * disagree on what counts as a break.
+         * Precedence: `value.breaks` first, then `value.default`, otherwise `[]`.
+         */
+        resolveEffectiveBreaks(thresholdValue) {
+            if (!thresholdValue || typeof thresholdValue !== "object") {
+                return [];
+            }
+            if (Array.isArray(thresholdValue.breaks)) {
+                return thresholdValue.breaks;
+            }
+            if (Array.isArray(thresholdValue.default)) {
+                return thresholdValue.default;
+            }
+            return [];
+        },
+
+        /**
+         * Canonical "how many color classes does this `color` control value carry?".
+         * Single source of truth for couplings and renderer-side coercion.
+         * Precedence: a `custom_colormap` with a `default` array wins over `steps`,
+         * otherwise `steps` wins; primitives count as one class.
+         */
+        resolveEffectiveColorSteps(colorValue) {
+            if (!colorValue || typeof colorValue !== "object") {
+                return 1;
+            }
+            if (colorValue.type === "custom_colormap" && Array.isArray(colorValue.default)) {
+                return colorValue.default.length;
+            }
+            if (typeof colorValue.steps === "number") {
+                return colorValue.steps;
+            }
+            return 1;
+        },
+
+        /**
+         * Walks each compiled shader entry and flags every key in `exampleParams`
+         * that is not declared in `params.builtIns ∪ params.controls ∪ params.customParams`.
+         * Returns a (possibly empty) list of `{ shaderType, key, allowed }` issues.
+         * The published example must be a valid layer per its own schema; otherwise
+         * a host that uses `exampleParams` as a template will produce layers that
+         * fail their own coupling/key validation.
+         */
+        checkExampleParamsConsistency(shaders) {
+            const issues = [];
+            for (const shader of shaders || []) {
+                const example = shader && shader.exampleParams;
+                if (!example || typeof example !== "object") {
+                    continue;
+                }
+                const params = shader.params || {};
+                const allowed = new Set([
+                    ...((params.builtIns || []).map(c => c.key)),
+                    ...((params.controls || []).map(c => c.key)),
+                    ...((params.customParams || []).map(c => c.key))
+                ]);
+                for (const key of Object.keys(example)) {
+                    if (!allowed.has(key)) {
+                        issues.push({ shaderType: shader.type, key, allowed: [...allowed] });
+                    }
+                }
+            }
+            return issues;
+        },
+
+        _warnIfExampleParamsInconsistent(shaders) {
+            const issues = this.checkExampleParamsConsistency(shaders);
+            if (!issues.length) {
+                return;
+            }
+            const summary = issues.map(i => `${i.shaderType}.exampleParams.${i.key}`).join(", ");
+            console.warn(
+                `[FlexRenderer.ShaderConfigurator] exampleParams keys not present in published params schema: ${summary}. ` +
+                `Hosts using exampleParams as a template will fail their own validation.`
+            );
+        },
+
+        /**
+         * Returns runtime coupling validators (with the `validate` function attached) for
+         * a given shader type. Hosts call this to validate layers before submission.
+         * The schema model only ships serialization-friendly entries (no functions).
+         */
+        getShaderCouplingValidators(shaderType) {
+            const Mediator = $.FlexRenderer.ShaderMediator;
+            const Shader = Mediator && (typeof Mediator.getShaderByType === "function"
+                ? Mediator.getShaderByType(shaderType)
+                : typeof Mediator.getClass === "function"
+                    ? Mediator.getClass(shaderType)
+                    : null);
+            if (!Shader || typeof Shader.controlCouplings !== "function") {
+                return [];
+            }
+            const raw = Shader.controlCouplings();
+            if (!Array.isArray(raw)) {
+                return [];
+            }
+            return raw.map(c => ({
+                name: c.name,
+                summary: c.summary,
+                controls: c.controls,
+                validate: typeof c.validate === "function" ? c.validate : undefined
+            }));
         },
 
         async compileDocsModelAsync() {
@@ -16365,7 +16825,7 @@ function makeWorker() {
                 supportedUiTypes: control.supportedUiTypes,
                 defaultControlConfig: control.default !== null ? deepClone(control.default) : null,
                 requiredControlConfig: control.required !== null ? deepClone(control.required) : null,
-                supportedControlSchemas: this._expandSupportedUiSchemas(control.supportedUiTypes)
+                supportedTypes: control.supportedUiTypes
             }));
 
             const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
@@ -16380,7 +16840,7 @@ function makeWorker() {
             return {
                 type: "object",
                 usage: "Configuration object assigned to ShaderConfig.params.",
-                builtIn: [
+                builtIns: [
                     ...this._compileUseChannelSchemas(Shader, sources, defs),
                     this._compileUseModeSchema(defs),
                     this._compileUseBlendSchema(defs),
@@ -16645,6 +17105,21 @@ function makeWorker() {
                 if (shader.description) {
                     out.push(`Description: ${shader.description}`);
                 }
+                if (shader.intent) {
+                    out.push(`Intent: ${shader.intent}`);
+                }
+                if (shader.expects) {
+                    out.push(`Expects: ${JSON.stringify(shader.expects)}`);
+                }
+                if (shader.exampleParams !== undefined) {
+                    out.push(`Example params: ${JSON.stringify(shader.exampleParams)}`);
+                }
+                if (Array.isArray(shader.controlCouplings) && shader.controlCouplings.length) {
+                    out.push(`Control couplings:`);
+                    for (const c of shader.controlCouplings) {
+                        out.push(`- ${c.name} [${(c.controls || []).join(", ")}]: ${c.summary}`);
+                    }
+                }
 
                 if (shader.sources.length) {
                     out.push(`Sources:`);
@@ -16874,6 +17349,42 @@ function makeWorker() {
         ${this._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")}
   </summary>
   <div class="border-t border-base-300 p-4 text-sm">
+    ${shader.intent ? `
+    <div class="mb-3">
+        <div class="font-semibold">Intent</div>
+        <div>${escapeHtml(shader.intent)}</div>
+    </div>` : ""}
+
+    ${shader.expects ? `
+    <div class="mb-3">
+        <div class="font-semibold">Expects</div>
+        <pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(shader.expects, null, 2))}</pre>
+    </div>` : ""}
+
+    ${shader.exampleParams !== undefined ? `
+    <div class="mb-3">
+        <div class="font-semibold">Example params</div>
+        <pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(shader.exampleParams, null, 2))}</pre>
+    </div>` : ""}
+
+    ${Array.isArray(shader.controlCouplings) && shader.controlCouplings.length ? `
+    <div class="mb-3">
+        <div class="font-semibold">Control couplings</div>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead><tr><th>Name</th><th>Controls</th><th>Rule</th></tr></thead>
+                <tbody>
+                    ${shader.controlCouplings.map(c => `
+                    <tr>
+                        <td><code>${escapeHtml(c.name)}</code></td>
+                        <td>${escapeHtml((c.controls || []).join(", "))}</td>
+                        <td>${escapeHtml(c.summary || "")}</td>
+                    </tr>`).join("")}
+                </tbody>
+            </table>
+        </div>
+    </div>` : ""}
+
      ${shader.sources.length ? `
     <div>
         <div class="mb-2 font-semibold">Sources</div>
@@ -17574,8 +18085,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-23
-//! Git commit: --6fac1f2-dirty
+//! Built on 2026-04-28
+//! Git commit: --79513a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -17862,8 +18373,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-23
-//! Git commit: --6fac1f2-dirty
+//! Built on 2026-04-28
+//! Git commit: --79513a5-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

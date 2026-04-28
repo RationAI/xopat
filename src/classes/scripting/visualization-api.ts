@@ -11,6 +11,27 @@ import type {
 } from "./visualization-api.scripts";
 
 import { XOpatScriptingApi } from "./abstract-api";
+import { reviewVisualizationProposal, type VisualizationReviewDecision } from "./visualization-review";
+
+/**
+ * Thrown by `requireVisualizationReview` when the user clicks "Send to LLM with
+ * feedback" in the playground. Carries the textual feedback and the snapshot
+ * the user had pending in the playground at the moment of feedback. The script
+ * runtime surfaces this to the assistant as a tool error whose message contains
+ * the feedback verbatim — the LLM treats it as a normal "user wants refinement"
+ * signal and re-plans.
+ */
+class VisualizationReviewFeedbackError extends Error {
+    feedback: string;
+    editedSnapshot: VisualizationStateSnapshot;
+
+    constructor(feedback: string, editedSnapshot: VisualizationStateSnapshot) {
+        super("User wants the assistant to refine the proposed change. Feedback: " + feedback);
+        this.name = "VisualizationReviewFeedbackError";
+        this.feedback = feedback;
+        this.editedSnapshot = editedSnapshot;
+    }
+}
 
 function cloneJson<T>(value: T): T {
     if (value === undefined || value === null) {
@@ -79,6 +100,171 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         }
 
         return fr.ShaderConfigurator;
+    }
+
+    /**
+     * xOpat session-format extras that augment the renderer-published `shaderConfigBase`
+     * whitelist. `dataReferences` is the host's session-data wiring; `shaders` and `order`
+     * belong to group layers. Everything else allowed at the top level of a layer comes
+     * from the renderer schema.
+     */
+    protected static readonly XOPAT_SESSION_TOP_KEYS = ["dataReferences", "shaders", "order"];
+
+    /**
+     * Read a params bucket from a shader schema. Plural names parallel each other.
+     */
+    protected readSchemaParamsBucket(schemaParams: any, kind: "builtIns" | "controls" | "customParams"): any[] {
+        if (!isPlainObject(schemaParams)) return [];
+        const direct = (schemaParams as any)[kind];
+        return Array.isArray(direct) ? direct : [];
+    }
+
+    /**
+     * Locate one shader's entry in the renderer-published config schema model. Returns the
+     * raw schema object (not cloned) - callers must not mutate. Match is by shader `type`.
+     */
+    protected findShaderInModel(model: any, shaderType: string): any | undefined {
+        const shaders = model && model.shaders;
+        if (Array.isArray(shaders)) {
+            return shaders.find((s: any) => s && s.type === shaderType);
+        }
+        if (isPlainObject(shaders)) {
+            for (const value of Object.values(shaders)) {
+                if (value && (value as any).type === shaderType) return value;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Allowed top-level layer keys for a given shader. Pulled from
+     * `model.shaderConfigBase.properties` ∪ `schema.rootConfig.properties` ∪ xOpat session-format
+     * extras. Underscore-prefixed and `cache` are filtered out as renderer-internal storage that
+     * should not be set from a script.
+     */
+    protected getAllowedTopLevelKeys(model: any, schema: any): Set<string> {
+        const allowed = new Set<string>(XOpatVisualizationScriptApi.XOPAT_SESSION_TOP_KEYS);
+        const collect = (props: any) => {
+            if (!Array.isArray(props)) return;
+            for (const entry of props) {
+                if (!entry || typeof entry.key !== "string") continue;
+                if (entry.key.startsWith("_")) continue;
+                if (entry.key === "cache") continue;
+                allowed.add(entry.key);
+            }
+        };
+        collect(model && model.shaderConfigBase && model.shaderConfigBase.properties);
+        collect(schema && schema.rootConfig && schema.rootConfig.properties);
+        return allowed;
+    }
+
+    /**
+     * Allowed `params` keys for a layer of `schema`. Union of built-ins, UI controls, and
+     * custom params - all read from the renderer-published schema. The host adds nothing.
+     */
+    protected getAllowedParamKeys(schema: any): Set<string> {
+        const allowed = new Set<string>();
+        const params = schema && schema.params;
+        for (const bucket of ["builtIns", "controls", "customParams"] as const) {
+            for (const entry of this.readSchemaParamsBucket(params, bucket)) {
+                if (entry && typeof entry.key === "string") {
+                    allowed.add(entry.key);
+                } else if (entry && typeof entry.name === "string") {
+                    // customParams may use `name` rather than `key`.
+                    allowed.add(entry.name);
+                }
+            }
+        }
+        return allowed;
+    }
+
+    /**
+     * Validate one layer (and its nested children) against the renderer-published schema.
+     * Generic and schema-driven: the host does not know any shader names or control names.
+     * Pushes human-readable issues into `issues`.
+     */
+    protected validateLayerKeys(
+        layer: any,
+        path: string,
+        model: any,
+        issues: string[]
+    ): void {
+        if (!isPlainObject(layer)) return;
+
+        // Recurse into nested groups first so the user gets every issue at once.
+        if (isPlainObject(layer.shaders)) {
+            for (const [childKey, child] of Object.entries(layer.shaders)) {
+                this.validateLayerKeys(child, path ? `${path}/${childKey}` : childKey, model, issues);
+            }
+        }
+
+        const layerType = typeof layer.type === "string" ? layer.type : undefined;
+        if (!layerType || layerType === "group") return;
+
+        const schema = this.findShaderInModel(model, layerType);
+        if (!schema) {
+            // Shader-type validity is the runtime's job; we'd duplicate its message here.
+            return;
+        }
+
+        const allowedTop = this.getAllowedTopLevelKeys(model, schema);
+        const unknownTop = Object.keys(layer).filter((key) => !allowedTop.has(key));
+        if (unknownTop.length > 0) {
+            issues.push(
+                `Layer '${path || layer.id || layerType}' has unknown top-level fields: ` +
+                `${unknownTop.join(", ")}. Allowed for shader '${layerType}': ` +
+                `${[...allowedTop].sort().join(", ")}.`
+            );
+        }
+
+        if (isPlainObject(layer.params)) {
+            const allowedParams = this.getAllowedParamKeys(schema);
+            if (allowedParams.size > 0) {
+                const unknownParams = Object.keys(layer.params).filter((key) => !allowedParams.has(key));
+                if (unknownParams.length > 0) {
+                    issues.push(
+                        `Shader '${layerType}' (layer '${path || layer.id || layerType}') does not define ` +
+                        `params: ${unknownParams.join(", ")}. Valid params: ` +
+                        `${[...allowedParams].sort().join(", ")}.`
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Validate a list of proposed visualizations before the user is asked to review them.
+     * Throws on the first issue with a message that lists every offending key plus the valid
+     * set, so the LLM can fix and retry without the user ever seeing the playground.
+     *
+     * Typed as `any[]` because two `VisualizationItem` types coexist in this file (scripts vs
+     * ambient, see top-of-file TODO); the validator only does shape checks via `isPlainObject`.
+     */
+    protected validateProposedVisualizations(visualizations: any[]): void {
+        if (!Array.isArray(visualizations) || visualizations.length < 1) return;
+
+        const model = (() => {
+            try {
+                return this.shaderConfigurator.compileConfigSchemaModel();
+            } catch (_err) {
+                return undefined;
+            }
+        })();
+        if (!model) return; // Renderer hasn't published a schema; let the runtime layer take it.
+
+        const issues: string[] = [];
+        visualizations.forEach((viz, i) => {
+            if (!isPlainObject(viz) || !isPlainObject((viz as any).shaders)) return;
+            for (const [layerKey, layer] of Object.entries((viz as any).shaders)) {
+                this.validateLayerKeys(layer, `viz[${i}].${layerKey}`, model, issues);
+            }
+        });
+
+        if (issues.length > 0) {
+            throw new Error(
+                `Visualization validation failed before review:\n- ${issues.join("\n- ")}`
+            );
+        }
     }
 
     protected get standaloneFactory(): any {
@@ -171,6 +357,89 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 strictVisualization: true,
             }
         );
+    }
+
+    /**
+     * Open the Visualization Playground in review mode for an LLM- or script-supplied
+     * snapshot. Replaces the simple consent dialog for visualization-mutating actions.
+     *
+     * Behavior on each user choice:
+     *   - Accept   → resolves to the (possibly edited) snapshot the user accepted.
+     *                Caller must commit it (e.g. via APPLICATION_CONTEXT.updateVisualization).
+     *   - Feedback → throws VisualizationReviewFeedbackError. The error message is
+     *                "User wants the assistant to refine ... Feedback: <text>" so the
+     *                script runtime surfaces it to the LLM as a normal tool error and
+     *                the model can re-plan. .feedback / .editedSnapshot are also
+     *                attached to the error for richer handling.
+     *   - Decline  → throws Error(rejectedMessage), matching the existing consent
+     *                cancellation contract.
+     *
+     * Honors `bypassConsentDialog` (auto-accept).
+     *
+     * Falls back to plain `requireActionConsent` when PlaygroundService is unavailable
+     * (headless / test environments).
+     */
+    protected async requireVisualizationReview(
+        proposed: VisualizationStateSnapshot,
+        options: {
+            title?: string;
+            rationale?: string;
+            historyLabel?: string;
+            consentTitle?: string;
+            consentDescription?: string;
+            consentDetails?: string[];
+            confirmLabel?: string;
+            cancelLabel?: string;
+            rejectedMessage?: string;
+        } = {}
+    ): Promise<VisualizationStateSnapshot> {
+        const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
+
+        // Trusted automation: skip review entirely.
+        if (this.bypassConsentDialog) {
+            return cloneJson(proposed);
+        }
+
+        const PLAYGROUND: any = (window as any).PLAYGROUND;
+        if (!PLAYGROUND?.open || typeof document === "undefined") {
+            // No playground: degrade to the existing yes/no consent.
+            await this.requireActionConsent({
+                title: options.consentTitle || options.title || "Allow visualization change?",
+                description: options.consentDescription || options.rationale || "The script wants to change the visualization in the current viewer session.",
+                details: options.consentDetails,
+                mode: "warning",
+                confirmLabel: options.confirmLabel,
+                cancelLabel: options.cancelLabel,
+                rejectedMessage,
+            });
+            return cloneJson(proposed);
+        }
+
+        const viewer = this.activeViewer;
+        // Apply-on-accept is OFF: the caller pipeline (APPLICATION_CONTEXT.updateVisualization
+        // or applyVisualizationStateSnapshot) commits after this returns, so we don't want
+        // the helper to apply twice. The helper still runs the playground UI and returns
+        // the user's decision.
+        const noopApply = async () => true;
+        const review: VisualizationReviewDecision = await reviewVisualizationProposal(
+            viewer,
+            proposed,
+            noopApply,
+            {
+                title: options.title,
+                rationale: options.rationale,
+                historyLabel: options.historyLabel,
+            },
+        );
+
+        if (review.decision === "feedback") {
+            throw new VisualizationReviewFeedbackError(review.feedback, review.editedSnapshot);
+        }
+        if (review.decision === "decline") {
+            throw new Error(rejectedMessage);
+        }
+        // Accept: return the (possibly edited) snapshot for the caller to commit.
+        return review.appliedSnapshot;
     }
 
     protected createLayerId(base: string, index: number): string {
@@ -493,13 +762,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const available = (OpenSeadragon as any).FlexRenderer.ShaderMediator.availableShaders();
         const out: string[] = [];
 
-        console.log(available);
-
         for (const Shader of available) {
             if (!Shader || typeof Shader.type !== "function") {
                 continue;
             }
-            console.log(Shader.type());
             out.push(String(Shader.type()));
         }
 
@@ -539,6 +805,21 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
+     * Returns the documentation entry for one shader type, or undefined if no such type is
+     * registered. Use after `getAvailableShaderTypes()` to drill into one shader without
+     * dumping the whole catalog (which can get truncated when many shaders are registered).
+     */
+    getShaderDocs(type: string): any {
+        if (typeof type !== "string" || !type.trim()) return undefined;
+        const configurator = this.shaderConfigurator;
+        const model = configurator.compileDocsModel();
+        const shaders = model && model.shaders;
+        if (!Array.isArray(shaders)) return undefined;
+        const entry = shaders.find((s: any) => s && s.type === type);
+        return entry ? cloneJson(entry) : undefined;
+    }
+
+    /**
      * Returns the persisted visualization list for the current session.
      */
     getVisualizations(): VisualizationItem[] {
@@ -572,11 +853,31 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
     /**
      * Restores a previously captured visualization state.
+     *
+     * Routes through the Visualization Playground review flow: the user can accept,
+     * edit-then-accept, send back to the assistant with feedback (throws
+     * VisualizationReviewFeedbackError), or decline (throws).
      */
     async restoreState(snapshot: VisualizationStateSnapshot): Promise<boolean> {
-        return await this.applyVisualizationStateSnapshot(snapshot, {
+        this.validateProposedVisualizations(
+            Array.isArray(snapshot && snapshot.visualizations) ? snapshot.visualizations : []
+        );
+        const accepted = await this.requireVisualizationReview(snapshot, {
+            title: "Review proposed visualization (restore state)",
+            rationale: "The script wants to restore a previously captured visualization state.",
             historyLabel: this.getHistoryLabel("restore-state"),
-            requireConsent: true
+            consentTitle: "Allow visualization state restore?",
+            consentDescription: "The script wants to restore a previously captured visualization state for the current viewer session.",
+            consentDetails: [
+                "The current visualization configuration will be replaced.",
+                "The change will persist in the current session and can be shared or exported.",
+                "Undo history will capture this as a visualization change when possible.",
+            ],
+            rejectedMessage: "Visualization state restore was canceled by the user.",
+        });
+        return await this.applyVisualizationStateSnapshot(accepted, {
+            historyLabel: this.getHistoryLabel("restore-state"),
+            requireConsent: false,
         });
     }
 
@@ -609,22 +910,30 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         activeVizIndex?: number | number[],
         newData: DataID[] = []
     ): Promise<boolean> {
-        await this.requireActionConsent({
-            title: "Allow visualization replacement?",
-            description: "The script wants to replace the persisted visualization list for the current viewer session.",
-            details: [
+        const next = Array.isArray(visualizations) ? visualizations.map(item => this.normalizeVisualizationInput(item)) : [];
+        this.validateProposedVisualizations(next);
+
+        const proposedSnapshot: VisualizationStateSnapshot = {
+            data: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
+            visualizations: cloneJson(next),
+            activeVisualizationIndex: cloneJson(activeVizIndex) as any,
+        };
+        const accepted = await this.requireVisualizationReview(proposedSnapshot, {
+            title: "Review proposed visualization (replace)",
+            rationale: "The script wants to replace the visualization list for this session.",
+            historyLabel: this.getHistoryLabel("replace"),
+            consentTitle: "Allow visualization replacement?",
+            consentDescription: "The script wants to replace the persisted visualization list for the current viewer session.",
+            consentDetails: [
                 "Existing visualizations in the session will be replaced.",
                 "The new configuration will persist and can be exported or shared.",
-                "Undo history will record this as a visualization change when possible."
+                "Undo history will record this as a visualization change when possible.",
             ],
-            mode: "warning",
-            confirmLabel: "Replace visualizations",
-            cancelLabel: "Cancel",
-            rejectedMessage: "Replacing the visualization list was canceled by the user."
+            rejectedMessage: "Replacing the visualization list was canceled by the user.",
         });
 
-        const next = Array.isArray(visualizations) ? visualizations.map(item => this.normalizeVisualizationInput(item)) : [];
-        return await APPLICATION_CONTEXT.updateVisualization(next, newData, activeVizIndex);
+        const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
+        return await APPLICATION_CONTEXT.updateVisualization(acceptedVisualizations, newData, activeVizIndex);
     }
 
     /**
@@ -637,29 +946,37 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             newData?: DataID[];
         } = {}
     ): Promise<boolean> {
-        await this.requireActionConsent({
-            title: "Allow adding a visualization?",
-            description: "The script wants to add a new visualization to the current viewer session.",
-            details: [
-                "The new visualization will persist in the current session.",
-                "The updated state can be shared or exported.",
-                "Undo history will record this as a visualization change when possible."
-            ],
-            mode: "warning",
-            confirmLabel: "Add visualization",
-            cancelLabel: "Cancel",
-            rejectedMessage: "Adding the visualization was canceled by the user."
-        });
-
         const next = this.getVisualizations();
-        next.push(this.normalizeVisualizationInput(visualization));
+        const normalized = this.normalizeVisualizationInput(visualization);
+        this.validateProposedVisualizations([normalized]);
+        next.push(normalized);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive !== false) {
             nextActiveIndex = [next.length - 1];
         }
 
-        return await APPLICATION_CONTEXT.updateVisualization(next, options.newData || [], nextActiveIndex as any);
+        const proposedSnapshot: VisualizationStateSnapshot = {
+            data: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
+            visualizations: cloneJson(next),
+            activeVisualizationIndex: cloneJson(nextActiveIndex) as any,
+        };
+        const accepted = await this.requireVisualizationReview(proposedSnapshot, {
+            title: "Review proposed visualization (add)",
+            rationale: "The script wants to add a new visualization.",
+            historyLabel: this.getHistoryLabel("add"),
+            consentTitle: "Allow adding a visualization?",
+            consentDescription: "The script wants to add a new visualization to the current viewer session.",
+            consentDetails: [
+                "The new visualization will persist in the current session.",
+                "The updated state can be shared or exported.",
+                "Undo history will record this as a visualization change when possible.",
+            ],
+            rejectedMessage: "Adding the visualization was canceled by the user.",
+        });
+
+        const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
+        return await APPLICATION_CONTEXT.updateVisualization(acceptedVisualizations, options.newData || [], nextActiveIndex as any);
     }
 
     /**
@@ -677,19 +994,6 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             throw new Error("Visualization index must be a non-negative integer.");
         }
 
-        await this.requireActionConsent({
-            title: "Allow visualization update?",
-            description: "The script wants to update an existing visualization in the current session.",
-            details: [
-                "The visualization change will persist in the current session.",
-                "Undo history will record this as a visualization change when possible."
-            ],
-            mode: "warning",
-            confirmLabel: "Update visualization",
-            cancelLabel: "Cancel",
-            rejectedMessage: "Updating the visualization was canceled by the user."
-        });
-
         const next = this.getVisualizations();
         if (index >= next.length) {
             throw new Error("Visualization index " + index + " is out of range.");
@@ -697,13 +1001,33 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
         const merged = $.extend(true, {}, next[index], patch || {});
         next[index] = this.normalizeVisualizationInput(merged);
+        this.validateProposedVisualizations([next[index]]);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive === true) {
             nextActiveIndex = [index];
         }
 
-        return await APPLICATION_CONTEXT.updateVisualization(next, options.newData || [], nextActiveIndex as any);
+        const proposedSnapshot: VisualizationStateSnapshot = {
+            data: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
+            visualizations: cloneJson(next),
+            activeVisualizationIndex: cloneJson(nextActiveIndex) as any,
+        };
+        const accepted = await this.requireVisualizationReview(proposedSnapshot, {
+            title: "Review proposed visualization (update)",
+            rationale: "The script wants to update an existing visualization.",
+            historyLabel: this.getHistoryLabel("update"),
+            consentTitle: "Allow visualization update?",
+            consentDescription: "The script wants to update an existing visualization in the current session.",
+            consentDetails: [
+                "The visualization change will persist in the current session.",
+                "Undo history will record this as a visualization change when possible.",
+            ],
+            rejectedMessage: "Updating the visualization was canceled by the user.",
+        });
+
+        const acceptedVisualizations = (Array.isArray(accepted.visualizations) ? accepted.visualizations : next) as typeof next;
+        return await APPLICATION_CONTEXT.updateVisualization(acceptedVisualizations, options.newData || [], nextActiveIndex as any);
     }
 
     /**
