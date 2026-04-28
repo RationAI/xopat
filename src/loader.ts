@@ -5,6 +5,7 @@ import type { OpenEvent, ViewerEventMap } from "openseadragon";
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
+import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
 
 
 /** Token symbols for internal element storage */
@@ -3114,8 +3115,8 @@ form.submit();
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer
-            this.add(0);
-            this.setActive(0, 'initial');
+            this.add(0, false);
+            // this.setActive(0, 'initial');
             (window as any).LAYOUT.bindViewerManager?.();
             (window as any).LAYOUT.syncActiveViewerMobile?.();
         }
@@ -3331,7 +3332,7 @@ form.submit();
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          */
-        add(index: number) {
+        add(index: number, setActive = true) {
             if (this.viewers[index]) this.delete(index);
 
             // make a unique cell inside the grid
@@ -3447,8 +3448,42 @@ form.submit();
                 viewer.scalebar.setActive(false);
             }
 
-            $(viewer.element).on('contextmenu', function (event: Event) {
+            // Canvas right-click → CanvasContextMenu registry → window.DropDown.
+            // Plugins/modules contribute items via CanvasContextMenu.register(...);
+            // when no provider returns items, no menu opens (parity with previous behavior).
+            $(viewer.element).on('contextmenu', function (event: any) {
                 event.preventDefault();
+                const orig: MouseEvent = event.originalEvent || event;
+                let osdPos: { x: number; y: number } = { x: 0, y: 0 };
+                let pixelPos: { x: number; y: number } = { x: 0, y: 0 };
+                try {
+                    const rect = (viewer.element as HTMLElement).getBoundingClientRect();
+                    const offsetX = orig.clientX - rect.left;
+                    const offsetY = orig.clientY - rect.top;
+                    const Pt = (window as any).OpenSeadragon?.Point;
+                    if (Pt && viewer.viewport) {
+                        const vp = viewer.viewport.pointFromPixel(new Pt(offsetX, offsetY));
+                        osdPos = { x: vp.x, y: vp.y };
+                        const tiledImage = viewer.world?.getItemAt?.(0);
+                        if (tiledImage && typeof tiledImage.viewportToImageCoordinates === "function") {
+                            const ip = tiledImage.viewportToImageCoordinates(vp);
+                            pixelPos = { x: ip.x, y: ip.y };
+                        } else {
+                            pixelPos = osdPos;
+                        }
+                    }
+                } catch (e) {
+                    // best-effort: still hand the event to providers without coordinates
+                }
+                const items = CanvasContextMenu.collect({
+                    viewer,
+                    event: orig,
+                    osdPosition: osdPos,
+                    pixelPosition: pixelPos,
+                });
+                if (items.length) {
+                    (window as any).DropDown?.open(orig, items);
+                }
             });
 
             for (let event in this.broadcastEvents) {
@@ -3590,10 +3625,12 @@ form.submit();
             this.viewers.splice(index, 0, viewer);
             this._wire(viewer);
 
-            if (!this.active) {
-                this._commitActive(viewer, 'add');
-            } else {
-                this._syncActiveViewState();
+            if (setActive) {
+                if (!this.active) {
+                    this._commitActive(viewer, 'add');
+                } else {
+                    this._syncActiveViewState();
+                }
             }
         }
 
@@ -3815,7 +3852,6 @@ form.submit();
 
             try {
                 // Clear all items
-                delete viewer.__cachedUUID;
                 if (viewer.world && viewer.world.getItemCount() > 0) {
                     const count = viewer.world.getItemCount();
                     for (let i = count - 1; i >= 0; i--) {
@@ -3833,6 +3869,8 @@ form.submit();
                      */
                     this.raiseEvent('viewer-reset', { viewer: viewer, uniqueId: viewer.uniqueId, index });
                 } // else no need to call reset, not opened
+
+                delete viewer.__cachedUUID;
             } catch (e) {
                 console.warn("Viewer reset failed - will recreate. Cause:", e);
                 this.add(index); //recreate force

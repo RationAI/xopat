@@ -386,10 +386,11 @@ ${methods}`;
     const visualizationGuidance = hasVisualization ? `
 
 Visualization workflow:
-- Pick a shader with the small-then-detail pattern. Call \`getAvailableShaderTypes()\` to get the list of valid \`type\` strings, then \`getShaderDocs(type)\` for the one you intend to use. Do NOT call \`getShaderDocsText()\` / \`getShaderDocsJson()\` for routine work; the catalog can be large enough to be truncated and lose the entry you actually need.
-- A layer's allowed top-level fields and its \`params\` keys are exactly what the shader's docs entry declares. Anything outside that set is rejected before the user is asked to review the proposal - the LLM gets the validation error, not the user.
-- For tweaks, prefer \`updateVisualizationAt(index, patch)\` over rebuilding the whole list. \`replaceVisualizations\` and \`addVisualization\` reload the renderer.
-- A mutation that fails validation throws with a message listing the offending keys and the valid ones; read it, fix the layer, retry. The user is not prompted unless the proposal is structurally valid.` : '';
+- Visualization layers follow a published JSON Schema (Draft 2020-12). Call \`visualization.getSchema()\` ONCE at session start and cache the returned object - it is the single source of truth for every valid layer shape.
+- To pick a shader: scan \`schema.$defs.shaderLayers\`. Each entry carries \`x-intent\` (what the shader is for) and \`x-expects.dataKind\` (\`scalar\` / \`multi-channel\` / \`rgb\` / \`mask\` / \`any\`) and \`x-expects.channels\`. Match those against \`viewer.getMetadata().channels\`. \`x-controlCouplings\` lists rules that must hold (e.g. colormap class count vs threshold breaks).
+- To construct a layer: copy \`schema.$defs.shaderLayers[type].examples[0]\` and tweak. The example is a complete, validated layer; copying it preserves the right wrapping (\`{ id, type, params: {...} }\`) so controls never end up at the layer top level.
+- For tweaks within the SAME shader type (changing a control value, opacity, etc.), use \`updateVisualizationAt(index, patch)\` - it deep-merges params. To CHANGE a layer's shader type (e.g. colormap → heatmap), the old controls don't carry over; build a fresh layer from the new type's example and submit it via \`updateVisualizationAt\` (the host detects type-change and replaces the layer instead of merging) or \`replaceVisualizations\`. \`replaceVisualizations\` and \`addVisualization\` reload the renderer.
+- Submitted layers are validated against the schema BEFORE the user is asked to review. On validation failure the error message includes JSON Pointer paths (e.g. \`/shaders/L1/params/color: must match anyOf\`) showing exactly where the layer is wrong. Read the path, fix the field, retry - the user is not prompted unless the proposal is structurally valid.` : '';
 
     return `Viewer scripting is available.
 

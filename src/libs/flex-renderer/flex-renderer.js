@@ -461,30 +461,38 @@
                 //todo a bit dirty.. consider events / consider doing within webgl context
                 if (name === "second-pass") {
                     // generate HTML elements for ShaderLayer's controls and put them into the DOM
-                    if (this.htmlHandler) {
-                        this.htmlReset();
+                    try {
+                        if (this.htmlHandler) {
+                            this.htmlReset();
 
-                        this.forEachShaderLayerWithContext(
-                            this._shaders,
-                            this.getShaderLayerOrder(),
-                            (shaderLayer, shaderId, shaderConfig, htmlContext) => {
-                                this.htmlHandler(
-                                    shaderLayer,
-                                    shaderConfig,
-                                    htmlContext
-                                );
+                            this.forEachShaderLayerWithContext(
+                                this._shaders,
+                                this.getShaderLayerOrder(),
+                                (shaderLayer, shaderId, shaderConfig, htmlContext) => {
+                                    this.htmlHandler(
+                                        shaderLayer,
+                                        shaderConfig,
+                                        htmlContext
+                                    );
+                                }
+                            );
+
+                            this.raiseEvent('html-controls-created', {
+                                name: name,
+                                program: program,
+                                shaderLayers: this._shaders,
+                            });
+                        }
+
+                        for (const shaderId in this._shaders) {
+                            try {
+                                this._shaders[shaderId].init();
+                            } catch (e) {
+                                $.console.warn(`Shader ${shaderId} init(). The shader control will not work.`, e);
                             }
-                        );
-
-                        this.raiseEvent('html-controls-created', {
-                            name: name,
-                            program: program,
-                            shaderLayers: this._shaders,
-                        });
-                    }
-
-                    for (const shaderId in this._shaders) {
-                        this._shaders[shaderId].init();
+                        }
+                    } catch (e) {
+                        $.console.warn(`Second pass re-initialization error: the visualization might not render.`, e);
                     }
                 }
             }
@@ -3671,8 +3679,17 @@ $.FlexRenderer.UIControls = class {
 
         let originalType = defaultParams.type;
 
-        // merge dP < cP < rP recursively with rP having the biggest overwriting priority, without modifying the original objects
-        const params = $.extend(true, {}, defaultParams, customParams, requiredParams);
+        // merge dP < cP < rP recursively with rP having the biggest overwriting priority, without modifying the original objects.
+        // When the user picks a different `type`, defaultParams is type-specific config from the layer that
+        // describes the original control type — its keys (e.g. a string `default` palette name, mode-specific
+        // hints, titles) are not transferable to a different control type and would corrupt the new control's
+        // expected param shape. Drop defaultParams in that case and let the chosen control's own `supports`
+        // fill in defaults via getParams(). requiredParams is layer-enforced and stays.
+        const userType = customParams && customParams.type;
+        const typeOverridden = userType && originalType && userType !== originalType;
+        const params = typeOverridden
+            ? $.extend(true, {}, customParams, requiredParams)
+            : $.extend(true, {}, defaultParams, customParams, requiredParams);
 
         if (!this._items[params.type]) {
             const controlType = params.type;
@@ -4956,7 +4973,13 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
             let min = this.steps[0];
             this.steps = this.steps.slice(0, maximum + 1);
             this.maxSteps = this.steps.length - 1;
-            this.steps.forEach(x => (x - min) / (max - min));
+            // Normalize to 0..1 if the caller passed an unnormalized range. The previous
+            // `forEach` here computed the rescaled values and discarded them — a no-op
+            // disguised as normalization. `map` actually applies it.
+            const span = max - min;
+            if (span > 0 && (min !== 0 || max !== 1)) {
+                this.steps = this.steps.map(x => (x - min) / span);
+            }
             for (let i = this.maxSteps + 1; i < maximum + 1; i++) {
                 this.steps.push(-1);
             }
@@ -4987,15 +5010,20 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
         return css.join("");
     }
 
-    _setPallete(newPallete) {
-        if (typeof newPallete[0] === "string") {
-            let temp = newPallete; //if this.pallete passed
-            this.pallete = [];
-            for (let color of temp) {
-                this.pallete.push(...this.parser(color));
-            }
+    /**
+     * Rebuild `this.pallete` (flat float uniform buffer) from a canonical hex-string palette.
+     * Contract: `hexColors` MUST be an array of `"#rrggbb"` strings. Input normalization
+     * belongs at the boundary (init / updater / cache round-trip), not here. The previous
+     * implementation tried to be polymorphic (parse strings on one call, re-pad on another)
+     * and crashed when given any other shape because `this.pallete` was never initialized
+     * along the alternate branch.
+     */
+    _setPallete(hexColors) {
+        this.pallete = [];
+        for (const color of hexColors) {
+            this.pallete.push(...this.parser(color));
         }
-        for (let i = this.pallete.length; i < 3 * (this.MAX_SAMPLES); i++) {
+        while (this.pallete.length < 3 * this.MAX_SAMPLES) {
             this.pallete.push(0);
         }
     }
@@ -5085,6 +5113,52 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
         };
     }
 
+    _normalizeParams() {
+        // Hook overridden because the parent ColorMap's normalization encodes invariants specific to
+        // its own semantics (params.default must be a named palette string in some scheme group).
+        // custom_colormap has different semantics — params.default is the palette itself, as an array.
+        // Inheriting the parent's normalization would clobber legitimate user input.
+        // General rule: parent-class invariants that don't hold for a subclass belong behind an
+        // overridable hook, not in a constructor-driven mutation path.
+    }
+
+    /**
+     * Coerce an arbitrary palette value (user input or stale cache) into the canonical shape:
+     * an array of `"#rrggbb"` hex strings. Called once at the init boundary so every internal
+     * consumer (`_setPallete`, `cssGradient`, the color-input UI, the cache round-trip) can
+     * assume the canonical shape and skip its own defensive branching.
+     *
+     * Tolerated inputs:
+     *   - array of hex strings (canonical)              → returned as-is
+     *   - array of [r, g, b] or [r, g, b, a] in 0..1   → converted to hex (alpha dropped — GLSL is vec3)
+     *   - anything else                                  → warn, fall back to supports().default
+     */
+    _normalizePalette(value) {
+        if (Array.isArray(value) && value.length > 0) {
+            if (value.every(item => typeof item === "string")) {
+                return value;
+            }
+            if (value.every(item => Array.isArray(item) && item.length >= 3)) {
+                return value.map(rgb => this._rgbTupleToHex(rgb));
+            }
+        }
+        console.warn(
+            `[FlexRenderer.UIControls.custom_colormap] palette has unsupported shape; ` +
+            `expected an array of "#rrggbb" hex strings (or [r,g,b] tuples in 0..1). ` +
+            `Falling back to default.`,
+            value
+        );
+        return this.supports.default;
+    }
+
+    _rgbTupleToHex(tuple) {
+        const channel = (n) => {
+            const v = Math.max(0, Math.min(255, Math.round(Number(n) * 255)));
+            return v.toString(16).padStart(2, "0");
+        };
+        return `#${channel(tuple[0])}${channel(tuple[1])}${channel(tuple[2])}`;
+    }
+
     prepare() {
         this.MAX_SAMPLES = 32;
         this.GLOBAL_GLSL_KEY = 'custom_colormap';
@@ -5099,7 +5173,11 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
     }
 
     init() {
-        this.value = this.load(this.params.default);
+        // Pin the shape contract at the boundary: `this.value` / `this.colorPallete` are always
+        // an array of `"#rrggbb"` hex strings from this point on. The loaded value may be the
+        // user-supplied default in any tolerated input shape, or a stale cache entry from an
+        // earlier (possibly buggy) run — normalize once here so internal methods can trust it.
+        this.value = this._normalizePalette(this.load(this.params.default));
 
         if (!Array.isArray(this.steps)) {
             this.setSteps();
@@ -5242,8 +5320,20 @@ return masked * bigger / actualLength;
     init() {
         this._updatePending = false;
         //encoded values hold breaks values between min and max,
-        this.encodedValues = this.load(this.params.breaks, "breaks");
-        this.mask = this.load(this.params.mask, "mask");
+        // Pin the shape contract at the boundary: `encodedValues` and `mask` are always arrays of
+        // finite numbers from this point on. Loaders may return user-supplied input or stale cache
+        // entries in any shape; normalize once here so the rest of init() and every later method
+        // (slider setup, mask toggling, glDrawing) can skip its own defensive branching.
+        this.encodedValues = this._normalizeNumberArray(
+            this.load(this.params.breaks, "breaks"),
+            this.supports.breaks,
+            "breaks"
+        );
+        this.mask = this._normalizeNumberArray(
+            this.load(this.params.mask, "mask"),
+            this.supports.mask,
+            "mask"
+        );
 
         this.value = this.encodedValues.map(this._normalize.bind(this));
         this.value = this.value.slice(0, this.MAX_SLIDERS);
@@ -5392,6 +5482,35 @@ return masked * bigger / actualLength;
 
     _normalize(value) {
         return (value - this.params.min) / (this.params.max - this.params.min);
+    }
+
+    /**
+     * Coerce an arbitrary `breaks` / `mask` value (user input or stale cache) into the canonical
+     * shape: an array of finite numbers. Tolerates a single-number input (treated as a one-element
+     * array, since `breaks: 0.5` is a reasonable user shorthand). Anything else — non-array,
+     * empty, full of NaN — warns and returns the supports() default. The single-number branch is
+     * the only "convenience" coercion; everything else fails loudly so silent corruption can't
+     * propagate into uniforms.
+     */
+    _normalizeNumberArray(value, fallback, paramName) {
+        let candidate = value;
+        if (typeof candidate === "number" && Number.isFinite(candidate)) {
+            candidate = [candidate];
+        }
+        if (Array.isArray(candidate)) {
+            const cleaned = candidate
+                .map(v => Number.parseFloat(v))
+                .filter(v => Number.isFinite(v));
+            if (cleaned.length > 0) {
+                return cleaned;
+            }
+        }
+        console.warn(
+            `[FlexRenderer.UIControls.AdvancedSlider] params.${paramName} has unsupported shape; ` +
+            `expected an array of finite numbers. Falling back to default.`,
+            value
+        );
+        return fallback.slice();
     }
 
     _updateConnectStyles(container) {
@@ -10527,6 +10646,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     return;
                 }
 
+                if (this._destroyed) {
+                    this._rebuildHandle = null;
+                    return;
+                }
+
                 if (!this._configuredExternally) {
                     this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item => item.__shaderConfig.id));
                 }
@@ -12882,7 +13006,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 
     static description() {
-        return "data values encoded in color scale. The color control's `steps` (and `custom_colormap` array length) is coerced to `threshold.breaks.length + 1`. When both are set, `custom_colormap.default.length` wins for the `custom_colormap` type, otherwise `color.steps` wins. The `connect` flag (default true) additionally synchronizes step boundaries with break positions.";
+        return "Number of color classes is always threshold.breaks.length + 1. To set classes explicitly, use color = { type: \"custom_colormap\", default: [...colors], steps: N } (palette length N wins) OR color = \" { type: \"colormap\", default: \"PaletteName\", steps: N } (steps wins). The connect flag (default true) syncs step boundaries to break positions.";
     }
 
     static intent() {
@@ -14601,6 +14725,17 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         };
     }
 
+    static _readWrapperParam(config, name, fallback = undefined) {
+        const params = (config && config.params) || {};
+        if (params[name] !== undefined) {
+            return params[name];
+        }
+        if (config && config[name] !== undefined) {
+            return config[name];
+        }
+        return fallback;
+    }
+
     static get defaultControls() {
         return {
             timeline: {
@@ -14617,8 +14752,15 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             return config;
         }
 
-        const series = Array.isArray(config.series) ? config.series : [];
         const params = config.params || (config.params = {});
+        if (config.series !== undefined && params.series === undefined) {
+            params.series = config.series;
+        }
+        if (config.seriesRenderer !== undefined && params.seriesRenderer === undefined) {
+            params.seriesRenderer = config.seriesRenderer;
+        }
+
+        const series = Array.isArray(params.series) ? params.series : [];
         const defs = this.defaultControls || {};
         const required = defs.timeline && defs.timeline.required ? $.extend(true, {}, defs.timeline.required) : {};
         const fallback = defs.timeline && defs.timeline.default ? $.extend(true, {}, defs.timeline.default) : {};
@@ -14648,7 +14790,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
         params.timeline = timeline;
 
-        if (!Array.isArray(config.series)) {
+        if (!Array.isArray(params.series)) {
             return config;
         }
 
@@ -14660,7 +14802,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             return config;
         }
 
-        config.series = config.series.map((entry, index) => expand(entry, {
+        params.series = params.series.map((entry, index) => expand(entry, {
             shaderType: this.type(),
             param: "series",
             entryIndex: index,
@@ -14722,22 +14864,26 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         const activeWorldIndex = Number.isInteger(activeEntry)
             ? activeEntry
             : (Number.isInteger(activeEntry && activeEntry.worldIndex) ? activeEntry.worldIndex : null);
+        const delegateParams = $.extend(true, {}, (config && config.params) || {});
+        delete delegateParams.seriesRenderer;
+        delete delegateParams.series;
+        delete delegateParams.timeline;
 
         return {
             id: `${this.id}_delegate`,
             name: config.name || "Time series delegate",
-            type: config.seriesRenderer || "identity",
+            type: this.constructor._readWrapperParam(config, "seriesRenderer", "identity"),
             visible: 1,
             fixed: false,
             tiledImages: activeWorldIndex === null ? [] : [activeWorldIndex],
-            params: config.params || {},
+            params: delegateParams,
             cache: config.cache || {}
         };
     }
 
     construct() {
         const config = this.getConfig();
-        const series = (config && config.series) || [];
+        const series = this.constructor._readWrapperParam(config, "series", []) || [];
         const timeline = (config.params && config.params.timeline) || {};
         const min = Number(timeline.min) || 0;
         const step = Number(timeline.step) || 1;
@@ -15035,6 +15181,17 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                 };
             }
 
+            static _readWrapperParam(config, name, fallback = undefined) {
+                const params = (config && config.params) || {};
+                if (params[name] !== undefined) {
+                    return params[name];
+                }
+                if (config && config[name] !== undefined) {
+                    return config[name];
+                }
+                return fallback;
+            }
+
             static get defaultControls() {
                 return {
                     channel_offset: { // eslint-disable-line camelcase
@@ -15053,7 +15210,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
             _readIntConfig(name, fallback, minimum = null) {
                 const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
-                const raw = config[name];
+                const raw = this.constructor._readWrapperParam(config, name, fallback);
                 const parsed = Number.parseInt(raw, 10);
                 let value = Number.isFinite(parsed) ? parsed : fallback;
                 if (minimum != null && value < minimum) { // eslint-disable-line eqeqeq
@@ -15064,8 +15221,8 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
             _getDelegateSettings() {
                 const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
-                const delegateConfig = $.extend(true, {}, config.channelRendererConfig || {});
-                const delegateType = delegateConfig.type || config.channelRenderer || "single_channel";
+                const delegateConfig = $.extend(true, {}, this.constructor._readWrapperParam(config, "channelRendererConfig", {}) || {});
+                const delegateType = delegateConfig.type || this.constructor._readWrapperParam(config, "channelRenderer", "single_channel");
 
                 if (delegateType === this.constructor.type()) {
                     throw new Error("channel-series cannot recursively render itself.");
@@ -15123,6 +15280,11 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
             _buildDelegateShaderConfig(settings) {
                 const config = this.getConfig ? (this.getConfig() || {}) : (this.__shaderConfig || {});
+                const delegateParams = $.extend(true, {}, ((settings.delegateConfig && settings.delegateConfig.params) || {}));
+                delete delegateParams.channelRenderer;
+                delete delegateParams.channelRendererConfig;
+                delete delegateParams.sourceIndex;
+                delete delegateParams.channel_offset;
                 return $.extend(true, {
                     id: `${this.id}_delegate`,
                     name: config.name || settings.delegateType,
@@ -15130,11 +15292,12 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                     visible: 1,
                     fixed: false,
                     tiledImages: (config.tiledImages || []).slice(),
-                    params: {},
+                    params: delegateParams,
                     cache: {}
                 }, settings.delegateConfig, {
                     id: `${this.id}_delegate`,
                     type: settings.delegateType,
+                    params: delegateParams,
                     tiledImages: Array.isArray(settings.delegateConfig.tiledImages) ?
                         settings.delegateConfig.tiledImages.slice() :
                         ((config.tiledImages || []).slice())
@@ -16160,60 +16323,53 @@ function makeWorker() {
         },
 
         compileConfigSchemaModel() {
-            const controlTypedefs = this._compileControlTypedefs();
-            const shaders = $.FlexRenderer.ShaderMediator.availableShaders().map(Shader => {
+            const availableShaders = $.FlexRenderer.ShaderMediator.availableShaders();
+            const uiControlEnvelopes = this._compileJsonSchemaUiControlEnvelopes();
+            const shaderLayerRefs = availableShaders.map(Shader => ({
+                $ref: `#/$defs/shaderLayers/${Shader.type()}`
+            }));
+            const shaderLayers = {};
+
+            for (const Shader of availableShaders) {
                 const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
-                return {
-                    type: Shader.type(),
-                    name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
-                    description: typeof Shader.description === "function" ? Shader.description() : "",
-                    intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
-                    expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
-                    exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
-                    controlCouplings: this._serializeControlCouplings(Shader),
-                    rootConfig: this._compileShaderRootConfigSchema(Shader),
-                    params: this._compileShaderParamsSchema(Shader, sources),
-                    sources: sources.map((src, index) => ({
-                        index,
-                        description: src.description || "",
-                        acceptedChannelCounts: this._probeAcceptedChannelCounts(src)
-                    }))
-                };
-            });
+                shaderLayers[Shader.type()] = this._compileShaderLayerJsonSchema(
+                    Shader,
+                    sources,
+                    uiControlEnvelopes,
+                    shaderLayerRefs
+                );
+            }
 
-            const model = {
-                version: 1,
-                generatedAt: new Date().toISOString(),
-                rendererConfig: {
-                    type: "object",
-                    usage: "Renderer configuration snapshot with explicit shader order and shader definitions.",
-                    properties: [
-                        {
-                            key: "order",
-                            type: "string[]",
-                            required: false,
-                            usage: "Optional top-level render order override. When omitted, the renderer falls back to Object.keys(shaders).",
-                            overridesDefaultOrder: true,
-                            targets: "top-level",
-                            defaultBehavior: "Object.keys(shaders)"
+            return {
+                $schema: "https://json-schema.org/draft/2020-12/schema",
+                $id: "https://flex-renderer/schemas/visualization-config/v2.json",
+                title: "FlexRenderer visualization config",
+                description: "Published JSON Schema for renderer visualization configuration.",
+                type: "object",
+                additionalProperties: false,
+                required: ["shaders"],
+                properties: {
+                    order: {
+                        type: "array",
+                        items: { type: "string" },
+                        description: "Optional top-level render order override. Defaults to Object.keys(shaders)."
+                    },
+                    shaders: {
+                        type: "object",
+                        additionalProperties: {
+                            oneOf: deepClone(shaderLayerRefs)
                         },
-                        {
-                            key: "shaders",
-                            type: "Object<string, ShaderConfig>",
-                            required: true,
-                            usage: "Map of shader id -> shader configuration object."
-                        }
-                    ]
+                        description: "Map of shader id -> shader configuration object."
+                    }
                 },
-                shaderConfigBase: this._compileBaseShaderConfigSchema(),
-                controlTypedefs,
-                uiControls: this._compileControlSchemas(),
-                shaders
+                $defs: {
+                    uiControlEnvelopes,
+                    shaderLayers
+                },
+                "x-schemaVersion": 2,
+                "x-generatedAt": new Date().toISOString(),
+                "x-legacyControlTypeKey": "type"
             };
-
-            this._warnIfExampleParamsInconsistent(shaders);
-
-            return model;
         },
 
         async compileConfigSchemaModelAsync() {
@@ -16794,6 +16950,597 @@ function makeWorker() {
                     }
                 ]
             };
+        },
+
+        _compileJsonSchemaUiControlEnvelopes() {
+            const built = this._buildControls();
+            const envelopes = {};
+
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    const uiType = control && control.uiControlType;
+                    if (!uiType || envelopes[uiType]) {
+                        continue;
+                    }
+                    envelopes[uiType] = this._compileJsonSchemaUiControlEnvelope(control);
+                }
+            }
+
+            return envelopes;
+        },
+
+        _compileJsonSchemaUiControlEnvelope(control) {
+            const docs = this._getControlClassDocs(control) || {};
+            const shape = this._compileControlConfigShape(control);
+            const properties = {
+                uiType: { const: control.uiControlType }
+            };
+            const required = ["uiType"];
+
+            for (const [key, value] of Object.entries(shape || {})) {
+                if (key === "type" || key === "uiType") {
+                    continue;
+                }
+                properties[key] = this._compileJsonSchemaFromDescriptor(value);
+            }
+
+            return {
+                type: "object",
+                additionalProperties: false,
+                required,
+                properties,
+                description: docs.description || docs.summary || `${control.uiControlType} control envelope.`,
+                "x-glType": control.type,
+                "x-legacyControlTypeKey": "type"
+            };
+        },
+
+        _compileShaderLayerJsonSchema(Shader, sources, uiControlEnvelopes, shaderLayerRefs) {
+            const shaderType = Shader.type();
+            const name = typeof Shader.name === "function" ? Shader.name() : shaderType;
+            const description = typeof Shader.description === "function" ? Shader.description() : "";
+            const properties = {
+                id: { type: "string" },
+                name: { type: "string" },
+                type: { const: shaderType },
+                visible: {
+                    type: ["number", "boolean"]
+                },
+                fixed: { type: "boolean" },
+                tiledImages: {
+                    type: "array",
+                    items: {
+                        type: "integer",
+                        minimum: 0
+                    }
+                }
+            };
+
+            if (Shader.type() === "group") {
+                properties.order = {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Optional child render order override inside the group. Defaults to Object.keys(shaders)."
+                };
+                properties.shaders = {
+                    type: "object",
+                    additionalProperties: {
+                        oneOf: deepClone(shaderLayerRefs)
+                    }
+                };
+            }
+
+            const paramsSchema = this._compileShaderParamsJsonSchema(
+                Shader,
+                sources,
+                uiControlEnvelopes
+            );
+            if (Object.keys(paramsSchema.properties || {}).length > 0) {
+                properties.params = paramsSchema;
+            }
+
+            const schema = {
+                type: "object",
+                additionalProperties: false,
+                required: ["type"],
+                properties,
+                title: name,
+                description: this._buildShaderSchemaDescription(Shader, description),
+                "x-sources": (sources || []).map((src, index) => ({
+                    index,
+                    description: src.description || "",
+                    acceptedChannelCounts: this._probeAcceptedChannelCounts(src)
+                })),
+                "x-controlCouplings": this._compileJsonSchemaControlCouplings(Shader)
+            };
+
+            const intent = typeof Shader.intent === "function" ? Shader.intent() : undefined;
+            if (intent) {
+                schema["x-intent"] = intent;
+            }
+            const expects = this._resolveShaderSchemaExpects(Shader, sources);
+            if (expects) {
+                schema["x-expects"] = expects;
+            }
+
+            const examples = this._buildShaderLayerExamples(Shader, sources);
+            if (examples.length) {
+                schema.examples = examples;
+            }
+
+            return schema;
+        },
+
+        _compileShaderParamsJsonSchema(Shader, sources, uiControlEnvelopes) {
+            const compiled = this._compileShaderParamsSchema(Shader, sources);
+            const properties = {};
+
+            for (const item of compiled.builtIns || []) {
+                properties[item.key] = this._compileBuiltInParamJsonSchema(item);
+            }
+
+            for (const control of compiled.controls || []) {
+                properties[control.key] = this._compileControlParamJsonSchema(control, uiControlEnvelopes);
+            }
+
+            for (const item of compiled.customParams || []) {
+                properties[item.key] = this._compileCustomParamJsonSchema(Shader, item);
+            }
+
+            return {
+                type: "object",
+                additionalProperties: false,
+                properties
+            };
+        },
+
+        _compileControlParamJsonSchema(control, uiControlEnvelopes) {
+            const normalizedUiTypes = (control.supportedUiTypes || [])
+                .map(uiType => this._normalizePublishedUiType(uiType))
+                .filter(uiType => !!uiControlEnvelopes[uiType]);
+            const primitiveSchemas = this._compileControlPrimitiveSchemasFromEnvelopes(normalizedUiTypes, uiControlEnvelopes);
+            const refs = normalizedUiTypes.map(uiType => ({ $ref: `#/$defs/uiControlEnvelopes/${uiType}` }));
+            const variants = primitiveSchemas.concat(refs);
+
+            if (!variants.length) {
+                return {};
+            }
+            if (variants.length === 1) {
+                return variants[0];
+            }
+            return { anyOf: variants };
+        },
+
+        _normalizePublishedUiType(uiType) {
+            if (!uiType) {
+                return uiType;
+            }
+            if ($.FlexRenderer.UIControls && $.FlexRenderer.UIControls._items && $.FlexRenderer.UIControls._items[uiType]) {
+                const item = $.FlexRenderer.UIControls._items[uiType];
+                return item.uiType || uiType;
+            }
+            return uiType;
+        },
+
+        _compileControlPrimitiveSchemasFromEnvelopes(uiTypes, uiControlEnvelopes) {
+            const seen = new Set();
+            const schemas = [];
+
+            for (const uiType of uiTypes || []) {
+                const envelope = uiControlEnvelopes[uiType];
+                const defaultSchema = envelope && envelope.properties && envelope.properties.default;
+                const primitiveSchema = this._compilePrimitiveSchemaFromEnvelopeDefault(uiType, defaultSchema);
+                if (!primitiveSchema) {
+                    continue;
+                }
+                const key = JSON.stringify(primitiveSchema);
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                schemas.push(primitiveSchema);
+            }
+
+            return schemas;
+        },
+
+        _compilePrimitiveSchemaFromEnvelopeDefault(uiType, defaultSchema) {
+            if (!defaultSchema || !defaultSchema.type) {
+                return null;
+            }
+
+            const normalizedType = Array.isArray(defaultSchema.type)
+                ? defaultSchema.type[0]
+                : defaultSchema.type;
+
+            if (uiType === "color") {
+                return {
+                    type: "string",
+                    pattern: "^#[0-9a-fA-F]{6,8}$"
+                };
+            }
+
+            switch (normalizedType) {
+                case "string":
+                    return { type: "string" };
+                case "integer":
+                case "number":
+                    return { type: "number" };
+                case "boolean":
+                    return { type: "boolean" };
+                case "array":
+                    return { type: "array" };
+                default:
+                    return null;
+            }
+        },
+
+        _compileSchemaFromSampleValue(value) {
+            if (value === null) {
+                return { type: "null" };
+            }
+            if (Array.isArray(value)) {
+                const itemSchemas = value
+                    .map(item => this._compileSchemaFromSampleValue(item))
+                    .filter(Boolean);
+                const samePrimitiveType = itemSchemas.length > 0 &&
+                    itemSchemas.every(schema => schema.type && schema.type === itemSchemas[0].type);
+
+                return samePrimitiveType
+                    ? { type: "array", items: { type: itemSchemas[0].type } }
+                    : { type: "array" };
+            }
+            if (typeof value === "string") {
+                return { type: "string" };
+            }
+            if (typeof value === "number") {
+                return Number.isInteger(value) ? { type: "integer" } : { type: "number" };
+            }
+            if (typeof value === "boolean") {
+                return { type: "boolean" };
+            }
+            if (typeof value === "object") {
+                return { type: "object" };
+            }
+            return null;
+        },
+
+        _compileBuiltInParamJsonSchema(item) {
+            let schema;
+            if (item.allowedValues) {
+                schema = { enum: deepClone(item.allowedValues) };
+            } else if (item.key && item.key.startsWith("use_channel_base")) {
+                schema = {
+                    type: "integer",
+                    minimum: 0
+                };
+            } else {
+                schema = this._compileTypeExpressionSchema(item.type, firstDefined(item.required, item.default));
+            }
+
+            if (item.default === null) {
+                schema = this._withNullableSchema(schema);
+            }
+
+            if (item.default !== undefined) {
+                schema.default = deepClone(item.default);
+            }
+            if (item.usage) {
+                schema.description = item.usage;
+            }
+            return schema;
+        },
+
+        _compileCustomParamJsonSchema(Shader, item) {
+            const schema = this._compileSpecialCustomParamJsonSchema(Shader, item) ||
+                this._compileTypeExpressionSchema(item.type, firstDefined(item.required, item.default));
+            if (item.default !== undefined && item.default !== null) {
+                schema.default = deepClone(item.default);
+            }
+            if (item.usage) {
+                schema.description = item.usage;
+            }
+            return schema;
+        },
+
+        _compileSpecialCustomParamJsonSchema(Shader, item) {
+            const shaderType = Shader && typeof Shader.type === "function" ? Shader.type() : "";
+            if (shaderType === "time-series" && item.key === "series") {
+                return {
+                    type: "array",
+                    items: {
+                        oneOf: [
+                            { type: "integer", minimum: 0 },
+                            { type: "string" },
+                            { type: "object" }
+                        ]
+                    }
+                };
+            }
+            if (shaderType === "channel-series" && item.key === "channelRendererConfig") {
+                return {
+                    type: "object"
+                };
+            }
+            if (shaderType === "channel-series" && item.key === "sourceIndex") {
+                return {
+                    type: "integer",
+                    minimum: 0
+                };
+            }
+            return null;
+        },
+
+        _compileJsonSchemaFromDescriptor(descriptor) {
+            const schema = this._compileTypeExpressionSchema(
+                descriptor && descriptor.type,
+                descriptor && descriptor.default
+            );
+
+            if (descriptor && descriptor.default !== undefined) {
+                schema.default = deepClone(descriptor.default);
+            }
+            if (descriptor && descriptor.default === null) {
+                return this._withNullableSchema(schema);
+            }
+            if (descriptor && descriptor.allowedValues) {
+                schema.enum = deepClone(descriptor.allowedValues);
+            }
+            if (descriptor && descriptor.examples) {
+                schema.examples = deepClone(descriptor.examples);
+            }
+            if (descriptor && descriptor.usage) {
+                schema.description = descriptor.usage;
+            }
+            return schema;
+        },
+
+        _compileTypeExpressionSchema(typeExpression, sampleValue = undefined) {
+            if (!typeExpression || typeExpression === "unknown" || typeExpression === "json") {
+                return {};
+            }
+
+            if (typeExpression.endsWith("[]")) {
+                return {
+                    type: "array",
+                    items: this._compileTypeExpressionSchema(typeExpression.slice(0, -2))
+                };
+            }
+
+            const arrayMatch = typeExpression.match(/^array<(.*)>$/);
+            if (arrayMatch) {
+                return {
+                    type: "array",
+                    items: this._compileTypeExpressionSchema(arrayMatch[1])
+                };
+            }
+
+            const parts = typeExpression.split("|").map(part => part.trim()).filter(Boolean);
+            if (parts.length > 1) {
+                const schemas = parts.map(part => this._compileTypeExpressionSchema(part, sampleValue));
+                const simpleTypes = schemas.every(schema =>
+                    schema &&
+                    Object.keys(schema).length === 1 &&
+                    typeof schema.type === "string"
+                );
+                if (simpleTypes) {
+                    return {
+                        type: schemas.map(schema => schema.type)
+                    };
+                }
+                return { oneOf: schemas };
+            }
+
+            switch (typeExpression) {
+                case "string":
+                    return { type: "string" };
+                case "number":
+                    return Number.isInteger(sampleValue) ? { type: "integer" } : { type: "number" };
+                case "boolean":
+                    return { type: "boolean" };
+                case "null":
+                    return { type: "null" };
+                case "array":
+                    return { type: "array" };
+                case "object":
+                    return { type: "object" };
+                case "integer":
+                    return { type: "integer" };
+                default:
+                    return {};
+            }
+        },
+
+        _withNullableSchema(schema = {}) {
+            if (schema.type && typeof schema.type === "string") {
+                return {
+                    ...schema,
+                    type: [schema.type, "null"]
+                };
+            }
+            if (Array.isArray(schema.type) && !schema.type.includes("null")) {
+                return {
+                    ...schema,
+                    type: schema.type.concat(["null"])
+                };
+            }
+            return schema;
+        },
+
+        _normalizeShaderExampleParams(Shader, value) {
+            if (!value || typeof value !== "object" || Array.isArray(value)) {
+                return value;
+            }
+
+            const controlTypes = new Map(
+                this._compileControlDescriptors(Shader).map(control => [control.name, control.supportedUiTypes || []])
+            );
+            const out = {};
+            for (const [key, entry] of Object.entries(value)) {
+                const isKnownUiControl = entry &&
+                    typeof entry === "object" &&
+                    !Array.isArray(entry) &&
+                    typeof entry.type === "string" &&
+                    $.FlexRenderer.UIControls &&
+                    typeof $.FlexRenderer.UIControls.getUiClass === "function" &&
+                    $.FlexRenderer.UIControls.getUiClass(entry.type);
+
+                if (isKnownUiControl) {
+                    out[key] = { uiType: entry.type };
+                    for (const [innerKey, innerValue] of Object.entries(entry)) {
+                        if (innerKey === "type") {
+                            continue;
+                        }
+                        out[key][innerKey] = deepClone(innerValue);
+                    }
+                } else if (entry && typeof entry === "object" && !Array.isArray(entry) && !entry.uiType) {
+                    const supportedUiTypes = controlTypes.get(key) || [];
+                    if (supportedUiTypes.length === 1) {
+                        out[key] = {
+                            uiType: supportedUiTypes[0],
+                            ...deepClone(entry)
+                        };
+                    } else {
+                        out[key] = deepClone(entry);
+                    }
+                } else {
+                    out[key] = deepClone(entry);
+                }
+            }
+            return out;
+        },
+
+        _buildShaderLayerExamples(Shader, sources) {
+            let exampleParams;
+            if (Shader && typeof Shader.exampleParams === "function") {
+                exampleParams = Shader.exampleParams();
+            }
+            if (!exampleParams || typeof exampleParams !== "object") {
+                exampleParams = this._synthesizeExampleParamsFromDefaults(Shader, sources);
+            }
+            if (!exampleParams || typeof exampleParams !== "object") {
+                return [];
+            }
+
+            const example = {
+                id: `${Shader.type()}_example`,
+                type: Shader.type()
+            };
+
+            if (sources && sources.length) {
+                example.tiledImages = sources.map((_, index) => index);
+            }
+            if (Shader.type() === "group" && exampleParams.shaders) {
+                Object.assign(example, deepClone(exampleParams));
+            } else {
+                example.params = this._normalizeShaderExampleParams(Shader, exampleParams);
+            }
+
+            return [example];
+        },
+
+        _synthesizeExampleParamsFromDefaults(Shader, sources) {
+            if (!Shader || typeof Shader.type !== "function") {
+                return null;
+            }
+            if (Shader.type() === "group") {
+                return {
+                    shaders: {
+                        child_1: {  // eslint-disable-line camelcase
+                            type: "identity",
+                            params: {
+                                use_channel0: "r" // eslint-disable-line camelcase
+                            }
+                        }
+                    },
+                    order: ["child_1"]
+                };
+            }
+            if (Shader.type() === "time-series") {
+                return {
+                    seriesRenderer: "identity",
+                    series: [0],
+                    timeline: {
+                        type: "range_input",
+                        default: 0,
+                        min: 0,
+                        max: 0,
+                        step: 1
+                    }
+                };
+            }
+
+            const params = {};
+            const compiled = this._compileShaderParamsSchema(Shader, sources);
+            for (const builtIn of compiled.builtIns || []) {
+                if (builtIn.default !== undefined && builtIn.default !== null) {
+                    params[builtIn.key] = deepClone(builtIn.default);
+                }
+            }
+            for (const control of this._compileControlDescriptors(Shader)) {
+                const seed = firstDefined(control.required, control.default);
+                if (seed !== undefined && seed !== null) {
+                    params[control.name] = deepClone(seed);
+                }
+            }
+            for (const [name, meta] of Object.entries(Shader.customParams || {})) {
+                if (meta && meta.default !== undefined) {
+                    params[name] = deepClone(meta.default);
+                }
+            }
+            return Object.keys(params).length ? params : {};
+        },
+
+        _compileJsonSchemaControlCouplings(Shader) {
+            const couplings = this._serializeControlCouplings(Shader);
+            if (!Array.isArray(couplings) || !couplings.length) {
+                return [];
+            }
+            return couplings.map(coupling => ({
+                name: coupling.name,
+                summary: coupling.summary,
+                controls: deepClone(coupling.controls || [])
+            }));
+        },
+
+        _buildShaderSchemaDescription(Shader, description) {
+            const type = Shader && typeof Shader.type === "function" ? Shader.type() : "";
+            if (type === "time-series" || type === "channel-series") {
+                return `${description} Wrapper-specific settings live under params alongside built-ins and UI controls.`;
+            }
+            return description;
+        },
+
+        _resolveShaderSchemaExpects(Shader, sources = []) {
+            if (Shader && typeof Shader.expects === "function") {
+                const explicit = Shader.expects();
+                if (explicit && explicit.dataKind) {
+                    return explicit;
+                }
+            }
+
+            const type = Shader && typeof Shader.type === "function" ? Shader.type() : "";
+            if (type === "group" || type === "time-series" || type === "channel-series") {
+                return { dataKind: "any", channels: "any" };
+            }
+
+            const accepted = (sources || [])
+                .map(src => this._probeAcceptedChannelCounts(src))
+                .filter(values => Array.isArray(values) && values.length);
+            if (!accepted.length) {
+                return null;
+            }
+            const first = accepted[0];
+            if (first.length === 1 && first[0] === 1) {
+                return { dataKind: "scalar", channels: 1 };
+            }
+            if (first.length === 1 && first[0] === 3) {
+                return { dataKind: "rgb", channels: 3 };
+            }
+            if (first.length === 1 && first[0] === 4) {
+                return { dataKind: "rgb", channels: 4 };
+            }
+            return { dataKind: "multi-channel", channels: "any" };
         },
 
         _compileShaderRootConfigSchema(Shader) {

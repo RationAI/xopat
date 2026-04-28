@@ -13,6 +13,8 @@ export class AppBar {
         window.addEventListener('app:layout-change', (e) => {
             this.onLayoutChange?.(e.detail);
         });
+        this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
         this.menu = new MainPanel({
@@ -102,7 +104,7 @@ export class AppBar {
         this.rightMenuCollapsed.attachTo($("#top-side-left-user"));
         this.rightMenuCollapsed.set(Menu.DESIGN.ICONONLY);
 
-        if (window.innerWidth < 600) {
+        if (window.innerWidth < this.maxMobileWidth) {
             this.rightMenu.setClass("display", "hidden");
         } else {
             this.rightMenuCollapsed.setClass("display", "hidden");
@@ -717,7 +719,7 @@ export class AppBar {
         }
     }
     onLayoutChange(details) {
-        if (details.width < 600) {
+        if (details.width < this.maxMobileWidth) {
             this.rightMenu.setClass("display", "hidden");
             this.rightMenuCollapsed.setClass("display", "");
         } else {

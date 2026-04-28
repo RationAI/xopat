@@ -500,7 +500,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
                 return await uploadEmbeddedDataUrl(dataUrl, path);
             }
 
-            if (depth >= 4) {
+            if (depth >= 19) {
                 return '[Object truncated: maximum serialization depth reached]';
             }
 

@@ -10,6 +10,7 @@ import { ViewerStateBindingController } from "./classes/app/viewer-state-binding
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
+import { SessionSyncController } from "./classes/session/session-sync";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
@@ -535,6 +536,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * @type {Window.ViewerManager}
      */
     window.VIEWER_MANAGER = new ViewerManager(ENV, CONFIG);
+    /**
+     * Live-collaboration session singleton. See src/SESSION.md.
+     * Instantiated here so providers can lazily reach VIEWER_MANAGER
+     * once they subscribe (i.e. once a session actually starts).
+     */
+    window.SESSION = new SessionSyncController();
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with

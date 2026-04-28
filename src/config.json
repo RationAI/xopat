@@ -315,7 +315,6 @@
               "dist/app.js",
               "user-interface.js",
               "layers.js",
-              "dist/tile-source.js"
             ]
         },
         "ui": {
@@ -329,7 +328,8 @@
         "libs": {
             "primer": "primer_css.css",
             "fontawesome": "fontawesome/css/v6-all.css",
-            "tailwind": "tailwind.min.css"
+            "tailwind": "tailwind.min.css",
+            "ajv": "ajv7.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",

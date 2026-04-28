@@ -76,6 +76,15 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         interactive: true,
         htmlHandler: options.htmlHandler || (() => {}),
         htmlReset: options.htmlReset || (() => {}),
+        // The OSD navigator is created asynchronously; FlexRenderer.rebuild()
+        // accesses `viewer.navigator.drawer.rebuild()` without a null guard
+        // (flex-renderer.js:10003), so any rebuild that fires before the navigator
+        // drawer is wired crashes. We disable shader-mirroring into the navigator
+        // for the playground (the navigator still renders the slide for navigation
+        // — only the shader pipeline is not duplicated there). Toggle on once the
+        // host & navigator drawer init order is bullet-proof, or once the upstream
+        // null-guard lands.
+        handleNavigator: false,
     };
 
     const renderingCapability = flexRendererClass && typeof flexRendererClass.ensureRuntimeSupport === "function"

@@ -16,6 +16,7 @@ declare global {
     var XOpatPlugin: new (id: string) => IXOpatPlugin;
     var VIEWER_MANAGER: any;
     var VIEWER: OpenSeadragon.Viewer;
+    var SESSION: SessionSync;
     var USER_INTERFACE: any;
     var van: any;
     var UI: any;
@@ -39,6 +40,7 @@ declare global {
         APPLICATION_CONTEXT: ApplicationContext;
         VIEWER_MANAGER: any;
         VIEWER: OpenSeadragon.Viewer;
+        SESSION: SessionSync;
         plugin: (id: string) => IXOpatPlugin | undefined;
         pluginMeta: (id: string, metaKey: string) => any;
         singletonModule: (id: string) => IXOpatModuleSingleton | undefined;

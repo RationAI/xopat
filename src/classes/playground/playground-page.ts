@@ -73,6 +73,7 @@ export interface PlaygroundPageHandle {
 }
 
 const HTML_NS_KEY = "xopat-playground-page";
+let pageCounter = 0;
 
 export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHandle {
     const initialVisualizationClone = deepClone(init.visualization);
@@ -96,26 +97,26 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
     centerWrap.style.background = "var(--fallback-b3, #111)";
     root.appendChild(centerWrap);
 
+    // Stable IDs for OSD lookups. Generated upfront so the menu and the viewer
+    // agree on the same navigator-host id.
+    const cellId = `xopat-pg-cell-${++pageCounter}`;
+    const navigatorId = `${cellId}-navigator`;
+
     const cellEl = document.createElement("div");
+    cellEl.id = cellId;
     cellEl.style.position = "absolute";
     cellEl.style.inset = "0";
     centerWrap.appendChild(cellEl);
-
-    const navigatorEl = document.createElement("div");
-    navigatorEl.style.position = "absolute";
-    navigatorEl.style.right = "8px";
-    navigatorEl.style.top = "8px";
-    navigatorEl.style.width = "180px";
-    navigatorEl.style.height = "120px";
-    navigatorEl.style.zIndex = "5";
-    navigatorEl.style.pointerEvents = "auto";
-    centerWrap.appendChild(navigatorEl);
 
     // Right-side menu host: the RightSideViewerMenu's root is `position: absolute`
     // (designed to overlay the OSD cell, like the main app does), so we mount it as
     // a sibling overlay inside centerWrap rather than as a separate flex column —
     // otherwise the absolute element collapses to its content height inside a flex
     // column and the menu disappears. See ui/classes/components/rightSideViewerMenu.mjs.
+    //
+    // The menu's NavigatorSideMenu also creates the navigator host element with
+    // id=navigatorId. We mount the menu BEFORE constructing the OSD viewer so the
+    // navigator host is in the DOM by the time OSD looks it up by id.
     const menuOverlay = document.createElement("div");
     menuOverlay.style.position = "absolute";
     menuOverlay.style.top = "0";
@@ -154,34 +155,15 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         if (activated || disposed) return;
         activated = true;
 
-        try {
-            viewerHandle = setupIsolatedViewer({
-                cellEl,
-                navigatorEl,
-                htmlHandler: (shaderLayer: any, shaderConfig: any, htmlContext: any) => {
-                    try {
-                        menuInstance?.getShadersTab?.()?.createLayer?.(viewerHandle?.viewer, shaderLayer, shaderConfig, htmlContext);
-                    } catch (e) {
-                        console.warn("[PlaygroundPage] htmlHandler failed", e);
-                    }
-                },
-                htmlReset: () => {
-                    try { menuInstance?.getShadersTab?.()?.clearLayers?.(); } catch (e) { /* noop */ }
-                },
-            });
-        } catch (e) {
-            console.error("[PlaygroundPage] failed to spawn isolated viewer", e);
-            renderViewerSetupError(centerWrap, e);
-            return;
-        }
-
-        // Mount scoped right-side menu (no AppBar pollution, custom viewer resolver).
+        // 1) Mount the right-side menu FIRST. Its NavigatorSideMenu creates a
+        //    container with id=navigatorId — OSD looks that id up at viewer
+        //    construction time, so it must already be in the DOM.
         const UI = (window as any).UI;
         if (UI?.RightSideViewerMenu) {
             try {
                 menuInstance = new UI.RightSideViewerMenu(
-                    cellEl.id,
-                    navigatorEl.id,
+                    cellId,
+                    navigatorId,
                     {
                         skipAppBarRegistration: true,
                         viewerResolver: () => viewerHandle?.viewer,
@@ -201,7 +183,6 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                     },
                 );
                 menuOverlay.appendChild(menuInstance.create());
-                menuInstance.init(viewerHandle.viewer);
             } catch (e) {
                 console.error("[PlaygroundPage] failed to mount RightSideViewerMenu", e);
             }
@@ -212,10 +193,49 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
             menuOverlay.appendChild(note);
         }
 
+        // 2) Resolve the navigator-host element the menu just appended.
+        const navigatorHost = document.getElementById(navigatorId) as HTMLElement | null;
+        if (!navigatorHost) {
+            console.warn(`[PlaygroundPage] navigator host #${navigatorId} not found in DOM — navigator will be unavailable`);
+        }
+
+        // 3) Now create the OSD viewer. It will mount the navigator into the
+        //    menu's nav host element (the same element rendered in the menu's
+        //    "Navigator" tab).
+        try {
+            viewerHandle = setupIsolatedViewer({
+                cellEl,
+                navigatorEl: navigatorHost || cellEl, // fallback so OSD doesn't crash
+                cellId,
+                htmlHandler: (shaderLayer: any, shaderConfig: any, htmlContext: any) => {
+                    try {
+                        menuInstance?.getShadersTab?.()?.createLayer?.(viewerHandle?.viewer, shaderLayer, shaderConfig, htmlContext);
+                    } catch (e) {
+                        console.warn("[PlaygroundPage] htmlHandler failed", e);
+                    }
+                },
+                htmlReset: () => {
+                    try { menuInstance?.getShadersTab?.()?.clearLayers?.(); } catch (e) { /* noop */ }
+                },
+            });
+        } catch (e) {
+            console.error("[PlaygroundPage] failed to spawn isolated viewer", e);
+            renderViewerSetupError(centerWrap, e);
+            return;
+        }
+
+        // 4) Attach the side menu to the now-live viewer (this wires the
+        //    shaders-tab's per-layer UI handlers).
+        try {
+            menuInstance?.init?.(viewerHandle.viewer);
+        } catch (e) {
+            console.error("[PlaygroundPage] menu.init failed", e);
+        }
+
         // Open the source viewer's primary tile image in the playground viewer so
         // the user sees the same slide. v2 will replace this with a full
         // visualization-pipeline apply.
-        openSourceMirror(viewerHandle.viewer, init);
+        openSourceMirror(viewerHandle.viewer, init, init.id);
 
         // Edit watcher: any 'cache-applied' / shader UI mutation should mark dirty.
         // FlexRenderer raises 'render' on every redraw; we instead listen for a
@@ -356,35 +376,151 @@ function renderViewerSetupError(host: HTMLElement, err: any) {
 }
 
 /**
- * Open the same primary tile image as the source viewer in the playground
- * viewer, so the user sees the slide. This is a deliberate v1 simplification —
- * visualization layers / FlexRenderer shader bindings are NOT applied.
+ * Mirror the source viewer into the playground:
+ *   - opens every source tiled image (in the same order so world indexes match),
+ *   - clones the source FlexRenderer's shader map with every shader id prefixed
+ *     by a per-page namespace, then applies it via `drawer.overrideConfigureAll`.
+ *
+ * Why prefix shader ids? FlexRenderer derives every shader-control's DOM id from
+ * `shaderLayer.id` (e.g. `${shader.id}_${controlName}`). Without a unique prefix,
+ * the playground's side-menu controls would share DOM ids with the parent right-
+ * rail's already-mounted controls, and noUiSlider / colormap controls collide
+ * with "Slider was already initialized" / `Float32Array.from(undefined)`.
+ *
+ * The prefix is applied recursively to:
+ *   - top-level shader-map keys + each shader's `.id`,
+ *   - group children's `shaders` map keys + their `.id`,
+ *   - `order` arrays at every nesting level.
+ *
+ * Numeric refs (`tiledImages: [worldIndex]`, `dataReferences: [dataIndex]`,
+ * cache control values) are left untouched.
  */
-function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit) {
+function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageId: string) {
     if (!playgroundViewer) return;
     const VM: any = (window as any).VIEWER_MANAGER;
     const sourceViewer = init.sourceViewerUniqueId && VM
         ? VM.getViewer?.(init.sourceViewerUniqueId, false)
         : undefined;
 
-    if (sourceViewer && sourceViewer.world?.getItemAt) {
-        const primary = sourceViewer.world.getItemAt(0);
-        if (primary && primary.source) {
-            try {
-                playgroundViewer.open([{ tileSource: primary.source, opacity: 1 }]);
-                return;
-            } catch (e) {
-                console.warn("[PlaygroundPage] open by source-clone failed, falling back", e);
-            }
-        }
+    if (!sourceViewer?.world?.getItemAt) {
+        renderMirrorNotice(playgroundViewer);
+        return;
     }
 
-    // Last-ditch: nothing to mirror. Show a notice.
+    // Collect every source tiled image so the world layout matches index-for-index.
+    const items: Array<{ tileSource: any; opacity: number; index: number }> = [];
+    const itemCount = sourceViewer.world.getItemCount?.() || 0;
+    for (let i = 0; i < itemCount; i++) {
+        const item = sourceViewer.world.getItemAt(i);
+        if (item?.source) {
+            items.push({
+                tileSource: item.source,
+                opacity: typeof item.opacity === "number" ? item.opacity : 1,
+                index: i,
+            });
+        }
+    }
+    if (!items.length) {
+        renderMirrorNotice(playgroundViewer);
+        return;
+    }
+
+    // Snapshot + namespace the source FlexRenderer shader map.
+    const namespace = buildShaderIdNamespace(pageId);
+    let renamedMap: Record<string, any> | undefined;
+    let renamedOrder: string[] | undefined;
+    try {
+        const sourceShaders = sourceViewer.drawer?.renderer?.getAllShaders?.();
+        if (sourceShaders && typeof sourceShaders === "object") {
+            const map: Record<string, any> = {};
+            for (const id in sourceShaders) {
+                if (!Object.prototype.hasOwnProperty.call(sourceShaders, id)) continue;
+                const cfg = typeof sourceShaders[id]?.getConfig === "function"
+                    ? sourceShaders[id].getConfig()
+                    : undefined;
+                if (cfg) map[id] = JSON.parse(JSON.stringify(cfg));
+            }
+            if (Object.keys(map).length) {
+                renamedMap = renameShaderIds(map, namespace);
+                const order = sourceViewer.drawer?.renderer?.getShaderLayerOrder?.();
+                if (Array.isArray(order)) {
+                    renamedOrder = order.map((id: string) => namespace + id);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("[PlaygroundPage] failed to snapshot source shader map", e);
+    }
+
+    try {
+        playgroundViewer.open(items);
+    } catch (e) {
+        console.warn("[PlaygroundPage] viewer.open(mirrored items) failed", e);
+        renderMirrorNotice(playgroundViewer);
+        return;
+    }
+
+    if (!renamedMap) return;
+
+    // Apply the renamed shader map after the world is populated. The FlexRenderer
+    // wires htmlHandler per layer here, which builds the side-menu rows with
+    // namespaced ids — no DOM id collision with the parent viewer's controls.
+    const apply = () => {
+        try {
+            playgroundViewer.drawer?.overrideConfigureAll?.(renamedMap, renamedOrder);
+        } catch (e) {
+            console.warn("[PlaygroundPage] overrideConfigureAll failed", e);
+        }
+    };
+    if (typeof playgroundViewer.addOnceHandler === "function") {
+        playgroundViewer.addOnceHandler("open", apply);
+    } else {
+        setTimeout(apply, 0);
+    }
+}
+
+/**
+ * Builds the per-page id prefix. FlexRenderer's `idPattern` rejects ids that
+ * start with `_` or contain `__`, so we use `pg<n>_` and rely on the original
+ * shader id (also pattern-conformant) as the suffix.
+ */
+function buildShaderIdNamespace(pageId: string): string {
+    const safePid = String(pageId).replace(/[^A-Za-z0-9]/g, "");
+    return `pg${safePid || "0"}_`;
+}
+
+/**
+ * Recursively renames shader-map keys, each shader's `.id`, group children's
+ * `shaders` keys + ids, and `order` arrays. Returns a NEW map; the input is
+ * not mutated.
+ */
+function renameShaderIds(map: Record<string, any>, namespace: string): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const [origId, value] of Object.entries(map)) {
+        const newId = namespace + origId;
+        out[newId] = renameShaderConfigInPlace(value, namespace, newId);
+    }
+    return out;
+}
+
+function renameShaderConfigInPlace(config: any, namespace: string, newId: string): any {
+    if (!config || typeof config !== "object") return config;
+    config.id = newId;
+    if (config.shaders && typeof config.shaders === "object" && !Array.isArray(config.shaders)) {
+        config.shaders = renameShaderIds(config.shaders, namespace);
+    }
+    if (Array.isArray(config.order)) {
+        config.order = config.order.map((id: string) => namespace + id);
+    }
+    return config;
+}
+
+function renderMirrorNotice(playgroundViewer: any) {
     const note = document.createElement("div");
     note.className = "p-4 text-sm absolute inset-0 flex items-center justify-center";
     note.textContent = $t(
         "playground.previewRenderingPending",
-        "Playground preview rendering is a pending feature. Use Copy to clipboard to export the current visualization.",
+        "Source viewer has no slide loaded — nothing to mirror.",
     );
-    playgroundViewer.element?.appendChild?.(note);
+    playgroundViewer?.element?.appendChild?.(note);
 }

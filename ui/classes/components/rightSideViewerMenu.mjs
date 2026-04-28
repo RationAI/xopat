@@ -23,11 +23,26 @@ export class RightSideViewerMenu extends BaseComponent {
     /**
      * @param viewerPositionId
      * @param navigatorID
+     * @param {object} [options]
+     * @param {boolean} [options.skipAppBarRegistration=false] - When true, tabs created by this menu are NOT
+     *   registered with USER_INTERFACE.AppBar.View. Use this when the menu lives outside the global app shell
+     *   (e.g., a sandboxed playground modal) and should not appear in the global "Show menus" dropdown.
+     * @param {(positionId: string) => any} [options.viewerResolver] - Custom resolver used in place of
+     *   VIEWER_MANAGER.getViewer(positionId). Allows hosting the menu against a viewer that is not registered
+     *   with VIEWER_MANAGER.
+     * @param {(value: any, ctx: { viewerPositionId: string }) => void} [options.onShaderChange] -
+     *   Replaces the default shader-index change handler (which mutates APPLICATION_CONTEXT.activeVisualizationIndex
+     *   and triggers a global re-open). Required for sandboxed hosts that must not affect global state.
+     * @param {(value: any) => void} [options.onOpacityChange]
+     * @param {() => void} [options.onCacheSnapshotByName]
+     * @param {() => void} [options.onCacheSnapshotByOrder]
      */
-    constructor(viewerPositionId, navigatorID) {
+    constructor(viewerPositionId, navigatorID, options = {}) {
         super();
         this.id = viewerPositionId + "-right-menu";
         this.viewerPositionId = viewerPositionId;
+        this._menuOptions = options || {};
+        this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
 
         this.navigatorMenu = new NavigatorSideMenu(this.id, navigatorID);
 
@@ -37,9 +52,13 @@ export class RightSideViewerMenu extends BaseComponent {
         );
 
         const originalAddTab = this.menu.addTab;
+        const skipAppBar = !!this._menuOptions.skipAppBarRegistration;
         this.menu.addTab = (item) => {
             const tabItem = originalAddTab.call(this.menu, item);
-            USER_INTERFACE.AppBar.View.registerViewComponent("sideViewerMenu", tabItem);
+            if (!skipAppBar) {
+                USER_INTERFACE.AppBar.View.registerViewComponent("sideViewerMenu", tabItem);
+            }
+            return tabItem;
         };
 
         this.menu.addTab(
@@ -56,10 +75,13 @@ export class RightSideViewerMenu extends BaseComponent {
 
         const nav = this.menu.tabs["navigator"];
         const oldFocus = nav._setFocus;
+        const resolveViewer = this._menuOptions.viewerResolver
+            ? (positionId) => this._menuOptions.viewerResolver(positionId)
+            : (positionId) => VIEWER_MANAGER.getViewer(positionId, false);
         nav._setFocus = () => {
             oldFocus.call(nav);
             // todo do not use private arg, just create getViereBy..something() to allow queringy by positionID
-            setTimeout(() => VIEWER_MANAGER.getViewer(viewerPositionId, false)?.navigator?.forceResize());
+            setTimeout(() => resolveViewer(viewerPositionId)?.navigator?.forceResize());
         };
 
         // defaultly open menus
@@ -101,10 +123,18 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     createShadersMenu() {
+        const opts = this._menuOptions || {};
+        const customShaderChange = typeof opts.onShaderChange === "function" ? opts.onShaderChange : null;
+        const customOpacityChange = typeof opts.onOpacityChange === "function" ? opts.onOpacityChange : null;
+        const customSnapshotByName = typeof opts.onCacheSnapshotByName === "function" ? opts.onCacheSnapshotByName : null;
+        const customSnapshotByOrder = typeof opts.onCacheSnapshotByOrder === "function" ? opts.onCacheSnapshotByOrder : null;
+
         this.shadersMenu = new ShaderSideMenu({
             pinned: false,
             opacity: 1,
-            onShaderChange: (value) => {
+            onShaderChange: customShaderChange ? (value) => {
+                customShaderChange(value, { viewerPositionId: this.viewerPositionId });
+            } : (value) => {
                 // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
                 const parsedValue = Number.parseInt(value, 10);
                 const nextValue = Number.isInteger(parsedValue) ? parsedValue : undefined;
@@ -121,11 +151,11 @@ export class RightSideViewerMenu extends BaseComponent {
                 }
                 APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
             },
-            onOpacityChange: (value) => {
+            onOpacityChange: customOpacityChange ? (value) => customOpacityChange(value) : (value) => {
                 Dialogs.show("Global layer opacity is not supported for now. Please raise an issue if you need this feature.", 5000, Dialogs.MSG_WARN);
             },
-            onCacheSnapshotByName: () => UTILITIES.storeVisualizationSnapshot(true),
-            onCacheSnapshotByOrder: () => UTILITIES.storeVisualizationSnapshot(false),
+            onCacheSnapshotByName: customSnapshotByName || (() => UTILITIES.storeVisualizationSnapshot(true)),
+            onCacheSnapshotByOrder: customSnapshotByOrder || (() => UTILITIES.storeVisualizationSnapshot(false)),
         });
         return this.shadersMenu.create();
     }
@@ -154,7 +184,7 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     onLayoutChange(details) {
-        if (details.width < 600) {
+        if (details.width < this.maxMobileWidth) {
             this.setClass("mobile", "mobile");
             this.setClass("display", "hidden");
         } else {

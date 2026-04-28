@@ -1,7 +1,6 @@
 import type { ScriptApiMetadata } from "./abstract-types";
 import type {
     VisualizationScriptApi,
-    VisualizationDocsModel,
     VisualizationStateSnapshot,
     VisualizationViewportRenderOptions,
     VisualizationViewportPixelsResult,
@@ -66,6 +65,7 @@ function isPlainObject(value: any): boolean {
     return !Array.isArray(value);
 }
 
+
 export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements VisualizationScriptApi {
 
     static ScriptApiMetadata: ScriptApiMetadata<XOpatVisualizationScriptApi> = {
@@ -103,167 +103,188 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
-     * xOpat session-format extras that augment the renderer-published `shaderConfigBase`
-     * whitelist. `dataReferences` is the host's session-data wiring; `shaders` and `order`
-     * belong to group layers. Everything else allowed at the top level of a layer comes
-     * from the renderer schema.
+     * Cached compiled validator for the renderer-published JSON Schema. Compiled ONCE on first
+     * use and reused for the lifetime of the script API instance.
+     *
+     * `_ajvDisabled` is set to true when AJV cannot handle the schema (typically a stack overflow
+     * during compile, caused by AJV inlining the recursive `group` shader). When disabled, schema
+     * validation is skipped on subsequent mutations and the playground / runtime acts as the gate.
+     * One console warning per session so the operator knows validation isn't running.
      */
-    protected static readonly XOPAT_SESSION_TOP_KEYS = ["dataReferences", "shaders", "order"];
+    protected _ajvValidator: ((value: any) => boolean) & { errors?: any[] } | undefined;
+    protected _ajvDisabled = false;
 
     /**
-     * Read a params bucket from a shader schema. Plural names parallel each other.
+     * Drop the cached validator and re-enable validation. Call after registering new shaders at
+     * runtime so the next validation picks up the new schema.
      */
-    protected readSchemaParamsBucket(schemaParams: any, kind: "builtIns" | "controls" | "customParams"): any[] {
-        if (!isPlainObject(schemaParams)) return [];
-        const direct = (schemaParams as any)[kind];
-        return Array.isArray(direct) ? direct : [];
+    public invalidateSchemaCache(): void {
+        this._ajvValidator = undefined;
+        this._ajvDisabled = false;
     }
 
     /**
-     * Locate one shader's entry in the renderer-published config schema model. Returns the
-     * raw schema object (not cloned) - callers must not mutate. Match is by shader `type`.
+     * Lazy AJV compile with defenses against the recursive `group` schema. Returns undefined when
+     * AJV is missing or when compile fails (e.g. stack overflow on a recursive `$ref` graph).
+     * Callers must treat undefined as "validation unavailable; skip and let downstream gates run".
      */
-    protected findShaderInModel(model: any, shaderType: string): any | undefined {
-        const shaders = model && model.shaders;
-        if (Array.isArray(shaders)) {
-            return shaders.find((s: any) => s && s.type === shaderType);
+    protected getSchemaValidator(): ((value: any) => boolean) | undefined {
+        if (this._ajvValidator) return this._ajvValidator;
+        if (this._ajvDisabled) return undefined;
+
+        const AjvCtor: any = (globalThis as any).Ajv2020 || (globalThis as any).Ajv;
+        if (typeof AjvCtor !== "function") {
+            this._ajvDisabled = true;
+            console.warn(
+                "[visualization scripting] AJV is not available on globalThis (Ajv2020 / Ajv). " +
+                "Schema validation is disabled; the playground review remains the gate."
+            );
+            return undefined;
         }
-        if (isPlainObject(shaders)) {
-            for (const value of Object.values(shaders)) {
-                if (value && (value as any).type === shaderType) return value;
+
+        // Options chosen for the recursive `group` schema:
+        //   strict: false  - we publish x-* extension keywords AJV doesn't recognize.
+        //   allErrors: true - one validation pass surfaces every problem to the LLM at once.
+        //   inlineRefs: false - never inline $refs. Keeps recursive schemas (group → group) from
+        //     blowing the call stack at compile time. Slight runtime cost; required for correctness.
+        //   validateSchema: false - the renderer is the source of truth; skip AJV's own draft check.
+        try {
+            const fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
+            const ajv = new AjvCtor({ strict: false, allErrors: true, inlineRefs: false, validateSchema: false });
+            this._ajvValidator = ajv.compile(fullSchema) as any;
+            return this._ajvValidator!;
+        } catch (err) {
+            this._ajvDisabled = true;
+            console.warn(
+                "[visualization scripting] AJV failed to compile the renderer schema (" +
+                String((err as any)?.message || err) +
+                "). Schema validation is disabled for the rest of this session; the playground " +
+                "review remains the gate."
+            );
+            return undefined;
+        }
+    }
+
+    /**
+     * Validate a list of proposed visualizations against the renderer-published JSON Schema.
+     * Runs BEFORE the user is asked to review the proposal so structurally invalid layers
+     * never reach the playground. Throws an Error with JSON Pointer paths to every invalid
+     * field; the chat layer surfaces the message to the LLM, which fixes and retries.
+     *
+     * The schema is the contract - no shader names or control names are hardcoded on the host.
+     * If AJV is unavailable or the schema can't be compiled, validation is skipped (the
+     * playground review still acts as the gate). A `RangeError` from AJV at validate time is
+     * caught and disables further validation rather than crashing the mutation.
+     */
+    protected validateProposedVisualizations(visualizations: any[]): void {
+        if (!Array.isArray(visualizations) || visualizations.length < 1) return;
+
+        const validate = this.getSchemaValidator();
+        if (!validate) return;
+
+        for (let i = 0; i < visualizations.length; i++) {
+            const viz: any = visualizations[i];
+            if (!isPlainObject(viz) || !isPlainObject(viz.shaders)) continue;
+
+            // Schema's root expects `{ shaders: {...} }`. Wrap each visualization in the same
+            // envelope so AJV evaluates it as one config.
+            const envelope = { shaders: viz.shaders, ...(Array.isArray(viz.order) ? { order: viz.order } : {}) };
+
+            let ok: boolean;
+            try {
+                ok = validate(envelope);
+            } catch (err) {
+                // Stack-overflow or any other AJV runtime explosion: disable, skip rest.
+                this._ajvDisabled = true;
+                this._ajvValidator = undefined;
+                console.warn(
+                    "[visualization scripting] AJV threw during validate (" +
+                    String((err as any)?.message || err) +
+                    "). Schema validation disabled for the rest of this session."
+                );
+                return;
+            }
+
+            if (!ok) {
+                const errors = (validate as any).errors as any[] | undefined;
+                const summary = (errors || []).map(e => {
+                    const where = e.instancePath ? `viz[${i}]${e.instancePath}` : `viz[${i}]`;
+                    return `  ${where}: ${e.message}${e.params ? " " + JSON.stringify(e.params) : ""}`;
+                }).join("\n");
+                const err: any = new Error(`Visualization validation failed before review:\n${summary}`);
+                err.ajvErrors = errors;
+                throw err;
             }
         }
-        return undefined;
     }
 
     /**
-     * Allowed top-level layer keys for a given shader. Pulled from
-     * `model.shaderConfigBase.properties` ∪ `schema.rootConfig.properties` ∪ xOpat session-format
-     * extras. Underscore-prefixed and `cache` are filtered out as renderer-internal storage that
-     * should not be set from a script.
+     * Validate every coupling rule the shader declares for `layer.type`. Validators come from
+     * `OpenSeadragon.FlexRenderer.ShaderConfigurator.getShaderCouplingValidators(type)` -
+     * the host invokes them but does not own the rules. Throws on the first failure with
+     * the validator's `expected`/`actual` payload attached. Recursively walks nested shader
+     * maps (groups), so a single call covers a whole visualization.
      */
-    protected getAllowedTopLevelKeys(model: any, schema: any): Set<string> {
-        const allowed = new Set<string>(XOpatVisualizationScriptApi.XOPAT_SESSION_TOP_KEYS);
-        const collect = (props: any) => {
-            if (!Array.isArray(props)) return;
-            for (const entry of props) {
-                if (!entry || typeof entry.key !== "string") continue;
-                if (entry.key.startsWith("_")) continue;
-                if (entry.key === "cache") continue;
-                allowed.add(entry.key);
-            }
-        };
-        collect(model && model.shaderConfigBase && model.shaderConfigBase.properties);
-        collect(schema && schema.rootConfig && schema.rootConfig.properties);
-        return allowed;
-    }
-
-    /**
-     * Allowed `params` keys for a layer of `schema`. Union of built-ins, UI controls, and
-     * custom params - all read from the renderer-published schema. The host adds nothing.
-     */
-    protected getAllowedParamKeys(schema: any): Set<string> {
-        const allowed = new Set<string>();
-        const params = schema && schema.params;
-        for (const bucket of ["builtIns", "controls", "customParams"] as const) {
-            for (const entry of this.readSchemaParamsBucket(params, bucket)) {
-                if (entry && typeof entry.key === "string") {
-                    allowed.add(entry.key);
-                } else if (entry && typeof entry.name === "string") {
-                    // customParams may use `name` rather than `key`.
-                    allowed.add(entry.name);
-                }
-            }
-        }
-        return allowed;
-    }
-
-    /**
-     * Validate one layer (and its nested children) against the renderer-published schema.
-     * Generic and schema-driven: the host does not know any shader names or control names.
-     * Pushes human-readable issues into `issues`.
-     */
-    protected validateLayerKeys(
-        layer: any,
-        path: string,
-        model: any,
-        issues: string[]
-    ): void {
+    protected validateLayerCouplings(layer: any, path: string = ""): void {
         if (!isPlainObject(layer)) return;
 
-        // Recurse into nested groups first so the user gets every issue at once.
         if (isPlainObject(layer.shaders)) {
             for (const [childKey, child] of Object.entries(layer.shaders)) {
-                this.validateLayerKeys(child, path ? `${path}/${childKey}` : childKey, model, issues);
+                this.validateLayerCouplings(child, path ? `${path}/${childKey}` : childKey);
             }
         }
 
         const layerType = typeof layer.type === "string" ? layer.type : undefined;
         if (!layerType || layerType === "group") return;
 
-        const schema = this.findShaderInModel(model, layerType);
-        if (!schema) {
-            // Shader-type validity is the runtime's job; we'd duplicate its message here.
-            return;
-        }
+        const configurator: any = this.shaderConfigurator;
+        if (typeof configurator.getShaderCouplingValidators !== "function") return;
 
-        const allowedTop = this.getAllowedTopLevelKeys(model, schema);
-        const unknownTop = Object.keys(layer).filter((key) => !allowedTop.has(key));
-        if (unknownTop.length > 0) {
-            issues.push(
-                `Layer '${path || layer.id || layerType}' has unknown top-level fields: ` +
-                `${unknownTop.join(", ")}. Allowed for shader '${layerType}': ` +
-                `${[...allowedTop].sort().join(", ")}.`
-            );
-        }
+        const validators = configurator.getShaderCouplingValidators(layerType);
+        if (!Array.isArray(validators) || validators.length < 1) return;
 
-        if (isPlainObject(layer.params)) {
-            const allowedParams = this.getAllowedParamKeys(schema);
-            if (allowedParams.size > 0) {
-                const unknownParams = Object.keys(layer.params).filter((key) => !allowedParams.has(key));
-                if (unknownParams.length > 0) {
-                    issues.push(
-                        `Shader '${layerType}' (layer '${path || layer.id || layerType}') does not define ` +
-                        `params: ${unknownParams.join(", ")}. Valid params: ` +
-                        `${[...allowedParams].sort().join(", ")}.`
-                    );
-                }
+        for (const entry of validators) {
+            if (!entry || typeof entry.validate !== "function") continue;
+
+            let outcome: any;
+            try {
+                outcome = entry.validate(layer);
+            } catch (err: any) {
+                const e: any = new Error(
+                    `Coupling validator '${entry.name}' on shader '${layerType}' threw: ${err?.message || err}.`
+                );
+                e.couplingViolation = { coupling: entry.name, layerType, layerPath: path || layer.id || layerType };
+                throw e;
+            }
+
+            if (outcome && outcome.ok === false) {
+                const summary = entry.summary ? ` ${entry.summary}` : "";
+                const msg = `Coupling '${entry.name}' on shader '${layerType}' (${path || layer.id || layerType}) was not satisfied.${summary}`;
+                const e: any = new Error(msg);
+                e.couplingViolation = {
+                    coupling: entry.name,
+                    layerType,
+                    layerPath: path || layer.id || layerType,
+                    controls: entry.controls,
+                    expected: outcome.expected,
+                    actual: outcome.actual,
+                };
+                throw e;
             }
         }
     }
 
     /**
-     * Validate a list of proposed visualizations before the user is asked to review them.
-     * Throws on the first issue with a message that lists every offending key plus the valid
-     * set, so the LLM can fix and retry without the user ever seeing the playground.
-     *
-     * Typed as `any[]` because two `VisualizationItem` types coexist in this file (scripts vs
-     * ambient, see top-of-file TODO); the validator only does shape checks via `isPlainObject`.
+     * Run schema + coupling validation on every visualization. Convenience wrapper called by
+     * each mutation method right before requireVisualizationReview opens the playground.
      */
-    protected validateProposedVisualizations(visualizations: any[]): void {
-        if (!Array.isArray(visualizations) || visualizations.length < 1) return;
-
-        const model = (() => {
-            try {
-                return this.shaderConfigurator.compileConfigSchemaModel();
-            } catch (_err) {
-                return undefined;
+    protected runFullValidation(visualizations: any[]): void {
+        this.validateProposedVisualizations(visualizations);
+        for (const viz of visualizations) {
+            if (!isPlainObject(viz) || !isPlainObject((viz as any).shaders)) continue;
+            for (const [key, layer] of Object.entries((viz as any).shaders)) {
+                this.validateLayerCouplings(layer, key);
             }
-        })();
-        if (!model) return; // Renderer hasn't published a schema; let the runtime layer take it.
-
-        const issues: string[] = [];
-        visualizations.forEach((viz, i) => {
-            if (!isPlainObject(viz) || !isPlainObject((viz as any).shaders)) return;
-            for (const [layerKey, layer] of Object.entries((viz as any).shaders)) {
-                this.validateLayerKeys(layer, `viz[${i}].${layerKey}`, model, issues);
-            }
-        });
-
-        if (issues.length > 0) {
-            throw new Error(
-                `Visualization validation failed before review:\n- ${issues.join("\n- ")}`
-            );
         }
     }
 
@@ -576,6 +597,50 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         }
     }
 
+    /**
+     * Merge a partial visualization patch onto an existing visualization. For each layer in
+     * `patch.shaders`: if the patch changes the layer's `type`, the layer is REPLACED wholesale
+     * (the old layer's params would be a different shader's controls and don't transfer); otherwise
+     * the layer is deep-merged. Visualization-level fields (`name`, `goalIndex`, ...) are deep-merged.
+     *
+     * Why this matters: deep-merging across a type change produces a half-old/half-new layer that
+     * carries the previous shader's control values, which the new shader's schema rejects with
+     * `additionalProperties: false`. The LLM-facing failure looks like "spurious validation error"
+     * when the real issue is "you can't patch type, you have to replace the layer".
+     */
+    protected mergeVisualizationPatch(existing: any, patch: any): any {
+        if (!isPlainObject(patch)) return cloneJson(existing) as any;
+
+        const merged: any = $.extend(true, {}, existing);
+
+        // Visualization-level fields (name, goalIndex, etc.) merge normally.
+        for (const [key, value] of Object.entries(patch)) {
+            if (key !== "shaders") {
+                merged[key] = cloneJson(value);
+            }
+        }
+
+        // Per-layer: replace on type change, deep-merge otherwise.
+        const patchShaders = isPlainObject(patch.shaders) ? patch.shaders : null;
+        if (patchShaders) {
+            if (!isPlainObject(merged.shaders)) merged.shaders = {};
+            for (const [layerKey, patchLayer] of Object.entries(patchShaders)) {
+                const existingLayer = merged.shaders[layerKey];
+                const patchType = isPlainObject(patchLayer) ? (patchLayer as any).type : undefined;
+                const existingType = isPlainObject(existingLayer) ? (existingLayer as any).type : undefined;
+
+                if (patchType && existingType && patchType !== existingType) {
+                    // Type change → fresh layer. Don't drag old controls along.
+                    merged.shaders[layerKey] = cloneJson(patchLayer);
+                } else {
+                    merged.shaders[layerKey] = $.extend(true, {}, existingLayer || {}, cloneJson(patchLayer));
+                }
+            }
+        }
+
+        return merged;
+    }
+
     protected normalizeVisualizationInput(input: VisualizationLayerSource): VisualizationItem {
         let visualization: any;
 
@@ -756,67 +821,21 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     /**
-     * Returns the shader types that can be used by visualization layers.
+     * Returns the renderer-published JSON Schema 2020-12 document. Single source of truth for
+     * every valid layer shape - the LLM and any other consumer reads this once and validates
+     * against it. Cache the result for the rest of the session.
+     *
+     * The slim view drops `$defs.uiControlEnvelopes` (typedef catalog) since `$defs.shaderLayers[type].examples`
+     * already encode valid envelope values. xOpat's own AJV instance still uses the full schema
+     * (with refs intact) for validation.
      */
-    getAvailableShaderTypes(): string[] {
-        const available = (OpenSeadragon as any).FlexRenderer.ShaderMediator.availableShaders();
-        const out: string[] = [];
-
-        for (const Shader of available) {
-            if (!Shader || typeof Shader.type !== "function") {
-                continue;
-            }
-            out.push(String(Shader.type()));
+    getSchema(): Record<string, any> {
+        const fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
+        const slim = cloneJson(fullSchema);
+        if (slim && isPlainObject(slim.$defs)) {
+            delete slim.$defs.uiControlEnvelopes;
         }
-
-        return out;
-    }
-
-    /**
-     * Returns the machine-friendly shader documentation model for visualization scripting.
-     */
-    getShaderDocsModel(): VisualizationDocsModel {
-        const configurator = this.shaderConfigurator;
-        const model = configurator.compileDocsModel();
-        return cloneJson(model);
-    }
-
-    /**
-     * Returns the shader documentation serialized as JSON.
-     */
-    getShaderDocsJson(pretty = true): string {
-        const configurator = this.shaderConfigurator;
-        const model = configurator.compileDocsModel();
-
-        if (pretty) {
-            return configurator.serializeDocs("json", model);
-        }
-
-        return JSON.stringify(model);
-    }
-
-    /**
-     * Returns the shader documentation serialized as plain text.
-     */
-    getShaderDocsText(): string {
-        const configurator = this.shaderConfigurator;
-        const model = configurator.compileDocsModel();
-        return configurator.serializeDocs("text", model);
-    }
-
-    /**
-     * Returns the documentation entry for one shader type, or undefined if no such type is
-     * registered. Use after `getAvailableShaderTypes()` to drill into one shader without
-     * dumping the whole catalog (which can get truncated when many shaders are registered).
-     */
-    getShaderDocs(type: string): any {
-        if (typeof type !== "string" || !type.trim()) return undefined;
-        const configurator = this.shaderConfigurator;
-        const model = configurator.compileDocsModel();
-        const shaders = model && model.shaders;
-        if (!Array.isArray(shaders)) return undefined;
-        const entry = shaders.find((s: any) => s && s.type === type);
-        return entry ? cloneJson(entry) : undefined;
+        return slim;
     }
 
     /**
@@ -859,7 +878,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * VisualizationReviewFeedbackError), or decline (throws).
      */
     async restoreState(snapshot: VisualizationStateSnapshot): Promise<boolean> {
-        this.validateProposedVisualizations(
+        this.runFullValidation(
             Array.isArray(snapshot && snapshot.visualizations) ? snapshot.visualizations : []
         );
         const accepted = await this.requireVisualizationReview(snapshot, {
@@ -911,7 +930,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         newData: DataID[] = []
     ): Promise<boolean> {
         const next = Array.isArray(visualizations) ? visualizations.map(item => this.normalizeVisualizationInput(item)) : [];
-        this.validateProposedVisualizations(next);
+        this.runFullValidation(next);
 
         const proposedSnapshot: VisualizationStateSnapshot = {
             data: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
@@ -948,7 +967,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     ): Promise<boolean> {
         const next = this.getVisualizations();
         const normalized = this.normalizeVisualizationInput(visualization);
-        this.validateProposedVisualizations([normalized]);
+        this.runFullValidation([normalized]);
         next.push(normalized);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
@@ -999,9 +1018,9 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             throw new Error("Visualization index " + index + " is out of range.");
         }
 
-        const merged = $.extend(true, {}, next[index], patch || {});
+        const merged = this.mergeVisualizationPatch(next[index], patch || {});
         next[index] = this.normalizeVisualizationInput(merged);
-        this.validateProposedVisualizations([next[index]]);
+        this.runFullValidation([next[index]]);
 
         let nextActiveIndex = this.getActiveVisualizationSelection();
         if (options.makeActive === true) {
