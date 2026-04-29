@@ -184,6 +184,8 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     onLayoutChange(details) {
+        if (!this.menu) return; // destroyed, but still existing, can happen on playground
+
         if (details.width < this.maxMobileWidth) {
             this.setClass("mobile", "mobile");
             this.setClass("display", "hidden");

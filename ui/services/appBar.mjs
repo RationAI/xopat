@@ -170,6 +170,166 @@ export class AppBar {
         }
     }
 
+    // ── Badge API ─────────────────────────────────────────────────────────
+    // Generic, multi-owner status badges hosted in the AppBar.
+    //
+    //   USER_INTERFACE.AppBar.addBadge('session', {
+    //       label: 'Live',
+    //       color: 'success',  // success | warning | error | info | neutral | primary | secondary | accent
+    //       dot: true,         // pulsing colored dot before label
+    //       icon: 'fa-users',
+    //       title: 'Live collaboration session',
+    //       onClick: () => { ... }
+    //   });
+    //   USER_INTERFACE.AppBar.updateBadge('session', { color: 'warning', label: 'Reconnecting…' });
+    //   USER_INTERFACE.AppBar.removeBadge('session');
+    //
+    // Multiple owners coexist by using distinct `id`s.
+
+    /**
+     * Add (or replace) a status badge in the AppBar.
+     * @param {string} id Unique badge id; subsequent addBadge with the same id replaces it.
+     * @param {object} opts
+     * @param {string} [opts.label] Visible label text.
+     * @param {('success'|'warning'|'error'|'info'|'neutral'|'primary'|'secondary'|'accent')} [opts.color='neutral']
+     * @param {('none'|'soft'|'outline'|'ghost')} [opts.style='none']
+     * @param {('xs'|'sm'|'md'|'lg')} [opts.size='sm']
+     * @param {string} [opts.icon] FontAwesome icon class (e.g. "fa-users").
+     * @param {boolean} [opts.dot=false] Render a colored dot before label.
+     * @param {string} [opts.dotColor] Optional explicit dot colour token (defaults to opts.color).
+     * @param {boolean} [opts.pulse=false] Animate the dot for "active/connecting" states.
+     * @param {string} [opts.title] Tooltip text.
+     * @param {Function} [opts.onClick] Click handler; if absent the badge is non-interactive.
+     * @returns {HTMLElement} The badge element (for advanced manipulation).
+     */
+    addBadge(id, opts = {}) {
+        if (!id || typeof id !== 'string') throw new Error("AppBar.addBadge: id required");
+        this._badges = this._badges || new Map();
+        const host = document.getElementById('top-side-badges');
+        if (!host) {
+            console.warn("AppBar.addBadge: host element #top-side-badges missing");
+            return null;
+        }
+
+        let entry = this._badges.get(id);
+        if (!entry) {
+            const el = document.createElement(opts.onClick ? 'button' : 'span');
+            el.dataset.badgeId = id;
+            host.appendChild(el);
+            entry = { el, opts: {} };
+            this._badges.set(id, entry);
+        }
+        entry.opts = { ...entry.opts, ...opts };
+        this._renderBadge(entry);
+        return entry.el;
+    }
+
+    /**
+     * Update a previously-added badge. Missing keys are preserved.
+     * @param {string} id
+     * @param {object} opts
+     */
+    updateBadge(id, opts = {}) {
+        if (!this._badges?.has(id)) return this.addBadge(id, opts);
+        const entry = this._badges.get(id);
+        entry.opts = { ...entry.opts, ...opts };
+        this._renderBadge(entry);
+        return entry.el;
+    }
+
+    /**
+     * Remove a badge.
+     * @param {string} id
+     */
+    removeBadge(id) {
+        const entry = this._badges?.get(id);
+        if (!entry) return false;
+        try { entry.el.remove(); } catch { /* ignore */ }
+        this._badges.delete(id);
+        return true;
+    }
+
+    /**
+     * Convenience for status pills: keep label/icon, swap color.
+     * @param {string} id
+     * @param {string} color daisyUI token (success/warning/error/info/neutral/...)
+     */
+    setBadgeColor(id, color) { return this.updateBadge(id, { color }); }
+
+    /** @returns {HTMLElement|null} */
+    getBadge(id) { return this._badges?.get(id)?.el || null; }
+
+    /** @returns {boolean} */
+    hasBadge(id) { return !!this._badges?.has(id); }
+
+    /** @private */
+    _renderBadge(entry) {
+        const { el, opts } = entry;
+        const color = opts.color || 'neutral';
+        const style = opts.style || 'none';
+        const size = opts.size || 'sm';
+
+        const classes = ['badge', `badge-${size}`, `badge-${color}`];
+        if (style && style !== 'none') classes.push(`badge-${style}`);
+        if (opts.onClick) classes.push('cursor-pointer', 'hover:opacity-80');
+        classes.push('gap-1');
+        el.className = classes.join(' ');
+        el.style.cssText = 'white-space:nowrap;font-weight:500;';
+        if (opts.title) el.title = opts.title; else el.removeAttribute('title');
+
+        // Replace children atomically.
+        el.replaceChildren();
+
+        if (opts.dot) {
+            const dot = document.createElement('span');
+            const dotColor = opts.dotColor || opts.color || 'neutral';
+            // Solid 8px dot using a small inline-block; uses theme via badge-* tokens
+            // by leveraging text colour inversion of the parent badge — we draw with
+            // a span using an explicit currentColor circle.
+            dot.style.cssText = [
+                'width:8px',
+                'height:8px',
+                'border-radius:9999px',
+                'display:inline-block',
+                'background-color:currentColor',
+                opts.pulse ? 'animation: appbar-badge-pulse 1.4s ease-in-out infinite' : '',
+            ].filter(Boolean).join(';');
+            dot.dataset.dotColor = dotColor;
+            el.appendChild(dot);
+        }
+
+        if (opts.icon) {
+            const i = document.createElement('i');
+            i.className = `fa ${opts.icon}`;
+            el.appendChild(i);
+        }
+
+        if (opts.label) {
+            const span = document.createElement('span');
+            span.textContent = opts.label;
+            el.appendChild(span);
+        }
+
+        // (Re)bind click handler safely — replace previous via cloneNode? we own
+        // the listener through the entry, so manage explicitly.
+        if (entry._clickHandler) {
+            el.removeEventListener('click', entry._clickHandler);
+            entry._clickHandler = null;
+        }
+        if (typeof opts.onClick === 'function') {
+            entry._clickHandler = (e) => { try { opts.onClick(e); } catch (err) { console.error(err); } };
+            el.addEventListener('click', entry._clickHandler);
+        }
+
+        // Inject the keyframes once per page.
+        if (!document.getElementById('appbar-badge-pulse-style')) {
+            const css = document.createElement('style');
+            css.id = 'appbar-badge-pulse-style';
+            css.textContent = '@keyframes appbar-badge-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.18)}}';
+            document.head.appendChild(css);
+        }
+    }
+
     isFullScreen() {
         return this._fullscreen;
     }

@@ -197,11 +197,6 @@ export class ShaderLayer extends BaseComponent {
                 blendName
             );
 
-        // small chevron to indicate open/closed advanced section
-        const chevronIcon = new FAIcon({
-            name: this.blendOpen ? "fa-chevron-up" : "fa-chevron-down"
-        });
-
         const chevronBtn = button(
             {
                 type: "button",
@@ -210,7 +205,7 @@ export class ShaderLayer extends BaseComponent {
                 title: $.t("main.shaders.blendConfigure"),
                 onclick: () => this._toggleBlendPopup()
             },
-            chevronIcon.create()
+            new FAIcon({name: "fa-cogs"}).create()
         );
 
         return div(

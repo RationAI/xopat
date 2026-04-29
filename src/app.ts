@@ -11,6 +11,10 @@ import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-r
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 import { SessionSyncController } from "./classes/session/session-sync";
+// Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
+// the Visualization Playground for script-driven mutations. Without this import the playground
+// never wires up and visualization mutations fall back to a plain yes/no consent dialog.
+import "./classes/playground/playground-service";
 
 // Functions defined in runtime-loaded scripts — declared here for type-check only (todo retype files to TS, replace with imports)
 declare function initXOpatUI(): void;
