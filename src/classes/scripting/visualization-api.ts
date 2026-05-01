@@ -58,11 +58,142 @@ function sanitizeArrayOfIntegers(value: any): number[] {
     return out;
 }
 
+/**
+ * AJV reports `oneOf` failures branch-by-branch: a single typo in a colormap
+ * layer produces one identical "must NOT have additional properties …" line
+ * per registered shader type (currently 14). The branch noise buries the
+ * actual fix.
+ *
+ * For each error whose `instancePath` falls inside `/shaders/<id>` (root or
+ * nested), look up the input layer's `type` and drop any error whose
+ * `schemaPath` clearly belongs to a *different* shader-type branch (matched
+ * by `/shaderLayers/<other-type>/`). Errors against the root envelope, the
+ * shaders map structure, or branches without a recognisable type tag are
+ * preserved.
+ *
+ * Idempotent and side-effect-free; the raw AJV errors stay attached to
+ * `err.ajvErrors` for the chat module's structured-error channel.
+ */
+function filterOneOfErrorsByDiscriminator(errors: any[] | undefined, viz: any): any[] {
+    if (!Array.isArray(errors) || !errors.length) return [];
+    if (!isPlainObject(viz) || !isPlainObject(viz.shaders)) return errors;
+
+    const shaderIdRegex = /^\/shaders\/([^/]+)/;
+    const branchRegex = /\/shaderLayers\/([^/]+)/;
+
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const e of errors) {
+        const ip: string = typeof e?.instancePath === "string" ? e.instancePath : "";
+        const sp: string = typeof e?.schemaPath === "string" ? e.schemaPath : "";
+
+        const idMatch = ip.match(shaderIdRegex);
+        if (idMatch) {
+            const shaderId = idMatch[1];
+            const branchMatch = sp.match(branchRegex);
+            if (branchMatch) {
+                const branchType = branchMatch[1];
+                const layer = (viz.shaders as any)[shaderId!];
+                const inputType = isPlainObject(layer) && typeof layer.type === "string" ? layer.type : undefined;
+                if (inputType && inputType !== branchType) continue;     // wrong-branch noise
+            }
+        }
+
+        // Dedupe identical (instancePath, message) pairs that survive the filter.
+        const key = `${ip}::${e?.message || ""}::${e?.params ? JSON.stringify(e.params) : ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(e);
+    }
+    return out.length ? out : errors;
+}
+
+/**
+ * Render a one-line corrective hint for a coupling violation. Walks the
+ * validator's `expected` payload (small object of `{ "<dotted.path>": value }`
+ * entries) and emits `Set X = Y[, Z = W][.]` so the LLM gets the literal fix
+ * inline with the failure message — no second-round trip required.
+ *
+ * Generic over coupling shape; per-coupling logic lives in flex-renderer.
+ * Returns "" when the expected payload is empty or absent.
+ */
+function formatCouplingCorrective(expected: any, _actual: any): string {
+    if (!isPlainObject(expected)) return "";
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(expected)) {
+        let rendered: string;
+        if (value === null || value === undefined) rendered = String(value);
+        else if (typeof value === "number" || typeof value === "boolean") rendered = String(value);
+        else if (typeof value === "string") rendered = JSON.stringify(value);
+        else {
+            try { rendered = JSON.stringify(value); } catch (e) { rendered = String(value); }
+        }
+        parts.push(`\`${key}\` = ${rendered}`);
+    }
+    if (!parts.length) return "";
+    return `To satisfy: set ${parts.join(", ")}.`;
+}
+
 function isPlainObject(value: any): boolean {
     if (!value || typeof value !== "object") {
         return false;
     }
     return !Array.isArray(value);
+}
+
+/**
+ * Build the set of shader ids that the open pipeline injects from
+ * `APPLICATION_CONTEXT.config.background[i].id`. Both the raw form and the
+ * FlexRenderer-sanitized form are returned so callers can test against either.
+ *
+ * The renderer's `_shaders` map is keyed by sanitized id; if a visualization
+ * config carries a shader whose id sanitizes onto a background's id, the open
+ * pipeline emits two distinct map entries that collapse to one in the
+ * renderer's order array, producing GLSL that declares the same uniforms
+ * twice. We use this set at the data-model boundaries (write via
+ * normalizeVisualizationInput, read via getVisualizations / getActiveVisualization)
+ * to enforce the structural invariant: backgrounds are owned by
+ * `config.background`, never by `config.visualizations[i].shaders`.
+ */
+function collectBackgroundShaderIds(): Set<string> {
+    const out = new Set<string>();
+    try {
+        const cfg: any = APPLICATION_CONTEXT?.config;
+        const backgrounds = Array.isArray(cfg?.background) ? cfg.background : [];
+        const fr: any = (OpenSeadragon as any)?.FlexRenderer;
+        const sanitize: ((s: string) => string) | undefined = typeof fr?.sanitizeKey === "function" ? fr.sanitizeKey : undefined;
+        for (const bg of backgrounds) {
+            const id = bg?.id;
+            if (typeof id !== "string" || !id.length) continue;
+            out.add(id);
+            if (sanitize) {
+                try { out.add(sanitize(id)); } catch (e) { /* skip non-stringable */ }
+            }
+        }
+    } catch (e) { /* swallow — best-effort filter */ }
+    return out;
+}
+
+/**
+ * Drop any top-level shader entries (and their entries in `viz.order`) whose
+ * id appears in the background-shader-id set. Mutates `viz` in place. Walks
+ * only the top level — the invariant applies to root visualization shaders;
+ * nested group children are not currently in scope (no known case where bg
+ * ids collide with nested ids).
+ */
+function stripBackgroundShaderIds(viz: any): void {
+    if (!viz || typeof viz !== "object") return;
+    const bgIds = collectBackgroundShaderIds();
+    if (!bgIds.size) return;
+
+    if (viz.shaders && typeof viz.shaders === "object" && !Array.isArray(viz.shaders)) {
+        for (const id of Object.keys(viz.shaders)) {
+            if (bgIds.has(id)) delete viz.shaders[id];
+        }
+    }
+    if (Array.isArray(viz.order)) {
+        viz.order = viz.order.filter((id: any) => typeof id !== "string" || !bgIds.has(id));
+    }
 }
 
 
@@ -85,7 +216,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         super(
             namespace,
             "Visualization Interface",
-            "The namespace provides shader documentation, persistent visualization management for the current viewer session, and standalone viewport rendering/extraction with custom visualization configurations."
+            "The namespace provides shader documentation, schema-based discovery for available visualization options, persistent visualization management for the current viewer session, and standalone viewport rendering/extraction with custom visualization configurations. Inspect getSchema() and related metadata before mutating visualizations; prefer exploring available layer types, examples, params, and validation guidance over guessing."
         );
     }
 
@@ -113,6 +244,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      */
     protected _ajvValidator: ((value: any) => boolean) & { errors?: any[] } | undefined;
     protected _ajvDisabled = false;
+    protected _publishedSchemaCache: Record<string, any> | undefined;
 
     /**
      * Drop the cached validator and re-enable validation. Call after registering new shaders at
@@ -121,6 +253,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     public invalidateSchemaCache(): void {
         this._ajvValidator = undefined;
         this._ajvDisabled = false;
+        this._publishedSchemaCache = undefined;
     }
 
     /**
@@ -132,12 +265,29 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         if (this._ajvValidator) return this._ajvValidator;
         if (this._ajvDisabled) return undefined;
 
-        const AjvCtor: any = (globalThis as any).Ajv2020 || (globalThis as any).Ajv;
+        // Look for the AJV constructor under any of the names hosts commonly expose. Prefer
+        // 2020-12-aware classes; fall back to the default AJV class. Note: if the loaded class
+        // only knows draft-07, the compile call below will throw on the renderer's 2020-12
+        // schema and the catch will disable validation — same outcome as no AJV at all.
+        //
+        // The bundled UMD at src/libs/ajv7.min.js sets `window.ajv7` to the module's
+        // exports object (NOT the constructor): the Ajv class is the `default` export.
+        // Walk every candidate name and unwrap `.default` if the value is an object
+        // rather than a function — same probe order, just resilient to UMD shapes.
+        const g = globalThis as any;
+        const candidates = ["Ajv2020", "ajv2020", "Ajv", "ajv", "ajv7"];
+        let AjvCtor: any;
+        for (const name of candidates) {
+            const cand = g[name];
+            if (typeof cand === "function") { AjvCtor = cand; break; }
+            if (cand && typeof cand.default === "function") { AjvCtor = cand.default; break; }
+        }
         if (typeof AjvCtor !== "function") {
             this._ajvDisabled = true;
             console.warn(
-                "[visualization scripting] AJV is not available on globalThis (Ajv2020 / Ajv). " +
-                "Schema validation is disabled; the playground review remains the gate."
+                "[visualization scripting] AJV is not available on globalThis (looked for " +
+                "Ajv2020 / ajv2020 / Ajv / ajv / ajv7). Schema validation is disabled; the " +
+                "playground review remains the gate."
             );
             return undefined;
         }
@@ -207,12 +357,13 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
             if (!ok) {
                 const errors = (validate as any).errors as any[] | undefined;
-                const summary = (errors || []).map(e => {
+                const filtered = filterOneOfErrorsByDiscriminator(errors, viz);
+                const summary = filtered.map(e => {
                     const where = e.instancePath ? `viz[${i}]${e.instancePath}` : `viz[${i}]`;
                     return `  ${where}: ${e.message}${e.params ? " " + JSON.stringify(e.params) : ""}`;
                 }).join("\n");
                 const err: any = new Error(`Visualization validation failed before review:\n${summary}`);
-                err.ajvErrors = errors;
+                err.ajvErrors = errors;     // raw errors for the chat module's structured channel
                 throw err;
             }
         }
@@ -259,7 +410,8 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
             if (outcome && outcome.ok === false) {
                 const summary = entry.summary ? ` ${entry.summary}` : "";
-                const msg = `Coupling '${entry.name}' on shader '${layerType}' (${path || layer.id || layerType}) was not satisfied.${summary}`;
+                const corrective = formatCouplingCorrective(outcome.expected, outcome.actual);
+                const msg = `Coupling '${entry.name}' on shader '${layerType}' (${path || layer.id || layerType}) was not satisfied.${summary}${corrective ? ` ${corrective}` : ""}`;
                 const e: any = new Error(msg);
                 e.couplingViolation = {
                     coupling: entry.name,
@@ -329,9 +481,18 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     protected buildVisualizationStateSnapshot(): VisualizationStateSnapshot {
+        const visualizations = cloneJson(Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : []);
+        // Persisted visualizations may carry top-level shader entries whose ids
+        // collide with config.background[i].id. The playground assembler keys
+        // bg shaders by bgRef.id and viz shaders by their authored id, so a
+        // collision produces two distinct renderOutput rows pointing at the
+        // same image — visible as a duplicated background row in the side menu
+        // and a double-render in the playground viewer. Strip here so every
+        // proposal-bound snapshot built from current state is clean.
+        for (const viz of visualizations) stripBackgroundShaderIds(viz);
         return {
             data: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.data) ? APPLICATION_CONTEXT.config.data : []),
-            visualizations: cloneJson(Array.isArray(APPLICATION_CONTEXT.config.visualizations) ? APPLICATION_CONTEXT.config.visualizations : []),
+            visualizations,
             activeVisualizationIndex: cloneJson(this.getActiveVisualizationSelection())
         };
     }
@@ -416,14 +577,28 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     ): Promise<VisualizationStateSnapshot> {
         const rejectedMessage = options.rejectedMessage || "The proposed visualization change was canceled by the user.";
 
-        // Trusted automation: skip review entirely.
-        if (this.bypassConsentDialog) {
-            return cloneJson(proposed);
+        // Order matters: prefer the Playground over any bypass, because visualization mutations
+        // are user-visible state changes that the user should be able to inspect / edit / reject
+        // even when the script context otherwise auto-accepts simple consent prompts. The
+        // `bypassConsentDialog` flag is only honored when no Playground UI is available
+        // (headless/test environments).
+        const PLAYGROUND: any = (window as any).PLAYGROUND;
+        const playgroundAvailable = !!(PLAYGROUND && typeof PLAYGROUND.open === "function" && typeof document !== "undefined");
+
+        // Defensive strip: even if the snapshot was built ad-hoc by a caller
+        // (instead of going through buildVisualizationStateSnapshot), guarantee
+        // the playground/headless commit never sees a viz shader whose id
+        // collides with a configured background. Operates on a clone so the
+        // caller's object is left intact.
+        const sanitized: VisualizationStateSnapshot = cloneJson(proposed);
+        if (Array.isArray(sanitized.visualizations)) {
+            for (const viz of sanitized.visualizations) stripBackgroundShaderIds(viz);
         }
 
-        const PLAYGROUND: any = (window as any).PLAYGROUND;
-        if (!PLAYGROUND?.open || typeof document === "undefined") {
-            // No playground: degrade to the existing yes/no consent.
+        if (!playgroundAvailable) {
+            if (this.bypassConsentDialog) {
+                return sanitized;
+            }
             await this.requireActionConsent({
                 title: options.consentTitle || options.title || "Allow visualization change?",
                 description: options.consentDescription || options.rationale || "The script wants to change the visualization in the current viewer session.",
@@ -433,7 +608,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
                 cancelLabel: options.cancelLabel,
                 rejectedMessage,
             });
-            return cloneJson(proposed);
+            return sanitized;
         }
 
         const viewer = this.activeViewer;
@@ -444,7 +619,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         const noopApply = async () => true;
         const review: VisualizationReviewDecision = await reviewVisualizationProposal(
             viewer,
-            proposed,
+            sanitized,
             noopApply,
             {
                 title: options.title,
@@ -664,6 +839,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
         }
 
         visualization.shaders = this.normalizeShaderMap(visualization.shaders).shaders;
+        stripBackgroundShaderIds(visualization);
         return visualization as VisualizationItem;
     }
 
@@ -825,12 +1001,34 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      * every valid layer shape - the LLM and any other consumer reads this once and validates
      * against it. Cache the result for the rest of the session.
      *
+     * Discovery guidance:
+     * - inspect `$defs.shaderLayers` to enumerate available shader/layer types
+     * - read each candidate's `x-intent`, `x-expects`, and `x-controlCouplings` before choosing
+     * - copy `examples[0]` from the selected layer type as the structural starting point
+     * - set only params that exist on that type; different layer types intentionally expose different controls
+     * - if the schema evidence is ambiguous, inspect more state or ask a clarification question instead of guessing
+     *
      * The slim view drops `$defs.uiControlEnvelopes` (typedef catalog) since `$defs.shaderLayers[type].examples`
      * already encode valid envelope values. xOpat's own AJV instance still uses the full schema
      * (with refs intact) for validation.
      */
     getSchema(): Record<string, any> {
-        const fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
+        // Defensive caller-side wrapper for the FlexRenderer "published examples failed validation"
+        // path - tracked upstream as patch B4 in docs/patches/flex-renderer-llm-schema.md. Once the
+        // upstream library no longer rejects its own examples, this try/catch can drop the fallback.
+        let fullSchema: any;
+        try {
+            fullSchema = this.shaderConfigurator.compileConfigSchemaModel();
+            this._publishedSchemaCache = fullSchema;
+        } catch (err) {
+            if (this._publishedSchemaCache) {
+                fullSchema = this._publishedSchemaCache;
+            } else {
+                const message = err instanceof Error ? err.message : String(err);
+                const firstLine = message.split(/\r?\n/, 1)[0]?.trim() || "schema compile failed";
+                throw new Error(`getSchema(): ${firstLine}`);
+            }
+        }
         const slim = cloneJson(fullSchema);
         if (slim && isPlainObject(slim.$defs)) {
             delete slim.$defs.uiControlEnvelopes;
@@ -840,27 +1038,135 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
 
     /**
      * Returns the persisted visualization list for the current session.
+     *
+     * Each entry is stripped of background-derived shader entries before
+     * being returned (see stripBackgroundShaderIds). The persisted config
+     * itself is not mutated; the next API write triggers a clean rewrite,
+     * which heals corrupted historical state organically.
      */
     getVisualizations(): VisualizationItem[] {
         const visualizations = Array.isArray(APPLICATION_CONTEXT.config.visualizations)
             ? APPLICATION_CONTEXT.config.visualizations
             : [];
-        return cloneJson(visualizations);
+        const cloned = cloneJson(visualizations);
+        for (const viz of cloned) stripBackgroundShaderIds(viz);
+        return cloned;
     }
 
     /**
-     * Returns the current active visualization selection.
+     * Returns the current active visualization selection, intersected with the
+     * actual visualization array — entries that point outside the array become
+     * `undefined`, and an entirely-empty result is returned as `undefined`.
+     *
+     * Rationale: the persisted `activeVisualizationIndex` option is a free
+     * cursor that does not auto-sync with `config.visualizations.length`, so
+     * scripts could observe `[0]` even when no visualization exists. Surfacing
+     * the cursor verbatim led the LLM to assume a viz existed and to issue
+     * follow-up calls against an absent target. Guarding here keeps the
+     * internal protected getter raw (callers that build snapshots want the
+     * unfiltered cursor) while giving the public API a sane invariant.
      */
     getActiveVisualizationIndex(): Array<number | undefined> | undefined {
-        return cloneJson(this.getActiveVisualizationSelection());
+        const raw = cloneJson(this.getActiveVisualizationSelection());
+        if (raw === undefined) return undefined;
+        const total = Array.isArray(APPLICATION_CONTEXT.config.visualizations)
+            ? APPLICATION_CONTEXT.config.visualizations.length
+            : 0;
+        if (total === 0) return undefined;
+        const guarded = raw.map((entry) =>
+            Number.isInteger(entry) && (entry as number) >= 0 && (entry as number) < total ? entry : undefined
+        );
+        return guarded.every((entry) => entry === undefined) ? undefined : guarded;
     }
 
     /**
      * Returns the first active visualization configuration, when one is selected.
+     * Stripped of background-derived shader entries; see getVisualizations.
      */
     getActiveVisualization(): VisualizationItem | undefined {
         const active = APPLICATION_CONTEXT.activeVisualizationConfig();
-        return cloneJson(active);
+        const cloned = cloneJson(active);
+        if (cloned) stripBackgroundShaderIds(cloned);
+        return cloned;
+    }
+
+    /**
+     * Dry-run validator for a proposed VisualizationItem (or shader-map). Runs
+     * the same JSON-Schema and coupling checks as `addVisualization` /
+     * `updateVisualizationAt` / `replaceVisualizations`, without mutating
+     * state or opening the playground review.
+     *
+     * Use this before any visualization-mutating call to catch shape errors,
+     * unknown fields, and cross-field rule violations (e.g. colormap class
+     * count vs threshold breaks). Returns a structured report; the caller
+     * fixes anything where `ok === false` and re-validates.
+     *
+     * Shape: same as the `addVisualization` first argument — either a full
+     * `VisualizationItem` (`{ name, shaders }`) or a shader-map.
+     */
+    validateProposedVisualization(viz: any): {
+        ok: boolean;
+        normalized?: VisualizationItem;
+        schemaErrors: string[];
+        couplingViolations: Array<{
+            coupling: string;
+            layerType?: string;
+            layerPath?: string;
+            controls?: string[];
+            expected?: any;
+            actual?: any;
+            message: string;
+        }>;
+    } {
+        const schemaErrors: string[] = [];
+        const couplingViolations: Array<{
+            coupling: string; layerType?: string; layerPath?: string;
+            controls?: string[]; expected?: any; actual?: any; message: string;
+        }> = [];
+
+        let normalized: VisualizationItem | undefined;
+        try {
+            normalized = this.normalizeVisualizationInput(viz);
+        } catch (err: any) {
+            schemaErrors.push(String(err?.message || err));
+            return { ok: false, schemaErrors, couplingViolations };
+        }
+
+        try {
+            this.validateProposedVisualizations([normalized]);
+        } catch (err: any) {
+            const msg = String(err?.message || err);
+            // Strip the leading "Visualization validation failed before review:" header so the
+            // returned strings are pure error lines the caller can re-render.
+            for (const line of msg.split(/\r?\n/)) {
+                const trimmed = line.replace(/^Visualization validation failed before review:?$/, "").trim();
+                if (trimmed) schemaErrors.push(trimmed);
+            }
+        }
+
+        if (isPlainObject((normalized as any).shaders)) {
+            for (const [key, layer] of Object.entries((normalized as any).shaders)) {
+                try {
+                    this.validateLayerCouplings(layer, key);
+                } catch (err: any) {
+                    const v = err?.couplingViolation || {};
+                    couplingViolations.push({
+                        coupling: v.coupling || "(unnamed)",
+                        layerType: v.layerType,
+                        layerPath: v.layerPath,
+                        controls: v.controls,
+                        expected: v.expected,
+                        actual: v.actual,
+                        message: String(err?.message || err),
+                    });
+                }
+            }
+        }
+
+        const ok = schemaErrors.length === 0 && couplingViolations.length === 0;
+        return ok
+            ? { ok, normalized, schemaErrors, couplingViolations }
+            : { ok, schemaErrors, couplingViolations };
     }
 
     /**

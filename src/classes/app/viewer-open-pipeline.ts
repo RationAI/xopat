@@ -3,6 +3,7 @@ import { ViewerSelectionState } from "./viewer-selection-state";
 import { ViewerStateBindingController } from "./viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./viewer-visualization-runtime";
 import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-shader-source-controller";
+import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
 
 export interface OpenViewerWithOptions {
     deriveOverlayFromBackgroundGoals?: boolean;
@@ -333,7 +334,10 @@ export class ViewerOpenPipeline {
         const visibleLoadChanged = (a: any, b: any) => buildVisibleLoadFingerprint(a) !== buildVisibleLoadFingerprint(b);
         const selectionAt = (value: any, viewerIndex: number): number | undefined => {
             const selected = normalizeHistorySelection(value) || [];
-            return selected[viewerIndex] ?? selected[0];
+            if (viewerIndex < selected.length) {
+                return selected[viewerIndex];
+            }
+            return selected[0];
         };
         const dataSpecFromRef = (dataSet: any[], ref: any) => typeof ref === "number" ? dataSet?.[ref] : ref;
         const dataIdFromSpec = (spec: any) => {
@@ -563,7 +567,7 @@ export class ViewerOpenPipeline {
         const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
         const isSecureMode = !!appContext.secure;
 
-        UTILITIES.parseBackgroundAndGoal(effectiveBgSpec, vizSpec, {
+        const selectionStateChanged = !!UTILITIES.parseBackgroundAndGoal(effectiveBgSpec, vizSpec, {
             deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
         });
 
@@ -593,8 +597,19 @@ export class ViewerOpenPipeline {
         const selectedBackgroundsBefore = selectedBackgroundIdsFromSnapshot(previousSnapshot);
         const selectedBackgroundsAfter = selectedBackgroundIdsFromSnapshot(nextSnapshot);
         const backgroundChanged = hadOpenViewerState && JSON.stringify(selectedBackgroundsBefore) !== JSON.stringify(selectedBackgroundsAfter);
-        const anythingVisibleChanged = hadOpenViewerState && visibleLoadChanged(previousSnapshot, nextSnapshot);
-        const anythingChanged = hadOpenViewerState && !loadSnapshotsEqual(previousSnapshot, nextSnapshot);
+        const explicitSelectionUpdate =
+            bgSpec !== undefined ||
+            vizSpec !== undefined ||
+            !!opts.deriveOverlayFromBackgroundGoals;
+        const selectionChangedDuringParse = hadOpenViewerState && explicitSelectionUpdate && selectionStateChanged;
+        const anythingVisibleChanged = hadOpenViewerState && (
+            visibleLoadChanged(previousSnapshot, nextSnapshot) ||
+            selectionChangedDuringParse
+        );
+        const anythingChanged = hadOpenViewerState && (
+            !loadSnapshotsEqual(previousSnapshot, nextSnapshot) ||
+            selectionChangedDuringParse
+        );
 
         const preserveHistoryOnBackgroundChange = opts.preserveHistoryOnBackgroundChange ?? parseLooseBoolean(
             appContext.config.params?.preserveHistoryOnBackgroundChange,
@@ -711,21 +726,11 @@ export class ViewerOpenPipeline {
             return make(env.client.image_group_server, BackgroundConfig.dataFromSpec(spec));
         };
 
-        const normalizeRendererShaderConfig = (shaderConfig: any, context: any = {}) => {
-            const rendererClass: any = (window.OpenSeadragon as any)?.FlexRenderer;
-            if (rendererClass && typeof rendererClass.normalizeShaderConfig === "function") {
-                return rendererClass.normalizeShaderConfig(shaderConfig, context);
-            }
-            return shaderConfig;
-        };
-
-        const normalizeRendererShaderMap = (shaderMap: Record<string, any>, context: any = {}) => {
-            const rendererClass: any = (window.OpenSeadragon as any)?.FlexRenderer;
-            if (rendererClass && typeof rendererClass.normalizeShaderMap === "function") {
-                return rendererClass.normalizeShaderMap(shaderMap, context);
-            }
-            return shaderMap;
-        };
+        // Renderer-side shader-config normalization wrappers were inlined here
+        // and consumed by the bg/viz assembly walk. The walk now lives in
+        // assemble-render-output.ts which holds its own thin delegates around
+        // FlexRenderer.normalizeShaderConfig / normalizeShaderMap, so the
+        // wrappers are no longer needed in this file.
 
         const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void) => {
             viewer.addTiledImage({
@@ -990,11 +995,24 @@ export class ViewerOpenPipeline {
             const nextNatureFingerprint = buildViewerNatureFingerprint(effectiveSnapshot, viewerIndex);
             const previousRenderFingerprint = buildViewerRenderFingerprint(previousSnapshot, viewerIndex);
             const nextRenderFingerprint = buildViewerRenderFingerprint(effectiveSnapshot, viewerIndex);
+            const previousBgSelection = selectionAt(previousSnapshot?.activeBackgroundIndex, viewerIndex);
+            const nextBgSelection = selectionAt(effectiveSnapshot?.activeBackgroundIndex, viewerIndex);
+            const previousVizSelection = selectionAt(previousSnapshot?.activeVisualizationIndex, viewerIndex);
+            const nextVizSelection = selectionAt(effectiveSnapshot?.activeVisualizationIndex, viewerIndex);
+            const selectionChangedForViewer =
+                previousBgSelection !== nextBgSelection ||
+                previousVizSelection !== nextVizSelection;
+            const visualizationSelectionChangedForViewer =
+                previousVizSelection !== nextVizSelection;
             const isNewViewer = !viewer || !viewer.isOpen?.() || (viewer.world?.getItemCount?.() || 0) < 1;
 
             let changeKind: "noop" | "content" | "visualization";
             if (isNewViewer) {
                 changeKind = "content";
+            } else if (selectionChangedForViewer) {
+                changeKind = previousBgSelection !== nextBgSelection || changesViewerCount
+                    ? "content"
+                    : "visualization";
             } else if (previousRenderFingerprint === nextRenderFingerprint) {
                 changeKind = "noop";
             } else if (previousNatureFingerprint !== nextNatureFingerprint || changesViewerCount) {
@@ -1007,6 +1025,7 @@ export class ViewerOpenPipeline {
                 entry,
                 viewerIndex,
                 changeKind,
+                visualizationSelectionChangedForViewer,
             };
         });
 
@@ -1171,99 +1190,54 @@ export class ViewerOpenPipeline {
                 }
             });
 
-            openedBase.forEach((bgRef: BackgroundConfig, bgIndex: number) => {
-                let bgShaders: VisualizationShaderGroupOrLayer[] | undefined = cloneRuntimeState(bgRef.shaders);
-                if (!bgShaders) {
-                    bgShaders = [{ type: "identity" }];
-                } else if (!Array.isArray(bgShaders)) {
-                    console.warn("Invalid shaders for background: array required.", bgIndex, bgRef, bgShaders);
-                    bgShaders = [bgShaders as VisualizationShaderGroupOrLayer];
+            const allocateWorldIndex = (
+                dataIndex: number,
+                kind: "background" | "visualization",
+                bgRef?: BackgroundConfig,
+            ): number => {
+                if (uniqueOsdWorldIndexes.has(dataIndex)) {
+                    return uniqueOsdWorldIndexes.get(dataIndex) as number;
                 }
-
-                let count = 0;
-                const resolveBackgroundShaderLayer = (shaderCfg: any) => {
-                    const hasExplicitRefs = Array.isArray(shaderCfg.dataReferences) && shaderCfg.dataReferences.length > 0;
-
-                    if (!hasExplicitRefs) {
-                        const dataIndex = bgRef.dataReference as number;
-                        shaderCfg.tiledImages = [uniqueOsdWorldIndexes.get(dataIndex) ?? -1];
-                        shaderCfg.name = shaderCfg.name || bgRef.name || BackgroundConfig.data(bgRef);
-                    } else {
-                        shaderCfg.tiledImages = [];
-                        shaderCfg.name = shaderCfg.name || UTILITIES.nameFromBGOrIndex(shaderCfg.dataReferences![0]);
-
-                        for (const dataIndex of shaderCfg.dataReferences!) {
-                            if (!uniqueOsdWorldIndexes.has(dataIndex)) {
-                                uniqueOsdWorldIndexes.set(dataIndex, toOpen.length);
-                                toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex]));
-                                openedSpecOrder.push(cfg.data[dataIndex]);
-                            }
-                            shaderCfg.tiledImages.push(uniqueOsdWorldIndexes.get(dataIndex) ?? -1);
-                        }
-                    }
-
-                    if (shaderCfg.shaders && typeof shaderCfg.shaders === "object" && !Array.isArray(shaderCfg.shaders)) {
-                        for (const childShaderCfg of Object.values(shaderCfg.shaders)) {
-                            resolveBackgroundShaderLayer(childShaderCfg);
-                        }
-                    }
-                };
-
-                for (const shaderCfg of bgShaders) {
-                    shaderCfg.id = count < 1 ? bgRef.id : `${bgRef.id}-${count}`;
-                    resolveBackgroundShaderLayer(shaderCfg);
-                    normalizeRendererShaderConfig(shaderCfg, {
-                        rootKind: "background",
-                        rootConfig: bgRef,
-                        expandDataSourceRef: (entry: any, meta: any = {}) => buildManagedShaderSourceEntry(
-                            entry,
-                            (dataIndex: number) => bgUrlFromEntry(bgRef, cfg.data[dataIndex]),
-                            meta
-                        ),
-                    });
-                    renderOutput[shaderCfg.id] = shaderCfg;
-                    count++;
+                const allocated = toOpen.length;
+                uniqueOsdWorldIndexes.set(dataIndex, allocated);
+                if (kind === "background" && bgRef) {
+                    toOpen.push(bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification));
+                } else {
+                    toOpen.push(vizUrlFromEntries(dataIndex));
                 }
-            });
+                openedSpecOrder.push(cfg.data[dataIndex]);
+                return allocated;
+            };
 
+            const assembleEnv = {
+                backgrounds: openedBase,
+                activeVisualization: renderingWithWebGL ? activeV : undefined,
+                data: cfg.data,
+                cloneRuntimeState,
+                resolveWorldIndex: allocateWorldIndex,
+                expandDataSourceRef: (entry: any, kind: "background" | "visualization", bgRef: BackgroundConfig | undefined, meta: any) => buildManagedShaderSourceEntry(
+                    entry,
+                    kind === "background" && bgRef
+                        ? (dataIndex: number) => bgUrlFromEntry(bgRef, cfg.data[dataIndex] as DataSpecification)
+                        : vizUrlFromEntries,
+                    meta,
+                ),
+            };
+
+            assembleBackgroundShaders(assembleEnv, renderOutput);
+
+            // `firstVizIndex` separates background-derived tiles from
+            // visualization-derived ones in the open-tile loop's `kind`
+            // labelling below. Capture it AFTER bg-shader allocation (which
+            // may add extra tiles for shaders with explicit dataReferences)
+            // and BEFORE viz-shader allocation.
             const firstVizIndex = toOpen.length;
-            let shaderConfigMap: Record<string, VisualizationShaderGroupOrLayer> = {};
 
             if (renderingWithWebGL && activeV) {
                 appContext.prepareRendering();
-                shaderConfigMap = cloneRuntimeState(activeV.shaders || {});
-
-                forEachVisualizationShader(shaderConfigMap as Record<string, any>, (vizShaderCfg, shaderId) => {
-                    vizShaderCfg.tiledImages = [];
-
-                    const dataRefs = vizShaderCfg.dataReferences || [];
-                    const firstSpec = dataRefs.length ? cfg.data[dataRefs[0] ?? 0] : undefined;
-                    const firstId = BackgroundConfig.dataFromSpec(firstSpec);
-                    vizShaderCfg.name = (vizShaderCfg.name || firstId || shaderId) as string;
-
-                    for (const dataIndex of dataRefs) {
-                        if (!uniqueOsdWorldIndexes.has(dataIndex)) {
-                            uniqueOsdWorldIndexes.set(dataIndex, toOpen.length);
-                            toOpen.push(vizUrlFromEntries(dataIndex));
-                            openedSpecOrder.push(cfg.data[dataIndex]);
-                        }
-
-                        vizShaderCfg.tiledImages.push(uniqueOsdWorldIndexes.get(dataIndex) ?? -1);
-                    }
-                });
-
-                normalizeRendererShaderMap(shaderConfigMap as Record<string, any>, {
-                    rootKind: "visualization",
-                    rootConfig: activeV,
-                    expandDataSourceRef: (entry: any, meta: any = {}) => buildManagedShaderSourceEntry(
-                        entry,
-                        vizUrlFromEntries,
-                        meta
-                    ),
-                });
-
-                Object.assign(renderOutput, shaderConfigMap);
             }
+
+            assembleVisualizationShaders(assembleEnv, renderOutput);
 
             // Cross-shader binding refs: the resolver's "sole user vs shared"
             // decision relies on knowing every shader that references a world
@@ -1376,6 +1350,13 @@ export class ViewerOpenPipeline {
                     }
                 }
 
+                // Stash the dataIndex → worldIndex map on the viewer so
+                // sandboxed clones (the Visualization Playground) can build
+                // their renderer config against the same world layout this
+                // pipeline just established. Plain object so it survives a
+                // structured clone path if anyone serialises it later.
+                (viewer as any).__dataToWorldIndex = Array.from(uniqueOsdWorldIndexes.entries());
+
                 plog(`openIntoViewer TILE LOOP DONE v=${viewerIndex}`, {
                     successOpened,
                     worldCount: viewer.world.getItemCount(),
@@ -1384,6 +1365,10 @@ export class ViewerOpenPipeline {
                 const applyRendererConfiguration = async () => {
                     if (!viewerSupportsFlexRendering || !viewer.drawer?.overrideConfigureAll) {
                         return false;
+                    }
+
+                    if (plan.visualizationSelectionChangedForViewer) {
+                        await viewer.drawer.overrideConfigureAll(undefined);
                     }
 
                     if (!Object.keys(renderOutput).length) {

@@ -102,19 +102,27 @@ export function buildJoinUrl(blob: string, base: Location = window.location): st
  * embedded as `params.sessionJoinBlob`. The guest's xOpat parses this
  * exactly like a normal shared-session URL and boots with the host's
  * plugin set from scratch (bypassCookies=true, permaLoadPlugins=false).
+ *
+ * Uses `UTILITIES.serializeApp` (not `serializeAppConfig`) so plugins
+ * loaded at runtime — including session-controls itself — are reflected
+ * in `config.plugins`. Without this, the guest would never load
+ * session-controls and the auto-join handler never fires.
  */
-export function buildProvisioningUrl(sessionBlob: string): string {
+export async function buildProvisioningUrl(sessionBlob: string): Promise<string> {
     const U: any = (globalThis as any).UTILITIES;
     const ctx: any = (globalThis as any).APPLICATION_CONTEXT;
-    if (!U?.serializeAppConfig || !ctx?.url) {
-        throw new Error("[SESSION] UTILITIES.serializeAppConfig unavailable; cannot build provisioning URL");
+    if (!U?.serializeApp || !ctx?.url) {
+        throw new Error("[SESSION] UTILITIES.serializeApp unavailable; cannot build provisioning URL");
     }
 
-    // withCookies=false → bypassCookies=true, bypassCacheLoadTime=true baked in.
-    const configJson: string = U.serializeAppConfig(false, false);
+    // serializeApp populates config.plugins from the runtime-loaded
+    // plugin set (covers permaLoad and runtime-loaded plugins that
+    // never made it into config.plugins via setOption). withCookies=false
+    // → bypassCookies=true is baked in.
+    const { app: configJson } = await U.serializeApp(undefined, false, false);
     let config: any;
     try { config = JSON.parse(configJson); }
-    catch { throw new Error("[SESSION] serializeAppConfig returned non-JSON"); }
+    catch { throw new Error("[SESSION] serializeApp returned non-JSON"); }
     config.params = config.params || {};
     config.params.sessionJoinBlob = sessionBlob;
     // Don't pollute the guest's persistent plugin cache.

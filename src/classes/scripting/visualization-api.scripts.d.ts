@@ -118,7 +118,8 @@ export type VisualizationShaderGroupOrLayer = VisualizationShaderGroup | Visuali
 /**
  * The renderer-published JSON Schema 2020-12 document describing every valid visualization
  * config. Returned by `visualization.getSchema()`. Consumers (LLMs, validators, type generators)
- * read it as the single source of truth for layer shapes.
+ * read it as the single source of truth for layer shapes and for discovering which layer types,
+ * params, examples, and validation hints are available before mutating visualization state.
  *
  * Top-level keys: standard JSON Schema fields (`$schema`, `$id`, `type`, `properties`,
  * `additionalProperties`, `required`) plus `$defs.shaderLayers.<type>` (one full layer schema
@@ -169,12 +170,16 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * Returns the renderer-published JSON Schema 2020-12 document describing every valid
      * visualization config. ONE-CALL discovery: cache the result for the rest of the session.
      *
-     * To pick a shader: scan `schema.$defs.shaderLayers`, match by `x-intent` and
-     * `x-expects.dataKind` against `viewer.getMetadata().channels`. To construct a layer:
-     * copy `schema.$defs.shaderLayers[type].examples[0]` and tweak. Submitted layers are
-     * AJV-validated against the same schema before the user is asked to review; on failure
-     * the error message includes JSON Pointer paths (e.g. `/shaders/L1/params/color`)
-     * pointing at the offending field plus what was expected.
+     * Discovery guidance:
+     * - inspect `schema.$defs.shaderLayers` to enumerate available layer types
+     * - read `x-intent`, `x-expects`, and `x-controlCouplings` on candidate types before choosing
+     * - copy `schema.$defs.shaderLayers[type].examples[0]` as the structural starting point
+     * - set only params that exist on the chosen type; different layer types expose different controls
+     * - if the schema evidence is ambiguous, inspect more viewer state or ask a clarification question instead of guessing
+     *
+     * Submitted layers are AJV-validated against the same schema before the user is asked to
+     * review; on failure the error message includes JSON Pointer paths (e.g.
+     * `/shaders/L1/params/color`) pointing at the offending field plus what was expected.
      */
     getSchema(): VisualizationConfigSchema;
 
@@ -184,7 +189,12 @@ export interface VisualizationScriptApi extends ScriptApiObject {
     getVisualizations(): VisualizationItem[];
 
     /**
-     * Returns the current active visualization selection.
+     * Returns the active-visualization selection, intersected with the actual
+     * visualization list. Entries that fall outside the list become
+     * `undefined`; the whole result is `undefined` when no entry is valid (in
+     * particular when `getVisualizations()` is empty). Pair with
+     * `getVisualizations()` / `getActiveVisualization()` rather than treating
+     * a non-undefined cursor as proof that a visualization exists.
      */
     getActiveVisualizationIndex(): Array<number | undefined> | undefined;
 
@@ -192,6 +202,33 @@ export interface VisualizationScriptApi extends ScriptApiObject {
      * Returns the first active visualization entry, when one is selected.
      */
     getActiveVisualization(): VisualizationItem | undefined;
+
+    /**
+     * Dry-run validator. Runs the same JSON-Schema and coupling checks as
+     * `addVisualization` / `updateVisualizationAt` / `replaceVisualizations`
+     * without mutating state or opening the playground review.
+     *
+     * Call this BEFORE any visualization-mutating method. If `result.ok ===
+     * false`, fix the reported errors first — the mutating call would fail
+     * with the same set otherwise. Couplings are cross-field rules (e.g. a
+     * colormap's `color.steps` must equal `threshold.breaks.length + 1`)
+     * that AJV alone cannot express; they only surface here, so dry-run
+     * is the only way to catch them up front.
+     */
+    validateProposedVisualization(viz: any): {
+        ok: boolean;
+        normalized?: VisualizationItem;
+        schemaErrors: string[];
+        couplingViolations: Array<{
+            coupling: string;
+            layerType?: string;
+            layerPath?: string;
+            controls?: string[];
+            expected?: any;
+            actual?: any;
+            message: string;
+        }>;
+    };
 
     /**
      * Captures the current visualization-related session state so it can be restored later.

@@ -251,9 +251,11 @@ The runtime opening pipeline is class-based and lives under `src/classes/app/`. 
   - Main transaction entrypoint.
   - Can replace or merge session `data` / `background`.
   - Can create additional viewers when multiple backgrounds are targeted.
+  - `vizSpec` arrays may contain explicit `undefined` entries to mean "no visualization for this viewer"; omitted `vizSpec` still means "keep the current selection".
   - Rebinds navigator title, scalebar reference, measurements, visualization menu, history, and synthetic open events.
 - `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, { backgroundIndex?, visualizationIndex? }, opts?)`
   - Use when one existing viewer should switch background and/or visualization without rebuilding unrelated viewers.
+  - Passing `visualizationIndex: null` clears the active visualization for that viewer.
   - The method delegates to the same open pipeline and therefore keeps history/session synchronization consistent.
 - `APPLICATION_CONTEXT.replaceVisualizations(visualizations, newData?, activeVizIndex?)`
   - Replaces the session visualization list while preserving the rest of the session.

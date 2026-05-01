@@ -137,17 +137,24 @@ export class RightSideViewerMenu extends BaseComponent {
             } : (value) => {
                 // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
                 const parsedValue = Number.parseInt(value, 10);
-                const nextValue = Number.isInteger(parsedValue) ? parsedValue : undefined;
-                let activeViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false, true);
-                if (Array.isArray(activeViz)) {
-                    const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
-                    if (Number.isInteger(index) && index >= 0) {
-                        activeViz[index] = nextValue;
-                    } else {
-                        activeViz[0] = nextValue;
-                    }
-                } else if (Number.isInteger(activeViz) || activeViz === undefined) {
-                    activeViz = nextValue;
+                const nextValue = Number.isInteger(parsedValue) ? parsedValue : null;
+                const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
+                const targetViewerIndex = Number.isInteger(index) && index >= 0 ? index : 0;
+
+                if (typeof APPLICATION_CONTEXT.updateViewerSelection === "function") {
+                    APPLICATION_CONTEXT.updateViewerSelection(targetViewerIndex, {
+                        visualizationIndex: nextValue
+                    });
+                    return;
+                }
+
+                const storedActiveViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false, true);
+                let activeViz;
+                if (Array.isArray(storedActiveViz)) {
+                    activeViz = storedActiveViz.slice();
+                    activeViz[targetViewerIndex] = nextValue === null ? undefined : nextValue;
+                } else {
+                    activeViz = nextValue === null ? [undefined] : nextValue;
                 }
                 APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
             },

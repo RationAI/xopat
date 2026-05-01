@@ -197,8 +197,8 @@ function initXOpatLayers() {
         return upgraded;
     }
 
-    function collectShaderEntries() {
-        const renderer = VIEWER?.drawer?.renderer;
+    function collectShaderEntries(viewer = VIEWER) {
+        const renderer = viewer?.drawer?.renderer;
         const entries = [];
 
         if (renderer && typeof renderer.forEachShaderLayerWithContext === "function") {
@@ -384,6 +384,129 @@ function initXOpatLayers() {
         });
     };
 
+    function jsonClone(value) {
+        try {
+            return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+        } catch (e) {
+            return {};
+        }
+    }
+
+    /**
+     * Capture a viewer's live visualization state for cross-peer broadcast.
+     * Shape contract documented in src/SESSION.md and consumed by
+     * src/classes/session/providers/visualization.ts.
+     */
+    UTILITIES.exportLiveVisualization = function (viewer) {
+        const renderer = viewer?.drawer?.renderer;
+        if (!renderer) return null;
+
+        const layers = {};
+        for (const entry of collectShaderEntries(viewer)) {
+            const config = entry.config || {};
+            layers[entry.pathString] = {
+                id: config.id,
+                type: typeof config.type === "string" ? config.type : "",
+                cache: jsonClone(isObject(config.cache) ? config.cache : {}) || {},
+                state: extractShaderState(config),
+            };
+        }
+
+        let layerOrder;
+        if (typeof renderer.getShaderLayerOrder === "function") {
+            const order = renderer.getShaderLayerOrder();
+            if (Array.isArray(order)) layerOrder = order.slice();
+        }
+        if (!Array.isArray(layerOrder)) layerOrder = Object.keys(layers);
+
+        return { layerOrder, layers };
+    };
+
+    /**
+     * Apply an exported live visualization payload onto the local renderer.
+     * Mutates per-layer config in place via public renderer accessors, then
+     * triggers a single drawer rebuild.
+     *
+     * The session provider sets `viewer.__sessionApplyingRemote = true` for
+     * the duration of this call so `_emitShaderConfigUpdate` skips re-emitting
+     * the changes back to peers (echo suppression). See
+     * src/classes/session/providers/visualization.ts.
+     *
+     * Returns true if any layer was mutated.
+     */
+    UTILITIES.importLiveVisualization = function (viewer, payload) {
+        const renderer = viewer?.drawer?.renderer;
+        if (!renderer || !isObject(payload)) return false;
+
+        const incomingLayers = isObject(payload.layers) ? payload.layers : {};
+        const navDrawer = viewer.navigator?.drawer;
+        let mutated = false;
+
+        for (const pathString of Object.keys(incomingLayers)) {
+            const incoming = incomingLayers[pathString];
+            if (!isObject(incoming)) continue;
+
+            const config = typeof renderer.getShaderLayerConfig === "function"
+                ? renderer.getShaderLayerConfig(pathString)
+                : null;
+            if (!config) {
+                console.warn(`[layers] importLiveVisualization: missing local config for "${pathString}"`);
+                continue;
+            }
+
+            const incomingType = typeof incoming.type === "string" ? incoming.type : "";
+            if (incomingType && config.type !== incomingType) {
+                config.type = incomingType;
+                if (navDrawer && typeof navDrawer.getOverriddenShaderConfig === "function") {
+                    const navConfig = navDrawer.getOverriddenShaderConfig(pathString);
+                    if (navConfig) navConfig.type = incomingType;
+                }
+            }
+
+            config.cache = jsonClone(isObject(incoming.cache) ? incoming.cache : {}) || {};
+            applySnapshotState(config, incoming.state);
+            config._cacheApplied = "session";
+            mutated = true;
+        }
+
+        const incomingOrder = Array.isArray(payload.layerOrder) ? payload.layerOrder : null;
+        if (incomingOrder && typeof renderer.setShaderLayerOrder === "function") {
+            const currentOrder = typeof renderer.getShaderLayerOrder === "function"
+                ? renderer.getShaderLayerOrder()
+                : null;
+            if (!Array.isArray(currentOrder) || currentOrder.join("/") !== incomingOrder.join("/")) {
+                try {
+                    renderer.setShaderLayerOrder(incomingOrder.slice());
+                    mutated = true;
+                } catch (e) {
+                    console.warn("[layers] importLiveVisualization: setShaderLayerOrder failed:", e);
+                }
+            }
+        }
+
+        if (mutated && viewer.drawer && typeof viewer.drawer.rebuild === "function") {
+            try { viewer.drawer.rebuild(0); }
+            catch (e) { console.warn("[layers] importLiveVisualization: drawer.rebuild failed:", e); }
+        }
+
+        return mutated;
+    };
+
+    /**
+     * Notify peers that a layer config changed locally. The session
+     * visualization provider listens for `shader-config-update` and
+     * force-emits a full snapshot on the next microtask. Skips while
+     * a remote apply is in progress to suppress echo.
+     */
+    UTILITIES._emitShaderConfigUpdate = function (viewer, layerId, change) {
+        if (!viewer || viewer.__sessionApplyingRemote) return;
+        try {
+            viewer.raiseEvent("shader-config-update", { viewer, layerId, change });
+        } catch (e) {
+            console.warn("[shader-config-update] dispatch failed:", e);
+        }
+    };
+
     /**
      * @private
      * @param layerId
@@ -405,6 +528,7 @@ function initXOpatLayers() {
                 shader = VIEWER.navigator.drawer.getOverriddenShaderConfig(layerId);
                 shader.type = type;
                 VIEWER.drawer.rebuild(0);
+                UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { type });
             } else {
                 console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': bad initialization?`);
             }
@@ -453,6 +577,7 @@ function initXOpatLayers() {
             // use blend not set, default with blend mode
             shader.resetMode(shaderConfig.params);
             VIEWER.drawer.rebuild(0);
+            UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { params: { use_mode: applied } });
             return true;
         }
 
@@ -474,6 +599,7 @@ function initXOpatLayers() {
             shaderConfig.params[filter] = value;
             shader.resetFilters(shaderConfig.params);
             VIEWER.drawer.rebuild(0);
+            UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { params: { [filter]: value } });
         } else {
             console.error("Invalid layer: bad initialization?");
         }

@@ -8,7 +8,6 @@ import { FullscreenMenuNavTab } from "../classes/components/fullscreenMenuNavTab
 import { BaseComponent } from "../classes/baseComponent.mjs";
 
 const { div, span, a, b, button, img, input } = van.tags;
-const { path, svg } = van.tags("http://www.w3.org/2000/svg");
 
 export class FullscreenMenus {
     constructor() {
@@ -307,6 +306,21 @@ export class FullscreenMenus {
         }).create();
     }
 
+    getHeaderBrand() {
+        const version = APPLICATION_CONTEXT?.env?.version || APPLICATION_CONTEXT?.env?.VERSION || "dev";
+        return div({ class: "flex items-center gap-3 self-start rounded-2xl border border-base-300 bg-base-100 px-3 py-2 shadow-sm" },
+            img({
+                src: `${APPLICATION_CONTEXT.url}src/assets/logos/xopat-logo.png`,
+                alt: "xOpat Viewer",
+                class: "h-5 w-5 object-contain"
+            }),
+            div({ class: "flex flex-col leading-tight" },
+                span({ class: "text-sm font-semibold" }, "Viewer"),
+                span({ class: "text-xs opacity-70" }, `v${version}`)
+            )
+        );
+    }
+
     get getSettingsBody() {
         const notification = div({ class: "mb-4 hidden", id: "settings-notification-wrap" },
             div({ class: "rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm" },
@@ -332,7 +346,10 @@ export class FullscreenMenus {
 
         return div({ class: "relative flex min-h-full flex-col gap-4 pb-24 pt-3 pr-2" },
             notification,
-            span({ class: "text-2xl font-semibold" }, $.t?.('main.bar.settings')),
+            div({ class: "flex flex-wrap items-start justify-between gap-3" },
+                span({ class: "text-2xl font-semibold" }, $.t?.('main.bar.settings')),
+                this.getHeaderBrand()
+            ),
             div({ class: "grid gap-4 lg:grid-cols-2" },
                 div({ class: "rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm" },
                     span({ class: "mb-3 block text-lg font-semibold" }, "Appearance"),
@@ -417,15 +434,13 @@ export class FullscreenMenus {
     getLogo(positionBottom, positionRight) {
         return div(
             { class: "pointer-events-none absolute bottom-0 right-0 hidden opacity-40 lg:block" },
-            div({ class: "relative h-[180px] w-[140px]" },
-                svg({ width: "199", height: "245", style: `transform: scale(0.4); position: absolute; bottom: ${positionBottom}px; right: ${positionRight}px;` },
-                    path({ class: "svg-bg", style: "stroke:none;", d: "M0 0L0 245L199 245L199 0L0 0z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", d: "M89 111C73.9124 102.634 59.1429 97.6265 42 103.699C10.6243 114.813 2.69417 155.943 24.3002 179.96C34.203 190.968 50.5908 195.588 65 193.711C70.1356 193.042 75.9957 189.366 81 189.558C85.6821 189.737 88.2317 195.201 93 196C93.6192 189.998 96.2022 186.738 102 185C101.099 181.757 97.6293 178.671 97.4406 175.424C97.0265 168.299 104.601 159.133 104.961 151C105.566 137.299 101.021 127.388 94 116C103.473 126.386 108.99 140.925 106.192 155C105.004 160.979 97.5869 171.328 100.07 177C104.64 187.436 131.355 202.006 122.296 214.956C118.441 220.467 108.201 223.195 105.353 214.981C103.302 209.066 108.098 199.867 106.772 193.044C105.706 187.562 98.7536 186.737 96.6034 192.059C95.3591 195.138 96.3032 198.787 95.6096 202C93.7875 210.441 87.5887 218.272 93.1481 226.96C100.503 238.454 121.175 235.504 129.532 226.699C134.728 221.225 136.419 213.299 137 206C148.187 205.48 157.471 186.148 144 184C149.507 175.759 148.085 167.119 146 158C165.247 156.32 202.562 125.778 177.895 106.649C169.278 99.9665 160.337 105.127 151 105C150.495 106.972 149.914 108.958 149.8 111.005C148.665 131.435 167.128 107.828 171.492 118.769C173.408 123.575 166.473 129.073 162.996 131.031C153.73 136.249 134.573 138.898 129.935 126.999C126.675 118.636 137.585 104.308 140.586 96C151.593 65.5361 152.007 31.5748 117 17.3125C83.7906 3.78271 48.8156 25.7805 54.3009 63C56.0017 74.5404 65.351 92.3288 73.5285 100.61C77.7937 104.929 84.2977 107.003 89 111z" }),
-                    path({ class: "svg-bg", style: "stroke:none;", d: "M87 81C82.7429 86.9183 82.9719 101.042 92.9992 101.573C102.597 102.082 97.7793 90.6547 93.9707 87.3356C91.5984 85.2683 89.3865 83.0401 87 81z" }),
-                    path({ class: "svg-fg", style: "stroke:none;", d: "M25 107C28.4168 108.639 36.7081 108.003 35.2485 102.053C32.9817 92.813 14.0022 92.0537 12.2292 102.001C10.2409 113.156 24.252 120.615 25 107z" })
-                ),
-                span({ class: "absolute bottom-[86px] right-[24px] text-lg font-semibold opacity-70" }, "xOpat"),
-                span({ class: "absolute bottom-[64px] right-[8px] text-lg font-semibold opacity-70" }, "Viewer")
+            div({ class: "relative h-[180px] w-[180px]" },
+                img({
+                    src: `${APPLICATION_CONTEXT.url}src/assets/logos/xopat-logo.png`,
+                    alt: "xOpat Viewer",
+                    class: "absolute object-contain",
+                    style: `width: 140px; height: 140px; bottom: ${positionBottom + 80}px; right: ${positionRight + 20}px;`
+                })
             )
         );
     }

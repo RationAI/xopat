@@ -180,12 +180,12 @@
                 <div class="mb-2 font-semibold">GL Type: <code>${escapeHtml(glType)}</code></div>
                 <div class="overflow-x-auto">
                     <table class="table table-sm">
-                        <thead><tr><th>Name</th><th>UI Type</th><th>Supports</th><th>Summary</th></tr></thead>
+                        <thead><tr><th>Name</th><th>Type</th><th>Supports</th><th>Summary</th></tr></thead>
                         <tbody>
                             ${controls.map(ctrl => `
                                 <tr>
                                     <td><code>${escapeHtml(ctrl.name || "")}</code></td>
-                                    <td>${escapeHtml(ctrl.uiType || "")}</td>
+                                    <td>${escapeHtml(ctrl.type || "")}</td>
                                     <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(ctrl.supports || {}, null, 2))}</pre></td>
                                     <td>${escapeHtml(ctrl.classDocs?.summary || ctrl.classDocs?.description || "")}</td>
                                 </tr>

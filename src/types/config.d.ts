@@ -79,6 +79,7 @@ type XOpatServerProxy = {
 };
 
 type XOpatServerConfig = {
+    devMode: boolean | null | undefined;
     name: string | null;
     supportsPost: boolean;
     secure?: {

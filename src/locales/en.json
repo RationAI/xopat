@@ -48,7 +48,7 @@
         "faultyViz": "Invalid Data"
       },
       "shaders": {
-        "title": "Visualization",
+        "title": "Layers",
         "saveCookies": "Remember settings",
         "setBlending": "Set blending",
         "blendingExplain": "Toggle blending (default: mask)",
@@ -84,6 +84,7 @@
         "cacheStale": "",
         "cacheTitle": "Layer visuals are cached",
         "cacheInfo": "The layer remembers parameter values set before.",
+        "noVisualization": "[no overlays]",
         "cache": {
           "name": "Params set from cache (name). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>.",
           "order": "Params set from cache (layer position). <a onclick=\"{{action}}\" class=\"btn-pointer\">Reset</a>."

@@ -278,6 +278,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         getOption(name: string, defaultValue: any = undefined, cache = true, parse = false) {
             const self = this as unknown as ApplicationContext;
+            const hasExplicitDefault = arguments.length >= 2;
             const builtin = self.config.defaultParams[name];
             if (builtin === undefined) {
                 console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
@@ -304,8 +305,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     return cached;
                 }
             }
-            let value = self.config.params[name] !== undefined ? self.config.params[name] :
-                (defaultValue === undefined ? self.config.defaultParams[name] : defaultValue);
+            let value = self.config.params[name] !== undefined
+                ? self.config.params[name]
+                : (hasExplicitDefault ? defaultValue : self.config.defaultParams[name]);
             if (value === "false") return false;
             if (value === "true") return true;
             if (parse && typeof value === "string") {
@@ -453,6 +455,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             // Placeholder for prepareRendering
         }
     }) as unknown as ApplicationContext;
+
+    if (ENV.server.devMode) {
+        APPLICATION_CONTEXT.setOption("debugMode", true);
+    }
 
     /**
      * Core HTTP Client.
@@ -795,9 +801,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             if (Array.isArray(visArg)) {
                 const norm = visArg.map(v => (v == null ? undefined : clampIndex(v, vizCount)));
                 if (Array.isArray(bgIndices)) return toAlignedArray(bgIndices.length, norm);
-                // single bg: take first defined overlay
-                const first = norm.find(v => v !== undefined);
-                return first === undefined ? undefined : first;
+                // single bg: preserve an explicit cleared selection (`[undefined]`)
+                // so callers can distinguish "show none" from "leave unchanged".
+                if (norm.length > 0) return [norm[0]];
+                return undefined;
             }
 
             // visArg undefined => no overlays
@@ -876,8 +883,21 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         // ---------- Handle vizSpec / derivation ----------
         if (vizSpec === null) {
             // erase overlays
-            APPLICATION_CONTEXT.setOption("activeVisualizationIndex", undefined);
-            updated = true;
+            const prevActiveVis = normalizeStoredVisualizationSelection(
+                APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
+            );
+            if (prevActiveVis !== undefined) {
+                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", undefined);
+                updated = true;
+            }
+            selectedBgArray.forEach((bgIdx) => {
+                const b = backgrounds[bgIdx];
+                if (!b) return;
+                if (b.goalIndex !== undefined) {
+                    b.goalIndex = undefined;
+                    updated = true;
+                }
+            });
         } else {
             // When derive flag is ON, derive overlays from per-background goalIndex,
             // regardless of whether vizSpec is provided or undefined.
@@ -904,7 +924,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                     if (Array.isArray(desiredActiveVis)) {
                         selectedBgArray.forEach((bgIdx, i) => {
                             const ov = (desiredActiveVis as Array<number>)[i];
-                            if (ov === undefined) return;
                             const b = backgrounds[bgIdx];
                             if (!b) return;
                             if (b.goalIndex !== ov) {
@@ -948,7 +967,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         if (!APPLICATION_CONTEXT.getOption("debugMode")) {
             return;
         }
-        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })();
+        (function () { var script = document.createElement('script'); script.onload = function () { var stats = new (window as any).Stats(); document.body.appendChild(stats.dom); stats.showPanel(1); stats.dom.style.top = '35px'; stats.dom.style.zIndex = '99'; requestAnimationFrame(function loop() { stats.update(); requestAnimationFrame(loop) }); }; script.src = APPLICATION_CONTEXT.url + 'src/external/stats.js'; document.head.appendChild(script); })();
     };
 
     const applicationLifecycle = new ApplicationLifecycleController(

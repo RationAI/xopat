@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-28
-//! Git commit: --79513a5-dirty
+//! Built on 2026-04-30
+//! Git commit: --9f2481e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -631,8 +631,20 @@
         setShaderLayerOrder(order) {
             if (!order) {
                 this._shadersOrder = null;
+                return;
             }
-            this._shadersOrder = order.map($.FlexRenderer.sanitizeKey);
+            const sanitized = order.map($.FlexRenderer.sanitizeKey);
+            const seen = new Set();
+            const deduped = [];
+            for (const key of sanitized) {
+                if (seen.has(key)) {
+                    $.console.warn(`setShaderLayerOrder: duplicate shader key '${key}' ignored (would cause GLSL redefinition).`);
+                    continue;
+                }
+                seen.add(key);
+                deduped.push(key);
+            }
+            this._shadersOrder = deduped;
         }
 
         /**
@@ -3770,7 +3782,7 @@ $.FlexRenderer.UIControls = class {
             if (this._items[type]) {
                 console.warn("Registering an already existing control component: ", type);
             }
-            uiElement["uiType"] = type;
+            uiElement["type"] = type;
             this._items[type] = uiElement;
         }
     }
@@ -3789,7 +3801,7 @@ $.FlexRenderer.UIControls = class {
         if (this._items[type]) {
             console.warn("Registering an already existing control component: ", type);
         }
-        cls._uiType = type;
+        cls._type = type;
         this._impls[type] = cls;
         // } else {
         //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
@@ -3847,7 +3859,7 @@ step="${params.step}" type="number" id="${uniqueId}"${$.FlexRenderer.UIControls.
             return name;
         },
         glType: "float",
-        uiType: "number",
+        type: "number",
         docs: {
             summary: "Numeric float input control.",
             description: "Renders an HTML number input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
@@ -3885,7 +3897,7 @@ step="${params.step}" type="number" id="${uniqueId}"${$.FlexRenderer.UIControls.
             return name;
         },
         glType: "float",
-        uiType: "range",
+        type: "range",
         docs: {
             summary: "Slider control for float uniforms.",
             description: "Renders an HTML range input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
@@ -3932,7 +3944,7 @@ step="${params.step}" type="number" id="${uniqueId}"${$.FlexRenderer.UIControls.
             return name;
         },
         glType: "vec3",
-        uiType: "color",
+        type: "color",
         docs: {
             summary: "RGB color picker control.",
             description: "Renders an HTML color input, decodes a hex color string into three normalized float components, and exposes a vec3 GLSL uniform.",
@@ -3970,7 +3982,7 @@ class="er-control__input er-control__input--bool" onchange="this.value=this.chec
             return name;
         },
         glType: "bool",
-        uiType: "bool",
+        type: "bool",
         docs: {
             summary: "Boolean toggle control.",
             description: "Renders an HTML checkbox, decodes the checked state into 0 or 1, and exposes a bool-compatible GLSL uniform.",
@@ -4036,7 +4048,7 @@ class="er-control__input er-control__input--bool" onchange="this.value=this.chec
             return name;
         },
         glType: "int",
-        uiType: "select_int",
+        type: "select_int",
         docs: {
             summary: "Integer select control.",
             description: "Renders an HTML select element, decodes the selected option value into an integer, and exposes an int GLSL uniform.",
@@ -4375,7 +4387,7 @@ $.FlexRenderer.UIControls.IControl = class IControl {
      * @return {*}
      */
     get uiControlType() {
-        return this.constructor._uiType;
+        return this.constructor._type;
     }
 
     /**
@@ -4622,7 +4634,7 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
     }
 
     get uiControlType() {
-        return this.component["uiType"];
+        return this.component["type"];
     }
 
     get supports() {
@@ -9914,6 +9926,10 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const createdOrder = [];
 
             for (const shaderId of requestedOrder) {
+                const sanitized = $.FlexRenderer.sanitizeKey(shaderId);
+                if (this.renderer._shaders[sanitized]) {
+                    this.renderer.removeShader(sanitized);
+                }
                 const shader = this.renderer.createShaderLayer(shaderId, shaders[shaderId], true);
                 if (shader) {
                     createdOrder.push(shaderId);
@@ -13020,7 +13036,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     static exampleParams() {
         return {
             color: { type: "colormap", default: "Viridis", steps: 3, mode: "sequential" },
-            threshold: { breaks: [0.33, 0.66] },
+            threshold: { type: "advanced_slider", breaks: [0.33, 0.66] },
             connect: true
         };
     }
@@ -13029,6 +13045,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return [{
             name: "colormap_class_count",
             summary: "Color class count must equal threshold.breaks.length + 1. Resize palette and breaks together.",
+            corrective: "Set params.color.steps = params.threshold.breaks.length + 1 (or pass threshold.breaks of length color.steps - 1).",
             controls: ["color", "threshold"],
             validate: (layer) => {
                 const params = (layer && layer.params) || {};
@@ -15952,6 +15969,27 @@ function makeWorker() {
  */
 (function($) {
 
+    let AjvConstructor;
+    const candidates = ["Ajv2020", "ajv2020", "Ajv", "ajv", "ajv7"];
+    for (const name of candidates) {
+        const cand = window[name];
+        if (typeof cand === "function") {
+            AjvConstructor = cand;
+            break;
+        }
+        if (cand && typeof cand.default === "function") {
+            AjvConstructor = cand.default;
+            break;
+        }
+    }
+    if (typeof AjvConstructor !== "function") {
+        console.warn(
+            "[flex renderer] AJV is not available on global scope (looked for " +
+            "Ajv2020 / ajv2020 / Ajv / ajv / ajv7). Schema validation is disabled; the " +
+            "playground review remains the gate."
+        );
+    }
+
     function deepClone(value) {
         if (typeof structuredClone === "function") {
             return structuredClone(value);
@@ -16340,7 +16378,7 @@ function makeWorker() {
                 );
             }
 
-            return {
+            const schema = {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 $id: "https://flex-renderer/schemas/visualization-config/v2.json",
                 title: "FlexRenderer visualization config",
@@ -16367,9 +16405,11 @@ function makeWorker() {
                     shaderLayers
                 },
                 "x-schemaVersion": 2,
-                "x-generatedAt": new Date().toISOString(),
-                "x-legacyControlTypeKey": "type"
+                "x-generatedAt": new Date().toISOString()
             };
+
+            this._assertPublishedExamplesValid(availableShaders, schema);
+            return schema;
         },
 
         async compileConfigSchemaModelAsync() {
@@ -16392,6 +16432,7 @@ function makeWorker() {
             return raw.map(c => ({
                 name: c.name,
                 summary: c.summary,
+                corrective: c.corrective,
                 controls: c.controls
             }));
         },
@@ -16465,6 +16506,93 @@ function makeWorker() {
             return issues;
         },
 
+        _compileExampleConsistencyInputs(ShaderClasses = []) {
+            return (ShaderClasses || []).map(Shader => {
+                const shaderType = Shader && typeof Shader.type === "function" ? Shader.type() : Shader && Shader.type;
+                const sources = Shader && typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
+                return {
+                    type: shaderType,
+                    exampleParams: Shader && typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
+                    params: this._compileShaderParamsSchema(Shader, sources)
+                };
+            });
+        },
+
+        _assertPublishedExamplesValid(ShaderClasses, schemaModel) {
+            const issues = [];
+            const compiledShaders = this._compileExampleConsistencyInputs(ShaderClasses);
+            const keyIssues = this.checkExampleParamsConsistency(compiledShaders);
+            for (const issue of keyIssues) {
+                issues.push({
+                    kind: "keys",
+                    type: issue.shaderType,
+                    key: issue.key,
+                    allowed: issue.allowed
+                });
+            }
+
+            const ajv = this._createSchemaAjv();
+            for (const Shader of ShaderClasses || []) {
+                const type = Shader && typeof Shader.type === "function" ? Shader.type() : Shader && Shader.type;
+                if (!type) {
+                    continue;
+                }
+                const layerSchema = schemaModel && schemaModel.$defs && schemaModel.$defs.shaderLayers &&
+                    schemaModel.$defs.shaderLayers[type];
+                const exampleLayer = layerSchema && layerSchema.examples && layerSchema.examples[0];
+                if (!layerSchema || !exampleLayer) {
+                    continue;
+                }
+
+                const validate = ajv.compile({
+                    ...layerSchema,
+                    $defs: deepClone((schemaModel && schemaModel.$defs) || {})
+                });
+                if (!validate(exampleLayer)) {
+                    issues.push({
+                        kind: "schema",
+                        type,
+                        errors: deepClone(validate.errors || [])
+                    });
+                }
+
+                for (const coupling of this.getShaderCouplingValidators(type)) {
+                    if (typeof coupling.validate !== "function") {
+                        continue;
+                    }
+                    const outcome = coupling.validate(exampleLayer);
+                    if (outcome && outcome.ok === false) {
+                        issues.push({
+                            kind: "coupling",
+                            type,
+                            coupling: coupling.name,
+                            expected: deepClone(outcome.expected),
+                            actual: deepClone(outcome.actual)
+                        });
+                    }
+                }
+            }
+
+            if (!issues.length) {
+                return;
+            }
+            throw new Error(
+                "[FlexRenderer.ShaderConfigurator] published examples failed validation:\n" +
+                issues.map(issue => `  ${JSON.stringify(issue)}`).join("\n")
+            );
+        },
+
+        _createSchemaAjv() {
+            if (!AjvConstructor) {
+                throw new Error("[FlexRenderer.ShaderConfigurator] Ajv is required for published-example validation.");
+            }
+            return new AjvConstructor({
+                allErrors: true,
+                strict: false,
+                schemaId: "auto"
+            });
+        },
+
         _warnIfExampleParamsInconsistent(shaders) {
             const issues = this.checkExampleParamsConsistency(shaders);
             if (!issues.length) {
@@ -16499,6 +16627,7 @@ function makeWorker() {
             return raw.map(c => ({
                 name: c.name,
                 summary: c.summary,
+                corrective: c.corrective,
                 controls: c.controls,
                 validate: typeof c.validate === "function" ? c.validate : undefined
             }));
@@ -16788,7 +16917,7 @@ function makeWorker() {
 
             return Object.keys(supports).map(name => ({
                 name,
-                supportedUiTypes: supports[name],
+                supportedTypes: supports[name],
                 default: (defs[name] && defs[name].default) || null,
                 required: (defs[name] && defs[name].required) || null
             }));
@@ -16827,7 +16956,7 @@ function makeWorker() {
                 out[glType] = controls.map(ctrl => ({
                     name: ctrl.name,
                     glType: ctrl.type,
-                    uiType: ctrl.uiControlType,
+                    type: ctrl.uiControlType,
                     supports: deepClone(ctrl.supports || {}),
                     classDocs: this._getControlClassDocs(ctrl)
                 }));
@@ -16842,7 +16971,7 @@ function makeWorker() {
                 out[glType] = controls.map(ctrl => ({
                     name: ctrl.name,
                     glType: ctrl.type,
-                    uiType: ctrl.uiControlType,
+                    type: ctrl.uiControlType,
                     typedef: this._getControlTypedefId(ctrl),
                     config: this._compileControlConfigShape(ctrl)
                 }));
@@ -16861,7 +16990,7 @@ function makeWorker() {
                         typedefs[typedefId] = {
                             id: typedefId,
                             name: control.name,
-                            uiType: control.uiControlType,
+                            type: control.uiControlType,
                             glType: control.type,
                             config: this._compileControlConfigShape(control)
                         };
@@ -16931,6 +17060,12 @@ function makeWorker() {
                         usage: "Data sources consumed by the shader. Entries are indexed by source position."
                     },
                     {
+                        key: "dataReferences",
+                        type: "number[]",
+                        required: false,
+                        usage: "Persisted-config source indexes that hosts may resolve to tiledImages before rendering."
+                    },
+                    {
                         key: "params",
                         type: "object",
                         required: false,
@@ -16958,11 +17093,11 @@ function makeWorker() {
 
             for (const controls of Object.values(built)) {
                 for (const control of controls) {
-                    const uiType = control && control.uiControlType;
-                    if (!uiType || envelopes[uiType]) {
+                    const type = control && control.uiControlType;
+                    if (!type || envelopes[type]) {
                         continue;
                     }
-                    envelopes[uiType] = this._compileJsonSchemaUiControlEnvelope(control);
+                    envelopes[type] = this._compileJsonSchemaUiControlEnvelope(control);
                 }
             }
 
@@ -16973,12 +17108,12 @@ function makeWorker() {
             const docs = this._getControlClassDocs(control) || {};
             const shape = this._compileControlConfigShape(control);
             const properties = {
-                uiType: { const: control.uiControlType }
+                type: { const: control.uiControlType }
             };
-            const required = ["uiType"];
+            const required = ["type"];
 
             for (const [key, value] of Object.entries(shape || {})) {
-                if (key === "type" || key === "uiType") {
+                if (key === "type") {
                     continue;
                 }
                 properties[key] = this._compileJsonSchemaFromDescriptor(value);
@@ -16989,9 +17124,9 @@ function makeWorker() {
                 additionalProperties: false,
                 required,
                 properties,
-                description: docs.description || docs.summary || `${control.uiControlType} control envelope.`,
-                "x-glType": control.type,
-                "x-legacyControlTypeKey": "type"
+                description: docs.description || docs.summary ||
+                    `${control.uiControlType} control envelope. The 'type' field discriminates the UI control kind; it is distinct from the parent shader layer's own 'type' field by virtue of nesting depth.`,
+                "x-glType": control.type
             };
         },
 
@@ -17009,10 +17144,13 @@ function makeWorker() {
                 fixed: { type: "boolean" },
                 tiledImages: {
                     type: "array",
-                    items: {
-                        type: "integer",
-                        minimum: 0
-                    }
+                    items: { type: "integer", minimum: 0 },
+                    description: "Renderer form: OSD world indices the shader samples from. Use this when assembling renderer config directly (e.g. via overrideConfigureAll). The host's normalizer also accepts dataReferences and resolves them to tiledImages at render time."
+                },
+                dataReferences: {
+                    type: "array",
+                    items: { type: "integer", minimum: 0 },
+                    description: "Persisted-config form: indices into config.data the shader samples from. Hosts (e.g. xOpat) resolve these to tiledImages at open time. Either tiledImages OR dataReferences (or both, when they agree) is acceptable; tiledImages takes precedence at the renderer boundary."
                 }
             };
 
@@ -17095,11 +17233,11 @@ function makeWorker() {
         },
 
         _compileControlParamJsonSchema(control, uiControlEnvelopes) {
-            const normalizedUiTypes = (control.supportedUiTypes || [])
-                .map(uiType => this._normalizePublishedUiType(uiType))
-                .filter(uiType => !!uiControlEnvelopes[uiType]);
-            const primitiveSchemas = this._compileControlPrimitiveSchemasFromEnvelopes(normalizedUiTypes, uiControlEnvelopes);
-            const refs = normalizedUiTypes.map(uiType => ({ $ref: `#/$defs/uiControlEnvelopes/${uiType}` }));
+            const normalizedTypes = (control.supportedTypes || [])
+                .map(type => this._normalizePublishedControlType(type))
+                .filter(type => !!uiControlEnvelopes[type]);
+            const primitiveSchemas = this._compileControlPrimitiveSchemasFromEnvelopes(normalizedTypes, uiControlEnvelopes);
+            const refs = normalizedTypes.map(type => ({ $ref: `#/$defs/uiControlEnvelopes/${type}` }));
             const variants = primitiveSchemas.concat(refs);
 
             if (!variants.length) {
@@ -17111,25 +17249,25 @@ function makeWorker() {
             return { anyOf: variants };
         },
 
-        _normalizePublishedUiType(uiType) {
-            if (!uiType) {
-                return uiType;
+        _normalizePublishedControlType(type) {
+            if (!type) {
+                return type;
             }
-            if ($.FlexRenderer.UIControls && $.FlexRenderer.UIControls._items && $.FlexRenderer.UIControls._items[uiType]) {
-                const item = $.FlexRenderer.UIControls._items[uiType];
-                return item.uiType || uiType;
+            if ($.FlexRenderer.UIControls && $.FlexRenderer.UIControls._items && $.FlexRenderer.UIControls._items[type]) {
+                const item = $.FlexRenderer.UIControls._items[type];
+                return item.type || type;
             }
-            return uiType;
+            return type;
         },
 
-        _compileControlPrimitiveSchemasFromEnvelopes(uiTypes, uiControlEnvelopes) {
+        _compileControlPrimitiveSchemasFromEnvelopes(types, uiControlEnvelopes) {
             const seen = new Set();
             const schemas = [];
 
-            for (const uiType of uiTypes || []) {
-                const envelope = uiControlEnvelopes[uiType];
+            for (const type of types || []) {
+                const envelope = uiControlEnvelopes[type];
                 const defaultSchema = envelope && envelope.properties && envelope.properties.default;
-                const primitiveSchema = this._compilePrimitiveSchemaFromEnvelopeDefault(uiType, defaultSchema);
+                const primitiveSchema = this._compilePrimitiveSchemaFromEnvelopeDefault(type, defaultSchema);
                 if (!primitiveSchema) {
                     continue;
                 }
@@ -17144,7 +17282,7 @@ function makeWorker() {
             return schemas;
         },
 
-        _compilePrimitiveSchemaFromEnvelopeDefault(uiType, defaultSchema) {
+        _compilePrimitiveSchemaFromEnvelopeDefault(type, defaultSchema) {
             if (!defaultSchema || !defaultSchema.type) {
                 return null;
             }
@@ -17153,7 +17291,7 @@ function makeWorker() {
                 ? defaultSchema.type[0]
                 : defaultSchema.type;
 
-            if (uiType === "color") {
+            if (type === "color") {
                 return {
                     type: "string",
                     pattern: "^#[0-9a-fA-F]{6,8}$"
@@ -17367,49 +17505,6 @@ function makeWorker() {
             return schema;
         },
 
-        _normalizeShaderExampleParams(Shader, value) {
-            if (!value || typeof value !== "object" || Array.isArray(value)) {
-                return value;
-            }
-
-            const controlTypes = new Map(
-                this._compileControlDescriptors(Shader).map(control => [control.name, control.supportedUiTypes || []])
-            );
-            const out = {};
-            for (const [key, entry] of Object.entries(value)) {
-                const isKnownUiControl = entry &&
-                    typeof entry === "object" &&
-                    !Array.isArray(entry) &&
-                    typeof entry.type === "string" &&
-                    $.FlexRenderer.UIControls &&
-                    typeof $.FlexRenderer.UIControls.getUiClass === "function" &&
-                    $.FlexRenderer.UIControls.getUiClass(entry.type);
-
-                if (isKnownUiControl) {
-                    out[key] = { uiType: entry.type };
-                    for (const [innerKey, innerValue] of Object.entries(entry)) {
-                        if (innerKey === "type") {
-                            continue;
-                        }
-                        out[key][innerKey] = deepClone(innerValue);
-                    }
-                } else if (entry && typeof entry === "object" && !Array.isArray(entry) && !entry.uiType) {
-                    const supportedUiTypes = controlTypes.get(key) || [];
-                    if (supportedUiTypes.length === 1) {
-                        out[key] = {
-                            uiType: supportedUiTypes[0],
-                            ...deepClone(entry)
-                        };
-                    } else {
-                        out[key] = deepClone(entry);
-                    }
-                } else {
-                    out[key] = deepClone(entry);
-                }
-            }
-            return out;
-        },
-
         _buildShaderLayerExamples(Shader, sources) {
             let exampleParams;
             if (Shader && typeof Shader.exampleParams === "function") {
@@ -17433,7 +17528,7 @@ function makeWorker() {
             if (Shader.type() === "group" && exampleParams.shaders) {
                 Object.assign(example, deepClone(exampleParams));
             } else {
-                example.params = this._normalizeShaderExampleParams(Shader, exampleParams);
+                example.params = deepClone(exampleParams);
             }
 
             return [example];
@@ -17569,10 +17664,9 @@ function makeWorker() {
                 key: control.name,
                 kind: "ui-control",
                 usage: `Shader param for UI control '${control.name}'.`,
-                supportedUiTypes: control.supportedUiTypes,
+                supportedTypes: control.supportedTypes,
                 defaultControlConfig: control.default !== null ? deepClone(control.default) : null,
                 requiredControlConfig: control.required !== null ? deepClone(control.required) : null,
-                supportedTypes: control.supportedUiTypes
             }));
 
             const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
@@ -17682,7 +17776,7 @@ function makeWorker() {
                     out.push({
                         name: control.name,
                         glType: control.type,
-                        uiType: control.uiControlType,
+                        type: control.uiControlType,
                         typedef: this._getControlTypedefId(control),
                         config: this._compileControlConfigShape(control)
                     });
@@ -17693,9 +17787,9 @@ function makeWorker() {
         },
 
         _getControlTypedefId(control) {
-            const uiType = control && control.uiControlType ? control.uiControlType : "unknown";
+            const type = control && control.uiControlType ? control.uiControlType : "unknown";
             const glType = control && control.type ? control.type : "unknown";
-            return `control:${uiType}:${glType}`;
+            return `control:${type}:${glType}`;
         },
 
         _compileControlConfigShape(control) {
@@ -17879,7 +17973,7 @@ function makeWorker() {
                 if (shader.controls.length) {
                     out.push(`Controls:`);
                     for (const control of shader.controls) {
-                        out.push(`- ${control.name}: supported ui types = ${control.supportedUiTypes.join(", ")}`);
+                        out.push(`- ${control.name}: supported ui types = ${control.supportedTypes.join(", ")}`);
                     }
                 }
 
@@ -18160,7 +18254,7 @@ function makeWorker() {
                     ${shader.controls.map(ctrl => `
                     <tr>
                         <td><code>${escapeHtml(ctrl.name)}</code></td>
-                        <td>${escapeHtml(ctrl.supportedUiTypes.join(", "))}</td>
+<td>${escapeHtml(ctrl.supportedTypes.join(", "))}</td>
                         <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(ctrl.default || ctrl.required || {}, null, 2))}</pre></td>
                     </tr>`).join("")}
                 </tbody>
@@ -18832,8 +18926,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-28
-//! Git commit: --79513a5-dirty
+//! Built on 2026-04-30
+//! Git commit: --9f2481e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19120,8 +19214,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-28
-//! Git commit: --79513a5-dirty
+//! Built on 2026-04-30
+//! Git commit: --9f2481e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

@@ -26,6 +26,7 @@
  */
 
 import { setupIsolatedViewer, type IsolatedViewerHandle } from "../app/setup-isolated-viewer";
+import { assembleBackgroundShaders, assembleVisualizationShaders } from "../app/assemble-render-output";
 
 export interface PlaygroundPageInit {
     /** Stable id (used for draft persistence and result keying). */
@@ -42,6 +43,17 @@ export interface PlaygroundPageInit {
     data?: any[];
     /** Optional initial liveState payload to import on boot (draft restore). */
     initialLiveState?: any;
+    /**
+     * Full post-mutation parent-session snapshot (LLM-review path). When
+     * present, `openSourceMirror` assembles the renderer config from
+     * `snapshot.background` + `snapshot.visualizations[activeIndex]` via the
+     * shared `assembleRenderOutput` helper — same logic the production
+     * open-pipeline runs, so the playground's render is pixel-identical to
+     * what the source viewer will show after Accept. When absent, the page
+     * falls back to the legacy `visualization`+`background` fields used by
+     * the user-driven Edit-menu flow.
+     */
+    snapshot?: any;
 }
 
 export interface PlaygroundPageHandle {
@@ -128,6 +140,15 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
     menuOverlay.style.pointerEvents = "auto";
     centerWrap.appendChild(menuOverlay);
 
+    // Per-page shader-id namespace. FlexRenderer DOM ids are derived from the
+    // shader id (e.g. `${shader.id}_${controlName}`); without a unique prefix
+    // the playground's controls collide with the parent right-rail's controls
+    // (noUiSlider "already initialized", colormap `Float32Array.from(undefined)`).
+    // We add this prefix when building the playground renderer config and
+    // strip it back off in getLiveState() / getVisualization() so callers see
+    // un-namespaced ids that match init.visualization and the source viewer.
+    const namespace = buildShaderIdNamespace(init.id);
+
     // --- State ----------------------------------------------------------
     let viewerHandle: IsolatedViewerHandle | undefined;
     let menuInstance: any = null;
@@ -182,7 +203,19 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
                         onCacheSnapshotByOrder: () => {/* no-op in sandbox */},
                     },
                 );
-                menuOverlay.appendChild(menuInstance.create());
+                const menuRoot = menuInstance.create() as HTMLElement;
+                // RightSideViewerMenu renders with `position: absolute; width: 400px;
+                // overflow-y: auto;` but no top/bottom inset and no height — so its
+                // own overflow-y never engages and tall menus push past the modal,
+                // hiding the action footer. In the playground we own the host
+                // overlay, so stretch the menu to fill it; production layouts
+                // (AppBar.View) keep their existing geometry untouched.
+                try {
+                    menuRoot.style.top = "0";
+                    menuRoot.style.bottom = "0";
+                    menuRoot.style.maxHeight = "100%";
+                } catch (e) { /* noop */ }
+                menuOverlay.appendChild(menuRoot);
             } catch (e) {
                 console.error("[PlaygroundPage] failed to mount RightSideViewerMenu", e);
             }
@@ -232,10 +265,44 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
             console.error("[PlaygroundPage] menu.init failed", e);
         }
 
-        // Open the source viewer's primary tile image in the playground viewer so
-        // the user sees the same slide. v2 will replace this with a full
-        // visualization-pipeline apply.
-        openSourceMirror(viewerHandle.viewer, init, init.id);
+        // 5) Lock the side-menu tabs open. RightSideViewerMenu's constructor
+        //    seeds each tab's open/closed state from APPLICATION_CONTEXT.AppCache,
+        //    and MultiPanelMenuTab.focus() / closeButton.onClick write back to
+        //    that same cache when toggled. In the playground the side menu IS
+        //    the proposal preview, so collapsing it is meaningless and the
+        //    cache write leaks playground UX state into the parent app's
+        //    persisted preferences (closed-by-default thereafter, even outside
+        //    the playground). Force-open every tab, neutralize the close
+        //    paths, and hide the X button.
+        try {
+            const tabs = (menuInstance as any)?.menu?.tabs || {};
+            for (const id of Object.keys(tabs)) {
+                const tab: any = tabs[id];
+                if (!tab) continue;
+                // Playground only surfaces the shaders editor in the side rail. The
+                // navigator host element still has to live in the DOM so the OSD
+                // viewer can mount its navigator widget into it (see step 3 above);
+                // we hide the tab's own UI but keep the host attached.
+                if (id === "navigator") {
+                    try { tab.hide?.(); } catch (e) { /* noop */ }
+                    continue;
+                }
+                try { tab._setFocus?.(); } catch (e) { /* noop */ }
+                tab._removeFocus = () => { /* locked open in playground */ };
+                if (typeof tab.focus === "function") {
+                    tab.focus = () => { try { tab._setFocus?.(); } catch (e) { /* noop */ } };
+                }
+                try { tab.closeButton?.setClass?.("display", "display-none"); } catch (e) { /* noop */ }
+            }
+        } catch (e) {
+            console.warn("[PlaygroundPage] failed to lock side-menu tabs open", e);
+        }
+
+        // Open the source viewer's slide in the playground viewer and apply the
+        // playground's own visualization (init.visualization) on top — so the
+        // user sees the proposed/edited config rendered, not whatever the source
+        // viewer is currently displaying.
+        openSourceMirror(viewerHandle.viewer, init, namespace);
 
         // Edit watcher: any 'cache-applied' / shader UI mutation should mark dirty.
         // FlexRenderer raises 'render' on every redraw; we instead listen for a
@@ -247,11 +314,19 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         watchEdits("shader-config-cache-update");
         watchEdits("layer-property-changed");
 
-        // Restore initial liveState if provided (draft restore path).
+        // Restore initial liveState if provided (draft restore path / source seed).
+        // Called BEFORE the renderer has been configured by overrideConfigureAll —
+        // importLiveVisualization warns "missing local config for ..." for shaders
+        // not yet installed and silently skips them. That is intentional: doing
+        // this AFTER overrideConfigureAll causes drawer.rebuild() to re-init
+        // newly configured shaders without the htmlHandler/htmlContext that
+        // overrideConfigureAll's first init wired up, breaking the first draw.
+        // Drafts re-apply via the side-rail state on subsequent edits, so the
+        // visible-cache delta is small.
         if (init.initialLiveState) {
             try {
-                (window as any).UTILITIES?.importLiveVisualization?.(viewerHandle.viewer, init.initialLiveState);
-                // Restored draft IS dirty (it has unsaved edits).
+                const namespaced = addNamespaceToLiveState(init.initialLiveState, namespace);
+                (window as any).UTILITIES?.importLiveVisualization?.(viewerHandle.viewer, namespaced);
                 markEdited();
             } catch (e) {
                 console.warn("[PlaygroundPage] importLiveVisualization (initial) failed", e);
@@ -265,7 +340,8 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         const utils = (window as any).UTILITIES;
         if (!viewerHandle || !utils?.exportLiveVisualization) return undefined;
         try {
-            return utils.exportLiveVisualization(viewerHandle.viewer);
+            const raw = utils.exportLiveVisualization(viewerHandle.viewer);
+            return stripNamespaceFromLiveState(raw, namespace);
         } catch (e) {
             console.warn("[PlaygroundPage] exportLiveVisualization failed", e);
             return undefined;
@@ -376,26 +452,28 @@ function renderViewerSetupError(host: HTMLElement, err: any) {
 }
 
 /**
- * Mirror the source viewer into the playground:
- *   - opens every source tiled image (in the same order so world indexes match),
- *   - clones the source FlexRenderer's shader map with every shader id prefixed
- *     by a per-page namespace, then applies it via `drawer.overrideConfigureAll`.
+ * Open the source viewer's slide in the playground and apply a FlexRenderer
+ * config assembled the same way the production open-pipeline assembles its
+ * renderOutput — via `assemble-render-output.ts`'s
+ * `assembleBackgroundShaders` + `assembleVisualizationShaders`. The user
+ * therefore sees in the modal exactly what the source viewer will show after
+ * Accept (WYSIWYG).
  *
- * Why prefix shader ids? FlexRenderer derives every shader-control's DOM id from
- * `shaderLayer.id` (e.g. `${shader.id}_${controlName}`). Without a unique prefix,
- * the playground's side-menu controls would share DOM ids with the parent right-
- * rail's already-mounted controls, and noUiSlider / colormap controls collide
- * with "Slider was already initialized" / `Float32Array.from(undefined)`.
+ *   - Tile sources come from the source viewer's world (the playground has no
+ *     open-pipeline of its own; the slide pyramid is reused as-is).
+ *   - The shared assembler walks `init.background` (or `init.snapshot.background`)
+ *     and `init.visualization.shaders` (or `init.snapshot.visualizations[active]`),
+ *     resolves `tiledImages` against the source viewer's `__dataToWorldIndex`
+ *     map (stashed by the production pipeline at the end of openIntoViewer),
+ *     and produces a renderOutput keyed under `bgRef.id` (bg) and the user-
+ *     authored shader ids (viz).
+ *   - Every shader id is then prefixed with the per-page namespace so its
+ *     DOM controls don't collide with the parent right-rail's controls.
  *
- * The prefix is applied recursively to:
- *   - top-level shader-map keys + each shader's `.id`,
- *   - group children's `shaders` map keys + their `.id`,
- *   - `order` arrays at every nesting level.
- *
- * Numeric refs (`tiledImages: [worldIndex]`, `dataReferences: [dataIndex]`,
- * cache control values) are left untouched.
+ * Numeric refs inside shader configs (`tiledImages`, `dataReferences`, cache
+ * control values) are otherwise left untouched.
  */
-function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageId: string) {
+function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, namespace: string) {
     if (!playgroundViewer) return;
     const VM: any = (window as any).VIEWER_MANAGER;
     const sourceViewer = init.sourceViewerUniqueId && VM
@@ -408,7 +486,9 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageI
     }
 
     // Collect every source tiled image so the world layout matches index-for-index.
-    const items: Array<{ tileSource: any; opacity: number; index: number }> = [];
+    // OSD's viewer.open() ignores per-item `index` and warns when one is supplied —
+    // array order already encodes world order, which is what we want.
+    const items: Array<{ tileSource: any; opacity: number }> = [];
     const itemCount = sourceViewer.world.getItemCount?.() || 0;
     for (let i = 0; i < itemCount; i++) {
         const item = sourceViewer.world.getItemAt(i);
@@ -416,7 +496,6 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageI
             items.push({
                 tileSource: item.source,
                 opacity: typeof item.opacity === "number" ? item.opacity : 1,
-                index: i,
             });
         }
     }
@@ -425,32 +504,62 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageI
         return;
     }
 
-    // Snapshot + namespace the source FlexRenderer shader map.
-    const namespace = buildShaderIdNamespace(pageId);
-    let renamedMap: Record<string, any> | undefined;
-    let renamedOrder: string[] | undefined;
-    try {
-        const sourceShaders = sourceViewer.drawer?.renderer?.getAllShaders?.();
-        if (sourceShaders && typeof sourceShaders === "object") {
-            const map: Record<string, any> = {};
-            for (const id in sourceShaders) {
-                if (!Object.prototype.hasOwnProperty.call(sourceShaders, id)) continue;
-                const cfg = typeof sourceShaders[id]?.getConfig === "function"
-                    ? sourceShaders[id].getConfig()
-                    : undefined;
-                if (cfg) map[id] = JSON.parse(JSON.stringify(cfg));
-            }
-            if (Object.keys(map).length) {
-                renamedMap = renameShaderIds(map, namespace);
-                const order = sourceViewer.drawer?.renderer?.getShaderLayerOrder?.();
-                if (Array.isArray(order)) {
-                    renamedOrder = order.map((id: string) => namespace + id);
-                }
+    // Pull the dataIndex → worldIndex map the source viewer's open-pipeline
+    // stashed at the end of its run (see viewer-open-pipeline.ts, after the
+    // tile-loop). Falls back to deriving the map from the list of backgrounds
+    // when the source viewer hasn't been through the pipeline yet (e.g. tests).
+    const stashedEntries = (sourceViewer as any).__dataToWorldIndex;
+    const dataToWorldIndex = new Map<number, number>(
+        Array.isArray(stashedEntries) ? stashedEntries : []
+    );
+    const backgrounds = pickBackgrounds(init);
+    if (!dataToWorldIndex.size && Array.isArray(backgrounds)) {
+        let next = 0;
+        for (const bg of backgrounds) {
+            if (!bg || typeof bg.dataReference !== "number") continue;
+            if (!dataToWorldIndex.has(bg.dataReference)) {
+                dataToWorldIndex.set(bg.dataReference, next++);
             }
         }
-    } catch (e) {
-        console.warn("[PlaygroundPage] failed to snapshot source shader map", e);
     }
+
+    const data = pickData(init);
+    const activeVisualization = pickActiveVisualization(init);
+
+    const renderOutput: Record<string, any> = {};
+    const env = {
+        backgrounds: backgrounds || [],
+        activeVisualization,
+        data,
+        cloneRuntimeState: <T,>(value: T): T => {
+            if (value === undefined || value === null) return value;
+            try { return JSON.parse(JSON.stringify(value)); } catch (e) { return value; }
+        },
+        // The playground never opens new tiles — anything missing from the
+        // pre-stashed map maps to -1, which the renderer treats as "no tile".
+        // In practice the source viewer has already opened every dataReference
+        // the snapshot can name, so this shouldn't happen.
+        resolveWorldIndex: (dataIndex: number): number => {
+            const idx = dataToWorldIndex.get(dataIndex);
+            return Number.isInteger(idx) ? (idx as number) : -1;
+        },
+        // No managed-source rerouting in the playground. Time-series and
+        // shader-source-controller bindings stay on the production side; the
+        // playground renders the active frame as-is.
+        expandDataSourceRef: (entry: any): any => entry,
+    };
+
+    assembleBackgroundShaders(env, renderOutput);
+    assembleVisualizationShaders(env, renderOutput);
+
+    if (!Object.keys(renderOutput).length) {
+        try { playgroundViewer.open(items); } catch (e) { /* swallow */ }
+        renderMirrorNotice(playgroundViewer);
+        return;
+    }
+
+    const renamedMap = renameShaderIds(renderOutput, namespace);
+    const renamedOrder = Object.keys(renderOutput).map(id => namespace + id);
 
     try {
         playgroundViewer.open(items);
@@ -459,8 +568,6 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageI
         renderMirrorNotice(playgroundViewer);
         return;
     }
-
-    if (!renamedMap) return;
 
     // Apply the renamed shader map after the world is populated. The FlexRenderer
     // wires htmlHandler per layer here, which builds the side-menu rows with
@@ -477,6 +584,50 @@ function openSourceMirror(playgroundViewer: any, init: PlaygroundPageInit, pageI
     } else {
         setTimeout(apply, 0);
     }
+}
+
+/**
+ * Backgrounds aren't part of `VisualizationStateSnapshot`; they come in via
+ * `init.background` (forwarded by playground-service from
+ * `options.source.background`). Falls back to the global session config so
+ * the user-driven Edit-menu flow still works without a snapshot.
+ */
+function pickBackgrounds(init: PlaygroundPageInit): any[] | undefined {
+    if (Array.isArray(init.background)) return init.background;
+    const APP: any = (window as any).APPLICATION_CONTEXT;
+    return Array.isArray(APP?.config?.background) ? APP.config.background : undefined;
+}
+
+function pickData(init: PlaygroundPageInit): any[] {
+    const fromSnapshot = init.snapshot?.data;
+    if (Array.isArray(fromSnapshot)) return fromSnapshot;
+    if (Array.isArray(init.data)) return init.data;
+    const APP: any = (window as any).APPLICATION_CONTEXT;
+    return Array.isArray(APP?.config?.data) ? APP.config.data : [];
+}
+
+/**
+ * Snapshot path takes precedence: when a full VisualizationStateSnapshot is
+ * supplied, the playground inherits the parent session's active visualization
+ * from there. Legacy `init.visualization` is used otherwise.
+ */
+function pickActiveVisualization(init: PlaygroundPageInit): any | undefined {
+    if (init.snapshot && Array.isArray(init.snapshot.visualizations)) {
+        const idx = pickActiveIndex(init.snapshot.activeVisualizationIndex);
+        return init.snapshot.visualizations[idx];
+    }
+    return init.visualization;
+}
+
+function pickActiveIndex(value: any): number {
+    if (Array.isArray(value)) {
+        for (const entry of value) {
+            if (Number.isInteger(entry)) return entry as number;
+        }
+    } else if (Number.isInteger(value)) {
+        return value as unknown as number;
+    }
+    return 0;
 }
 
 /**
@@ -513,6 +664,74 @@ function renameShaderConfigInPlace(config: any, namespace: string, newId: string
         config.order = config.order.map((id: string) => namespace + id);
     }
     return config;
+}
+
+/**
+ * Live state from FlexRenderer (UTILITIES.exportLiveVisualization) is keyed by
+ * the renderer's (namespaced) shader-path strings, where each segment is one
+ * shader id (top-level or nested under a group). Strip the namespace so
+ * callers — draft persistence, source-viewer apply via importLiveVisualization,
+ * and edited-snapshot composition — see ids matching `init.visualization` and
+ * the source viewer's shader map.
+ *
+ * Shape contract (see src/layers.js):
+ *   { layerOrder: string[], layers: { [pathString]: { id, type, cache, state } } }
+ */
+function stripNamespaceFromLiveState(live: any, namespace: string): any {
+    if (!live || typeof live !== "object" || !live.layers || typeof live.layers !== "object") return live;
+    const out: any = { ...live, layers: {} };
+    for (const key in live.layers) {
+        if (!Object.prototype.hasOwnProperty.call(live.layers, key)) continue;
+        const strippedKey = stripNamespaceFromPath(key, namespace);
+        const layer = live.layers[key];
+        // Layer payload carries its own `id` field — strip the namespace there too.
+        const cleanLayer = layer && typeof layer === "object" && typeof layer.id === "string"
+            ? { ...layer, id: stripNamespaceFromPath(layer.id, namespace) }
+            : layer;
+        out.layers[strippedKey] = cleanLayer;
+    }
+    if (Array.isArray(live.layerOrder)) {
+        out.layerOrder = live.layerOrder.map((id: string) =>
+            typeof id === "string" ? stripNamespaceFromPath(id, namespace) : id);
+    }
+    return out;
+}
+
+/**
+ * Inverse of stripNamespaceFromLiveState — used for draft restore and
+ * source-viewer-state seeding, where the stored payload is un-namespaced and
+ * must be re-namespaced for the current page's renderer instance (page
+ * namespaces differ across sessions).
+ */
+function addNamespaceToLiveState(live: any, namespace: string): any {
+    if (!live || typeof live !== "object" || !live.layers || typeof live.layers !== "object") return live;
+    const out: any = { ...live, layers: {} };
+    for (const key in live.layers) {
+        if (!Object.prototype.hasOwnProperty.call(live.layers, key)) continue;
+        const namespacedKey = addNamespaceToPath(key, namespace);
+        const layer = live.layers[key];
+        const namespacedLayer = layer && typeof layer === "object" && typeof layer.id === "string"
+            ? { ...layer, id: addNamespaceToPath(layer.id, namespace) }
+            : layer;
+        out.layers[namespacedKey] = namespacedLayer;
+    }
+    if (Array.isArray(live.layerOrder)) {
+        out.layerOrder = live.layerOrder.map((id: string) =>
+            typeof id === "string" ? addNamespaceToPath(id, namespace) : id);
+    }
+    return out;
+}
+
+/** Strip the per-page namespace from every segment of a shader path. */
+function stripNamespaceFromPath(path: string, namespace: string): string {
+    if (typeof path !== "string" || !path) return path;
+    return path.split("/").map(seg => seg.startsWith(namespace) ? seg.slice(namespace.length) : seg).join("/");
+}
+
+/** Add the per-page namespace to every segment of a shader path. */
+function addNamespaceToPath(path: string, namespace: string): string {
+    if (typeof path !== "string" || !path) return path;
+    return path.split("/").map(seg => namespace + seg).join("/");
 }
 
 function renderMirrorNotice(playgroundViewer: any) {

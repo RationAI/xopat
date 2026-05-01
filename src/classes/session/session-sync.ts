@@ -256,7 +256,7 @@ export class SessionSyncController implements SessionSync {
         const encoded = await encodeBlob(blob, Number.MAX_SAFE_INTEGER);
         let url: string;
         try {
-            url = buildProvisioningUrl(encoded);
+            url = await buildProvisioningUrl(encoded);
         } catch (e) {
             console.warn("[SESSION] provisioning URL unavailable, using minimal fragment:", e);
             const params = new URLSearchParams();

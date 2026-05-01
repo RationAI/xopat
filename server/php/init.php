@@ -75,6 +75,7 @@ foreach ($_POST as $key=>&$value) {
 
 $CORE["server"]["name"] = "php";
 $CORE["server"]["supportsPost"] = true;
+$CORE["server"]["devMode"] = false; // todo: support dev mode from env/args
 
 $replacer = function($match) use ($i18n, $PLUGINS, $MODULES, $CORE) {
     ob_start();
