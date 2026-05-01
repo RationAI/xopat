@@ -278,6 +278,7 @@
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js",
+            "ajv": "ajv7.min.js",
             "render": "flex-renderer/flex-renderer.js"
         },
         // src/external  key: source / [sources,list]
@@ -328,15 +329,14 @@
         "libs": {
             "primer": "primer_css.css",
             "fontawesome": "fontawesome/css/v6-all.css",
-            "tailwind": "tailwind.min.css",
-            "ajv": "ajv7.min.css"
+            "tailwind": "tailwind.min.css"
         },
         "external": {
             "enjoyhint": "enjoyhint.css",
             "nouislider": "nouislider.css"
         },
         "src": {
-          "env": ["assets/style.css", "assets/xopat.css", "assets/custom.css"]
+          "env": ["assets/style.css", "assets/custom.css"]
         }
     }
 }
