@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-04-30
-//! Git commit: --9f2481e-dirty
+//! Built on 2026-05-01
+//! Git commit: --c45378a-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -382,6 +382,13 @@
                 const config = shader.getConfig();
                 // Check explicitly type of the config, if updated, recreate shader
                 if (shader.constructor.type() !== config.type) {
+                    const NewShader = $.FlexRenderer.ShaderMediator.getClass(config.type);
+                    if (NewShader) {
+                        // Drop orphan params from the previous shader type before re-instantiation,
+                        // otherwise stale keys (color, threshold, connect, incompatible use_channelN, ...)
+                        // ride along and trigger parseChannel warnings or sample()-time incompatibilities.
+                        this._sanitizeShaderParams(config, NewShader);
+                    }
                     this.createShaderLayer(shaderId, config, false);
                 }
             }
@@ -622,6 +629,96 @@
                 return shader.getConfig();
             }
             return undefined;
+        }
+
+        /**
+         * Change a layer's shader type and trigger a rebuild.
+         * Use this rather than mutating shaderConfig.type directly: it scrubs orphan
+         * params from the previous type before the rebuild loop re-instantiates the shader.
+         *
+         * @param {String} layerId
+         * @param {String} newType  must be a registered shader type ($.FlexRenderer.ShaderMediator)
+         */
+        changeShaderType(layerId, newType) {
+            const id = $.FlexRenderer.sanitizeKey(layerId);
+            const shader = this._shaders[id];
+            if (!shader) {
+                throw new Error(`$.FlexRenderer::changeShaderType: Unknown layer '${layerId}'.`);
+            }
+
+            const NewShader = $.FlexRenderer.ShaderMediator.getClass(newType);
+            if (!NewShader) {
+                throw new Error(`$.FlexRenderer::changeShaderType: Unknown shader type '${newType}'.`);
+            }
+
+            const config = shader.getConfig();
+            if (config.type === newType) {
+                return;
+            }
+            config.type = newType;
+            config.error = false;
+            this._sanitizeShaderParams(config, NewShader);
+            this.registerProgram(null, this.webglContext.secondPassProgramKey);
+        }
+
+        /**
+         * Drop keys from shaderConfig.params that are not valid for the target shader class.
+         * Called on shader-type-change paths only — orphan keys from the previous shader
+         * (e.g. heatmap's `color`, `threshold`, `connect`) and incompatible per-source
+         * channel values would otherwise cause parseChannel warnings or sample()-time
+         * GLSL incompatibilities once the new shader is constructed.
+         *
+         * @param {ShaderConfig} shaderConfig    config whose .params object will be mutated
+         * @param {Function}     NewShaderClass  the target shader class
+         * @private
+         */
+        _sanitizeShaderParams(shaderConfig, NewShaderClass) {
+            const params = shaderConfig && shaderConfig.params;
+            if (!params || typeof params !== "object") {
+                return;
+            }
+
+            const controlNames = new Set(Object.keys(NewShaderClass.defaultControls || {}));
+
+            let sources = [];
+            try {
+                sources = NewShaderClass.sources() || [];
+            } catch (e) {
+                sources = [];
+            }
+
+            for (const key of Object.keys(params)) {
+                // Keep any use_* key (filters, mode, blend, per-source channel, future additions).
+                // Keep keys that match a control on the new shader.
+                if (!key.startsWith("use_") && !controlNames.has(key)) {
+                    delete params[key];
+                    continue;
+                }
+                // For per-source channel strings, drop if the new source can't accept the length —
+                // letting the constructor regenerate a default beats parseChannel greedy-padding.
+                const channelMatch = /^use_channel(\d+)$/.exec(key);
+                if (!channelMatch) {
+                    continue;
+                }
+                const source = sources[parseInt(channelMatch[1], 10)];
+                if (!source || typeof source.acceptsChannelCount !== "function") {
+                    continue;
+                }
+                const value = params[key];
+                if (typeof value !== "string") {
+                    continue;
+                }
+                // Strip optional "N:" inline base-channel prefix (e.g. "7:r").
+                const inline = /^(\d+):(.*)$/.exec(value);
+                const channel = inline ? inline[2] : value;
+                if (!source.acceptsChannelCount(channel.length)) {
+                    delete params[key];
+                }
+            }
+
+            if (typeof NewShaderClass.normalizeConfig === "function") {
+                NewShaderClass.normalizeConfig(shaderConfig, {});
+            }
         }
 
         /**
@@ -4815,6 +4912,43 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
         };
     }
 
+    /**
+     * Envelope-level couplings, applied to every shader that nests a `colormap`
+     * envelope. Surfaced in the published schema at
+     * `$defs.uiControlEnvelopes.colormap['x-controlCouplings']` and reachable
+     * at runtime via `ShaderConfigurator.getEnvelopeCouplingValidators("colormap")`.
+     */
+    static controlCouplings() {
+        return [{
+            name: "colormap_palette_in_mode",
+            summary: "Colormap default must be a palette listed in schemeGroups[mode].",
+            corrective: "Set default to a palette that appears in $.FlexRenderer.ColorMaps.schemeGroups[mode], or change mode to a group whose list includes the desired palette.",
+            controls: ["default", "mode"],
+            validate: (envelope) => {
+                const palette = envelope && envelope.default;
+                const mode = envelope && envelope.mode;
+                // Skip array defaults — those belong to `custom_colormap`, which
+                // does not constrain palette name to a scheme group.
+                if (typeof palette !== "string" || typeof mode !== "string") {
+                    return { ok: true };
+                }
+                const group = $.FlexRenderer.ColorMaps && $.FlexRenderer.ColorMaps.schemeGroups
+                    && $.FlexRenderer.ColorMaps.schemeGroups[mode];
+                if (!group) {
+                    return { ok: true };
+                }
+                if (group.includes(palette)) {
+                    return { ok: true };
+                }
+                return {
+                    ok: false,
+                    expected: { default: `∈ schemeGroups["${mode}"] = [${group.join(", ")}]` },
+                    actual: { default: palette, mode }
+                };
+            }
+        }];
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this._params = this.getParams(params);
@@ -4876,8 +5010,23 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
             this.setSteps();
         }
 
-        if (!this.value || !$.FlexRenderer.ColorMaps.schemeGroups[this.params.mode].includes(this.value)) {
-            this.value = $.FlexRenderer.ColorMaps.defaults[this.params.mode];
+        const mode = this.params.mode;
+        const group = $.FlexRenderer.ColorMaps.schemeGroups[mode];
+        const requested = this.params.default;
+        if (!this.value || !group || !group.includes(this.value)) {
+            const fallback = $.FlexRenderer.ColorMaps.defaults[mode];
+            if (requested && fallback && requested !== fallback) {
+                // Visible signal so the script-driven layer (and any human
+                // reading devtools) can correlate the unexpected preview
+                // colour with a palette/mode mismatch. Behaviour is unchanged
+                // — still falls back — to avoid breaking persisted configs
+                // that rely on the substitution.
+                console.warn(
+                    `[FlexRenderer.ColorMap] palette "${requested}" is not in schemeGroups["${mode}"]; ` +
+                    `substituting with "${fallback}". Pick a mode whose schemeGroups list contains the desired palette.`
+                );
+            }
+            this.value = fallback;
         }
         this.colorPallete = $.FlexRenderer.ColorMaps[this.value][this.maxSteps];
 
@@ -5074,7 +5223,7 @@ uniform int ${this.webGLVariableName}_colormap_size;`;
 
     sample(value = undefined, valueGlType = 'void') {
         if (!value || valueGlType !== 'float') {
-            return `ERROR Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+            throw new Error(`Incompatible control. Colormap cannot be used with ${this.name} (sampling type '${valueGlType}').`);
         }
         return `sample_colormap(${value}, ${this.webGLVariableName}_colormap, ${this.webGLVariableName}_steps, ${this.webGLVariableName}_colormap_size, ${!this.params.continuous})`;
     }
@@ -5123,6 +5272,12 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
             ],
             glType: "vec3"
         };
+    }
+
+    static controlCouplings() {
+        // The parent's palette-in-mode coupling has no meaning here:
+        // `default` is an array of user-supplied colors, not a named palette.
+        return [];
     }
 
     _normalizeParams() {
@@ -5602,9 +5757,8 @@ uniform float ${this.webGLVariableName}_mask[ADVANCED_SLIDER_LEN+1];`;
     }
 
     sample(value = undefined, valueGlType = 'void') {
-        // TODO: throwing & managing exception would be better, now we don't know what happened when this gets baked to GLSL
         if (!value || valueGlType !== 'float') {
-            return `ERROR Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}')`;
+            throw new Error(`Incompatible control. Advanced slider cannot be used with ${this.name} (sampling type '${valueGlType}').`);
         }
         return `sample_advanced_slider(${value}, ${this.webGLVariableName}_breaks, ${this.webGLVariableName}_mask, ${this.params.maskOnly}, ${this.webGLVariableName}_min)`;
     }
@@ -7061,19 +7215,18 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
         node.innerHTML = icons.map(icon => {
             const previewHtml = icon.className
-                ? `<i class="${icon.className}" aria-hidden="true" style="font-size: 24px;"></i>`
-                : `<span style="font-size: 24px; line-height: 1;">${icon.glyph}</span>`;
+                ? `<i class="${icon.className} text-2xl" aria-hidden="true"></i>`
+                : `<span class="text-2xl leading-none">${icon.glyph}</span>`;
 
             return `
 <button type="button"
-    class="icon-search-result"
+    class="icon-search-result btn btn-ghost h-auto py-2 flex flex-col items-center gap-1 normal-case font-normal"
     data-icon-name="${icon.name}"
     data-icon-set="${icon.set || ""}"
-    title="${icon.name}"
-    style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; padding: 10px; border: 1px solid #d8e2d9; border-radius: 10px; background: #fff;">
-<span style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;">${previewHtml}</span>
-<span style="font-size: 12px; text-align: center; line-height: 1.2;">${icon.name}</span>
-<span style="font-size: 11px; text-align: center; line-height: 1.2; opacity: 0.6;">${icon.set || ""}</span>
+    title="${icon.name}">
+<span class="inline-flex items-center justify-center w-8 h-8">${previewHtml}</span>
+<span class="text-xs text-center leading-tight truncate max-w-full">${icon.name}</span>
+<span class="text-[11px] text-center leading-tight opacity-60">${icon.set || ""}</span>
 </button>`;
         }).join("");
 
@@ -7107,28 +7260,31 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
     toHtml(classes = "", css = "") {
         const disabled = this.params.interactive ? "" : "disabled";
-        const body = `<div id="${this.id}_root" class="er-control__widget er-control__widget--icon"${$.FlexRenderer.UIControls.styleAttr(`${css}; position: relative;`)}>
-<div class="er-control__toolbar er-control__toolbar--icon" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-    <button id="${this.id}_trigger" type="button" class="er-control__button er-control__button--icon-trigger" ${disabled}
-        style="width: 52px; height: 52px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer;">
-        <span id="${this.id}_preview" class="er-control__preview er-control__preview--icon" style="display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;">?</span>
+        const decodedColor = this._decodeStoredValue(this.encodedValue || this.params.default).color;
+        // Positioning (`position: absolute`, top/right offsets, z-index, width
+        // clamp) and the `display: none` toggle stay inline — init() flips
+        // display directly, and these utilities don't compose cleanly as
+        // single Tailwind classes. Visual styling delegates to daisyUI tokens
+        // so the popover follows the host theme.
+        const body = `<div id="${this.id}_root" class="er-control__widget er-control__widget--icon relative"${$.FlexRenderer.UIControls.styleAttr(css)}>
+<div class="er-control__toolbar er-control__toolbar--icon flex items-center justify-between gap-2">
+    <button id="${this.id}_trigger" type="button" class="er-control__button er-control__button--icon-trigger btn btn-square btn-outline" ${disabled}>
+        <span id="${this.id}_preview" class="er-control__preview er-control__preview--icon inline-flex items-center justify-center w-full h-full">?</span>
     </button>
 </div>
-<div id="${this.id}_popup" class="er-control__popup er-control__popup--icon"
-     style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(420px, 90vw); padding: 12px; border: 1px solid #c9d5ca; border-radius: 12px; background: #fdfefd; box-shadow: 0 16px 36px rgba(18, 32, 24, 0.12);">
-    <div class="er-control__popup-header er-control__popup-header--icon" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <strong style="font-size: 13px;">Icon picker</strong>
-        <button id="${this.id}_close" type="button" class="er-control__button er-control__button--icon-close" ${disabled}>Close</button>
+<div id="${this.id}_popup" class="er-control__popup er-control__popup--icon card card-compact bg-base-100 border border-base-300 shadow-lg"
+     style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(420px, 90vw);">
+    <div class="card-body p-3">
+        <div class="er-control__popup-header er-control__popup-header--icon flex justify-between items-center mb-2">
+            <span class="font-medium text-sm">Icon picker</span>
+            <button id="${this.id}_close" type="button" class="er-control__button er-control__button--icon-close btn btn-ghost btn-xs btn-circle" aria-label="Close" ${disabled}>✕</button>
+        </div>
+        <div class="er-control__search er-control__search--icon flex items-center gap-2 mb-2">
+            <input type="text" id="${this.id}_query" class="er-control__input er-control__input--icon-query input input-bordered input-sm flex-1" placeholder="Search icons, aliases, glyphs" ${disabled}>
+            <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color w-10 h-10 rounded cursor-pointer" value="${decodedColor}" title="Icon color" ${disabled}>
+        </div>
+        <div id="${this.id}_results" class="er-control__results er-control__results--icon grid grid-cols-3 gap-2 max-h-[360px] overflow-auto"></div>
     </div>
-    <div class="er-control__search er-control__search--icon" style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; align-items: end;">
-        <input type="text" id="${this.id}_query" class="er-control__input er-control__input--icon-query" placeholder="Search icons, aliases, glyphs" style="width: 100%;" ${disabled}>
-        <label class="er-control__color-picker er-control__color-picker--icon" style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #4e5d52;">
-            <span>Color</span>
-            <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color" value="${this._decodeStoredValue(this.encodedValue || this.params.default).color}" style="width: 44px; height: 38px; padding: 2px;" ${disabled}>
-        </label>
-    </div>
-    <div id="${this.id}_results" class="er-control__results er-control__results--icon"
-         style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-height: 360px; overflow: auto;"></div>
 </div>
 </div>`;
         return $.FlexRenderer.UIControls.renderControl("icon", this.params.title, body, classes);
@@ -8342,9 +8498,20 @@ ${getStencilPassCode(remainingBlendShader)}
         for (const shaderLayerId of keyOrder) {
             const shaderLayer = shaderMap[shaderLayerId];
             const shaderLayerConfig = shaderLayer.getConfig();
-            const slot = shaderLayer.__renderSlot;
-            const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
-            const opacityModifier = `(${opacityModifierBase}) * inspector_layer_alpha(${slot})`;
+
+            // Snapshot mutable assembly state so a throw mid-iteration (e.g. an
+            // incompatible control's sample() throws from getFragmentShaderExecution)
+            // can be rolled back cleanly and the offending layer emitted as disabled
+            // instead of corrupting the GLSL source.
+            const definitionSnapshot = definition;
+            const executionSnapshot = execution;
+            const customBlendSnapshot = customBlendFunctions;
+            const remainingBlendSnapshot = remainingBlendShader;
+
+            try {
+                const slot = shaderLayer.__renderSlot;
+                const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+                const opacityModifier = `(${opacityModifierBase}) * inspector_layer_alpha(${slot})`;
 
             execution += `\n    // ${shaderLayer.uid}\n`;
 
@@ -8390,6 +8557,28 @@ ${getStencilPassCode(shaderLayer)}
     clip_color.a = clip_color.a * ${opacityModifier};
     intermediate_color = ${shaderLayer.uid}_blend_func(clip_color, intermediate_color);
 `;
+                }
+            } catch (e) {
+                $.console.error(`Failed to assemble shader '${shaderLayer.id}' (${shaderLayerConfig.type}). Hiding layer.`, e);
+                shaderLayerConfig.error = true;
+                definition = definitionSnapshot;
+                execution = executionSnapshot;
+                customBlendFunctions = customBlendSnapshot;
+                remainingBlendShader = remainingBlendSnapshot;
+
+                execution += `\n    // ${shaderLayer.uid}\n`;
+                if (shaderLayer._mode !== "clip") {
+                    execution += `${getRemainingBlending()}
+    // ${shaderLayer.uid} - Disabled (assembly error)
+    intermediate_color = vec4(0.0);
+`;
+                    remainingBlendShader = shaderLayer;
+                } else {
+                    execution += `
+    // ${shaderLayer.uid} - Disabled with Clipmask (assembly error)
+    intermediate_color = vec4(0.0);
+`;
+                }
             }
         }
 
@@ -8475,8 +8664,15 @@ ${getStencilPassCode(shaderLayer)}
         }
 
         // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
-        gl.uniform1iv(this._instanceOffsets, instanceOffsets);
-        gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        // Guard against empty arrays — WebGL2 raises INVALID_VALUE on uniform1iv with a zero-length array.
+        // This happens for shaders with no tiledImages (e.g. the grid shader); leaving the GLSL fixed-size
+        // uniform arrays at their defaults is fine since those shaders don't read these uniforms.
+        if (instanceOffsets.length > 0) {
+            gl.uniform1iv(this._instanceOffsets, instanceOffsets);
+        }
+        if (instanceTextureIndexes.length > 0) {
+            gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        }
         // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
         gl.uniform3fv(this._shaderVariables, shaderVariables);
 
@@ -13035,7 +13231,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static exampleParams() {
         return {
-            color: { type: "colormap", default: "Viridis", steps: 3, mode: "sequential" },
+            color: { type: "colormap", default: "Blues", steps: 3, mode: "singlehue" },
             threshold: { type: "advanced_slider", breaks: [0.33, 0.66] },
             connect: true
         };
@@ -13301,158 +13497,6 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 })(OpenSeadragon);
 
 (function($) {
-    /**
- * Edges shader
- * data reference must contain one index to the data to render using edges strategy
- *
- * $_GET/$_POST expected parameters:
- *  index - unique number in the compiled shader
- * $_GET/$_POST supported parameters:
- *  color - for more details, see @WebGLModule.UIControls color UI type
- *  edgeThickness - for more details, see @WebGLModule.UIControls number UI type
- *  threshold - for more details, see @WebGLModule.UIControls number UI type
- *  opacity - for more details, see @WebGLModule.UIControls number UI type
- */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
-
-    static type() {
-        return "edge_isoline";
-    }
-
-    static name() {
-        return "Edges";
-    }
-
-    static description() {
-        return "highlights edges at threshold values";
-    }
-
-    static intent() {
-        return "Trace iso-contour edges where a scalar field crosses a threshold. Pick to outline level sets without filling regions.";
-    }
-
-    static expects() {
-        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
-    }
-
-    static exampleParams() {
-        return { color: "#fff700", threshold: 50, edgeThickness: 1 };
-    }
-
-    static docs() {
-        return {
-            summary: "Edge-highlighting shader for one scalar input channel.",
-            description: "Detects threshold crossings in the four cardinal directions around each sample and renders edge and inner-edge colors based on neighborhood comparisons.",
-            kind: "shader",
-            inputs: [{
-                index: 0,
-                acceptedChannelCounts: [1],
-                description: "1D data to detect edges on threshold value"
-            }],
-            controls: [
-                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
-                { name: "threshold", ui: "range_input", valueType: "float", default: 50, min: 1, max: 100, step: 1 },
-                { name: "edgeThickness", ui: "range", valueType: "float", default: 1, min: 0.5, max: 3, step: 0.1 }
-            ]
-        };
-    }
-
-    static sources() {
-        return [{
-            acceptsChannelCount: (x) => x === 1,
-            description: "1D data to detect edges on threshold value"
-        }];
-    }
-
-    static get defaultControls() {
-        return {
-            color: {
-                default: {type: "color", default: "#fff700", title: "Color: "},
-                accepts: (type, instance) => type === "vec3"
-            },
-            threshold: {
-                default: {type: "range_input", default: 50, min: 1, max: 100, step: 1, title: "Threshold: "},
-                accepts: (type, instance) => type === "float"
-            },
-            edgeThickness: {
-                default: {type: "range", default: 1, min: 0.5, max: 3, step: 0.1, title: "Edge thickness: "},
-                accepts: (type, instance) => type === "float"
-            },
-        };
-    }
-
-    getFragmentShaderDefinition() {
-        //here we override so we should call super method to include our uniforms
-        return `
-${super.getFragmentShaderDefinition()}
-
-float edge_threshold_${this.uid}() {
-    return ${this.threshold.sample("0.0", "float")};
-}
-
-float edge_softness_${this.uid}(float centerValue, float neighborhoodMin, float neighborhoodMax) {
-    float localSpan = max(neighborhoodMax - neighborhoodMin, 0.0);
-    float derivSpan = abs(dFdx(centerValue)) + abs(dFdy(centerValue));
-    return max(0.01, max(localSpan * 0.35, derivSpan * 2.0));
-}
-
-float edge_crossing_${this.uid}(float thresholdValue, float neighborhoodMin, float neighborhoodMax, float softness) {
-    float low = smoothstep(thresholdValue - softness, thresholdValue, neighborhoodMax);
-    float high = 1.0 - smoothstep(thresholdValue, thresholdValue + softness, neighborhoodMin);
-    return clamp(low * high, 0.0, 1.0);
-}`;
-    }
-
-    getFragmentShaderExecution() {
-        return `
-    float mid = ${this.sampleChannel('v_texture_coords')};
-    if (mid < 1e-6) return vec4(.0);
-    float dist = ${this.edgeThickness.sample('mid', 'float')} * sqrt(zoom) * 0.005 + 0.008;
-    float thresholdValue = edge_threshold_${this.uid}();
-
-    float u = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y)')};
-    float b = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y)')};
-    float l = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - dist)')};
-    float r = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + dist)')};
-    float ul = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y - dist)')};
-    float ur = ${this.sampleChannel('vec2(v_texture_coords.x - dist, v_texture_coords.y + dist)')};
-    float bl = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y - dist)')};
-    float br = ${this.sampleChannel('vec2(v_texture_coords.x + dist, v_texture_coords.y + dist)')};
-
-    float nearMin = min(min(min(u, b), min(l, r)), min(min(ul, ur), min(bl, br)));
-    float nearMax = max(max(max(u, b), max(l, r)), max(max(ul, ur), max(bl, br)));
-    float outerSoftness = edge_softness_${this.uid}(mid, nearMin, nearMax);
-    float outerEdge = edge_crossing_${this.uid}(thresholdValue, min(nearMin, mid), max(nearMax, mid), outerSoftness);
-
-    if (outerEdge > 0.01) {
-        return vec4(${this.color.sample()}, outerEdge);
-    }
-
-    float innerDist = 2.5 * dist;
-    float u2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y)')};
-    float b2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y)')};
-    float l2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y - innerDist)')};
-    float r2 = ${this.sampleChannel('vec2(v_texture_coords.x, v_texture_coords.y + innerDist)')};
-    float ul2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y - innerDist)')};
-    float ur2 = ${this.sampleChannel('vec2(v_texture_coords.x - innerDist, v_texture_coords.y + innerDist)')};
-    float bl2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y - innerDist)')};
-    float br2 = ${this.sampleChannel('vec2(v_texture_coords.x + innerDist, v_texture_coords.y + innerDist)')};
-
-    float farMin = min(min(min(u2, b2), min(l2, r2)), min(min(ul2, ur2), min(bl2, br2)));
-    float farMax = max(max(max(u2, b2), max(l2, r2)), max(max(ul2, ur2), max(bl2, br2)));
-    float innerSoftness = edge_softness_${this.uid}(mid, farMin, farMax);
-    float innerEdge = edge_crossing_${this.uid}(thresholdValue, min(farMin, mid), max(farMax, mid), innerSoftness);
-
-    if (mid >= thresholdValue && innerEdge > 0.01) {
-        return vec4(${this.color.sample()} * 0.7, innerEdge * 0.7); //inner border
-    }
-    return vec4(.0);
-`;
-    }
-});
-})(OpenSeadragon);
-
-(function($) {
 /**
  * Threshold edge shader with derivative-aware smoothing.
  *
@@ -13595,6 +13639,127 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
 
     vec3 edgeColor = outerAlpha >= innerAlpha ? ${this.outer_color.sample()} : ${this.inner_color.sample()};
     return vec4(edgeColor, edgeAlpha);
+`;
+    }
+});
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * Grid shader.
+ *
+ * Renders a configurable grid overlay. Takes no texture data — `sources()` is `[]`.
+ *
+ * Coordinate space: image-source pixels. The grid follows OSD pan/zoom so cells
+ * grow on screen as the user zooms in. To anchor the grid to a specific image,
+ * pass a single tiledImage index in shaderConfig.tiledImages — the drawer's
+ * _collectShaderUniforms then fills `pixelSize` with that image's image-zoom
+ * (screen-px per image-px). With no tiledImages, `pixelSize` defaults to 1 and
+ * the grid degrades gracefully into screen-pixel space.
+ *
+ * Cell sizes are in image pixels; line width is in screen pixels (so lines
+ * stay readable regardless of zoom).
+ */
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "grid";
+    }
+
+    static name() {
+        return "Grid";
+    }
+
+    static description() {
+        return "Render a configurable grid overlay (no data input).";
+    }
+
+    static intent() {
+        return "Overlay an alignment / scale grid. Pick to add image-anchored guidelines.";
+    }
+
+    static expects() {
+        return { dataKind: "none", channels: 0 };
+    }
+
+    static exampleParams() {
+        /* eslint-disable camelcase */
+        return { color: "#ffffff", cell_x: 256, cell_y: 256, line_width: 1 };
+        /* eslint-enable camelcase */
+    }
+
+    static docs() {
+        return {
+            summary: "Configurable grid overlay; no texture sampling.",
+            description: "Draws an axis-aligned grid in image-source pixel coordinates. Cell sizes are in image pixels and follow OSD pan/zoom. Line width is in screen pixels so lines stay readable. Optionally pass a single tiledImage index in tiledImages to anchor coordinates to that image; otherwise the grid lives in screen pixels.",
+            kind: "shader",
+            inputs: [],
+            controls: [
+                { name: "color", ui: "color", valueType: "vec3", default: "#ffffff" },
+                { name: "cell_x", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
+                { name: "cell_y", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
+                { name: "line_width", ui: "range_input", valueType: "float", default: 1, min: 0.5, max: 10, step: 0.5 }
+            ],
+            notes: [
+                "tiledImages may contain at most one entry; it is used as a coordinate reference, not a data source.",
+                "With empty tiledImages, the grid is in screen pixels (pixelSize = 1)."
+            ]
+        };
+    }
+
+    static sources() {
+        return [];
+    }
+
+    static get defaultControls() {
+        return {
+            color: {
+                default: {type: "color", default: "#ffffff", title: "Color: "},
+                accepts: (type, instance) => type === "vec3"
+            },
+            cell_x: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 256, min: 1, max: 8192, step: 1, title: "Cell width (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            cell_y: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 256, min: 1, max: 8192, step: 1, title: "Cell height (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            line_width: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 1, min: 0.5, max: 10, step: 0.5, title: "Line width (screen px): "},
+                accepts: (type, instance) => type === "float"
+            }
+        };
+    }
+
+    getFragmentShaderExecution() {
+        // SimpleUIControl normalizes range/number values to [0, 1] before upload, so the
+        // GLSL uniform is a fraction of the configured min..max range. Denormalize via
+        // mix(min, max, sample) — same pattern as iconmap_decodeCellSize.
+        // pixelSize is OSD's image-zoom (screen-px per image-px); convert via divide.
+        const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
+        const cx = this.cell_x.params;
+        const cy = this.cell_y.params;
+        const lw = this.line_width.params;
+        return `
+    float cellX = max(mix(${f(cx.min)}, ${f(cx.max)}, ${this.cell_x.sample()}), 1.0);
+    float cellY = max(mix(${f(cy.min)}, ${f(cy.max)}, ${this.cell_y.sample()}), 1.0);
+    float scale = max(pixelSize, 1e-6);
+    vec2 imgCoord = gl_FragCoord.xy / scale;
+
+    float modX = mod(imgCoord.x, cellX);
+    float modY = mod(imgCoord.y, cellY);
+    float dx = min(modX, cellX - modX);
+    float dy = min(modY, cellY - modY);
+
+    // Convert image-pixel distances to screen pixels for a stable line width.
+    float minDistScreen = min(dx, dy) * scale;
+
+    float halfWidth = mix(${f(lw.min)}, ${f(lw.max)}, ${this.line_width.sample()}) * 0.5;
+    float feather = max(fwidth(minDistScreen), 1e-4);
+    float onLine = 1.0 - smoothstep(halfWidth - feather, halfWidth + feather, minDistScreen);
+
+    return vec4(${this.color.sample()}, onLine);
 `;
     }
 });
@@ -13987,7 +14152,8 @@ return vec4(.0);
                         valueType: "float",
                         default: {
                             default: [0.25, 0.75],
-                            mask: [1, 1, 1]
+                            mask: [1, 1, 1],
+                            maskOnly: false
                         },
                         required: {
                             type: "advanced_slider",
@@ -14026,6 +14192,14 @@ return vec4(.0);
                         type: "advanced_slider",
                         default: [0.25, 0.75],
                         mask: [1, 1, 1],
+                        // The slider's `maskOnly=false` mode returns the
+                        // positional ratio of which interval the value fell
+                        // into (bigger / actualLength = i / breakCount), with
+                        // mask[] left alone as the visibility toggle. IconMap
+                        // recovers the integer interval index from that ratio
+                        // in getFragmentShaderExecution; mask is no longer
+                        // overloaded as an index carrier.
+                        maskOnly: false,
                         title: "Breaks",
                         pips: {
                             mode: "positions",
@@ -14118,19 +14292,15 @@ return vec4(.0);
                         this._refresh();
                         return;
                     }
-                    if (typeof this.threshold.syncMaskToIntervals === "function") {
-                        this.threshold.syncMaskToIntervals((index) => index, true);
-                    }
+                    // Class count unchanged: the breaks uniform alone moved.
+                    // GLSL re-classifies on the next draw via the slider's
+                    // bigger/actualLength positional-ratio path, so we just
+                    // invalidate. No mask coupling to maintain.
                     this.invalidate();
                 }, true);
             }
 
             super.init();
-
-            if (this.threshold && typeof this.threshold.syncMaskToIntervals === "function") {
-                this.threshold.syncMaskToIntervals((index) => index, true);
-                this.invalidate();
-            }
         }
 
         _getClassCount() {
@@ -14326,6 +14496,15 @@ ${this._buildIconSamplerFunction()}
             const uid = this.uid;
             const thresholdMaskAtCenter = `sample_advanced_slider(centerChan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
             const thresholdMaskAtPoint = `sample_advanced_slider(chan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
+            // breakCount = number of breaks = classCount - 1. The slider
+            // returns i/breakCount as a positional ratio (maskOnly=false on
+            // this control), so multiplying by breakCount and rounding
+            // recovers the integer interval index. With one class there are
+            // no breaks; classIndex is statically 0.
+            const breakCount = Math.max(0, this._getClassCount() - 1);
+            const classIndexExpr = breakCount === 0
+                ? "int classIndex = 0;"
+                : `int classIndex = int(floor(classRatio * float(${breakCount}) + 0.5));`;
 
             return `
 float chan = ${this.sampleChannel("v_texture_coords")};
@@ -14338,14 +14517,14 @@ if (grid.z <= 0.0) {
 vec2 centerUv = iconmap_cellCenterUv_${uid}(v_texture_coords);
 float centerChan = ${this.sampleChannel("centerUv")};
 float centerMask = ${thresholdMaskAtCenter};
-float classValue = ${this.threshold.sample("centerChan", "float")};
+float classRatio = ${this.threshold.sample("centerChan", "float")};
 float visibleCenter = step(0.05, centerMask);
 
 if (visibleCenter <= 0.0) {
     return vec4(0.0);
 }
 
-int classIndex = int(floor(classValue + 0.5));
+${classIndexExpr}
 vec4 icon = iconmap_sampleIcon_${uid}(classIndex, grid.xy);
 float visible = ${this.clip_icons.sample()} ? step(0.05, ${thresholdMaskAtPoint}) : 1.0;
 
@@ -14438,6 +14617,316 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 });
 
+})(OpenSeadragon);
+
+(function($) {
+/**
+ * H&E (and related) stain-separation shader.
+ *
+ * Implements Ruifrok–Johnston color deconvolution for brightfield slides.
+ * Each preset bakes a 3x3 stain matrix M whose rows are the normalized RGB
+ * optical-density signatures of the stains. The inverse Q = M^-1 is computed
+ * once at module load and injected as a GLSL constant; per pixel:
+ *
+ *   OD     = -log10((rgb*255 + 1) / 256)
+ *   stains = OD * Q     (vec3 * mat3 -> row-vector multiply)
+ *
+ * The user picks one stain to display. Output is either the raw concentration
+ * (debug) or the concentration multiplied by a tint color.
+ */
+
+// Standard Ruifrok stain RGB-OD vectors.
+const STAIN_VECTORS = {
+    H: [0.65, 0.70, 0.29],
+    E: [0.07, 0.99, 0.11],
+    DAB: [0.27, 0.57, 0.78],
+    MG: [0.0, 1.0, 0.0],
+    R: [0.27, 0.57, 0.78]   // Ruifrok's residual for HE
+};
+
+// Stain enum -> select option index. Must match SHADER_STAIN_* constants below.
+const STAIN_H = 0;
+const STAIN_E = 1;
+const STAIN_DAB = 2;
+const STAIN_MG = 3;
+const STAIN_R = 4;
+
+function normalize3(v) {
+    const m = Math.hypot(v[0], v[1], v[2]);
+    return m > 0 ? [v[0] / m, v[1] / m, v[2] / m] : [0, 0, 0];
+}
+
+function cross3(a, b) {
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    ];
+}
+
+// Build a 3-row stain matrix; if autoResidualIndex is given, fill that row
+// with the cross product of the other two normalized rows.
+function buildMatrix(rows, autoResidualIndex) {
+    const m = rows.map(r => r ? normalize3(r) : null);
+    if (autoResidualIndex !== undefined) {
+        const others = m.filter((_, i) => i !== autoResidualIndex);
+        m[autoResidualIndex] = normalize3(cross3(others[0], others[1]));
+    }
+    return m;
+}
+
+function inverse3(rows) {
+    const [a, b, c] = rows[0];
+    const [d, e, f] = rows[1];
+    const [g, h, i] = rows[2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (Math.abs(det) < 1e-12) {
+        return [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    }
+    const k = 1 / det;
+    return [
+        [(e * i - f * h) * k, (c * h - b * i) * k, (b * f - c * e) * k],
+        [(f * g - d * i) * k, (a * i - c * g) * k, (c * d - a * f) * k],
+        [(d * h - e * g) * k, (b * g - a * h) * k, (a * e - b * d) * k]
+    ];
+}
+
+// Emit a GLSL mat3 literal in column-major order from a row-major JS matrix.
+// We use vec3 * mat3 in GLSL, which is row-vector * matrix; storing M^-1 in
+// the natural column-major layout makes that multiply produce the right thing.
+function glslMat3(rowMajor) {
+    const f = (x) => Number(x).toFixed(6);
+    const m = rowMajor;
+    return `mat3(` +
+        `${f(m[0][0])}, ${f(m[1][0])}, ${f(m[2][0])}, ` +
+        `${f(m[0][1])}, ${f(m[1][1])}, ${f(m[2][1])}, ` +
+        `${f(m[0][2])}, ${f(m[1][2])}, ${f(m[2][2])})`;
+}
+
+// preset id -> { matrix rows (input order), GLSL inverse literal, mapping
+// from stain enum to row index, list of stains the preset exposes }.
+// Row order in each `rows` array fixes the index of each stain in `stains`
+// that comes out of the deconvolution.
+const PRESETS = (() => {
+    function build(id, rowsInput, stainOrder, autoResidualIndex) {
+        const rows = buildMatrix(rowsInput, autoResidualIndex);
+        const inv = inverse3(rows);
+        // stainEnum -> row index (0..2), or -1 if not in this preset.
+        const stainToRow = { H: -1, E: -1, DAB: -1, MG: -1, R: -1 };
+        stainOrder.forEach((name, idx) => {
+            stainToRow[name] = idx;
+        });
+        return {
+            id,
+            matrixInvGlsl: glslMat3(inv),
+            stainToRow,
+            stainOrder
+        };
+    }
+
+    return {
+        he: build("he", [STAIN_VECTORS.H, STAIN_VECTORS.E, STAIN_VECTORS.R], ["H", "E", "R"]),
+        hdab: build("hdab", [STAIN_VECTORS.H, STAIN_VECTORS.DAB, null], ["H", "DAB", "R"], 2),
+        hedab: build("hedab", [STAIN_VECTORS.H, STAIN_VECTORS.E, STAIN_VECTORS.DAB], ["H", "E", "DAB"]),
+        mgdab: build("mgdab", [STAIN_VECTORS.MG, STAIN_VECTORS.DAB, null], ["MG", "DAB", "R"], 2)
+    };
+})();
+
+const PRESET_INDEX = ["he", "hdab", "hedab", "mgdab"];
+
+// Build the GLSL fragment that maps (preset, stain) -> matrix row index, plus
+// the helper that returns the per-preset M^-1. Indices are stable across the
+// shader uniform values for `preset` and `stain`.
+function buildHelpersGlsl(uid) {
+    const matrixBranches = PRESET_INDEX
+        .map((id, i) => `    if (preset == ${i}) return ${PRESETS[id].matrixInvGlsl};`)
+        .join("\n");
+
+    const rowBranches = PRESET_INDEX.map((id, presetIdx) => {
+        const m = PRESETS[id].stainToRow;
+        const checks = [
+            ["H", STAIN_H],
+            ["E", STAIN_E],
+            ["DAB", STAIN_DAB],
+            ["MG", STAIN_MG],
+            ["R", STAIN_R]
+        ]
+            .filter(([key]) => m[key] >= 0)
+            .map(([key, enumVal]) => `        if (stain == ${enumVal}) return ${m[key]};`)
+            .join("\n");
+        return `    if (preset == ${presetIdx}) {\n${checks}\n        return -1;\n    }`;
+    }).join("\n");
+
+    return `
+mat3 stain_matrix_inv_${uid}(int preset) {
+${matrixBranches}
+    return mat3(1.0);
+}
+
+int stain_row_${uid}(int preset, int stain) {
+${rowBranches}
+    return -1;
+}
+
+float stain_pick_${uid}(vec3 stains, int row) {
+    if (row == 0) return stains.x;
+    if (row == 1) return stains.y;
+    return stains.z;
+}
+`;
+}
+
+$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+
+    static type() {
+        return "stain-separation";
+    }
+
+    static name() {
+        return "H&E stain separation";
+    }
+
+    static description() {
+        return "Ruifrok–Johnston color deconvolution for brightfield H&E and related stain combinations (H-DAB, HE-DAB, MG-DAB).";
+    }
+
+    static intent() {
+        return "Separate and visualise individual stains in brightfield RGB slides (H&E, H-DAB, etc.).";
+    }
+
+    static expects() {
+        return { dataKind: "rgb", channels: 3 };
+    }
+
+    static exampleParams() {
+        return {
+            preset: 0,
+            stain: 0,
+            tintColor: "#5b3ea4",
+            intensity: 1.0
+        };
+    }
+
+    static docs() {
+        return {
+            summary: "Brightfield stain separation via Ruifrok–Johnston color deconvolution.",
+            description: "Reads RGB, converts to optical density, multiplies by the inverse stain matrix of the chosen preset, and renders one stain channel as either a tinted display or raw concentration. Stain options not present in the chosen preset render as transparent.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [3, 4],
+                description: "RGB brightfield slide (alpha is ignored)"
+            }],
+            controls: [
+                { name: "use_channel0", required: "rgb" },
+                {
+                    name: "preset",
+                    ui: "select",
+                    valueType: "int",
+                    default: 0,
+                    description: "Stain matrix preset: 0=H&E, 1=H-DAB, 2=HE-DAB, 3=MG-DAB."
+                },
+                {
+                    name: "stain",
+                    ui: "select",
+                    valueType: "int",
+                    default: 0,
+                    description: "Which stain to display: 0=Hematoxylin, 1=Eosin, 2=DAB, 3=Methyl Green, 4=Residual. Stains absent from the chosen preset render transparent."
+                },
+                { name: "tintColor", ui: "color", valueType: "vec3", default: "#5b3ea4" },
+                { name: "intensity", ui: "range_input", valueType: "float", default: 1.0, min: 0, max: 3, step: 0.05 },
+                { name: "useRaw", ui: "bool", valueType: "bool", default: false }
+            ]
+        };
+    }
+
+    static sources() {
+        return [{
+            acceptsChannelCount: (n) => n >= 3,
+            description: "RGB brightfield slide (alpha is ignored)"
+        }];
+    }
+
+    static get defaultControls() {
+        return {
+            use_channel0: {  // eslint-disable-line camelcase
+                required: "rgb"
+            },
+            preset: {
+                default: {
+                    type: "select",
+                    default: 0,
+                    title: "Preset",
+                    options: [
+                        { value: 0, label: "H&E" },
+                        { value: 1, label: "H-DAB" },
+                        { value: 2, label: "HE-DAB" },
+                        { value: 3, label: "MG-DAB" }
+                    ]
+                },
+                accepts: (type) => type === "int"
+            },
+            stain: {
+                default: {
+                    type: "select",
+                    default: 0,
+                    title: "Stain",
+                    options: [
+                        { value: STAIN_H, label: "Hematoxylin" },
+                        { value: STAIN_E, label: "Eosin" },
+                        { value: STAIN_DAB, label: "DAB" },
+                        { value: STAIN_MG, label: "Methyl Green" },
+                        { value: STAIN_R, label: "Residual" }
+                    ]
+                },
+                accepts: (type) => type === "int"
+            },
+            tintColor: {
+                default: { type: "color", default: "#5b3ea4", title: "Tint" },
+                accepts: (type) => type === "vec3"
+            },
+            intensity: {
+                default: { type: "range_input", default: 1.0, min: 0, max: 3, step: 0.05, title: "Intensity" },
+                accepts: (type) => type === "float"
+            },
+            useRaw: {
+                default: { type: "bool", default: false, title: "Raw concentration" },
+                accepts: (type) => type === "bool"
+            }
+        };
+    }
+
+    getFragmentShaderDefinition() {
+        return `
+${super.getFragmentShaderDefinition()}
+${buildHelpersGlsl(this.uid)}
+`;
+    }
+
+    getFragmentShaderExecution() {
+        const uid = this.uid;
+        return `
+    vec3 rgb = ${this.sampleChannel('v_texture_coords', 0, true)};
+    rgb = clamp(rgb, vec3(1.0 / 255.0), vec3(1.0));
+    vec3 od = -log((rgb * 255.0 + 1.0) / 256.0) / log(10.0);
+
+    int preset = int(${this.preset.sample()});
+    int stain  = int(${this.stain.sample()});
+    int row = stain_row_${uid}(preset, stain);
+    if (row < 0) {
+        return vec4(0.0);
+    }
+
+    mat3 Q = stain_matrix_inv_${uid}(preset);
+    vec3 stains = od * Q;
+    float v = max(stain_pick_${uid}(stains, row), 0.0);
+    float t = clamp(${this.filter(`v * ${this.intensity.sample()}`)}, 0.0, 1.0);
+
+    vec3 outRgb = ${this.useRaw.sample()} ? vec3(t) : (t * ${this.tintColor.sample()});
+    return vec4(outRgb, t);
+`;
+    }
+});
 })(OpenSeadragon);
 
 (function($) {
@@ -16571,6 +17060,36 @@ function makeWorker() {
                         });
                     }
                 }
+
+                const exampleParams = exampleLayer && exampleLayer.params;
+                if (exampleParams && typeof exampleParams === "object") {
+                    for (const [paramKey, value] of Object.entries(exampleParams)) {
+                        if (!value || typeof value !== "object" || Array.isArray(value)) {
+                            continue;
+                        }
+                        const envelopeType = typeof value.type === "string" ? value.type : null;
+                        if (!envelopeType) {
+                            continue;
+                        }
+                        for (const coupling of this.getEnvelopeCouplingValidators(envelopeType)) {
+                            if (typeof coupling.validate !== "function") {
+                                continue;
+                            }
+                            const outcome = coupling.validate(value);
+                            if (outcome && outcome.ok === false) {
+                                issues.push({
+                                    kind: "envelope-coupling",
+                                    type,
+                                    paramKey,
+                                    envelope: envelopeType,
+                                    coupling: coupling.name,
+                                    expected: deepClone(outcome.expected),
+                                    actual: deepClone(outcome.actual)
+                                });
+                            }
+                        }
+                    }
+                }
             }
 
             if (!issues.length) {
@@ -16631,6 +17150,42 @@ function makeWorker() {
                 controls: c.controls,
                 validate: typeof c.validate === "function" ? c.validate : undefined
             }));
+        },
+
+        /**
+         * Returns runtime coupling validators (with `validate` attached) for a UI
+         * control envelope type (e.g. "colormap"). Hosts call this to validate any
+         * value carrying that envelope `type` before submitting a layer. The schema
+         * model surfaces the same entries (without `validate`) at
+         * `$defs.uiControlEnvelopes[<type>]['x-controlCouplings']`.
+         */
+        getEnvelopeCouplingValidators(envelopeType) {
+            if (!envelopeType) {
+                return [];
+            }
+            const built = this._buildControls();
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    if (control && control.uiControlType === envelopeType) {
+                        const Klass = control.constructor;
+                        if (!Klass || typeof Klass.controlCouplings !== "function") {
+                            return [];
+                        }
+                        const raw = Klass.controlCouplings();
+                        if (!Array.isArray(raw)) {
+                            return [];
+                        }
+                        return raw.map(c => ({
+                            name: c.name,
+                            summary: c.summary,
+                            corrective: c.corrective,
+                            controls: c.controls,
+                            validate: typeof c.validate === "function" ? c.validate : undefined
+                        }));
+                    }
+                }
+            }
+            return [];
         },
 
         async compileDocsModelAsync() {
@@ -17119,7 +17674,7 @@ function makeWorker() {
                 properties[key] = this._compileJsonSchemaFromDescriptor(value);
             }
 
-            return {
+            const envelope = {
                 type: "object",
                 additionalProperties: false,
                 required,
@@ -17128,6 +17683,35 @@ function makeWorker() {
                     `${control.uiControlType} control envelope. The 'type' field discriminates the UI control kind; it is distinct from the parent shader layer's own 'type' field by virtue of nesting depth.`,
                 "x-glType": control.type
             };
+
+            const envelopeCouplings = this._serializeEnvelopeControlCouplings(control);
+            if (Array.isArray(envelopeCouplings) && envelopeCouplings.length) {
+                envelope["x-controlCouplings"] = envelopeCouplings;
+            }
+
+            return envelope;
+        },
+
+        /**
+         * Serialization-friendly view of a UI control class's envelope-level
+         * `controlCouplings()`. Mirrors `_serializeControlCouplings` for shaders.
+         * The class itself (not the instance) carries the static method.
+         */
+        _serializeEnvelopeControlCouplings(control) {
+            const Klass = control && control.constructor;
+            if (!Klass || typeof Klass.controlCouplings !== "function") {
+                return undefined;
+            }
+            const raw = Klass.controlCouplings();
+            if (!Array.isArray(raw) || raw.length === 0) {
+                return undefined;
+            }
+            return raw.map(c => ({
+                name: c.name,
+                summary: c.summary,
+                corrective: c.corrective,
+                controls: deepClone(c.controls || [])
+            }));
         },
 
         _compileShaderLayerJsonSchema(Shader, sources, uiControlEnvelopes, shaderLayerRefs) {
@@ -18926,8 +19510,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-04-30
-//! Git commit: --9f2481e-dirty
+//! Built on 2026-05-01
+//! Git commit: --c45378a-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19214,8 +19798,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-04-30
-//! Git commit: --9f2481e-dirty
+//! Built on 2026-05-01
+//! Git commit: --c45378a-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
