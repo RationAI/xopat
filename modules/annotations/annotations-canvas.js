@@ -12,6 +12,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.overlay.resizecanvas(); //if plugin loaded at runtime, 'open' event not called
         // this._debugActiveObjectBinder();
 
+        // Spatial index attached to the fabric canvas. Drives viewport culling,
+        // lazy per-object refresh, and cluster placeholders. The fabric prototype
+        // patches in modules/fabricjs/openseadragon-fabricjs-overlay.js read it via
+        // canvas.__spatialIndex.
+        if (typeof OSDAnnotations.SpatialIndex === 'function') {
+            this.spatialIndex = new OSDAnnotations.SpatialIndex(this);
+            this.spatialIndex.attachTo(this.overlay.fabric);
+        }
+
         this.__selectionSnapshot = [];
         this.__programmaticClear = false;   // to avoid firing clear selection events from fabric on empty clicks
 
@@ -510,6 +519,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {object} exported canvas content in {objects:[object], version:string} format
      */
     toObject(withAllProps=true, filter=false, ...withProperties) {
+        // Lazy state may be stale on off-screen objects; flush before serializing.
+        this.spatialIndex?.flushAll();
         let props;
         if (typeof withAllProps === "boolean") {
             props = this._exportedPropertiesGlobal(withAllProps);
@@ -574,8 +585,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @param {boolean} on
      */
     enableAnnotations(on) {
-        const objects = this.canvas.getObjects();
-
         if (!on) {
             this._cachedTargetCanvasSelection = this.getSelectedAnnotations();
             this.clearAnnotationSelection(true);
@@ -583,11 +592,22 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             this.requestEndSelectionEdit();
         }
 
-        for (let i = 0; i < objects.length; i++) {
-            this._applyAnnotationVisibilityState(objects[i]);
+        // Bump filters version so off-screen objects refresh lazily on entry.
+        // For correctness this frame, walk only currently-visible objects.
+        this.spatialIndex?.bumpFilters();
+        const list = this.spatialIndex
+            ? this.spatialIndex.visibleObjects(this.canvas.vptCoords, this.canvas)
+            : this.canvas.getObjects();
+
+        for (let i = 0; i < list.length; i++) {
+            this._applyAnnotationVisibilityState(list[i]);
         }
 
         if (on && this._cachedTargetCanvasSelection) {
+            // selection may contain off-screen objects whose .visible reflects an older
+            // filter version — refresh each before checking
+            const idx = this.spatialIndex;
+            if (idx) this._cachedTargetCanvasSelection.forEach(obj => obj && idx.ensureFresh(obj));
             const selection = this._cachedTargetCanvasSelection.filter(obj => obj?.visible);
             if (selection.length > 1) {
                 selection.forEach(obj => this.selectAnnotation(obj, true));
@@ -1344,6 +1364,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     _applyAnnotationVisibilityState(object) {
         if (!object || object.isHighlight) return;
+        if (this.spatialIndex) object._filtersVersion = this.spatialIndex.filtersVersion;
 
         const annotationsEnabled = !this.module.disabledInteraction;
         const layer = object.layerID ? this.getLayer(String(object.layerID)) : null;
@@ -1405,8 +1426,17 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const selected = this.getSelectedAnnotations?.() || [];
         let changed = false;
 
-        for (const object of this.canvas?.getObjects?.() || []) {
-            if (!this.isAnnotation(object)) continue;
+        // Bump filters version; off-screen objects refresh lazily on next render/hit-test.
+        // For this frame we walk the currently-visible set + the selected set (selected
+        // may include off-screen objects whose .visible we still need to recompute).
+        this.spatialIndex?.bumpFilters();
+        const visible = this.spatialIndex
+            ? this.spatialIndex.visibleObjects(this.canvas?.vptCoords, this.canvas)
+            : (this.canvas?.getObjects?.() || []);
+        const seen = new Set();
+        const walk = (object) => {
+            if (!object || seen.has(object) || !this.isAnnotation(object)) return;
+            seen.add(object);
             const wasVisible = object.visible !== false;
             this._applyAnnotationVisibilityState(object);
             const isVisible = object.visible !== false;
@@ -1415,7 +1445,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             if (!isVisible && selected.some(sel => sel.internalID === object.internalID)) {
                 this.deselectAnnotation(object, true);
             }
-        }
+        };
+        for (const object of visible) walk(object);
+        for (const object of selected) walk(object);
 
         if ((this.isEditing?.() || this.isOngoingEdit?.()) && selected.some(obj => this.module.isAnnotationFilteredOut(obj))) {
             this.requestEndSelectionEdit();
@@ -2293,8 +2325,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @type function
      */
     updateAnnotationVisuals = UTILITIES.makeThrottled(() => {
-        // fixme iterate all
-        this.canvas.getObjects().forEach(o => this.updateSingleAnnotationVisuals(o));
+        // Bump the global visuals version; the spatial index applies
+        // updateSingleAnnotationVisuals lazily per-object on render or hit-test.
+        // Off-screen objects are also caught up by spatialIndex.flushAll() before export.
+        this.spatialIndex?.bumpVisuals();
         this.canvas.requestRenderAll();
         this.raiseEvent('visual-property-changed', {visuals: this.module.presets.commonAnnotationVisuals});
     }, 180);
@@ -2308,6 +2342,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         });
 
         this.viewer.addHandler('screenshot', e => {
+            // ensure off-screen objects are caught up to current visuals/zoom/filter
+            // versions before they get rasterized into the screenshot
+            this.spatialIndex?.flushAll();
             e.context2D.drawImage(this.canvas.getElement(), 0, 0);
         });
 
@@ -2432,6 +2469,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 _this._abortForControlInteraction(event, true);
                 return;
             }
+
             _this.module.cursor.mouseTime = Date.now();
             let preset = _this.module.presets.left;
             if (!preset && _this.module._provideDefaultPresets && _this.module.presets.length === 0) {

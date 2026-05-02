@@ -1,5 +1,14 @@
 const { div, style } = globalThis.van.tags;
 
+// Virtualization tunables. Above the threshold the board switches from
+// "render all rows as DOM" to a windowed view that materializes only rows in the
+// scroll viewport (+ overscan). SortableJS drag-reorder is disabled in this mode
+// because it cannot operate on rows that aren't in the DOM.
+const BOARD_VIRTUALIZATION_THRESHOLD = 500;
+const BOARD_LAYER_ROW_PX = 44;
+const BOARD_ANNOTATION_ROW_PX = 40;
+const BOARD_VIRTUAL_OVERSCAN = 5;
+
 function sanitizeId(value) {
     return String(value ?? 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -77,6 +86,17 @@ export class AnnotationBoardPanel {
         this.bodyEl = null;
         this.layerLogsEl = null;
         this.deleteButton = null;
+
+        // Virtualization state. Populated only while _virtualMode is true.
+        this._virtualMode = false;
+        this._virtualRows = null;          // [{kind:'layer'|'ann', id, height}]
+        this._virtualRowOffsets = null;    // cumulative pixel offsets, length === rows.length
+        this._virtualTotalHeight = 0;
+        this._virtualSpacerEl = null;
+        this._virtualScrollHandler = null;
+        this._virtualPaintQueued = false;
+        this._virtualNoticeEl = null;
+        this._virtualLastRange = null;     // {first,last} of last paint, for cheap diff
     }
 
     get fabric() {
@@ -164,6 +184,8 @@ export class AnnotationBoardPanel {
 
     destroy() {
         this.commitEdit(true);
+        this._detachVirtualScroll();
+        this._showVirtualNotice(false);
         this._mounted = false;
     }
 
@@ -307,6 +329,23 @@ export class AnnotationBoardPanel {
             }
         }
 
+        // Pre-build the virtual row list; it tells us total row count + acts as the
+        // source of truth for the virtualized path. Building is O(rows) but cheap
+        // (no DOM); we always do it so the threshold check is uniform.
+        this._buildVirtualRows();
+        const totalRows = this._virtualRows.length;
+        const wantVirtual = totalRows > BOARD_VIRTUALIZATION_THRESHOLD;
+
+        if (wantVirtual !== this._virtualMode) {
+            this._transitionVirtualMode(wantVirtual);
+        }
+
+        if (this._virtualMode) this._renderVirtualized();
+        else this._renderLegacy();
+    }
+
+    _renderLegacy() {
+        const fabric = this.fabric;
         const previousScroll = this.bodyEl?.scrollTop ?? 0;
         this.layerLogsEl.replaceChildren();
 
@@ -336,6 +375,239 @@ export class AnnotationBoardPanel {
 
         if (this.bodyEl) this.bodyEl.scrollTop = previousScroll;
         this._setSortableEnabled(!this._sortablesDisabled);
+    }
+
+    // -------------- virtualization ------------------------------------------
+
+    /**
+     * Walks _getBoardEntries() and produces a flat list of row descriptors
+     * + a cumulative pixel-offset table. No DOM is created. Called from render()
+     * so the row count drives the legacy-vs-virtualized dispatch.
+     */
+    _buildVirtualRows() {
+        const fabric = this.fabric;
+        const rows = [];
+        const offsets = [];
+        let y = 0;
+
+        const push = (row) => {
+            rows.push(row);
+            offsets.push(y);
+            y += row.height;
+        };
+
+        if (fabric) {
+            for (const entry of this._getBoardEntries()) {
+                if (entry.type === 'layer') {
+                    const layer = fabric.getLayer(entry.id);
+                    if (!layer) continue;
+                    const layerId = String(layer.id);
+                    push({ kind: 'layer', id: layerId, height: BOARD_LAYER_ROW_PX });
+                    if (this._collapsedLayers.has(layerId)) continue;
+                    const objects = layer.getObjects?.() || [];
+                    for (const object of objects) {
+                        push({
+                            kind: 'ann',
+                            id: String(object.incrementId),
+                            layerId,
+                            height: BOARD_ANNOTATION_ROW_PX
+                        });
+                    }
+                } else if (entry.type === 'annotation') {
+                    const object = fabric.findObjectOnCanvasByIncrementId(Number(entry.id));
+                    if (this._isRootAnnotation(object)) {
+                        push({
+                            kind: 'ann',
+                            id: String(object.incrementId),
+                            layerId: null,
+                            height: BOARD_ANNOTATION_ROW_PX
+                        });
+                    }
+                }
+            }
+        }
+
+        this._virtualRows = rows;
+        this._virtualRowOffsets = offsets;
+        this._virtualTotalHeight = y;
+    }
+
+    /**
+     * Toggle between legacy and virtualized rendering. Cleans up the path
+     * being torn down (Sortable instances on entry; spacer/listener on exit).
+     */
+    _transitionVirtualMode(wantVirtual) {
+        if (wantVirtual) {
+            // tear down sortable on the way in
+            this._destroyAllSortables();
+            this.layerLogsEl?.replaceChildren();
+            this._showVirtualNotice(true);
+            this._virtualLastRange = null;
+        } else {
+            this._detachVirtualScroll();
+            if (this._virtualSpacerEl?.parentNode === this.layerLogsEl) {
+                this.layerLogsEl.removeChild(this._virtualSpacerEl);
+            }
+            this._virtualSpacerEl = null;
+            this._showVirtualNotice(false);
+            // re-init board sortable on legacy reentry; per-layer sortables are
+            // initialized inside _renderLegacy after layer containers are mounted
+            this._sortablesReady = false;
+            this.initBoardSortable();
+            this._sortablesReady = true;
+        }
+        this._virtualMode = wantVirtual;
+    }
+
+    _destroyAllSortables() {
+        const drop = (el) => {
+            if (!el) return;
+            const inst = el._sortableInstance;
+            if (inst) {
+                try { inst.destroy(); } catch {}
+                el._sortableInstance = null;
+            }
+        };
+        drop(this.layerLogsEl);
+        this.root?.querySelectorAll('[data-layer-container="true"]').forEach(drop);
+    }
+
+    _renderVirtualized() {
+        if (!this.layerLogsEl) return;
+
+        // ensure spacer exists + sized correctly
+        if (!this._virtualSpacerEl || this._virtualSpacerEl.parentNode !== this.layerLogsEl) {
+            this.layerLogsEl.replaceChildren();
+            const spacer = document.createElement('div');
+            spacer.dataset.role = 'virt-spacer';
+            spacer.style.position = 'relative';
+            spacer.style.width = '100%';
+            this.layerLogsEl.appendChild(spacer);
+            this._virtualSpacerEl = spacer;
+        }
+        this._virtualSpacerEl.style.height = this._virtualTotalHeight + 'px';
+
+        this._attachVirtualScroll();
+        // force a fresh paint after rebuild (range cache is stale)
+        this._virtualLastRange = null;
+        this._paintVirtualWindow();
+    }
+
+    _attachVirtualScroll() {
+        if (!this.bodyEl || this._virtualScrollHandler) return;
+        const handler = () => {
+            if (this._virtualPaintQueued) return;
+            this._virtualPaintQueued = true;
+            requestAnimationFrame(() => {
+                this._virtualPaintQueued = false;
+                if (this._virtualMode) this._paintVirtualWindow();
+            });
+        };
+        this._virtualScrollHandler = handler;
+        this.bodyEl.addEventListener('scroll', handler, { passive: true });
+    }
+
+    _detachVirtualScroll() {
+        if (this.bodyEl && this._virtualScrollHandler) {
+            this.bodyEl.removeEventListener('scroll', this._virtualScrollHandler);
+        }
+        this._virtualScrollHandler = null;
+        this._virtualPaintQueued = false;
+    }
+
+    /**
+     * Binary-search the cumulative offset table for the first row whose offset
+     * is > scrollTop. The row before it is the first visible row.
+     */
+    _firstRowAtY(y) {
+        const offsets = this._virtualRowOffsets;
+        if (!offsets || !offsets.length) return 0;
+        let lo = 0, hi = offsets.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (offsets[mid] <= y) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
+    }
+
+    _paintVirtualWindow() {
+        const fabric = this.fabric;
+        const spacer = this._virtualSpacerEl;
+        if (!spacer || !fabric) return;
+
+        const rows = this._virtualRows;
+        const offsets = this._virtualRowOffsets;
+        if (!rows || !rows.length) {
+            spacer.replaceChildren();
+            this._virtualLastRange = { first: 0, last: -1 };
+            return;
+        }
+
+        const scrollTop = this.bodyEl?.scrollTop || 0;
+        const viewportH = this.bodyEl?.clientHeight || 0;
+        let first = this._firstRowAtY(scrollTop);
+        let last = this._firstRowAtY(scrollTop + viewportH);
+        first = Math.max(0, first - BOARD_VIRTUAL_OVERSCAN);
+        last = Math.min(rows.length - 1, last + BOARD_VIRTUAL_OVERSCAN);
+
+        const lastRange = this._virtualLastRange;
+        if (lastRange && lastRange.first === first && lastRange.last === last) return;
+        this._virtualLastRange = { first, last };
+
+        // v1: rebuild the window slice. Window size is small (~viewport rows + 2*overscan)
+        // so allocation cost is bounded regardless of total row count.
+        spacer.replaceChildren();
+        for (let i = first; i <= last; i++) {
+            const row = rows[i];
+            let el;
+            if (row.kind === 'layer') {
+                const layer = fabric.getLayer(row.id);
+                if (!layer) continue;
+                el = this._renderLayer(layer, true);
+            } else {
+                const object = fabric.findObjectOnCanvasByIncrementId(Number(row.id));
+                if (!object) continue;
+                el = this._renderAnnotation(object);
+            }
+            el.style.position = 'absolute';
+            el.style.top = offsets[i] + 'px';
+            el.style.left = '0';
+            el.style.right = '0';
+            el.style.height = row.height + 'px';
+            spacer.appendChild(el);
+        }
+
+        // selection visuals + active-layer highlight on the rows that just materialized
+        this._withSelectionSyncPaused(() => {
+            this._syncSortableSelection(fabric.getSelectedLayers?.() || [], 'layer');
+            this._syncSortableSelection(fabric.getSelectedAnnotations?.() || [], 'annotation');
+        });
+        this._updateDeleteSelectionHeaderButton();
+        this._updateActiveLayerVisual(fabric.getActiveLayer?.());
+    }
+
+    /**
+     * Header notice that drag-reorder is unavailable at this scale.
+     */
+    _showVirtualNotice(visible) {
+        if (!visible) {
+            if (this._virtualNoticeEl?.parentNode) {
+                this._virtualNoticeEl.parentNode.removeChild(this._virtualNoticeEl);
+            }
+            this._virtualNoticeEl = null;
+            return;
+        }
+        if (this._virtualNoticeEl) return;
+        const header = this.root?.querySelector(`#${CSS.escape(this.headerId)}`);
+        if (!header) return;
+        const el = document.createElement('div');
+        el.dataset.role = 'virt-notice';
+        el.className = 'text-[10px] opacity-50 px-2 italic';
+        el.textContent = this.plugin.t?.('annotations.board.dragDisabledLargeList')
+            || 'Drag-reorder disabled at this scale';
+        header.appendChild(el);
+        this._virtualNoticeEl = el;
     }
 
     _getBoardEntries() {
@@ -386,7 +658,7 @@ export class AnnotationBoardPanel {
         return result;
     }
 
-    _renderLayer(layer) {
+    _renderLayer(layer, inVirtualizedList = false) {
         const layerId = String(layer.id);
         const wrapper = document.createElement('div');
         wrapper.id = this.getLayerElementId(layerId);
@@ -399,6 +671,7 @@ export class AnnotationBoardPanel {
 
         const row = document.createElement('div');
         row.className = 'flex items-center gap-2 px-2 py-2 hover:bg-base-200 cursor-pointer transition-colors';
+        if (inVirtualizedList) row.style.height = BOARD_LAYER_ROW_PX + 'px';
 
         // Toggle Arrow
         const toggleBtn = document.createElement('div');
@@ -441,16 +714,22 @@ export class AnnotationBoardPanel {
         row.append(toggleBtn, info, actions);
         wrapper.appendChild(row);
 
-        const annotationContainer = document.createElement('div');
-        annotationContainer.id = this.getAnnotationContainerId(layerId);
-        annotationContainer.className = 'bg-base-100/50 ml-2'; // Slight indentation feel
-        annotationContainer.dataset.layerContainer = 'true';
-        annotationContainer.style.display = collapsed ? 'none' : 'block';
+        // In virtualized mode, the layer's annotations render as separate rows on
+        // the spacer (the windowing path positions them by absolute offset). Don't
+        // build the inner container here — it would double-render and break
+        // absolute positioning math.
+        if (!inVirtualizedList) {
+            const annotationContainer = document.createElement('div');
+            annotationContainer.id = this.getAnnotationContainerId(layerId);
+            annotationContainer.className = 'bg-base-100/50 ml-2'; // Slight indentation feel
+            annotationContainer.dataset.layerContainer = 'true';
+            annotationContainer.style.display = collapsed ? 'none' : 'block';
 
-        for (const object of layer.getObjects?.() || []) {
-            annotationContainer.appendChild(this._renderAnnotation(object));
+            for (const object of layer.getObjects?.() || []) {
+                annotationContainer.appendChild(this._renderAnnotation(object));
+            }
+            wrapper.appendChild(annotationContainer);
         }
-        wrapper.appendChild(annotationContainer);
 
         return wrapper;
     }
@@ -698,6 +977,7 @@ export class AnnotationBoardPanel {
     }
 
     initBoardSortable() {
+        if (this._virtualMode) return;
         if (!this.layerLogsEl || this.layerLogsEl._sortableInstance) return;
         this.layerLogsEl._sortableInstance = new Sortable(this.layerLogsEl, {
             group: { name: `annotation-board-${this.uid}`, pull: true, put: (to, from, dragEl) => ['layer', 'annotation'].includes(dragEl.getAttribute('data-type')) },
@@ -732,6 +1012,7 @@ export class AnnotationBoardPanel {
     }
 
     initLayerSortable(container) {
+        if (this._virtualMode) return;
         if (!container || container._sortableInstance) return;
         container._sortableInstance = new Sortable(container, {
             group: { name: `annotation-board-${this.uid}`, pull: true, put: (to, from, dragEl) => dragEl.getAttribute('data-type') === 'annotation' },

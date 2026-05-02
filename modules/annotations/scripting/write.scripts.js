@@ -343,13 +343,13 @@ ScriptingManager.registerExternalApi(
             const items = Array.isArray(inputs) ? inputs : [];
             if (items.length === 0) return [];
 
+            await this._assertCreateBudget(items.length);
             const opts = options || {};
             const ASYNC_THRESHOLD = 100;
             const useAsync = opts.async === true || items.length > ASYNC_THRESHOLD;
 
             if (!useAsync) {
                 // Synchronous path (small batches): preserve original behavior.
-                await this._assertCreateBudget(items.length);
                 const fabric = this._getFabric();
                 const annotations = items.map((input) => this._buildAnnotationFromInput(input));
                 for (const annotation of annotations) {

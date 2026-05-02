@@ -124,6 +124,205 @@
 // For rotated OSD->Fabric viewportTransform, compute all 4 inverse-mapped corners
 // and store an axis-aligned bounding box that fully contains the rotated viewport.
 // This is conservative: it may render a few extra objects, but it should not hide visible ones.
+    // ---------- spatial index hooks ----------------------------------------------------------
+    // The annotations module attaches an AnnotationSpatialIndex instance as
+    // `canvas.__spatialIndex`. The patches below detour fabric's hot paths through that index
+    // when present, and fall through to the original implementation otherwise. This keeps
+    // unrelated fabric canvases (other modules) untouched.
+
+    const _origOnObjectAdded = fabric.Canvas.prototype._onObjectAdded;
+    fabric.Canvas.prototype._onObjectAdded = function (obj) {
+        const r = _origOnObjectAdded.call(this, obj);
+        const idx = this.__spatialIndex;
+        if (idx) idx.add(obj);
+        return r;
+    };
+
+    const _origOnObjectRemoved = fabric.Canvas.prototype._onObjectRemoved;
+    fabric.Canvas.prototype._onObjectRemoved = function (obj) {
+        const r = _origOnObjectRemoved.call(this, obj);
+        const idx = this.__spatialIndex;
+        if (idx) idx.remove(obj);
+        return r;
+    };
+
+    const _origSetCoords = fabric.Object.prototype.setCoords;
+    fabric.Object.prototype.setCoords = function (skipCorners) {
+        const r = _origSetCoords.call(this, skipCorners);
+        const idx = this.canvas && this.canvas.__spatialIndex;
+        if (idx && this._idxBox) idx.update(this);
+        return r;
+    };
+
+    const _origRenderObjects = fabric.Canvas.prototype._renderObjects;
+    fabric.Canvas.prototype._renderObjects = function (ctx, objects) {
+        const idx = this.__spatialIndex;
+        if (!idx) return _origRenderObjects.call(this, ctx, objects);
+
+        const visible = idx.visibleObjects(this.vptCoords, this);
+        const { rects, suppressed } = idx.clusters(this.vptCoords, this);
+
+        const filtered = suppressed && suppressed.size
+            ? visible.filter(o => !suppressed.has(o))
+            : visible;
+
+        // lazy-refresh per-object before draw
+        for (let i = 0; i < filtered.length; i++) idx.ensureFresh(filtered[i]);
+
+        _origRenderObjects.call(this, ctx, filtered);
+
+        if (rects && rects.length) _drawClusters(ctx, this, rects);
+    };
+
+    // Cluster pill style (all values in CSS pixels — drawn in screen space).
+    const PILL_PAD_X = 8;
+    const PILL_PAD_Y = 4;
+    const PILL_RADIUS = 8;
+    const PILL_FONT_COUNT = '600 12px system-ui, -apple-system, Segoe UI, sans-serif';
+    const PILL_FONT_SUFFIX = '500 9px system-ui, -apple-system, Segoe UI, sans-serif';
+    const PILL_BG = 'rgba(30, 41, 59, 0.92)';
+    const PILL_FG = '#fff';
+    const PILL_SHADOW = 'rgba(0,0,0,0.4)';
+    const PILL_GAP_AFTER_ICON = 5;
+    const PILL_ROW_GAP = 1;
+    const PILL_ICON_W = 12;
+    const PILL_ICON_H = 11;
+    const PILL_TOP_ROW_H = 14;
+    const PILL_BOTTOM_ROW_H = 11;
+    const PILL_SUFFIX_TEXT = 'annot.';
+
+    function _formatClusterCount(n) {
+        if (n > 9999) return '9.9k+';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+        return String(n);
+    }
+
+    /**
+     * Draws an irregular pentagon outline (suggestive of a hand-drawn polygon
+     * annotation) inside a 12x11 box anchored at (x, y) top-left.
+     */
+    function _drawClusterPolygonIcon(ctx, x, y) {
+        // 5 vertices in a 12x11 grid; offsets chosen to look hand-drawn rather than regular
+        const pts = [
+            [x +  3, y +  1],
+            [x + 11, y +  3],
+            [x +  9, y + 10],
+            [x +  3, y +  9],
+            [x +  1, y +  4],
+        ];
+        ctx.save();
+        ctx.lineWidth = 1.4;
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = PILL_FG;
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function _drawClusterPill(ctx, centerX, centerY, count) {
+        const label = _formatClusterCount(count);
+
+        // Measure both rows
+        ctx.font = PILL_FONT_COUNT;
+        const labelW = ctx.measureText(label).width;
+        ctx.font = PILL_FONT_SUFFIX;
+        const suffixW = ctx.measureText(PILL_SUFFIX_TEXT).width;
+
+        const topRowW = PILL_ICON_W + PILL_GAP_AFTER_ICON + labelW;
+        const bottomRowW = suffixW;
+        const contentW = Math.max(topRowW, bottomRowW);
+        const contentH = PILL_TOP_ROW_H + PILL_ROW_GAP + PILL_BOTTOM_ROW_H;
+
+        const pillW = contentW + PILL_PAD_X * 2;
+        const pillH = contentH + PILL_PAD_Y * 2;
+
+        const x = Math.round(centerX - pillW * 0.5);
+        const y = Math.round(centerY - pillH * 0.5);
+
+        // Background pill with drop shadow
+        ctx.save();
+        ctx.shadowColor = PILL_SHADOW;
+        ctx.shadowBlur = 6;
+        ctx.shadowOffsetY = 1;
+        ctx.fillStyle = PILL_BG;
+        ctx.beginPath();
+        const r = Math.min(PILL_RADIUS, pillH * 0.5);
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + pillW, y,         x + pillW, y + pillH, r);
+        ctx.arcTo(x + pillW, y + pillH, x,         y + pillH, r);
+        ctx.arcTo(x,         y + pillH, x,         y,         r);
+        ctx.arcTo(x,         y,         x + pillW, y,         r);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        // Top row: [icon] [count] (left-aligned within the top-row block,
+        // which is itself centered horizontally inside the pill).
+        const topRowX = x + Math.round((pillW - topRowW) * 0.5);
+        const topRowMidY = y + PILL_PAD_Y + PILL_TOP_ROW_H * 0.5;
+        const iconY = Math.round(topRowMidY - PILL_ICON_H * 0.5);
+        _drawClusterPolygonIcon(ctx, topRowX, iconY);
+
+        ctx.fillStyle = PILL_FG;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.font = PILL_FONT_COUNT;
+        ctx.fillText(label, topRowX + PILL_ICON_W + PILL_GAP_AFTER_ICON, topRowMidY);
+
+        // Bottom row: "annot." centered horizontally, smaller font, slightly dimmer.
+        const bottomMidY = y + PILL_PAD_Y + PILL_TOP_ROW_H + PILL_ROW_GAP + PILL_BOTTOM_ROW_H * 0.5;
+        ctx.font = PILL_FONT_SUFFIX;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillText(PILL_SUFFIX_TEXT, x + pillW * 0.5, bottomMidY);
+    }
+
+    function _drawClusters(ctx, canvas, rects) {
+        // Reset transform to retina-only; pill is drawn in CSS pixel space so its
+        // size stays constant regardless of canvas zoom. The screen rect on each
+        // cluster is already in CSS pixels.
+        const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
+        ctx.save();
+        ctx.setTransform(retina, 0, 0, retina, 0, 0);
+
+        for (let i = 0; i < rects.length; i++) {
+            const r = rects[i];
+            const s = r.screen;
+            if (!s) continue;
+            _drawClusterPill(ctx, s.x + s.w * 0.5, s.y + s.h * 0.5, r.count);
+        }
+
+        ctx.restore();
+    }
+
+    const _origSearchPossibleTargets = fabric.Canvas.prototype._searchPossibleTargets;
+    fabric.Canvas.prototype._searchPossibleTargets = function (objects, pointer) {
+        const idx = this.__spatialIndex;
+        if (!idx) return _origSearchPossibleTargets.call(this, objects, pointer);
+
+        const visible = idx.visibleObjects(this.vptCoords, this);
+        const { suppressed } = idx.clusters(this.vptCoords, this);
+
+        // refresh per-object first so filter-hidden objects do not take clicks
+        for (let i = 0; i < visible.length; i++) idx.ensureFresh(visible[i]);
+
+        const realCandidates = suppressed && suppressed.size
+            ? visible.filter(o => !suppressed.has(o))
+            : visible;
+
+        return _origSearchPossibleTargets.call(this, realCandidates, pointer);
+        // Cluster pills are render-only; clicks pass through to whatever fabric
+        // finds beneath them (or to OSD viewport when nothing is hit).
+    };
+
+    fabric.Canvas.prototype._visibleObjects = function () {
+        const idx = this.__spatialIndex;
+        return idx ? idx.visibleObjects(this.vptCoords, this) : this._objects;
+    };
+
     fabric.StaticCanvas.prototype.calcViewportBoundaries = function() {
         const width = this.width;
         const height = this.height;
@@ -302,19 +501,27 @@
             }
 
             const zoom = transform.zoom;
-            this._fabricCanvas.__osdViewportScale = zoom;
-            this._fabricCanvas.setViewportTransform(transform.matrix);
+            const canvas = this._fabricCanvas;
+            canvas.__osdViewportScale = zoom;
+            canvas.setViewportTransform(transform.matrix);
 
             // square root will make closer zoom a bit larger -> nicer
             const smallZoom = Math.sqrt(zoom) / 2;
-            if (updateObjects !== false) {
-                this._fabricCanvas._objects.forEach(x => {
-                    x.zooming?.(smallZoom, zoom);
-                });
+            canvas.__lastSmallZoom = smallZoom;
+            canvas.__lastRealZoom = zoom;
+
+            const idx = canvas.__spatialIndex;
+            const zoomChanged = zoom !== this._lastZoomUpdate;
+            if (zoomChanged && idx) idx.bumpZoom();
+
+            if (updateObjects !== false && zoomChanged) {
+                // only iterate the visible set; off-screen objects refresh lazily on entry
+                const list = idx ? idx.visibleObjects(canvas.vptCoords, canvas) : canvas._objects;
+                for (let i = 0; i < list.length; i++) list[i].zooming?.(smallZoom, zoom);
             }
             this._lastZoomUpdate = zoom;
 
-            this._fabricCanvas.renderAll();
+            canvas.renderAll();
             return zoom;
         }
     }
