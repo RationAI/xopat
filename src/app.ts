@@ -278,7 +278,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
          */
         getOption(name: string, defaultValue: any = undefined, cache = true, parse = false) {
             const self = this as unknown as ApplicationContext;
-            const hasExplicitDefault = arguments.length >= 2;
             const builtin = self.config.defaultParams[name];
             if (builtin === undefined) {
                 console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
@@ -307,7 +306,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             }
             let value = self.config.params[name] !== undefined
                 ? self.config.params[name]
-                : (hasExplicitDefault ? defaultValue : self.config.defaultParams[name]);
+                : (defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
             if (value === "false") return false;
             if (value === "true") return true;
             if (parse && typeof value === "string") {
