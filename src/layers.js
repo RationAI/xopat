@@ -511,39 +511,40 @@ function initXOpatLayers() {
      * @private
      * @param layerId
      */
-    UTILITIES.clearShaderCache = function (layerId) {
-        const config = VIEWER.drawer.renderer.getShaderLayerConfig(layerId);
+    UTILITIES.clearShaderCache = function (layerId, viewer = window.VIEWER) {
+        const config = viewer.drawer.renderer.getShaderLayerConfig(layerId);
         if (!config) return;
         config.cache = {};
         config._cacheApplied = undefined;
-        VIEWER.drawer.rebuild();
+        viewer.drawer.rebuild();
     };
 
-    UTILITIES.changeVisualizationLayer = function (layerId, type) {
-        let factoryClass = OpenSeadragon.FlexRenderer.ShaderMediator.getClass(type);
-        if (factoryClass !== undefined) {
-            let shader = VIEWER.drawer.renderer.getShaderLayerConfig(layerId);
-            if (shader) {
-                shader.type = type;
-                shader = VIEWER.navigator.drawer.getOverriddenShaderConfig(layerId);
-                shader.type = type;
-                VIEWER.drawer.rebuild(0);
-                UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { type });
-            } else {
-                console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': bad initialization?`);
-            }
-        } else {
-            console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': unknown type!`);
+    UTILITIES.changeVisualizationLayer = function (layerId, type, viewer = window.VIEWER) {
+        try {
+            viewer.drawer.renderer.changeShaderType(layerId, type);
+        } catch (e) {
+            console.error(`UTILITIES::changeVisualizationLayer Invalid layer id '${layerId}': ${e.message}`);
+            return;
         }
+        try {
+            viewer.navigator?.drawer?.renderer?.changeShaderType?.(layerId, type);
+        } catch (e) {
+            // navigator may not mirror every layer; non-fatal
+        }
+        // changeShaderType only rebuilds the WebGL program; idle viewers (e.g. playground)
+        // need an explicit repaint so the swap shows immediately.
+        viewer.forceRedraw();
+        viewer.navigator?.forceRedraw?.();
+        UTILITIES._emitShaderConfigUpdate(viewer, layerId, { type });
     };
 
     /**
      * Enable or disable UI for modes, with the given mode applied (no need to call changeModeOfLayer)
      */
-    UTILITIES.shaderPartSetBlendModeUIEnabled = function (layerId, enabled) {
+    UTILITIES.shaderPartSetBlendModeUIEnabled = function (layerId, enabled, viewer = window.VIEWER) {
         const maskNode = document.getElementById(`${layerId}-mode-toggle`);
         const mode = enabled ? maskNode.dataset.mode : "show";
-        if (!mode || !UTILITIES.changeModeOfLayer(layerId, mode, false)) {
+        if (!mode || !UTILITIES.changeModeOfLayer(layerId, mode, false, viewer)) {
             Dialogs.show($.t('messages.failedToSetMask'), 2500, Dialogs.MSG_WARN);
         }
     };
@@ -556,8 +557,8 @@ function initXOpatLayers() {
      * @param toggle if false, just update the current mode
      * @return true if successfully performed
      */
-    UTILITIES.changeModeOfLayer = function (layerId, otherMode = "blend", toggle = true) {
-        const shader = VIEWER.drawer.renderer.getShaderLayer(layerId);
+    UTILITIES.changeModeOfLayer = function (layerId, otherMode = "blend", toggle = true, viewer = window.VIEWER) {
+        const shader = viewer.drawer.renderer.getShaderLayer(layerId);
 
         if (shader) {
             const shaderConfig = shader.getConfig(layerId);
@@ -576,8 +577,8 @@ function initXOpatLayers() {
             shaderConfig.params.use_mode = applied;
             // use blend not set, default with blend mode
             shader.resetMode(shaderConfig.params);
-            VIEWER.drawer.rebuild(0);
-            UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { params: { use_mode: applied } });
+            viewer.drawer.rebuild(0);
+            UTILITIES._emitShaderConfigUpdate(viewer, layerId, { params: { use_mode: applied } });
             return true;
         }
 
@@ -591,15 +592,15 @@ function initXOpatLayers() {
      * @param filter filter to set, "use_*" style (gamma, exposure...)
      * @param value filter parameter (scalar) value
      */
-    UTILITIES.setFilterOfLayer = function (layerId, filter, value) {
-        const shader = VIEWER.drawer.renderer.getShaderLayer(layerId);
+    UTILITIES.setFilterOfLayer = function (layerId, filter, value, viewer = window.VIEWER) {
+        const shader = viewer.drawer.renderer.getShaderLayer(layerId);
 
         if (shader) {
             const shaderConfig = shader.getConfig(layerId);
             shaderConfig.params[filter] = value;
             shader.resetFilters(shaderConfig.params);
-            VIEWER.drawer.rebuild(0);
-            UTILITIES._emitShaderConfigUpdate(VIEWER, layerId, { params: { [filter]: value } });
+            viewer.drawer.rebuild(0);
+            UTILITIES._emitShaderConfigUpdate(viewer, layerId, { params: { [filter]: value } });
         } else {
             console.error("Invalid layer: bad initialization?");
         }

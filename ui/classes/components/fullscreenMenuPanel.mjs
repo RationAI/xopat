@@ -50,6 +50,8 @@ export class FullscreenMenuPanel extends MainPanel {
         this.closeButtonSide = normalizedOptions.closeButtonSide || Modal.CLOSE_BUTTON_SIDE.LEFT;
         this.namespaceLabelClass = normalizedOptions.namespaceLabelClass || `px-3 text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50 ${this.headerTopPaddingClass}`;
         this.namespaceSeparatorClass = normalizedOptions.namespaceSeparatorClass || "my-2 border-t border-base-300/70";
+        this.namespaceGroupClass = normalizedOptions.namespaceGroupClass || "flex flex-col gap-1 min-w-0";
+        this.namespaceButtonsClass = normalizedOptions.namespaceButtonsClass || "flex min-w-0 gap-1";
 
         this.bodyRoot = div({
             class: `${this.heightClass} min-h-0 w-full min-w-0 bg-base-200`
@@ -70,6 +72,7 @@ export class FullscreenMenuPanel extends MainPanel {
         this._created = false;
 
         this.header.setClass("closeButtonPadding", "mt-7 bg-base-100");
+        this.body.setClass("fullscreenMenuBodyPadding", "px-3");
     }
 
     create() {
@@ -127,18 +130,29 @@ export class FullscreenMenuPanel extends MainPanel {
                 nodes.push(separator);
             }
 
+            const group = document.createElement("div");
+            group.className = this.namespaceGroupClass;
+            group.dataset.menuNamespaceGroup = namespace.id;
+
             const label = document.createElement("div");
             label.className = this.namespaceLabelClass;
             label.dataset.menuNamespaceLabel = namespace.id;
             label.textContent = namespace.title || namespace.label || namespace.id;
-            nodes.push(label);
+            group.appendChild(label);
+
+            const buttonRow = document.createElement("div");
+            buttonRow.className = this.namespaceButtonsClass;
+            buttonRow.dataset.menuNamespaceButtons = namespace.id;
 
             for (const tab of tabs) {
                 const buttonNode = buttonsByTabId.get(tab.id);
                 if (buttonNode) {
-                    nodes.push(buttonNode);
+                    buttonRow.appendChild(buttonNode);
                 }
             }
+
+            group.appendChild(buttonRow);
+            nodes.push(group);
 
             firstNamespace = false;
         }
@@ -148,6 +162,21 @@ export class FullscreenMenuPanel extends MainPanel {
         }
 
         this._syncHeaderButtonOrientation();
+        this._syncNamespaceGroupOrientation();
+    }
+
+    _syncNamespaceGroupOrientation() {
+        const header = this._resolveHeaderElement();
+        if (!header) return;
+
+        const stackButtons = this._isSideOrientation && this._isSideOrientation()
+            && !(this._shouldCollapseSideHeader && this._shouldCollapseSideHeader());
+
+        for (const buttonRow of header.querySelectorAll("[data-menu-namespace-buttons]")) {
+            buttonRow.style.flexDirection = stackButtons ? "column" : "row";
+            buttonRow.style.flexWrap = "nowrap";
+            buttonRow.style.alignItems = stackButtons ? "stretch" : "center";
+        }
     }
 
     _resolveHeaderElement(root = undefined) {
@@ -163,7 +192,10 @@ export class FullscreenMenuPanel extends MainPanel {
         let remainingIndex = 0;
 
         for (const child of Array.from(header.children)) {
-            if (child.dataset?.menuNamespaceLabel || child.dataset?.menuNamespaceSeparator) {
+            if (child.dataset?.menuNamespaceLabel
+                || child.dataset?.menuNamespaceSeparator
+                || child.dataset?.menuNamespaceGroup
+                || child.dataset?.menuNamespaceButtons) {
                 continue;
             }
             if (child.dataset?.menuTabId) {
@@ -181,13 +213,19 @@ export class FullscreenMenuPanel extends MainPanel {
     _applyMenuDefaults() {
         this.set(this.defaultOrientation, this.defaultButtonSide, this.defaultDesign, this.defaultRounded);
         this._syncHeaderButtonOrientation();
+        this._syncNamespaceGroupOrientation();
+    }
+
+    _syncLayout() {
+        super._syncLayout();
+        this._syncNamespaceGroupOrientation();
     }
 
     _syncHeaderButtonOrientation() {
         for (const tab of Object.values(this.tabs)) {
             if (!tab?.headerButton) continue;
             tab.headerButton.set(Button.ORIENTATION.HORIZONTAL);
-            tab.headerButton.setClass("fullscreenMenuButtonWidth", "justify-start");
+            tab.headerButton.setClass("fullscreenMenuButtonWidth", "justify-start flex-nowrap whitespace-nowrap");
         }
     }
 

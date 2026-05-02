@@ -1142,9 +1142,16 @@ export class ViewerOpenPipeline {
                 if (isSeriesLikeMeta(meta) && shaderSourceController) {
                     const tileSource = sourceFactory(dataIndex as number);
                     const loadKey = deriveLoadKey(cfg.data[dataIndex as number], tileSource, dataIndex as number);
+                    // opacity > 0 is required so the flex-renderer's first-pass
+                    // actually paints this tile into its atlas layer
+                    // (flex-renderer.js:_drawTwoPassFirst gates on getOpacity() > 0).
+                    // OSD's classic compositor is bypassed by the two-pass model,
+                    // so this opacity does NOT affect on-screen layering — it only
+                    // controls whether the source is sampleable by the second pass.
                     shaderSourceController.registerDataSource(loadKey, () => ({
                         tileSource: sourceFactory(dataIndex as number),
-                        openOptions: { opacity: 0 },
+                        // todo: test 0
+                        openOptions: { opacity: 1 },
                     }));
 
                     const activeIndex = computeActiveSeriesIndex(meta?.config);

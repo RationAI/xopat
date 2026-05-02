@@ -344,7 +344,7 @@ export class FullscreenMenus {
             { value: "dark", text: $.t('settings.theme.dark') }
         );
 
-        return div({ class: "relative flex min-h-full flex-col gap-4 pb-24 pt-3 pr-2" },
+        return div({ class: "relative flex min-h-full flex-col gap-4 pb-24 pt-3" },
             notification,
             div({ class: "flex flex-wrap items-start justify-between gap-3" },
                 span({ class: "text-2xl font-semibold" }, $.t?.('main.bar.settings')),

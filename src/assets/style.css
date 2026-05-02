@@ -702,3 +702,15 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
 .er-control__aux--slider-with-input > .er-control > .er-control__body {
     display: block;
 }
+.er-control__popup.er-control__popup--icon {
+    width: 327px !important;
+}
+
+.er-control__preview.er-control__preview--icon > * {
+    font-size: 16px !important;
+}
+
+.er-control__button.er-control__button--icon-trigger {
+    min-height: 30px !important;
+    height: 30px !important;
+}

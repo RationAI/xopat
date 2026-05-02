@@ -104,6 +104,19 @@ export class ViewerShaderSourceController {
         this.refs.clear();
     }
 
+    /**
+     * Programmatic scrub funnel — calls into the time-series shader's `scrubTo`
+     * so UI, scripting API, and session replay all route through the same
+     * `requestSourceBinding` → resolver path. Returns true if the call dispatched.
+     */
+    scrubShaderSource(shaderId: string, offset: number): boolean {
+        const renderer = (this.viewer as any)?.drawer?.renderer;
+        const shader = renderer?.getShaderLayer?.(shaderId);
+        if (!shader || typeof shader.scrubTo !== "function") return false;
+        shader.scrubTo(offset);
+        return true;
+    }
+
     resolver = (ctx: ResolverContext): Promise<ResolverResult | null> | ResolverResult | null => {
         const request = ctx.request || {};
         const entry = request.entry;
@@ -130,7 +143,7 @@ export class ViewerShaderSourceController {
             console.log(`${LOG_PREFIX} cache-hit`, { bindingKey, loadKey: entry.loadKey, currentIdx, targetIdx: cached });
             this.rebindRef(currentIdx, cached as number, bindingKey);
             // Pure rebind of already-loaded tile — skip the rebuild cascade.
-            return this.result(cached as number, sourceIndex, { rebind: true });
+            return this.result(cached as number, sourceIndex, { kind: "rebind" });
         }
 
         const factory = this.factories.get(entry.loadKey);
@@ -156,7 +169,7 @@ export class ViewerShaderSourceController {
                 this.forgetWorldIndex(currentIdx as number);
                 this.associate(worldIndex, entry.loadKey, bindingKey);
                 console.log(`${LOG_PREFIX} swap-in-place DONE`, { bindingKey, worldIndex });
-                return this.result(worldIndex, sourceIndex, { rebind: false });
+                return this.result(worldIndex, sourceIndex, { kind: "swap" });
             });
         }
 
@@ -165,7 +178,7 @@ export class ViewerShaderSourceController {
             this.removeRef(currentIdx, bindingKey);
             this.associate(worldIndex, entry.loadKey, bindingKey);
             console.log(`${LOG_PREFIX} append DONE`, { bindingKey, worldIndex });
-            return this.result(worldIndex, sourceIndex, { rebind: false });
+            return this.result(worldIndex, sourceIndex, { kind: "append" });
         });
     };
 
@@ -182,7 +195,11 @@ export class ViewerShaderSourceController {
         return this.viewer?.world?.getIndexOfItem?.(item) ?? -1;
     }
 
-    private result(worldIndex: number, sourceIndex: number, opts: { rebind: boolean }): ResolverResult {
+    private result(
+        worldIndex: number,
+        sourceIndex: number,
+        opts: { kind: "rebind" | "swap" | "append" }
+    ): ResolverResult {
         const mutation = (config: any) => {
             // Mutate in place so references captured by delegate shaders
             // (time-series delegate holds the same tiledImages array) see
@@ -193,21 +210,26 @@ export class ViewerShaderSourceController {
             }
             config.tiledImages[sourceIndex] = worldIndex;
         };
-        if (opts.rebind) {
-            // Pure cache-hit rebind — no new tile, no rebuild.
-            return {
-                worldIndex,
-                refreshShader: false,
-                rebuildProgram: false,
-                rebuildDrawer: false,
-                resetItems: false,
-                mutation,
-            };
-        }
-        // Opened a new tile (or swapped one) — let the drawer re-wire
-        // shader↔tile associations. Leaving the rebuild flags undefined
-        // makes the library default them to true.
-        return { worldIndex, mutation };
+        return {
+            worldIndex,
+            // Managed-source swaps don't change shader GLSL/topology — refreshing
+            // the shader instance would re-run TimeSeriesShader.construct(), which
+            // resets tiledImages back to the active series entry's worldIndex
+            // (because construct reads config.params.timeline.default *before*
+            // super.construct() syncs it from this.timeline.encoded). That
+            // clobbers the in-place mutation we just applied, so first visits to
+            // a non-active frame wrongly render the active frame.
+            refreshShader: false,
+            rebuildProgram: false,
+            // Append grew the world — atlas (sized to the previous itemCount)
+            // needs to be resized via setDimensions inside _requestRebuild.
+            // registerProgram inside the rebuild only re-creates shaders whose
+            // `type` changed (time-series → time-series is a no-op), so this
+            // path does NOT re-run construct.
+            rebuildDrawer: opts.kind === "append",
+            resetItems: false,
+            mutation,
+        };
     }
 
     private openAppend(tileSource: any, openOptions: Record<string, any> | undefined, referenceItem: any): Promise<number> {

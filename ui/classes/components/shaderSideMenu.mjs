@@ -312,7 +312,7 @@ export class ShaderSideMenu extends BaseComponent {
                     title: $.t('main.shaders.defaultBlending'),
                 }, {
                     title: maskEnabled ? $.t('main.shaders.maskDisable') : $.t('main.shaders.maskEnable'),
-                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected),
+                    action: (selected) => UTILITIES.shaderPartSetBlendModeUIEnabled(id, !selected, viewer),
                     selected: maskEnabled
                 }, {
                     title: clipSelected ? $.t('main.shaders.clipMaskOff') : $.t('main.shaders.clipMask'),
@@ -323,9 +323,9 @@ export class ShaderSideMenu extends BaseComponent {
                         const newMode = selected ? "blend" : "clip";
                         node.dataset.mode = newMode;
                         if (!maskEnabled) {
-                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true);
+                            UTILITIES.shaderPartSetBlendModeUIEnabled(id, true, viewer);
                         } else {
-                            UTILITIES.changeModeOfLayer(id, newMode, false);
+                            UTILITIES.changeModeOfLayer(id, newMode, false, viewer);
                         }
                     },
                     selected: clipSelected
@@ -432,6 +432,7 @@ export class ShaderSideMenu extends BaseComponent {
             .FlexRenderer
             .ShaderMediator
             .availableShaders()
+            .filter(s => s.type() !== "group")
             .map(s => ({type: s.type(), name: s.name()}));
 
         // map filters if you want editable rows (optional)
@@ -462,7 +463,7 @@ export class ShaderSideMenu extends BaseComponent {
                     }
                 },
                 onChangeType: (type) =>
-                    UTILITIES.changeVisualizationLayer(shaderLayer.id, type),
+                    UTILITIES.changeVisualizationLayer(shaderLayer.id, type, viewer),
 
                 // NEW: explicit mode change (no toggle, and we also keep blend mode)
                 onChangeMode: (mode, blend) => {
@@ -511,9 +512,9 @@ export class ShaderSideMenu extends BaseComponent {
                 },
 
                 onSetFilter: (key, val) =>
-                    UTILITIES.setFilterOfLayer(shaderLayer.id, key, val),
+                    UTILITIES.setFilterOfLayer(shaderLayer.id, key, val, viewer),
                 onClearCache: () =>
-                    UTILITIES.clearShaderCache(shaderLayer.id),
+                    UTILITIES.clearShaderCache(shaderLayer.id, viewer),
                 onReorder: (dir) => {
                     const node = this.shaderNodeCells[shaderLayer.id];
                     const parent = node?.parentElement;
