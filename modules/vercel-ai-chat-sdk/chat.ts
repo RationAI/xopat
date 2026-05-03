@@ -1,6 +1,45 @@
 import { ChatPanel } from './ui/ChatPanel';
 import {ChatService} from './chatService';
 
+let enabled: boolean | undefined = undefined;
+function isChatDebugModeEnabled(): boolean {
+    if (enabled === undefined) {
+        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+    }
+    return !!enabled;
+}
+
+function truncateChatDebugText(value: string, maxChars = 8_000): string {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+}
+
+function debugSerializeChatValue(value: any, depth = 0): any {
+    if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "string") return truncateChatDebugText(value);
+    if (depth >= 6) return "[Max debug depth reached]";
+    if (Array.isArray(value)) return value.slice(0, 25).map((item) => debugSerializeChatValue(item, depth + 1));
+    if (typeof value === "object") {
+        const output: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value).slice(0, 25)) {
+            output[key] = debugSerializeChatValue(item, depth + 1);
+        }
+        return output;
+    }
+    return String(value);
+}
+
+function chatDebugLog(label: string, data?: unknown): void {
+    if (!isChatDebugModeEnabled()) return;
+
+    if (typeof data === "undefined") {
+        console.debug(`[CHAT DEBUG] ${label}`);
+        return;
+    }
+
+    console.debug(`[CHAT DEBUG] ${label}`, debugSerializeChatValue(data));
+}
+
 class ChatModule extends XOpatModuleSingleton {
     chatService: ChatService;
     chatPanel: ChatPanel;
@@ -186,6 +225,13 @@ class ChatModule extends XOpatModuleSingleton {
 
     async executeAssistantScript(script: string, options: { signal?: AbortSignal } = {}): Promise<ChatMessage> {
         const context = this._getScriptExecutionContext();
+        chatDebugLog("SCRIPT_EXECUTION_REQUEST", {
+            contextId: context?.id || null,
+            activeViewerContextId: typeof context?.getActiveViewerContextId === "function"
+                ? context.getActiveViewerContextId()
+                : null,
+            script,
+        });
 
         if (!context || typeof context.executeScript !== 'function') {
             return {
@@ -233,16 +279,81 @@ class ChatModule extends XOpatModuleSingleton {
                 })
                 : await executionPromise;
 
-            return await this._normalizeScriptResultToMessage(result);
+            chatDebugLog("SCRIPT_EXECUTION_RESULT", {
+                contextId: context?.id || null,
+                result,
+            });
+            const normalized = await this._normalizeScriptResultToMessage(result);
+            chatDebugLog("SCRIPT_EXECUTION_MESSAGE", normalized);
+            return normalized;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            chatDebugLog("SCRIPT_EXECUTION_ERROR", {
+                contextId: context?.id || null,
+                error,
+            });
             return {
                 role: 'user',
-                parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}` }],
+                parts: [{ ok: false, type: 'script-result', text: `The requested action could not be completed: ${message}`, script } as any],
                 content: `The requested action could not be completed: ${message}`,
                 createdAt: new Date(),
+                metadata: {
+                    scriptError: this._extractScriptExecutionErrorDetails(error),
+                } as any,
             };
         }
+    }
+
+    _extractScriptExecutionErrorDetails(error: any): Record<string, unknown> | null {
+        const visited = new Set<any>();
+        let current = error;
+
+        while (current && typeof current === "object" && !visited.has(current)) {
+            visited.add(current);
+
+            if (current.couplingViolation || Array.isArray(current.ajvErrors)) {
+                const details: Record<string, unknown> = {
+                    name: current.name || "Error",
+                    message: current.message || String(current),
+                };
+
+                if (current.couplingViolation && typeof current.couplingViolation === "object") {
+                    details.couplingViolation = {
+                        coupling: current.couplingViolation.coupling,
+                        layerType: current.couplingViolation.layerType,
+                        layerPath: current.couplingViolation.layerPath,
+                        controls: current.couplingViolation.controls,
+                        expected: current.couplingViolation.expected,
+                        actual: current.couplingViolation.actual,
+                    };
+                }
+
+                if (Array.isArray(current.ajvErrors) && current.ajvErrors.length) {
+                    details.ajvErrors = current.ajvErrors.slice(0, 5).map((entry: any) => ({
+                        instancePath: entry?.instancePath,
+                        message: entry?.message,
+                        params: entry?.params,
+                    }));
+                }
+
+                return details;
+            }
+
+            current = current.cause;
+        }
+
+        if (error instanceof Error) {
+            return {
+                name: error.name,
+                message: error.message,
+            };
+        }
+
+        if (typeof error === "string" && error.trim()) {
+            return { message: error.trim() };
+        }
+
+        return null;
     }
 
     extractScriptFromAssistantMessage(message: ChatMessage): string | undefined {

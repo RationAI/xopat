@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-05-01
-//! Git commit: --c45378a-dirty
+//! Built on 2026-05-02
+//! Git commit: --3326e6e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8241,8 +8241,12 @@ uniform int u_instanceOffsets[${this.textureMappingsUniformSize}];
 // Stores texture indexes for each shader, beginning at index obtained from u_instanceOffsets
 uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
 
-// Carries shader global attributes (opacity, pixelSize, zoom)
-uniform vec3 u_shaderVariables[${this.textureMappingsUniformSize}];
+// Carries shader global attributes (opacity, pixelSize, imageOriginPx.xy)
+uniform vec4 u_shaderVariables[${this.textureMappingsUniformSize}];
+
+// Viewport zoom — identical across all shaders this frame, so kept as a scalar
+// instead of duplicating per slot in u_shaderVariables.
+uniform float u_zoom;
 
 // For each tiled image, we store (base texture offset, pack count, channel count)
 uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
@@ -8290,6 +8294,7 @@ bool stencilPasses;
 float opacity;
 float pixelSize;
 float zoom;
+vec2 imageOriginPx;
 
 
 // FUNCTION DEFINITIONS
@@ -8453,7 +8458,7 @@ ${execution}
     vec4 overall_color = intermediate_color;
     vec4 clip_color = vec4(.0);
 
-    vec3 attrs;
+    vec4 attrs;
 `;
         let customBlendFunctions = "";
 
@@ -8540,7 +8545,8 @@ ${getStencilPassCode(shaderLayer)}
     attrs = u_shaderVariables[${slot}];
     opacity = attrs.x;
     pixelSize = attrs.y;
-    zoom = attrs.z;
+    imageOriginPx = attrs.zw;
+    zoom = u_zoom;
 `;
 
             if (shaderLayer._mode !== "clip") {
@@ -8610,6 +8616,7 @@ ${getStencilPassCode(shaderLayer)}
         this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets[0]");
         this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
         this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
+        this._zoomLoc = gl.getUniformLocation(program, "u_zoom");
 
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
@@ -8657,7 +8664,8 @@ ${getStencilPassCode(shaderLayer)}
         for (const renderInfo of renderArray) {
             renderInfo.shader.glDrawing(this.webGLProgram, gl);
 
-            shaderVariables.push(renderInfo.opacity, renderInfo.pixelSize, renderInfo.zoom);
+            const origin = renderInfo.imageOriginPx || [0, 0];
+            shaderVariables.push(renderInfo.opacity, renderInfo.pixelSize, origin[0], origin[1]);
 
             instanceOffsets.push(instanceTextureIndexes.length);
             instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
@@ -8674,7 +8682,8 @@ ${getStencilPassCode(shaderLayer)}
             gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
         }
         // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
-        gl.uniform3fv(this._shaderVariables, shaderVariables);
+        gl.uniform4fv(this._shaderVariables, shaderVariables);
+        gl.uniform1f(this._zoomLoc, renderArray.length > 0 ? renderArray[0].zoom : 1);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
@@ -11218,15 +11227,32 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const sources = [];
             const flatShaders = this.renderer.getFlatShaderLayers(shaders, shaderOrder);
 
+            const canvas = this.renderer.canvas;
+            const osdViewport = this.viewer.viewport;
+            const inner = osdViewport && osdViewport._containerInnerSize;
+            const sx = inner && inner.x ? canvas.width / inner.x : 1;
+            const sy = inner && inner.y ? canvas.height / inner.y : 1;
+
             for (const shader of flatShaders) {
                 const config = shader.getConfig();
                 const hasSources = Array.isArray(config.tiledImages) && config.tiledImages.length > 0;
                 const tiledImage = hasSources ? this.viewer.world.getItemAt(config.tiledImages[0]) : null;
 
+                let imageOriginPx = [0, 0];
+                if (tiledImage && osdViewport) {
+                    // image (0,0) → viewport coords → CSS viewer-element pixels (top-down)
+                    // → framebuffer pixels (bottom-up to match gl_FragCoord).
+                    const vp = tiledImage.imageToViewportCoordinates(0, 0, true);
+                    const cssPt = osdViewport.pixelFromPoint(vp, true);
+                    imageOriginPx[0] = cssPt.x * sx;
+                    imageOriginPx[1] = canvas.height - cssPt.y * sy;
+                }
+
                 sources.push({
                     zoom: viewport.zoom,
                     pixelSize: tiledImage ? this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom) : 1,
                     opacity: tiledImage ? tiledImage.getOpacity() : 1,
+                    imageOriginPx,
                     shader: shader,
                 });
             }
@@ -13648,17 +13674,20 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
 /**
  * Grid shader.
  *
- * Renders a configurable grid overlay. Takes no texture data — `sources()` is `[]`.
- *
- * Coordinate space: image-source pixels. The grid follows OSD pan/zoom so cells
- * grow on screen as the user zooms in. To anchor the grid to a specific image,
- * pass a single tiledImage index in shaderConfig.tiledImages — the drawer's
- * _collectShaderUniforms then fills `pixelSize` with that image's image-zoom
- * (screen-px per image-px). With no tiledImages, `pixelSize` defaults to 1 and
- * the grid degrades gracefully into screen-pixel space.
+ * Declares one data reference that the configurator auto-binds (via
+ * tiledImages: [0]) so the grid lives in that image's source-pixel space and
+ * pans/zooms with it. The reference texture is not sampled — it is used
+ * purely as a coordinate anchor: the drawer's _collectShaderUniforms fills
+ * `pixelSize` (screen-px per image-px) from the bound tiledImage. If no
+ * binding exists, `pixelSize` defaults to 1 and the grid degrades gracefully
+ * into screen-pixel space.
  *
  * Cell sizes are in image pixels; line width is in screen pixels (so lines
  * stay readable regardless of zoom).
+ *
+ * Optional adaptive_lod toggle holds on-screen cell size in [1×, 2×) of the
+ * configured size by snapping cellX/cellY to powers of two — merge when the
+ * cell would drop below ½ original; subdivide when it would exceed 2×.
  */
 $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
 
@@ -13671,7 +13700,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 
     static description() {
-        return "Render a configurable grid overlay (no data input).";
+        return "Render a configurable grid overlay anchored to a reference image.";
     }
 
     static intent() {
@@ -13679,42 +13708,55 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     }
 
     static expects() {
-        return { dataKind: "none", channels: 0 };
+        return { dataKind: "any", channels: 0 };
     }
 
     static exampleParams() {
         /* eslint-disable camelcase */
-        return { color: "#ffffff", cell_x: 256, cell_y: 256, line_width: 1 };
+        return { color: "#ffffff", cell_x: 256, cell_y: 256, line_width: 1, adaptive_lod: false };
         /* eslint-enable camelcase */
     }
 
     static docs() {
         return {
-            summary: "Configurable grid overlay; no texture sampling.",
-            description: "Draws an axis-aligned grid in image-source pixel coordinates. Cell sizes are in image pixels and follow OSD pan/zoom. Line width is in screen pixels so lines stay readable. Optionally pass a single tiledImage index in tiledImages to anchor coordinates to that image; otherwise the grid lives in screen pixels.",
+            summary: "Configurable grid overlay anchored to a reference image (texture not sampled).",
+            description: "Draws an axis-aligned grid in image-source pixel coordinates. Declares one data reference used purely as a coordinate anchor — the configurator auto-binds it so the grid pans/zooms with the image. Cell sizes are in image pixels; line width is in screen pixels so lines stay readable. With no binding, the grid degrades to screen-pixel space (pixelSize = 1).",
             kind: "shader",
-            inputs: [],
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: "any",
+                description: "Reference image — used only as a coordinate anchor (not sampled)."
+            }],
             controls: [
                 { name: "color", ui: "color", valueType: "vec3", default: "#ffffff" },
                 { name: "cell_x", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
                 { name: "cell_y", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
-                { name: "line_width", ui: "range_input", valueType: "float", default: 1, min: 0.5, max: 10, step: 0.5 }
+                { name: "line_width", ui: "range_input", valueType: "float", default: 1, min: 0.5, max: 10, step: 0.5 },
+                { name: "adaptive_lod", ui: "bool", valueType: "bool", default: false }
             ],
             notes: [
-                "tiledImages may contain at most one entry; it is used as a coordinate reference, not a data source.",
-                "With empty tiledImages, the grid is in screen pixels (pixelSize = 1)."
+                "The reference texture is bound for coordinate anchoring only; pixels are never sampled.",
+                "With no binding, the grid renders in screen pixels (pixelSize = 1).",
+                "adaptive_lod snaps cell size to powers of two so the on-screen cell stays in [1×, 2×) of the configured size."
             ]
         };
     }
 
     static sources() {
-        return [];
+        return [{
+            acceptsChannelCount: () => true,
+            description: "Reference image — used only as a coordinate anchor (not sampled)."
+        }];
     }
 
     static get defaultControls() {
         return {
+            use_channel0: {  // eslint-disable-line camelcase
+                default: "rgba",
+                accepts: (type, instance) => true,
+            },
             color: {
-                default: {type: "color", default: "#ffffff", title: "Color: "},
+                default: {type: "color", default: "#ff0000", title: "Color: "},
                 accepts: (type, instance) => type === "vec3"
             },
             cell_x: {  // eslint-disable-line camelcase
@@ -13728,6 +13770,10 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             line_width: {  // eslint-disable-line camelcase
                 default: {type: "range_input", default: 1, min: 0.5, max: 10, step: 0.5, title: "Line width (screen px): "},
                 accepts: (type, instance) => type === "float"
+            },
+            adaptive_lod: {  // eslint-disable-line camelcase
+                default: {type: "bool", default: true, title: "Adaptive LOD: "},
+                accepts: (type, instance) => type === "bool"
             }
         };
     }
@@ -13745,7 +13791,16 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     float cellX = max(mix(${f(cx.min)}, ${f(cx.max)}, ${this.cell_x.sample()}), 1.0);
     float cellY = max(mix(${f(cy.min)}, ${f(cy.max)}, ${this.cell_y.sample()}), 1.0);
     float scale = max(pixelSize, 1e-6);
-    vec2 imgCoord = gl_FragCoord.xy / scale;
+
+    // Symmetric LOD: snap cell size to a power of two so on-screen cell stays
+    // in [1×, 2×) of the configured size. pixelSize<0.5 → merge; pixelSize≥2 → subdivide.
+    if (${this.adaptive_lod.sample()}) {
+        float lodMult = exp2(-floor(log2(scale)));
+        cellX *= lodMult;
+        cellY *= lodMult;
+    }
+
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale;
 
     float modX = mod(imgCoord.x, cellX);
     float modY = mod(imgCoord.y, cellY);
@@ -13985,10 +14040,11 @@ new_color = ${shaderLayer.uid}_blend_func(vec4(0.0), new_color);`;
                     execution += `
     instance_id = ${slot};
 ${getStencilPassCode(shaderLayer)}
-    vec3 attrs_${slot} = u_shaderVariables[${slot}];
+    vec4 attrs_${slot} = u_shaderVariables[${slot}];
     opacity = attrs_${slot}.x;
     pixelSize = attrs_${slot}.y;
-    zoom = attrs_${slot}.z;`;
+    imageOriginPx = attrs_${slot}.zw;
+    zoom = u_zoom;`;
 
                     if (shaderLayer._mode !== "clip") {
                         execution += `${getRemainingBlending()}
@@ -14703,6 +14759,11 @@ function glslMat3(rowMajor) {
         `${f(m[0][2])}, ${f(m[1][2])}, ${f(m[2][2])})`;
 }
 
+function glslVec3(v) {
+    const f = (x) => Number(x).toFixed(6);
+    return `vec3(${f(v[0])}, ${f(v[1])}, ${f(v[2])})`;
+}
+
 // preset id -> { matrix rows (input order), GLSL inverse literal, mapping
 // from stain enum to row index, list of stains the preset exposes }.
 // Row order in each `rows` array fixes the index of each stain in `stains`
@@ -14719,6 +14780,8 @@ const PRESETS = (() => {
         return {
             id,
             matrixInvGlsl: glslMat3(inv),
+            // Per-row normalized stain RGB-OD vector, used for natural reconstruction.
+            stainVecGlsl: rows.map(glslVec3),
             stainToRow,
             stainOrder
         };
@@ -14757,6 +14820,12 @@ function buildHelpersGlsl(uid) {
         return `    if (preset == ${presetIdx}) {\n${checks}\n        return -1;\n    }`;
     }).join("\n");
 
+    const vectorBranches = PRESET_INDEX.map((id, presetIdx) => {
+        const vecs = PRESETS[id].stainVecGlsl;
+        const checks = vecs.map((v, row) => `        if (row == ${row}) return ${v};`).join("\n");
+        return `    if (preset == ${presetIdx}) {\n${checks}\n    }`;
+    }).join("\n");
+
     return `
 mat3 stain_matrix_inv_${uid}(int preset) {
 ${matrixBranches}
@@ -14766,6 +14835,11 @@ ${matrixBranches}
 int stain_row_${uid}(int preset, int stain) {
 ${rowBranches}
     return -1;
+}
+
+vec3 stain_vector_${uid}(int preset, int row) {
+${vectorBranches}
+    return vec3(0.0);
 }
 
 float stain_pick_${uid}(vec3 stains, int row) {
@@ -14802,6 +14876,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return {
             preset: 0,
             stain: 0,
+            style: 0,
             tintColor: "#5b3ea4",
             intensity: 1.0
         };
@@ -14810,7 +14885,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     static docs() {
         return {
             summary: "Brightfield stain separation via Ruifrok–Johnston color deconvolution.",
-            description: "Reads RGB, converts to optical density, multiplies by the inverse stain matrix of the chosen preset, and renders one stain channel as either a tinted display or raw concentration. Stain options not present in the chosen preset render as transparent.",
+            description: "Reads RGB, converts to optical density, multiplies by the inverse stain matrix of the chosen preset, and renders one stain channel. The default Natural style physically reconstructs what the slide would look like with only the chosen stain present (opaque, calibrated colors); Tinted multiplies a custom color by the concentration; Grayscale shows the raw concentration. Stain options not present in the chosen preset render as transparent.",
             kind: "shader",
             inputs: [{
                 index: 0,
@@ -14833,9 +14908,15 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                     default: 0,
                     description: "Which stain to display: 0=Hematoxylin, 1=Eosin, 2=DAB, 3=Methyl Green, 4=Residual. Stains absent from the chosen preset render transparent."
                 },
+                {
+                    name: "style",
+                    ui: "select",
+                    valueType: "int",
+                    default: 0,
+                    description: "Display style: 0=Natural (physically reconstructed single-stain slide, opaque), 1=Tinted (stain concentration multiplied by tintColor, alpha = concentration), 2=Grayscale (concentration as gray, alpha = concentration)."
+                },
                 { name: "tintColor", ui: "color", valueType: "vec3", default: "#5b3ea4" },
-                { name: "intensity", ui: "range_input", valueType: "float", default: 1.0, min: 0, max: 3, step: 0.05 },
-                { name: "useRaw", ui: "bool", valueType: "bool", default: false }
+                { name: "intensity", ui: "range_input", valueType: "float", default: 1.0, min: 0, max: 10, step: 0.1 }
             ]
         };
     }
@@ -14881,17 +14962,26 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 },
                 accepts: (type) => type === "int"
             },
+            style: {
+                default: {
+                    type: "select",
+                    default: 0,
+                    title: "Style",
+                    options: [
+                        { value: 0, label: "Natural" },
+                        { value: 1, label: "Tinted" },
+                        { value: 2, label: "Grayscale" }
+                    ]
+                },
+                accepts: (type) => type === "int"
+            },
             tintColor: {
                 default: { type: "color", default: "#5b3ea4", title: "Tint" },
                 accepts: (type) => type === "vec3"
             },
             intensity: {
-                default: { type: "range_input", default: 1.0, min: 0, max: 3, step: 0.05, title: "Intensity" },
+                default: { type: "range_input", default: 1.0, min: 0, max: 10, step: 0.1, title: "Intensity" },
                 accepts: (type) => type === "float"
-            },
-            useRaw: {
-                default: { type: "bool", default: false, title: "Raw concentration" },
-                accepts: (type) => type === "bool"
             }
         };
     }
@@ -14920,10 +15010,24 @@ ${buildHelpersGlsl(this.uid)}
     mat3 Q = stain_matrix_inv_${uid}(preset);
     vec3 stains = od * Q;
     float v = max(stain_pick_${uid}(stains, row), 0.0);
-    float t = clamp(${this.filter(`v * ${this.intensity.sample()}`)}, 0.0, 1.0);
+    float scaled = ${this.filter(`v * ${this.intensity.sample()}`)};
 
-    vec3 outRgb = ${this.useRaw.sample()} ? vec3(t) : (t * ${this.tintColor.sample()});
-    return vec4(outRgb, t);
+    int style = int(${this.style.sample()});
+    if (style == 0) {
+        // Natural reconstruction: rebuild what the slide would look like with
+        // only this stain present. exp(-c*s*ln10) inverts the OD formulation
+        // back to RGB in [0,1]. Output is fully opaque so contrast is preserved
+        // against any background.
+        vec3 stainVec = stain_vector_${uid}(preset, row);
+        vec3 reconRgb = exp(-scaled * stainVec * log(10.0));
+        return vec4(clamp(reconRgb, 0.0, 1.0), ${this.opacity.sample()});
+    }
+
+    float t = clamp(scaled, 0.0, 1.0);
+    if (style == 2) {
+        return vec4(vec3(t), t);
+    }
+    return vec4(t * ${this.tintColor.sample()}, t);
 `;
     }
 });
@@ -15402,6 +15506,23 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         timeline.default = this.timeline.encoded || this.timeline.raw || config.params.timeline.default;
 
         const delegateConfig = this._getDelegateShaderConfig(activeEntry);
+
+        // preserve a live source binding
+        // across re-constructs. _refreshShadersForTiledImage (~line 11673) re-runs
+        // construct() when a newly-opened series frame finishes loading. By that
+        // point requestSourceBinding's mutation has already written
+        // config.tiledImages[0] = newIdx; re-deriving from series[initialOffset]
+        // would clobber it back to the original active entry, so first visits to
+        // non-active frames render the active frame's data.
+        const liveTiledImages = config.tiledImages;
+        if (
+            Array.isArray(liveTiledImages) &&
+            liveTiledImages.length > 0 &&
+            liveTiledImages.every(w => Number.isInteger(w) && w >= 0)
+        ) {
+            delegateConfig.tiledImages = liveTiledImages;
+        }
+
         const DelegateShader = $.FlexRenderer.ShaderMediator.getClass(delegateConfig.type);
         if (!DelegateShader) {
             throw new Error(`time-series: unknown child shader type '${delegateConfig.type}'.`);
@@ -15439,23 +15560,27 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         super.init();
         this._renderer.init();
 
-        let lastOffset = this._getActiveSeriesOffset();
-        this.timeline.on("default", () => {
-            const nextOffset = this._getActiveSeriesOffset();
+        // time-series scrub — was reading config.series (raw,
+        // un-expanded by the data-source pipeline) and passing a raw integer to
+        // requestSourceBinding, which routed to the integer-rebind shortcut and
+        // bypassed the xOpat shaderSourceResolver. Drop lastOffset short-circuit
+        // and delegate dedup to the resolver's cache-hit branch (it already
+        // handles same-loadKey rebinds with all rebuild flags false).
+        this.timeline.on("default", () => this.scrubTo(this._getActiveSeriesOffset()));
+    }
 
-            if (nextOffset !== lastOffset) {
-                lastOffset = nextOffset;
-
-                this.requestSourceBinding(0, this._getActiveSeriesEntry(this.getConfig().series), {
-                    reason: "time-series-source-change",
-                    refreshShader: false,
-                    rebuildProgram: false,
-                    rebuildDrawer: false,
-                    resetItems: false
-                });
-                return;
-            }
-            this.invalidate();
+    scrubTo(offset) {
+        const series = this.constructor._readWrapperParam(this.getConfig(), "series", []);
+        if (!Array.isArray(series) || series.length === 0) {
+            return;
+        }
+        const idx = Math.max(0, Math.min(series.length - 1, Number(offset) | 0));
+        this.requestSourceBinding(0, series[idx], {
+            reason: "time-series-source-change",
+            refreshShader: false,
+            rebuildProgram: false,
+            rebuildDrawer: false,
+            resetItems: false
         });
     }
 
@@ -19510,8 +19635,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-05-01
-//! Git commit: --c45378a-dirty
+//! Built on 2026-05-02
+//! Git commit: --3326e6e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19798,8 +19923,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-01
-//! Git commit: --c45378a-dirty
+//! Built on 2026-05-02
+//! Git commit: --3326e6e-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

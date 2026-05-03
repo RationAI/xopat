@@ -973,13 +973,125 @@ export class ChatPanel extends BaseComponent {
 
     _pushInternalMessage(message: ChatMessage): void {
         this._messages.push(message);
+        this._messageList?.addMessage(message);
+    }
+
+    _truncateInternalText(value: string, limit = 4000): string {
+        if (value.length <= limit) return value;
+        return `${value.slice(0, limit)}\n\n[truncated to ${limit} characters by chat panel]`;
+    }
+
+    _stripAssistantReasoning(text: string): string {
+        return String(text || "")
+            .replace(/<think>[\s\S]*?<\/think>/gi, "")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+    }
+
+    _oneLineErrorSummary(text: string): string {
+        const firstLine = String(text || "").split(/\r?\n/, 1)[0]?.trim() || "Repeated script execution failures.";
+        return firstLine.length > 220 ? firstLine.slice(0, 217) + "…" : firstLine;
+    }
+
+    // Library-noise: getSchema()/getVisualizations() trip the FlexRenderer "published examples failed validation"
+    // path on every call. Don't burn the failure budget on it. Track upstream patch B4 in
+    // docs/patches/flex-renderer-llm-schema.md; remove this guard once patched.
+    _isLibraryNoiseScriptFailure(executionMessage: ChatMessage | null | undefined): boolean {
+        const message = String(
+            (executionMessage as any)?.metadata?.scriptError?.message ||
+            (executionMessage as any)?.content ||
+            ""
+        );
+        return /published examples failed validation/i.test(message);
+    }
+
+    _makeHiddenInternalMessage(role: "user" | "assistant", text: string, metadata: Record<string, unknown> = {}): ChatMessage {
+        return {
+            role,
+            content: text,
+            parts: [{
+                type: "host-feedback",
+                text,
+            } as any],
+            metadata: {
+                hiddenFromChatUi: true,
+                ...metadata,
+            } as any,
+            createdAt: new Date(),
+        };
+    }
+
+    _createAssistantScriptPlaceholder(reply: ChatMessage): ChatMessage {
+        const fallback = "Prepared a viewer automation step from the current request and prior runtime feedback.";
+        const extracted = this.chat?.extractAssistantTextWithoutScript?.(reply) || "";
+        const stripped = this._stripAssistantReasoning(extracted);
+        const hasRealProse = !!stripped;
+        const text = this._truncateInternalText(stripped || fallback, 800);
+
+        return {
+            role: "assistant",
+            content: text,
+            parts: [{ type: "text", text }],
+            metadata: hasRealProse ? {} as any : {
+                hiddenFromChatUi: true,
+                internalSource: "assistant-script-placeholder",
+            } as any,
+            createdAt: reply.createdAt || new Date(),
+        };
+    }
+
+    _buildScriptFailureFeedback(executionMessage: ChatMessage): ChatMessage {
+        const metadata = (executionMessage as any)?.metadata || {};
+        const structured = metadata?.scriptError || null;
+        const coupling = structured?.couplingViolation || null;
+        const ajvErrors = Array.isArray(structured?.ajvErrors) ? structured.ajvErrors : [];
+        const details: string[] = [];
+
+        if (coupling) {
+            details.push(`coupling: ${coupling.coupling || "unknown"}`);
+            if (coupling.layerType) details.push(`layerType: ${coupling.layerType}`);
+            if (coupling.layerPath) details.push(`layerPath: ${coupling.layerPath}`);
+            if (coupling.expected !== undefined) details.push(`expected: ${JSON.stringify(coupling.expected)}`);
+            if (coupling.actual !== undefined) details.push(`actual: ${JSON.stringify(coupling.actual)}`);
+            if (Array.isArray(coupling.controls) && coupling.controls.length) {
+                details.push(`controls: ${JSON.stringify(coupling.controls)}`);
+            }
+        }
+
+        if (ajvErrors.length) {
+            details.push(`ajvErrors: ${JSON.stringify(ajvErrors)}`);
+        }
+
+        const errorText = executionMessage.content || "Script execution failed.";
+        const feedbackText = [
+            "Script execution failed.",
+            `Error: ${errorText}`,
+            details.length ? `Structured details:\n${details.join("\n")}` : null,
+            "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
+        ].filter(Boolean).join("\n");
+
+        const incomingParts = Array.isArray(executionMessage.parts) ? executionMessage.parts : [];
+        const visibleScriptResultParts = incomingParts.filter((p: any) => p?.type === "script-result");
+
+        return {
+            role: "user",
+            content: feedbackText,
+            parts: [
+                ...visibleScriptResultParts,
+                { type: "host-feedback", text: feedbackText } as any,
+            ],
+            metadata: {
+                scriptError: structured,
+            } as any,
+            createdAt: new Date(),
+        };
     }
 
     async _loadSession(sessionId: string): Promise<void> {
         try {
             const hydration = await this.chatService.loadSession(sessionId);
             this._messages = (hydration.messages || []).map((m) => ({ ...m, createdAt: m.createdAt || new Date() }));
-            this._messageList?.setMessages(this._getVisibleMessages(this._messages));
+            this._messageList?.setMessages(this._messages);
             this._sessionPicker?.setActiveSession(hydration.session.id);
             this._updateSessionTitle(hydration.session);
 
@@ -1382,9 +1494,12 @@ export class ChatPanel extends BaseComponent {
                 const reply = await this.chatService.sendMessage(this._providerId!, this._messages.slice(), { signal });
                 if (this._shouldStopAssistantLoop()) return;
 
-                this._messages.push(reply);
-
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
+                const placeholderOrReply = script ? this._createAssistantScriptPlaceholder(reply) : reply;
+                this._messages.push(placeholderOrReply);
+                if (script && !this._isHiddenInternalMessage(placeholderOrReply)) {
+                    this._messageList?.addMessage(placeholderOrReply);
+                }
                 this._messageList?.updateProgress(this._friendlyProgress(reply, null, step));
 
                 if (!script) {
@@ -1403,22 +1518,7 @@ export class ChatPanel extends BaseComponent {
                         (executionMessage.parts || []).some((p: any) => p.type === "script-result" && p.ok === false);
 
                     if (failedScript) {
-                        const errorText = executionMessage.content || "Script execution failed.";
-                        executionMessage = {
-                            role: "user",
-                            content:
-                                "Script execution failed.\n" +
-                                `Error: ${errorText}\n` +
-                                "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
-                            parts: [{
-                                type: "host-feedback",
-                                text:
-                                    "Script execution failed.\n" +
-                                    `Error: ${errorText}\n` +
-                                    "Do not guess field names or methods. Use only fields explicitly shown in the allowed API. If required information is missing, ask a brief clarification question.",
-                            }],
-                            createdAt: new Date(),
-                        };
+                        executionMessage = this._buildScriptFailureFeedback(executionMessage);
                     }
                 } catch (err) {
                     failedScript = true;
@@ -1439,9 +1539,13 @@ export class ChatPanel extends BaseComponent {
 
                 if (this._shouldStopAssistantLoop()) return;
 
+                const isLibraryNoiseFailure = this._isLibraryNoiseScriptFailure(executionMessage);
+
                 if (failedScript) {
                     consecutiveSuccessfulScriptSteps = 0;
-                    consecutiveFailedScriptSteps += 1;
+                    if (!isLibraryNoiseFailure) {
+                        consecutiveFailedScriptSteps += 1;
+                    }
                 } else {
                     consecutiveSuccessfulScriptSteps += 1;
                     consecutiveFailedScriptSteps = 0;
@@ -1452,19 +1556,16 @@ export class ChatPanel extends BaseComponent {
 
                 if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
                     const terminalError = String(executionMessage.content || "Repeated script execution failures.");
+                    console.debug("[ChatPanel] repeated-script-failures terminal", terminalError);
+                    const summaryLine = this._oneLineErrorSummary(terminalError);
+                    const userText =
+                        `The assistant tried ${maxConsecutiveFailedScriptSteps} times and stopped. ` +
+                        `Last error: ${summaryLine} ` +
+                        "Open the developer console for full details, or rephrase the request.";
                     const visibleMessage: ChatMessage = {
                         role: "assistant",
-                        content:
-                            "The assistant stopped after repeated script execution failures.\n\n" +
-                            terminalError +
-                            "\n\nStart a new turn after narrowing the request or first inspect the exact API payload shape that the action requires.",
-                        parts: [{
-                            type: "text",
-                            text:
-                                "The assistant stopped after repeated script execution failures.\n\n" +
-                                terminalError +
-                                "\n\nStart a new turn after narrowing the request or first inspect the exact API payload shape that the action requires.",
-                        }],
+                        content: userText,
+                        parts: [{ type: "text", text: userText }],
                         metadata: { uiVariant: "error", reason: "repeated-script-failures" } as any,
                         createdAt: new Date(),
                     };

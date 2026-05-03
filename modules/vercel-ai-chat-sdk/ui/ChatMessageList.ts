@@ -1,4 +1,6 @@
-const { div, span, img, a, code, pre } = (globalThis as any).van.tags;
+const { div, span, img, a, code, pre, button } = (globalThis as any).van.tags;
+
+const SCRIPT_RESULT_PREVIEW_LIMIT = 600;
 
 export interface ChatMessageListOptions {
     id?: string;
@@ -109,6 +111,21 @@ export class ChatMessageList {
         this._pendingBubble = null;
     }
 
+    _isHiddenInternalMessage(message: ChatMessage): boolean {
+        const metadata = (message as any)?.metadata || {};
+        return metadata.hiddenFromChatUi === true || typeof metadata.internalSource === "string";
+    }
+
+    _hasRuntimeParts(message: ChatMessage): boolean {
+        const parts = Array.isArray(message?.parts) ? message.parts : [];
+        return parts.some((part: any) => part?.type === "host-feedback" || part?.type === "script-result");
+    }
+
+    _hasVisibleScriptResult(message: ChatMessage): boolean {
+        const parts = Array.isArray(message?.parts) ? message.parts : [];
+        return parts.some((part: any) => part?.type === "script-result");
+    }
+
     _isRuntimeFeedbackMessage(message: ChatMessage): boolean {
         const text = String(message?.content || "");
         return (
@@ -126,14 +143,21 @@ export class ChatMessageList {
 
     _shouldRender(message: ChatMessage): boolean {
         if (this._displayMode === "all") return true;
-        if (message.role === "user" && !this._isRuntimeFeedbackMessage(message)) return true;
+        if (this._isHiddenInternalMessage(message)) return false;
+        if (message.role === "user") {
+            // Show messages carrying a script-result (failure bubble or visible result),
+            // and the user's own typed input; hide model-only host-feedback nudges.
+            if (this._hasVisibleScriptResult(message)) return true;
+            if (this._isRuntimeFeedbackMessage(message)) return false;
+            return true;
+        }
         if (message.role === "assistant" && !this._isAssistantScriptMessage(message)) return true;
         return false;
     }
 
     _kind(message: ChatMessage): "user" | "assistant" | "runtime" | "error" {
         if ((message as any)?.metadata?.uiVariant === "error") return "error";
-        if (this._isRuntimeFeedbackMessage(message)) return "runtime";
+        if (this._isHiddenInternalMessage(message) || this._hasRuntimeParts(message) || this._isRuntimeFeedbackMessage(message)) return "runtime";
         if (message.role === "user") return "user";
         return "assistant";
     }
@@ -169,9 +193,17 @@ export class ChatMessageList {
     }
 
     _renderMessageContent(el: HTMLElement, message: ChatMessage, kind: "user" | "assistant" | "runtime" | "error"): void {
-        const parts = Array.isArray(message.parts) && message.parts.length
+        const allParts = Array.isArray(message.parts) && message.parts.length
             ? message.parts
             : (message.content ? [{ type: "text", text: String(message.content) } as ChatMessagePart] : []);
+
+        // host-feedback parts are coaching prompts meant for the model. In user-friendly mode,
+        // hide them when there is already a visible part (script-result/text) carrying the user signal.
+        const hideHostFeedback = this._displayMode !== "all"
+            && allParts.some((p: any) => p?.type === "script-result" || p?.type === "text");
+        const parts = hideHostFeedback
+            ? allParts.filter((p: any) => p?.type !== "host-feedback")
+            : allParts;
 
         if (!parts.length) {
             el.textContent = "";
@@ -202,11 +234,31 @@ export class ChatMessageList {
                 }
                 case "script-result": {
                     const stateCls = part.ok ? "border-success/30" : "border-error/30";
+                    const fullText = String(part.text || "");
+                    const isTruncated = fullText.length > SCRIPT_RESULT_PREVIEW_LIMIT;
+                    const previewText = isTruncated
+                        ? fullText.slice(0, SCRIPT_RESULT_PREVIEW_LIMIT) + "…"
+                        : fullText;
+                    const textEl = pre({ class: "whitespace-pre-wrap" }, code(previewText)) as HTMLElement;
                     const block = div(
                         { class: `rounded border ${stateCls} bg-base-200/50 p-2 text-[11px]` },
                         part.script ? pre({ class: "mb-2" }, code(part.script)) : null,
-                        pre({ class: "whitespace-pre-wrap" }, code(part.text)),
+                        textEl,
                     ) as HTMLElement;
+                    if (isTruncated) {
+                        let expanded = false;
+                        const toggle = button({
+                            class: "mt-1 text-[10px] underline opacity-70 hover:opacity-100",
+                            type: "button",
+                            onclick: (event: Event) => {
+                                event.preventDefault();
+                                expanded = !expanded;
+                                textEl.replaceChildren(code(expanded ? fullText : previewText));
+                                (toggle as HTMLElement).textContent = expanded ? "Show less" : "Show details";
+                            },
+                        }, "Show details") as HTMLElement;
+                        block.appendChild(toggle);
+                    }
                     el.appendChild(block);
                     break;
                 }
