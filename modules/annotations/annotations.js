@@ -395,6 +395,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			strictSchema: false
 		});
 
+		// _unsaved cache snapshot disabled — JSON.stringify of the full
+		// canvas blew localStorage quota past ~500 annotations and froze
+		// the UI on every Nth edit + beforeunload. Recovery is delegated
+		// to the core dirty flag (APPLICATION_CONTEXT.setDirty) plus the
+		// beforeunload listener installed in src/loader.ts. The helper
+		// methods below (_writeUnsavedSnapshot / _readUnsavedSnapshot /
+		// _initIoFromCache / _applyPendingUnsavedSnapshot / etc.) are
+		// kept intact so the feature can return once a smarter snapshot
+		// strategy lands (e.g. IndexedDB, delta-only, or size-gated).
+		/*
 		if (this._storeCacheSnapshots) {
 			this._pendingUnsavedSnapshots = this._pendingUnsavedSnapshots || {};
 			this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
@@ -440,6 +450,18 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 			if (!this._loadedUnsavedPresets) {
 				await this.loadPresetsCookieSnapshot();
 			}
+		}
+		*/
+
+		const markDirty = () => APPLICATION_CONTEXT.setDirty();
+		this.addFabricHandler('annotation-create', markDirty);
+		this.addFabricHandler('annotation-delete', markDirty);
+		this.addFabricHandler('annotation-replace', markDirty);
+		this.addFabricHandler('annotation-edit', markDirty);
+		this.addHandler('export', () => { APPLICATION_CONTEXT.__cache.dirty = false; });
+
+		if (!this._loadedUnsavedPresets) {
+			await this.loadPresetsCookieSnapshot();
 		}
 		return store;
 	}

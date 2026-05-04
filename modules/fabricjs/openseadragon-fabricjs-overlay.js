@@ -150,8 +150,34 @@
     fabric.Object.prototype.setCoords = function (skipCorners) {
         const r = _origSetCoords.call(this, skipCorners);
         const idx = this.canvas && this.canvas.__spatialIndex;
-        if (idx && this._idxBox) idx.update(this);
+        // Skip our index update when this setCoords is the lazy resync from
+        // ensureFresh (see spatial-index.js). Image-space bbox is a function
+        // of object geometry only — viewport transform changes don't affect
+        // the rbush entry.
+        if (idx && this._idxBox && !idx._silentSetCoords) idx.update(this);
         return r;
+    };
+
+    // ----- F1: bypass per-object setCoords loop in setViewportTransform -------
+    // fabric's own setViewportTransform iterates _objects and calls
+    // setCoords(true) on every one. With 50k annotations that's the dominant
+    // per-frame cost. The expensive aCoords/lineCoords are image-space — they
+    // don't change when only the viewport moves. We do everything fabric does
+    // EXCEPT the per-object loop, then bump idx.setCoordsVersion so the
+    // lazy resync in ensureFresh refreshes oCoords for visible items only.
+    const _origSetVptTransform = fabric.Canvas.prototype.setViewportTransform;
+    fabric.Canvas.prototype.setViewportTransform = function (vpt) {
+        const idx = this.__spatialIndex;
+        if (!idx) return _origSetVptTransform.call(this, vpt);
+
+        this.viewportTransform = vpt;
+        if (this._activeObject) this._activeObject.setCoords();
+        if (this.backgroundImage) this.backgroundImage.setCoords(true);
+        if (this.overlayImage) this.overlayImage.setCoords(true);
+        this.calcViewportBoundaries();
+        idx.bumpSetCoords();
+        if (this.renderOnAddRemove) this.requestRenderAll();
+        return this;
     };
 
     const _origRenderObjects = fabric.Canvas.prototype._renderObjects;
@@ -159,14 +185,21 @@
         const idx = this.__spatialIndex;
         if (!idx) return _origRenderObjects.call(this, ctx, objects);
 
-        const visible = idx.visibleObjects(this.vptCoords, this);
-        const { rects, suppressed } = idx.clusters(this.vptCoords, this);
+        // Always cluster. Consume fabric's `objects` in the order it provided
+        // (preserves active-object reordering from _chooseObjectsToRender),
+        // dropping anything our cluster computation wants to render as a pill
+        // instead. Falls back to our own visible set when fabric passed none.
+        const realCandidates = idx.realCandidates(this.vptCoords, this);
+        let filtered;
+        if (objects) {
+            const realSet = new Set(realCandidates);
+            filtered = objects.filter(o => realSet.has(o));
+        } else {
+            filtered = realCandidates;
+        }
+        const { rects } = idx.clusters(this.vptCoords, this);
 
-        const filtered = suppressed && suppressed.size
-            ? visible.filter(o => !suppressed.has(o))
-            : visible;
-
-        // lazy-refresh per-object before draw
+        // lazy-refresh per-object before draw (cheap when nothing changed)
         for (let i = 0; i < filtered.length; i++) idx.ensureFresh(filtered[i]);
 
         _origRenderObjects.call(this, ctx, filtered);
@@ -222,68 +255,100 @@
         ctx.restore();
     }
 
-    function _drawClusterPill(ctx, centerX, centerY, count) {
-        const label = _formatClusterCount(count);
+    // Per-frame cluster pill rendering used to dominate Skia: each pill
+    // re-rasterized a shadow-blurred rounded rect + 2 fillText calls + a
+    // stroked polygon icon. With many pills × every frame this filled the
+    // GPU pipe and could hang the renderer process.
+    //
+    // Mitigation: render each unique pill once into an offscreen canvas
+    // keyed by the displayed label, then drawImage on every frame. Cache
+    // size is bounded — only ~30 distinct labels exist
+    // (count buckets + "9.9k+" cap).
+    const _pillCache = new Map();   // label -> {bitmap, w, h}
+    const _PILL_CACHE_MAX = 64;
 
-        // Measure both rows
-        ctx.font = PILL_FONT_COUNT;
-        const labelW = ctx.measureText(label).width;
-        ctx.font = PILL_FONT_SUFFIX;
-        const suffixW = ctx.measureText(PILL_SUFFIX_TEXT).width;
+    function _renderPillBitmap(label) {
+        // Measure on a temp ctx to know the final pill size.
+        const measureCanvas = document.createElement('canvas');
+        const m = measureCanvas.getContext('2d');
+        m.font = PILL_FONT_COUNT;
+        const labelW = m.measureText(label).width;
+        m.font = PILL_FONT_SUFFIX;
+        const suffixW = m.measureText(PILL_SUFFIX_TEXT).width;
 
         const topRowW = PILL_ICON_W + PILL_GAP_AFTER_ICON + labelW;
-        const bottomRowW = suffixW;
-        const contentW = Math.max(topRowW, bottomRowW);
+        const contentW = Math.max(topRowW, suffixW);
         const contentH = PILL_TOP_ROW_H + PILL_ROW_GAP + PILL_BOTTOM_ROW_H;
 
         const pillW = contentW + PILL_PAD_X * 2;
         const pillH = contentH + PILL_PAD_Y * 2;
 
-        const x = Math.round(centerX - pillW * 0.5);
-        const y = Math.round(centerY - pillH * 0.5);
+        // Pad bitmap to accommodate the shadow.
+        const SHADOW_PAD = 12;
+        const bw = Math.ceil(pillW + SHADOW_PAD * 2);
+        const bh = Math.ceil(pillH + SHADOW_PAD * 2);
 
-        // Background pill with drop shadow
-        ctx.save();
-        ctx.shadowColor = PILL_SHADOW;
-        ctx.shadowBlur = 6;
-        ctx.shadowOffsetY = 1;
-        ctx.fillStyle = PILL_BG;
-        ctx.beginPath();
+        const bmp = document.createElement('canvas');
+        bmp.width = bw;
+        bmp.height = bh;
+        const bctx = bmp.getContext('2d');
+
+        const x = SHADOW_PAD;
+        const y = SHADOW_PAD;
+
+        // Shadowed background
+        bctx.save();
+        bctx.shadowColor = PILL_SHADOW;
+        bctx.shadowBlur = 6;
+        bctx.shadowOffsetY = 1;
+        bctx.fillStyle = PILL_BG;
+        bctx.beginPath();
         const r = Math.min(PILL_RADIUS, pillH * 0.5);
-        ctx.moveTo(x + r, y);
-        ctx.arcTo(x + pillW, y,         x + pillW, y + pillH, r);
-        ctx.arcTo(x + pillW, y + pillH, x,         y + pillH, r);
-        ctx.arcTo(x,         y + pillH, x,         y,         r);
-        ctx.arcTo(x,         y,         x + pillW, y,         r);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
+        bctx.moveTo(x + r, y);
+        bctx.arcTo(x + pillW, y,         x + pillW, y + pillH, r);
+        bctx.arcTo(x + pillW, y + pillH, x,         y + pillH, r);
+        bctx.arcTo(x,         y + pillH, x,         y,         r);
+        bctx.arcTo(x,         y,         x + pillW, y,         r);
+        bctx.closePath();
+        bctx.fill();
+        bctx.restore();
 
-        // Top row: [icon] [count] (left-aligned within the top-row block,
-        // which is itself centered horizontally inside the pill).
         const topRowX = x + Math.round((pillW - topRowW) * 0.5);
         const topRowMidY = y + PILL_PAD_Y + PILL_TOP_ROW_H * 0.5;
         const iconY = Math.round(topRowMidY - PILL_ICON_H * 0.5);
-        _drawClusterPolygonIcon(ctx, topRowX, iconY);
+        _drawClusterPolygonIcon(bctx, topRowX, iconY);
 
-        ctx.fillStyle = PILL_FG;
-        ctx.textBaseline = 'middle';
-        ctx.textAlign = 'left';
-        ctx.font = PILL_FONT_COUNT;
-        ctx.fillText(label, topRowX + PILL_ICON_W + PILL_GAP_AFTER_ICON, topRowMidY);
+        bctx.fillStyle = PILL_FG;
+        bctx.textBaseline = 'middle';
+        bctx.textAlign = 'left';
+        bctx.font = PILL_FONT_COUNT;
+        bctx.fillText(label, topRowX + PILL_ICON_W + PILL_GAP_AFTER_ICON, topRowMidY);
 
-        // Bottom row: "annot." centered horizontally, smaller font, slightly dimmer.
         const bottomMidY = y + PILL_PAD_Y + PILL_TOP_ROW_H + PILL_ROW_GAP + PILL_BOTTOM_ROW_H * 0.5;
-        ctx.font = PILL_FONT_SUFFIX;
-        ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.fillText(PILL_SUFFIX_TEXT, x + pillW * 0.5, bottomMidY);
+        bctx.font = PILL_FONT_SUFFIX;
+        bctx.textAlign = 'center';
+        bctx.fillStyle = 'rgba(255,255,255,0.85)';
+        bctx.fillText(PILL_SUFFIX_TEXT, x + pillW * 0.5, bottomMidY);
+
+        return { bitmap: bmp, w: bw, h: bh, anchorX: bw * 0.5, anchorY: bh * 0.5 };
+    }
+
+    function _getPillBitmap(label) {
+        let entry = _pillCache.get(label);
+        if (entry) return entry;
+        entry = _renderPillBitmap(label);
+        if (_pillCache.size >= _PILL_CACHE_MAX) {
+            // simple FIFO eviction
+            const firstKey = _pillCache.keys().next().value;
+            _pillCache.delete(firstKey);
+        }
+        _pillCache.set(label, entry);
+        return entry;
     }
 
     function _drawClusters(ctx, canvas, rects) {
-        // Reset transform to retina-only; pill is drawn in CSS pixel space so its
-        // size stays constant regardless of canvas zoom. The screen rect on each
-        // cluster is already in CSS pixels.
+        // Reset transform to retina-only; pills are drawn in CSS pixel space
+        // so their size stays constant regardless of canvas zoom.
         const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
         ctx.save();
         ctx.setTransform(retina, 0, 0, retina, 0, 0);
@@ -292,7 +357,11 @@
             const r = rects[i];
             const s = r.screen;
             if (!s) continue;
-            _drawClusterPill(ctx, s.x + s.w * 0.5, s.y + s.h * 0.5, r.count);
+            const label = _formatClusterCount(r.count);
+            const pill = _getPillBitmap(label);
+            const cx = s.x + s.w * 0.5;
+            const cy = s.y + s.h * 0.5;
+            ctx.drawImage(pill.bitmap, Math.round(cx - pill.anchorX), Math.round(cy - pill.anchorY));
         }
 
         ctx.restore();
@@ -303,15 +372,12 @@
         const idx = this.__spatialIndex;
         if (!idx) return _origSearchPossibleTargets.call(this, objects, pointer);
 
-        const visible = idx.visibleObjects(this.vptCoords, this);
-        const { suppressed } = idx.clusters(this.vptCoords, this);
+        const realCandidates = idx.realCandidates(this.vptCoords, this);
 
-        // refresh per-object first so filter-hidden objects do not take clicks
-        for (let i = 0; i < visible.length; i++) idx.ensureFresh(visible[i]);
-
-        const realCandidates = suppressed && suppressed.size
-            ? visible.filter(o => !suppressed.has(o))
-            : visible;
+        // refresh per-object: only the candidates that can actually be hit.
+        // ensureFresh also handles the lazy oCoords resync (F2) so fabric's
+        // containsPoint check below sees current screen-space coords.
+        for (let i = 0; i < realCandidates.length; i++) idx.ensureFresh(realCandidates[i]);
 
         return _origSearchPossibleTargets.call(this, realCandidates, pointer);
         // Cluster pills are render-only; clicks pass through to whatever fabric
@@ -321,6 +387,29 @@
     fabric.Canvas.prototype._visibleObjects = function () {
         const idx = this.__spatialIndex;
         return idx ? idx.visibleObjects(this.vptCoords, this) : this._objects;
+    };
+
+    // ----- selection-aware cluster invalidation ------------------------------
+    // The spatial index's clusters() call exempts canvas._activeObject (and
+    // active-selection members + isHighlight helpers) so the user never loses
+    // sight of what they're selecting / editing / creating. Cluster results
+    // are cached per (vpt, members, selection) — bump selectionVersion at the
+    // two low-level fabric hooks that mutate _activeObject so the next render
+    // recomputes with the new exempt set.
+    const _origSetActiveObject = fabric.Canvas.prototype._setActiveObject;
+    fabric.Canvas.prototype._setActiveObject = function (t, e) {
+        const r = _origSetActiveObject.call(this, t, e);
+        const idx = this.__spatialIndex;
+        if (idx) idx.bumpSelection();
+        return r;
+    };
+
+    const _origDiscardActiveObject = fabric.Canvas.prototype._discardActiveObject;
+    fabric.Canvas.prototype._discardActiveObject = function (e, t) {
+        const r = _origDiscardActiveObject.call(this, e, t);
+        const idx = this.__spatialIndex;
+        if (idx) idx.bumpSelection();
+        return r;
     };
 
     fabric.StaticCanvas.prototype.calcViewportBoundaries = function() {

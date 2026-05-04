@@ -1,13 +1,20 @@
 const { div, style, input } = globalThis.van.tags;
 
-// The board panel always virtualizes: only rows in the scroll viewport
-// (+ overscan) are realized as DOM, regardless of total annotation /
-// layer / collapse-state count. SortableJS drag-reorder was removed in
-// favor of explicit ▲/▼/📁 controls per row + the right-click context
-// menu's "group siblings by criterion" action.
-const BOARD_LAYER_ROW_PX = 44;
-const BOARD_ANNOTATION_ROW_PX = 40;
-const BOARD_VIRTUAL_OVERSCAN = 5;
+// Auto-grouping replaces row-virtualization. When a single preset has
+// ≥ THRESHOLD annotations on the same level (root or one specific layer),
+// those annotations collapse into a single group row showing icon + count.
+// The user's structurally-distinct annotations (those without high-volume
+// peers) still render as individual rows. When members of a group are
+// selected on canvas, the group exposes up to CHILDREN_VISIBLE child rows
+// directly under itself so the user can manipulate the active selection
+// per-row; on full deselect, the tail vanishes.
+const BOARD_PRESET_GROUP_THRESHOLD = 50;
+const BOARD_GROUP_CHILDREN_VISIBLE = 10;
+// Hard cap on the number of annotation rows returned by free-text search.
+// Beyond this we emit a "+N more matches" tail so the user knows their query
+// is broader than the panel can usefully display — they should refine the
+// query rather than scroll a huge match list.
+const BOARD_SEARCH_RESULT_LIMIT = 20;
 
 function sanitizeId(value) {
     return String(value ?? 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -73,7 +80,6 @@ export class AnnotationBoardPanel {
         this._editSelection = undefined;
         this._collapsedLayers = new Set();
         this._renderQueued = false;
-        this._selectionSyncPaused = false;
         this._editUiActive = false;
         this._delegatedClickInstalled = false;
 
@@ -83,13 +89,13 @@ export class AnnotationBoardPanel {
         this.layerLogsEl = null;
         this.deleteButton = null;
 
-        // Free-text filter applied during _buildVirtualRows; empty string disables.
+        // Free-text filter applied during _buildRows; empty string disables.
         this._searchQuery = '';
 
-        // Data-version cache. _virtualRows is rebuilt only when _dataVersion
-        // changes (data mutation, search query toggle, layer collapse).
-        // Renders triggered by selection sync, scroll, focus updates, etc.
-        // do not pay the rebuild cost.
+        // Data-version + last-built cursor. We always rebuild on render now
+        // (the row count is bounded by auto-grouping), but we keep the version
+        // as a cheap "did anything change since last paint" guard for callers
+        // that want to skip a redundant repaint.
         this._dataVersion = 0;
         this._lastBuiltVersion = -1;
         this._wrapperHandlers = null;       // [{event, fn}] for unsubscribe in destroy()
@@ -98,18 +104,16 @@ export class AnnotationBoardPanel {
         this._annotationRowTemplate = null;
         this._layerRowTemplate = null;
 
-        // Virtualization state. Always-on; ~30 rows materialized at any time.
-        this._virtualRows = null;          // [{kind:'layer'|'ann', layer/obj, id, height}]
-        this._virtualRowOffsets = null;    // cumulative pixel offsets, length === rows.length
-        this._virtualTotalHeight = 0;
-        this._virtualSpacerEl = null;
-        this._virtualScrollHandler = null;
-        this._virtualPaintQueued = false;
-        this._virtualLastRange = null;     // {first,last} of last paint, for cheap diff
+        // Result of the last _buildRows() call. Plain array of row descriptors
+        // (kind: 'layer' | 'ann' | 'group' | 'group-overflow'); rebuilt when
+        // _dataVersion changes or selection changes. The row count is bounded
+        // by O(unique-presets-per-level + selected-children) so we render every
+        // row with plain DOM flow — no virtualization.
+        this._rows = null;
 
         // Last row touched by a non-shift click. Shift+click selects the
-        // contiguous range between this anchor and the clicked row in
-        // _virtualRows order. Stored as the row's incrementId.
+        // contiguous range between this anchor and the clicked row.
+        // Stored as the row's incrementId.
         this._selectionAnchorId = null;
     }
 
@@ -170,7 +174,7 @@ export class AnnotationBoardPanel {
                 )
             ),
             new UI.Div({
-                    extraClasses: 'px-2 py-1 border-b border-base-300 bg-base-100 sticky top-[42px] z-10'
+                    extraClasses: 'px-2 py-1 border-b border-base-300 sticky top-[42px] z-10'
                 },
                 input({
                     type: 'search',
@@ -205,8 +209,6 @@ export class AnnotationBoardPanel {
 
         if (!this._mountSetupDone) {
             this._setupContainerClearSelection(root);
-            this._setupVirtualSpacer();
-            this._attachVirtualScroll();
             this._installDelegatedHandlers();
             this._mountSetupDone = true;
         }
@@ -219,32 +221,23 @@ export class AnnotationBoardPanel {
     destroy() {
         this.commitEdit(true);
         this._unsubscribeFromWrapperEvents();
-        this._detachVirtualScroll();
         this._mounted = false;
     }
 
-    /** Lazy-create the spacer element inside layerLogsEl. */
-    _setupVirtualSpacer() {
-        if (this._virtualSpacerEl || !this.layerLogsEl) return;
-        const spacer = document.createElement('div');
-        spacer.dataset.role = 'virt-spacer';
-        spacer.style.position = 'relative';
-        spacer.style.width = '100%';
-        // CSS containment: layout/style/paint stay inside the spacer subtree.
-        spacer.style.contain = 'layout style paint';
-        this.layerLogsEl.replaceChildren(spacer);
-        this._virtualSpacerEl = spacer;
-    }
-
     /**
-     * One delegated click handler on layerLogsEl. Per-row click handlers are
-     * not attached anymore — they routed through here.
-     * Per-button handlers (edit / ▲ / ▼ / 📁) keep their own onclick and
-     * stopPropagation so they don't fire the row click.
+     * One delegated click handler on layerLogsEl, routing to the per-kind
+     * dispatcher based on the closest row's `data-type`. Per-button handlers
+     * (▲ / ▼ / 📁 / chevron) keep their own onclick and stopPropagation so
+     * they don't trigger the row click.
      */
     _installDelegatedHandlers() {
         if (!this.layerLogsEl || this._delegatedClickInstalled) return;
         this.layerLogsEl.addEventListener('click', (e) => {
+            // Group rows are intentionally not clickable on left-click. Bulk-
+            // selecting 50+ annotations cascades through selectAnnotation /
+            // annotation-selection-changed and freezes the viewer; bulk
+            // operations live behind the right-click context menu instead.
+            if (e.target.closest('[data-type="annotation-group"]')) return;
             const annRow = e.target.closest('[data-type="annotation"]');
             if (!annRow) return;
             const id = Number(annRow.dataset.id);
@@ -257,6 +250,17 @@ export class AnnotationBoardPanel {
             this._clickBoardElement(focus, id, e);
         });
         this.layerLogsEl.addEventListener('contextmenu', (e) => {
+            const groupRow = e.target.closest('[data-type="annotation-group"]');
+            if (groupRow) {
+                const key = String(groupRow.dataset.id || '');
+                const group = this._findGroupRow(key);
+                const anchor = group?.members?.[0];
+                if (anchor) {
+                    e.preventDefault();
+                    this._openGroupContextMenu(e, anchor);
+                }
+                return;
+            }
             const annRow = e.target.closest('[data-type="annotation"]');
             if (!annRow) return;
             const id = Number(annRow.dataset.id);
@@ -270,9 +274,10 @@ export class AnnotationBoardPanel {
     }
 
     /**
-     * Subscribe to FabricWrapper events that mutate the row composition. Each
-     * handler bumps _dataVersion so the next render rebuilds _virtualRows;
-     * non-data renders (selection sync, scroll, focus) reuse the cache.
+     * Subscribe to FabricWrapper events that mutate the row composition.
+     * Each handler bumps _dataVersion so the next render rebuilds _rows.
+     * Selection changes are included because group rows expose a tail of
+     * selected children and the underlying selection set drives that tail.
      */
     _subscribeToWrapperEvents() {
         if (this._wrapperHandlers || !this.fabric) return;
@@ -284,6 +289,8 @@ export class AnnotationBoardPanel {
             'annotation-filter-change',
             'layer-removed',
             'layer-objects-changed',
+            'annotation-selection-changed',
+            'layer-selection-changed',
         ];
         const handlers = [];
         const bump = () => {
@@ -339,35 +346,6 @@ export class AnnotationBoardPanel {
         });
     }
 
-    _withSelectionSyncPaused(fn) {
-        if (this._selectionSyncPaused) return fn?.();
-        this._selectionSyncPaused = true;
-        try {
-            return fn?.();
-        } finally {
-            this._selectionSyncPaused = false;
-        }
-    }
-
-    _clearDomSelection(root = this.layerLogsEl) {
-        if (!root) return;
-        root.querySelectorAll('.history-selected').forEach(el => {
-            el.classList.remove('history-selected');
-        });
-    }
-
-    _syncSortableSelection(objects, type) {
-        if (!this.root) return;
-        const list = Array.isArray(objects) ? objects : (objects ? [objects] : []);
-        for (const obj of list) {
-            const id = type === 'annotation' ? obj?.incrementId : obj?.id;
-            if (id === undefined || id === null) continue;
-            const el = this.root.querySelector(`[data-type="${type}"][data-id="${String(id)}"]`);
-            if (!el) continue;
-            el.classList.add('history-selected');
-        }
-    }
-
     _updateDeleteSelectionHeaderButton(disable = false) {
         const btn = document.getElementById(`${this.containerId}-delete-selection`);
         if (!btn) return;
@@ -399,82 +377,204 @@ export class AnnotationBoardPanel {
         const isEditing = !!(fabric.isEditing?.() || fabric.isOngoingEdit?.());
         if (this._editUiActive !== isEditing) {
             this._editUiActive = isEditing;
-            // edit-mode UI flip used to also toggle Sortable; with always-virtualize
-            // there is no Sortable to toggle, but we still want to rebuild deferred
-            // edit affordances on the row template.
         }
 
-        // Reuse cached _virtualRows when no data has changed since last build.
-        // Renders triggered by selection sync / scroll / edit-mode flip / focus
-        // updates fall into this fast path and pay no rebuild cost.
-        if (this._virtualRows == null || this._dataVersion !== this._lastBuiltVersion) {
-            this._buildVirtualRows();
-            this._lastBuiltVersion = this._dataVersion;
-            // a fresh build invalidates the visible-range cache so paint repaints
-            this._virtualLastRange = null;
-        }
-        // Always virtualized — DOM is bounded at ~30 rows + spacer regardless
-        // of total annotation / layer / collapse-state count.
-        this._renderVirtualized();
+        // Row count is bounded (auto-grouping collapses high-volume presets),
+        // so we always rebuild on render. Cheap relative to scrolling 1000s of
+        // virtualized DOM rows.
+        this._buildRows();
+        this._lastBuiltVersion = this._dataVersion;
+        this._renderRows();
+        this._updateDeleteSelectionHeaderButton();
+        this._updateActiveLayerVisual(fabric.getActiveLayer?.());
     }
 
-    // -------------- virtualization ------------------------------------------
-
     /**
-     * Walks _getBoardEntries() and produces a flat list of row descriptors
-     * + a cumulative pixel-offset table. No DOM is created. Called from render()
-     * so the row count drives the legacy-vs-virtualized dispatch.
+     * Build the panel's row list from current fabric state.
+     *
+     * For each level (root, or one specific layer) we tally annotations by
+     * `presetID` (falling back to `factoryID` so untyped annotations still
+     * group sensibly). When the count for a single preset on a single level
+     * reaches BOARD_PRESET_GROUP_THRESHOLD, the panel emits one group row
+     * instead of N annotation rows. Selection state then drives a tail of
+     * up-to-CHILDREN_VISIBLE individual rows for any selected members of
+     * that group, plus an overflow indicator if the cap is exceeded.
+     *
+     * Groups are always collapsed: there's no expand affordance. Members
+     * surface only via canvas selection (the children tail) or via search.
      */
-    _buildVirtualRows() {
+    _buildRows() {
         const fabric = this.fabric;
         const rows = [];
-        const offsets = [];
-        let y = 0;
+        if (!fabric) { this._rows = rows; return; }
 
-        const push = (row) => {
-            rows.push(row);
-            offsets.push(y);
-            y += row.height;
-        };
+        const matches = this._buildSearchMatcher();
+        const selectedSet = new Set((fabric.getSelectedAnnotations?.() || []).map(o => o?.incrementId));
+        const isFiltered = (o) => !!this.context.isAnnotationFilteredOut?.(o);
 
-        if (fabric) {
-            const matches = this._buildSearchMatcher();
-            for (const entry of this._getBoardEntries()) {
-                if (entry.type === 'layer') {
-                    const layer = entry.layer;
-                    if (!layer) continue;
-                    const layerId = String(layer.id);
-                    const layerObjects = layer.getObjects?.() || [];
-                    if (matches) {
-                        const layerNameHit = matches(this._layerHaystack(layer));
-                        const matchingObjects = layerNameHit
-                            ? layerObjects
-                            : layerObjects.filter(o => matches(this._annotationHaystack(o)));
-                        if (!layerNameHit && matchingObjects.length === 0) continue;
-                        push({ kind: 'layer', layer, id: layerId, height: BOARD_LAYER_ROW_PX });
-                        if (this._collapsedLayers.has(layerId)) continue;
-                        for (const object of matchingObjects) {
-                            push({ kind: 'ann', obj: object, id: String(object.incrementId), layerId, height: BOARD_ANNOTATION_ROW_PX });
-                        }
-                    } else {
-                        push({ kind: 'layer', layer, id: layerId, height: BOARD_LAYER_ROW_PX });
-                        if (this._collapsedLayers.has(layerId)) continue;
-                        for (const object of layerObjects) {
-                            push({ kind: 'ann', obj: object, id: String(object.incrementId), layerId, height: BOARD_ANNOTATION_ROW_PX });
-                        }
+        // Search-scope cap: emit at most BOARD_SEARCH_RESULT_LIMIT matches
+        // across all levels. The remaining matches feed a "+N more matches"
+        // tail row appended once at the end of _buildRows.
+        let searchEmitted = 0;
+        let searchHidden = 0;
+
+        const emitLevel = (levelKey, sourceObjects, opts = {}) => {
+            const { layerId = null } = opts;
+            // Apply search at the level: if search active, we render only matches
+            // and skip grouping (so users can find what they typed).
+            if (matches) {
+                for (const o of sourceObjects) {
+                    if (!matches(this._annotationHaystack(o))) continue;
+                    if (searchEmitted >= BOARD_SEARCH_RESULT_LIMIT) {
+                        searchHidden++;
+                        continue;
                     }
-                } else if (entry.type === 'annotation') {
-                    const object = entry.obj;
-                    if (!this._isRootAnnotation(object)) continue;
-                    if (matches && !matches(this._annotationHaystack(object))) continue;
-                    push({ kind: 'ann', obj: object, id: String(object.incrementId), layerId: null, height: BOARD_ANNOTATION_ROW_PX });
+                    rows.push({ kind: 'ann', obj: o, id: String(o.incrementId), layerId });
+                    searchEmitted++;
+                }
+                return;
+            }
+
+            // Tally by preset (presetID, fallback to factoryID).
+            const buckets = new Map();
+            const order = [];
+            for (const o of sourceObjects) {
+                const key = this._presetKeyOf(o);
+                let bucket = buckets.get(key);
+                if (!bucket) {
+                    bucket = { key, members: [] };
+                    buckets.set(key, bucket);
+                    order.push(key);
+                }
+                bucket.members.push(o);
+            }
+
+            for (const key of order) {
+                const bucket = buckets.get(key);
+                const overThreshold = bucket.members.length >= BOARD_PRESET_GROUP_THRESHOLD;
+
+                if (!overThreshold) {
+                    // Below the threshold → render individually.
+                    for (const o of bucket.members) {
+                        rows.push({ kind: 'ann', obj: o, id: String(o.incrementId), layerId });
+                    }
+                    continue;
+                }
+
+                // Auto-grouped. The group row is always collapsed; selected
+                // members surface as a children tail directly underneath.
+                const groupKey = `${levelKey}|${key}`;
+                const selectedMembers = bucket.members.filter(o => selectedSet.has(o.incrementId));
+                rows.push({
+                    kind: 'group',
+                    groupKey,
+                    levelKey,
+                    layerId,
+                    presetKey: key,
+                    members: bucket.members,
+                    selectedMembers,
+                });
+                const visible = selectedMembers.slice(0, BOARD_GROUP_CHILDREN_VISIBLE);
+                for (const o of visible) {
+                    if (isFiltered(o)) continue;
+                    rows.push({ kind: 'ann', obj: o, id: String(o.incrementId), layerId, parentGroupKey: groupKey });
+                }
+                if (selectedMembers.length > visible.length) {
+                    rows.push({
+                        kind: 'group-overflow',
+                        groupKey,
+                        hidden: selectedMembers.length - visible.length,
+                    });
                 }
             }
+        };
+
+        for (const entry of this._getBoardEntries()) {
+            if (entry.type === 'layer') {
+                const layer = entry.layer;
+                if (!layer) continue;
+                const layerId = String(layer.id);
+                const layerObjects = layer.getObjects?.() || [];
+
+                // With an active search, skip a layer entirely unless its
+                // name matches OR at least one member matches.
+                if (matches) {
+                    const layerNameHit = matches(this._layerHaystack(layer));
+                    const hasMemberHit = layerNameHit
+                        || layerObjects.some(o => matches(this._annotationHaystack(o)));
+                    if (!layerNameHit && !hasMemberHit) continue;
+                }
+
+                rows.push({ kind: 'layer', layer, id: layerId });
+                if (this._collapsedLayers.has(layerId)) continue;
+                emitLevel(`layer:${layerId}`, layerObjects, { layerId });
+            }
+            // Root annotations are emitted in one batch below so emitLevel can
+            // tally them as a single level for grouping.
         }
 
-        this._virtualRows = rows;
-        this._virtualRowOffsets = offsets;
-        this._virtualTotalHeight = y;
+        // Root annotations: filter directly from the canvas like the previous
+        // builder did, so we get the natural canvas order.
+        const rootAnnotations = (fabric.canvas?.getObjects?.() || [])
+            .filter(o => fabric.isAnnotation?.(o) && this._isRootAnnotation(o));
+        if (rootAnnotations.length) {
+            emitLevel('root', rootAnnotations, { layerId: null });
+        }
+
+        if (matches && searchHidden > 0) {
+            rows.push({ kind: 'search-overflow', hidden: searchHidden });
+        }
+
+        this._rows = rows;
+    }
+
+    /** Resolve a stable "preset bucket" key for an annotation. */
+    _presetKeyOf(o) {
+        if (!o) return 'unknown';
+        if (o.presetID !== undefined && o.presetID !== null && String(o.presetID) !== '') {
+            return `p:${String(o.presetID)}`;
+        }
+        if (o.factoryID !== undefined && o.factoryID !== null && String(o.factoryID) !== '') {
+            return `f:${String(o.factoryID)}`;
+        }
+        return 'unknown';
+    }
+
+    /** Lookup helper for the delegated context-menu handler. */
+    _findGroupRow(groupKey) {
+        if (!this._rows) return null;
+        for (const r of this._rows) {
+            if (r.kind === 'group' && r.groupKey === groupKey) return r;
+        }
+        return null;
+    }
+
+    _renderRows() {
+        if (!this.layerLogsEl) return;
+        const frag = document.createDocumentFragment();
+        const rows = this._rows || [];
+
+        // The original layout used a top-level container that hosted layer
+        // sub-containers; with grouping we render every row at the same level
+        // (group rows for same-preset clusters carry their indentation visually
+        // via a leading column rather than DOM nesting).
+        for (const row of rows) {
+            let el = null;
+            if (row.kind === 'layer') {
+                el = this._renderLayer(row.layer);
+            } else if (row.kind === 'ann') {
+                el = this._renderAnnotation(row.obj, { parentGroupKey: row.parentGroupKey, layerId: row.layerId });
+            } else if (row.kind === 'group') {
+                el = this._renderPresetGroup(row);
+            } else if (row.kind === 'group-overflow') {
+                el = this._renderGroupOverflow(row);
+            } else if (row.kind === 'search-overflow') {
+                el = this._renderSearchOverflow(row);
+            }
+            if (el) frag.appendChild(el);
+        }
+
+        this.layerLogsEl.replaceChildren(frag);
     }
 
     /**
@@ -696,112 +796,6 @@ export class AnnotationBoardPanel {
         return ((layer?.name || '') + ' ' + (layer?.label || '') + ' ' + (layer?.id || '')).toLowerCase();
     }
 
-    _renderVirtualized() {
-        if (!this.layerLogsEl) return;
-
-        // Spacer is created once in mount(); just keep its height in sync.
-        if (this._virtualSpacerEl) {
-            this._virtualSpacerEl.style.height = this._virtualTotalHeight + 'px';
-        }
-        this._paintVirtualWindow();
-    }
-
-    _attachVirtualScroll() {
-        if (!this.bodyEl || this._virtualScrollHandler) return;
-        const handler = () => {
-            if (this._virtualPaintQueued) return;
-            this._virtualPaintQueued = true;
-            requestAnimationFrame(() => {
-                this._virtualPaintQueued = false;
-                this._paintVirtualWindow();
-            });
-        };
-        this._virtualScrollHandler = handler;
-        this.bodyEl.addEventListener('scroll', handler, { passive: true });
-    }
-
-    _detachVirtualScroll() {
-        if (this.bodyEl && this._virtualScrollHandler) {
-            this.bodyEl.removeEventListener('scroll', this._virtualScrollHandler);
-        }
-        this._virtualScrollHandler = null;
-        this._virtualPaintQueued = false;
-    }
-
-    /**
-     * Binary-search the cumulative offset table for the first row whose offset
-     * is > scrollTop. The row before it is the first visible row.
-     */
-    _firstRowAtY(y) {
-        const offsets = this._virtualRowOffsets;
-        if (!offsets || !offsets.length) return 0;
-        let lo = 0, hi = offsets.length - 1;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >>> 1;
-            if (offsets[mid] <= y) lo = mid;
-            else hi = mid - 1;
-        }
-        return lo;
-    }
-
-    _paintVirtualWindow() {
-        const fabric = this.fabric;
-        const spacer = this._virtualSpacerEl;
-        if (!spacer || !fabric) return;
-
-        const rows = this._virtualRows;
-        const offsets = this._virtualRowOffsets;
-        if (!rows || !rows.length) {
-            spacer.replaceChildren();
-            this._virtualLastRange = { first: 0, last: -1 };
-            return;
-        }
-
-        const scrollTop = this.bodyEl?.scrollTop || 0;
-        const viewportH = this.bodyEl?.clientHeight || 0;
-        let first = this._firstRowAtY(scrollTop);
-        let last = this._firstRowAtY(scrollTop + viewportH);
-        first = Math.max(0, first - BOARD_VIRTUAL_OVERSCAN);
-        last = Math.min(rows.length - 1, last + BOARD_VIRTUAL_OVERSCAN);
-
-        const lastRange = this._virtualLastRange;
-        if (lastRange && lastRange.first === first && lastRange.last === last) return;
-        this._virtualLastRange = { first, last };
-
-        // v1: rebuild the window slice. Window size is small (~viewport rows + 2*overscan)
-        // so allocation cost is bounded regardless of total row count.
-        spacer.replaceChildren();
-        for (let i = first; i <= last; i++) {
-            const row = rows[i];
-            let el;
-            if (row.kind === 'layer') {
-                if (!row.layer) continue;
-                el = this._renderLayer(row.layer);
-            } else {
-                if (!row.obj) continue;
-                el = this._renderAnnotation(row.obj);
-            }
-            el.style.position = 'absolute';
-            el.style.top = offsets[i] + 'px';
-            el.style.left = '0';
-            el.style.right = '0';
-            el.style.height = row.height + 'px';
-            // Skip render/layout for rows currently outside the scroll viewport
-            // even within the realized window — the browser respects this.
-            el.style.contentVisibility = 'auto';
-            el.style.containIntrinsicSize = row.height + 'px';
-            spacer.appendChild(el);
-        }
-
-        // selection visuals + active-layer highlight on the rows that just materialized
-        this._withSelectionSyncPaused(() => {
-            this._syncSortableSelection(fabric.getSelectedLayers?.() || [], 'layer');
-            this._syncSortableSelection(fabric.getSelectedAnnotations?.() || [], 'annotation');
-        });
-        this._updateDeleteSelectionHeaderButton();
-        this._updateActiveLayerVisual(fabric.getActiveLayer?.());
-    }
-
     _getBoardEntries() {
         const fabric = this.fabric;
         if (!fabric) return [];
@@ -918,10 +912,13 @@ export class AnnotationBoardPanel {
         const layerId = String(layer.id);
         const collapsed = this._collapsedLayers.has(layerId);
         const annCount = Number(layer.getAnnotationCount?.() ?? layer.getObjects?.().length ?? 0);
+        const isSelected = !!this.fabric?.getSelectedLayers?.()
+            ?.some(l => String(l?.id) === layerId);
 
         const wrapper = this._getLayerTemplate().cloneNode(true);
         wrapper.id = this.getLayerElementId(layerId);
         wrapper.dataset.id = layerId;
+        if (isSelected) wrapper.classList.add('history-selected');
 
         const row = wrapper.querySelector('[data-tpl-role="row"]');
         const toggleBtn = wrapper.querySelector('[data-tpl-role="toggle"]');
@@ -929,8 +926,6 @@ export class AnnotationBoardPanel {
         const badgeEl = wrapper.querySelector('[data-tpl-role="badge"]');
         const areaEl = wrapper.querySelector('[data-tpl-role="area"]');
         const actions = wrapper.querySelector('[data-tpl-role="actions"]');
-
-        row.style.height = BOARD_LAYER_ROW_PX + 'px';
 
         toggleBtn.className = `px-1 transition-transform duration-200 ${collapsed ? '' : 'rotate-90'}`;
         toggleBtn.onclick = (e) => {
@@ -1054,15 +1049,24 @@ export class AnnotationBoardPanel {
         return root;
     }
 
-    _renderAnnotation(object) {
+    _renderAnnotation(object, opts = {}) {
         const factory = this.context.getAnnotationObjectFactory(object.factoryID);
         const isFiltered = !!this.context.isAnnotationFilteredOut?.(object);
+        const isSelected = !!this.fabric?.getSelectedAnnotations?.()
+            ?.some(o => o?.incrementId === object.incrementId);
+        const isChild = !!opts.parentGroupKey;
 
         // Clone the static skeleton, then write per-row data.
         const row = this._getAnnotationTemplate().cloneNode(true);
         row.id = this.getAnnotationElementId(object.label);
         row.dataset.id = String(object.incrementId);
-        row.className = `group/ann flex items-center gap-3 px-2 py-1 border-l-4 border-transparent history-item-row transition-all ${isFiltered ? 'opacity-45 saturate-50 cursor-not-allowed' : 'hover:bg-base-300/50 cursor-pointer'}`.trim();
+        if (opts.parentGroupKey) row.dataset.parentGroup = opts.parentGroupKey;
+        row.className = [
+            'group/ann flex items-center gap-3 px-2 py-1 border-l-4 border-transparent history-item-row transition-all',
+            isFiltered ? 'opacity-45 saturate-50 cursor-not-allowed' : 'hover:bg-base-300/50 cursor-pointer',
+            isChild ? 'pl-7' : '',
+            isSelected ? 'history-selected' : '',
+        ].filter(Boolean).join(' ').trim();
         if (isFiltered) row.setAttribute('aria-disabled', 'true');
 
         const color = this.fabric.getAnnotationColor?.(object) || 'var(--fallback-bc,black)';
@@ -1148,6 +1152,99 @@ export class AnnotationBoardPanel {
         return row;
     }
 
+    /**
+     * Render a "preset group" header row that stands in for N annotations
+     * (N ≥ BOARD_PRESET_GROUP_THRESHOLD) sharing one preset on one level.
+     * Plain click selects all members; ctrl-click toggles add/remove; right
+     * click forwards to _openGroupContextMenu against the first member.
+     * The group row is always collapsed — members surface only via canvas
+     * selection, exposed as a children tail directly underneath.
+     */
+    _renderPresetGroup(groupRow) {
+        const { groupKey, members, selectedMembers } = groupRow;
+        const sample = members[0];
+        const factory = sample
+            ? this.context.getAnnotationObjectFactory?.(sample.factoryID)
+            : null;
+        const color = sample ? (this.fabric?.getAnnotationColor?.(sample) || 'var(--fallback-bc,black)') : 'var(--fallback-bc,black)';
+
+        // Title prefers preset category; falls back to factory name.
+        const presetMeta = sample?.presetID != null
+            ? this.context?.presets?.get?.(sample.presetID)
+            : null;
+        const title = presetMeta?.getMetaValue?.('category')
+            || presetMeta?.meta?.category?.value
+            || factory?.title?.()
+            || (sample?.factoryID ? String(sample.factoryID) : 'Group');
+
+        const allSelected = selectedMembers.length === members.length;
+        const someSelected = selectedMembers.length > 0;
+
+        const row = document.createElement('div');
+        row.dataset.type = 'annotation-group';
+        row.dataset.id = groupKey;
+        // Not left-clickable (bulk select would freeze the viewer); right-click
+        // surfaces bulk actions instead. cursor-default + context-menu hint.
+        row.className = [
+            'group/grp flex items-center gap-3 px-2 py-1 border-l-4 history-item-row transition-all hover:bg-base-300/50 cursor-context-menu',
+            allSelected ? 'history-selected' : '',
+        ].filter(Boolean).join(' ').trim();
+        row.title = 'Right-click for bulk actions';
+        row.style.borderLeftColor = color;
+
+        const iconBox = document.createElement('div');
+        iconBox.className = 'flex-shrink-0 flex items-center justify-center w-5';
+        iconBox.style.pointerEvents = 'none';
+        iconBox.appendChild(factoryIcon(factory?.getIcon?.() || 'fa-tag'));
+        iconBox.firstChild.style.color = color;
+
+        const content = document.createElement('div');
+        content.className = 'flex-1 min-w-0 leading-tight';
+        content.style.pointerEvents = 'none';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'text-sm font-semibold truncate';
+        titleEl.textContent = title;
+
+        const subText = document.createElement('div');
+        subText.className = 'text-[10px] opacity-60 flex gap-2 items-center';
+        const countEl = document.createElement('span');
+        countEl.textContent = `${members.length} annotations`;
+        subText.appendChild(countEl);
+        if (someSelected) {
+            const sep = document.createTextNode(' • ');
+            const selEl = document.createElement('span');
+            selEl.className = 'text-primary';
+            selEl.textContent = `${selectedMembers.length} selected`;
+            subText.append(sep, selEl);
+        }
+        content.append(titleEl, subText);
+
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-ghost badge-sm font-mono';
+        badge.style.pointerEvents = 'none';
+        badge.textContent = String(members.length);
+
+        row.append(iconBox, content, badge);
+        return row;
+    }
+
+    /** Dimmed tail row indicating "+N more selected" beyond the visible cap. */
+    _renderGroupOverflow(row) {
+        const el = document.createElement('div');
+        el.className = 'flex items-center gap-3 px-2 py-1 pl-7 text-xs opacity-50 italic';
+        el.textContent = `+${row.hidden} more selected`;
+        return el;
+    }
+
+    /** Dimmed tail row indicating search results truncated past the cap. */
+    _renderSearchOverflow(row) {
+        const el = document.createElement('div');
+        el.className = 'flex items-center justify-center gap-2 px-2 py-2 mt-1 text-xs opacity-60 italic border-t border-base-300';
+        el.textContent = `+${row.hidden} more matches — refine your search`;
+        return el;
+    }
+
     _getAnnotationDisplayText(object) {
         const categoryDesc = this.fabric.getAnnotationDescription?.(object, 'category', true, false)
             || this.fabric.getDefaultAnnotationName?.(object, false)
@@ -1192,7 +1289,7 @@ export class AnnotationBoardPanel {
 
     _selectRangeTo(toIncrementId) {
         const fabric = this.fabric;
-        const rows = this._virtualRows;
+        const rows = this._rows;
         if (!fabric || !Array.isArray(rows) || !rows.length) return;
 
         const toIdx = rows.findIndex(r => r.kind === 'ann' && r.obj?.incrementId === toIncrementId);
@@ -1387,7 +1484,6 @@ export class AnnotationBoardPanel {
             const item = target?.closest?.('[data-type="annotation"],[data-type="layer"]');
             if (item || shouldIgnore(target)) return;
 
-            this._withSelectionSyncPaused(() => this._clearDomSelection(this.layerLogsEl));
             this.fabric.clearAnnotationSelection?.(true);
             this.fabric.clearLayerSelection?.();
             this.fabric.unsetActiveLayer?.();
