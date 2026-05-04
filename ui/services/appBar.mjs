@@ -600,7 +600,7 @@ export class AppBar {
             this.subMenu.addItem({
                 id: 'history-undo',
                 icon: 'fa-rotate-left',
-                label: $.t('main.bar.undo'),
+                label: $.t('main.bar.undo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
@@ -629,7 +629,7 @@ export class AppBar {
             this.subMenu.addItem({
                 id: 'history-redo',
                 icon: 'fa-rotate-right',
-                label: $.t('main.bar.redo'),
+                label: $.t('main.bar.redo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;

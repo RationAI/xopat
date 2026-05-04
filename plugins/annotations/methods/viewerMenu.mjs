@@ -114,7 +114,8 @@ export const viewerMenuMethods = {
                 searchPlaceholder: this.t('annotations.filters.searchPlaceholder'),
                 emptyText: this.t('annotations.filters.noneAvailable'),
                 options: available[type] || [],
-                selected: activeByType.get(type)?.values || []
+                selected: activeByType.get(type)?.values || [],
+                maxVisible: 20
             });
             wrapper.appendChild(select.create());
             return { wrapper, select };
@@ -424,12 +425,26 @@ export const viewerMenuMethods = {
             this._refreshAllAuthorLists();
         };
 
-        const dropDown = (e) => {
-            if (this.context.presets.right || (Date.now() - e.pressTime) > 250) return;
+        // Canvas right-click menu provider. Registered with the global
+        // CanvasContextMenu registry so all providers (annotations, playground,
+        // future plugins) aggregate into a single DropDown opened by loader.ts.
+        // Returns null to opt out (drawing-with-right-click mode, long-press drag,
+        // or wrong viewer in a multi-viewport layout).
+        const contextMenuProviderId = `annotations-${viewerId}`;
+        const contextMenuProvider = (ctx) => {
+            if (ctx.viewer?.uniqueId !== viewerId) return null;
+            if (this.context.disabledInteraction) return null;
+            if (this.context.presets.right) return null;
+            // Suppress on right-click drag: cursor.mouseTime is set on press by
+            // annotations-canvas.js handleRightClickDown and not reset on the
+            // typical release path, so press-duration is still measurable here.
+            const cursor = this.context.cursor;
+            if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return null;
 
+            const wrapped = { originalEvent: ctx.event };
             let actions = [];
             let handler;
-            const active = this.context.fabric.canvas.findTarget(e.originalEvent);
+            const active = this.context.fabric.canvas.findTarget(ctx.event);
             if (active) {
                 this.context.fabric.canvas.setActiveObject(active);
                 this.context.fabric.canvas.renderAll();
@@ -468,18 +483,18 @@ export const viewerMenuMethods = {
             }
 
             actions.push({ title: 'Actions:' });
-            const mousePos = this._getMousePosition(e);
+            const mousePos = this._getMousePosition(wrapped);
             const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
             actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
             const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
             actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
-            const canPaste = this._canPasteAnnotation(e);
-            const handlerPaste = this._pasteAnnotation.bind(this, e);
+            const canPaste = this._canPasteAnnotation(wrapped);
+            const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
             actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
             const handlerDelete = this._deleteAnnotation.bind(this, active);
             actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
 
-            USER_INTERFACE.DropDown.open(e.originalEvent, actions);
+            return actions;
         };
 
         state._fabricEventBindings = {
@@ -488,7 +503,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
-            dropDown
+            contextMenuProviderId
         };
 
         fabric.addHandler('annotation-selection-changed', annotationSelectionChanged);
@@ -504,7 +519,8 @@ export const viewerMenuMethods = {
         fabric.addHandler('layer-added', sideRefresh);
         fabric.addHandler('layer-removed', sideRefresh);
 
-        fabric.addHandler('nonprimary-release-not-handled', dropDown);
+        // Higher priority than the playground (10) so annotation entries appear first.
+        window.CanvasContextMenu?.register(contextMenuProviderId, contextMenuProvider, 20);
     },
 
     _unbindViewerFabricEvents(viewerOrId) {
@@ -521,7 +537,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
-            dropDown
+            contextMenuProviderId
         } = bindings;
 
         fabric.removeHandler('annotation-selection-changed', annotationSelectionChanged);
@@ -535,7 +551,7 @@ export const viewerMenuMethods = {
         fabric.removeHandler('layer-added', sideRefresh);
         fabric.removeHandler('layer-removed', sideRefresh);
 
-        fabric.removeHandler('nonprimary-release-not-handled', dropDown);
+        if (contextMenuProviderId) window.CanvasContextMenu?.unregister(contextMenuProviderId);
 
         delete state._fabricEventBindings;
     },

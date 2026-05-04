@@ -504,6 +504,11 @@ class Dropdown extends BaseSelectableComponent {
             });
         }
         this._applyDisabledState(item, liEl);
+        // Always keep _node pointing at the latest rendered element. Any code
+        // path that re-renders (e.g. addSection → _rebuildContent) leaves the
+        // previous _node detached otherwise, and setItemDisabled /
+        // setItemLabel mutate the wrong (invisible) element.
+        item._node = liEl;
         return liEl;
     }
 

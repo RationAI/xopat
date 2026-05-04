@@ -185,7 +185,7 @@ ScriptingManager.registerExternalApi(
             if (incomingCount > this.MAX_SCRIPT_ANNOTATIONS_PER_CALL) {
                 await this.requireActionConsent({
                     title: "Allow annotations?",
-                    description: `The script wants to add more than ${this.MAX_SCRIPT_ANNOTATIONS_PER_CALL} annotations at once.`,
+                    description: `The script wants to add ${incomingCount} annotations at once.`,
                     details: [
                         "Allowing this script to add more than one annotation at once may pollute the workspace or cause performance issues.",
                     ],
@@ -345,109 +345,26 @@ ScriptingManager.registerExternalApi(
 
             await this._assertCreateBudget(items.length);
             const opts = options || {};
-            const ASYNC_THRESHOLD = 100;
-            const useAsync = opts.async === true || items.length > ASYNC_THRESHOLD;
-
-            if (!useAsync) {
-                // Synchronous path (small batches): preserve original behavior.
-                const fabric = this._getFabric();
-                const annotations = items.map((input) => this._buildAnnotationFromInput(input));
-                for (const annotation of annotations) {
-                    const ok = fabric.addAnnotation?.(annotation);
-                    if (ok === false) {
-                        throw new Error("One of the annotations could not be created.");
-                    }
-                }
-                return annotations.map((annotation) => this._serializeAnnotation(annotation));
-            }
-
-            // Async path: shows a progress dialog with cancel; chunked addition
-            // yields the main thread between chunks; whole batch becomes one undo.
-            return this._createAnnotationsAsync(items, opts);
-        }
-
-        async _createAnnotationsAsync(items, opts) {
-            const chunkSize = Math.max(1, opts.chunkSize | 0 || 50);
             const fabric = this._getFabric();
-
-            // Build all fabric objects up front; this is fast and lets us know the
-            // final batch size for the progress bar.
             const annotations = items.map((input) => this._buildAnnotationFromInput(input));
-            const total = annotations.length;
-            const successfullyAdded = [];
 
-            const ctrl = new AbortController();
-            const externalSignal = opts.signal;
-            if (externalSignal) {
-                if (externalSignal.aborted) ctrl.abort();
-                else externalSignal.addEventListener("abort", () => ctrl.abort(), { once: true });
-            }
+            // Threshold (default 500) lives on the wrapper bulk facility; we
+            // pass through any caller overrides. The wrapper handles
+            // chunking + progress dialog (anchored to its viewer) + cancel +
+            // single batch history entry.
+            const result = await fabric.addAnnotationsBulk(annotations, {
+                chunkSize: opts.chunkSize,
+                threshold: opts.async === true ? 0 : (opts.threshold ?? undefined),
+                progress: opts.progress,
+                title: opts.title || 'Adding annotations',
+                viewer: opts.viewer ?? fabric.viewer,
+                anchor: opts.anchor,
+                signal: opts.signal,
+                onProgress: opts.onProgress,
+                historyName: 'Add annotations',
+            });
 
-            // Progress dialog (skipped when caller supplies their own onProgress).
-            let dialog = null;
-            const UI = globalThis.UI;
-            const useDialog = !opts.onProgress && UI && UI.ProgressDialog;
-            if (useDialog) {
-                dialog = UI.ProgressDialog.show({
-                    title: opts.title || "Adding annotations",
-                    total,
-                    cancellable: true,
-                });
-                dialog.onCancel(() => ctrl.abort());
-            }
-
-            const tickProgress = (n) => {
-                if (dialog) dialog.tick(n);
-                if (typeof opts.onProgress === "function") {
-                    try { opts.onProgress(n, total); } catch (e) { console.error(e); }
-                }
-            };
-
-            try {
-                for (let i = 0; i < annotations.length; i += chunkSize) {
-                    if (ctrl.signal.aborted) break;
-                    const end = Math.min(i + chunkSize, annotations.length);
-                    for (let j = i; j < end; j++) {
-                        const a = annotations[j];
-                        const added = fabric._addAnnotation
-                            ? fabric._addAnnotation(a, false)
-                            : fabric.addAnnotation?.(a, false);
-                        if (added !== false) successfullyAdded.push(a);
-                    }
-                    tickProgress(successfullyAdded.length);
-                    // yield to the main thread so UI stays responsive
-                    await new Promise((r) => setTimeout(r, 0));
-                }
-            } catch (err) {
-                if (dialog) dialog.error(err);
-                else throw err;
-            }
-
-            // record the batch as a single history entry (already executed)
-            if (successfullyAdded.length && APPLICATION_CONTEXT?.history?.pushExecuted) {
-                const snapshot = successfullyAdded.slice();
-                APPLICATION_CONTEXT.history.pushExecuted(
-                    () => snapshot.forEach((a) => fabric._addAnnotation?.(a, false)),
-                    () => snapshot.forEach((a) => fabric._deleteAnnotation?.(a, false)),
-                    { name: "Add annotations" }
-                );
-            }
-
-            // raise a batch-end event for downstream listeners
-            try {
-                fabric.raiseEvent?.("annotation-loaded", {
-                    objects: successfullyAdded,
-                    bulk: true,
-                });
-            } catch (e) { /* non-fatal */ }
-
-            if (dialog && !dialog.isError) dialog.done();
-
-            return {
-                created: successfullyAdded.length,
-                cancelled: ctrl.signal.aborted,
-                annotations: successfullyAdded.map((a) => this._serializeAnnotation(a)),
-            };
+            return result.annotations.map((annotation) => this._serializeAnnotation(annotation));
         }
 
         deleteAnnotation(ref) {

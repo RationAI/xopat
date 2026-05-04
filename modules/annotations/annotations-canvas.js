@@ -24,6 +24,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.__selectionSnapshot = [];
         this.__programmaticClear = false;   // to avoid firing clear selection events from fabric on empty clicks
 
+        // Fast incrementId → annotation lookup. Maintained at the same call
+        // sites that already drive the spatial index (_addAnnotation /
+        // _deleteAnnotation). Self-healing fallback in
+        // findObjectOnCanvasByIncrementId covers the post-load window
+        // (assignAnnotationIds runs after the bulk-add).
+        this._byIncrementId = new Map();
+
+        // Public hint set: when groupSiblingsByCriterion creates a new layer
+        // for a "(new collapsed layer)" target, it stamps the layer id here so
+        // the panel collapses it on first observation. Consumers should remove
+        // ids after honoring the hint.
+        this.collapsedLayerHints = new Set();
+
         this._boardOrder = [];
         this._boardEditSelection = undefined;
         this.focusWithScreen = true;
@@ -568,16 +581,24 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {null|fabric.Object}
      */
     findObjectOnCanvasByIncrementId(id) {
-        //todo fabric.js should have some way how to avoid linear iteration over all objects...
-        let target = null;
-        this.canvas.getObjects().some(o => {
-            if (o.incrementId === id) {
-                target = o;
-                return true;
+        if (id === undefined || id === null) return null;
+        const key = Number(id);
+        if (Number.isNaN(key)) return null;
+        const cached = this._byIncrementId.get(key);
+        if (cached) return cached;
+        // Self-healing fallback for objects whose incrementId was assigned
+        // after _addAnnotation (load path: assignAnnotationIds runs after
+        // the bulk add). Linear scan once; stamp the map so subsequent
+        // calls are O(1).
+        const objects = this.canvas.getObjects();
+        for (let i = 0; i < objects.length; i++) {
+            const o = objects[i];
+            if (Number(o.incrementId) === key) {
+                this._byIncrementId.set(key, o);
+                return o;
             }
-            return false;
-        });
-        return target;
+        }
+        return null;
     }
 
     /**
@@ -965,6 +986,295 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
+     * Move an annotation up or down by one position. For layered annotations
+     * the swap happens within the layer's `_objects`. For root annotations
+     * the swap happens within `_boardOrder` among other annotation entries.
+     * Single undoable history entry.
+     * @param {fabric.Object} annotation
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     */
+    moveAnnotation(annotation, direction) {
+        if (!annotation) return false;
+        const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
+        const swap = () => {
+            if (layer) return layer.swapAnnotation(annotation, direction);
+            // root annotation: swap in _boardOrder among annotation entries
+            const order = this._boardOrder;
+            const id = String(annotation.incrementId);
+            const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
+            if (idx === -1) return false;
+            const step = direction === 'up' ? -1 : 1;
+            // find next neighbor that is also an annotation entry (skip layers)
+            let target = idx + step;
+            while (target >= 0 && target < order.length && order[target].type !== 'annotation') {
+                target += step;
+            }
+            if (target < 0 || target >= order.length) return false;
+            [order[idx], order[target]] = [order[target], order[idx]];
+            return true;
+        };
+        const reverseDir = direction === 'up' ? 'down' : 'up';
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = swap(); if (changed) this.canvas.requestRenderAll(); return changed; },
+            () => {
+                // undo: swap the other direction
+                if (layer) layer.swapAnnotation(annotation, reverseDir);
+                else {
+                    const order = this._boardOrder;
+                    const id = String(annotation.incrementId);
+                    const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
+                    if (idx !== -1) {
+                        const step = reverseDir === 'up' ? -1 : 1;
+                        let target = idx + step;
+                        while (target >= 0 && target < order.length && order[target].type !== 'annotation') target += step;
+                        if (target >= 0 && target < order.length) {
+                            [order[idx], order[target]] = [order[target], order[idx]];
+                        }
+                    }
+                }
+                this.canvas.requestRenderAll();
+                return true;
+            },
+            { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Move a layer up or down in board order (only swaps with neighboring
+     * layer entries, skipping any annotation entries in between).
+     * @param {OSDAnnotations.Layer} layer
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     */
+    moveLayer(layer, direction) {
+        if (!layer) return false;
+        const id = String(layer.id);
+        const swap = (dir) => {
+            const order = this._boardOrder;
+            const idx = order.findIndex(e => e.type === 'layer' && e.id === id);
+            if (idx === -1) return false;
+            const step = dir === 'up' ? -1 : 1;
+            let target = idx + step;
+            while (target >= 0 && target < order.length && order[target].type !== 'layer') target += step;
+            if (target < 0 || target >= order.length) return false;
+            [order[idx], order[target]] = [order[target], order[idx]];
+            return true;
+        };
+        const reverseDir = direction === 'up' ? 'down' : 'up';
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = swap(direction); return changed; },
+            () => { swap(reverseDir); return true; },
+            { name: direction === 'up' ? 'Move layer up' : 'Move layer down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Re-parent an annotation to a different layer (or to root if `null`).
+     * Single undoable history entry.
+     * @param {fabric.Object} annotation
+     * @param {string|null} targetLayerId
+     * @returns {boolean} true if changed
+     */
+    setAnnotationLayer(annotation, targetLayerId) {
+        if (!annotation) return false;
+        const oldLayerId = annotation.layerID ? String(annotation.layerID) : null;
+        const oldIndex = oldLayerId
+            ? (this.getLayer(oldLayerId)?.getAnnotationIndex(annotation) ?? -1)
+            : this.getBoardItemIndex('annotation', annotation.incrementId);
+        const target = targetLayerId !== null && targetLayerId !== undefined
+            ? String(targetLayerId)
+            : null;
+        if (oldLayerId === target) return false;
+
+        const apply = (toLayerId, toIndex) => {
+            if (oldLayerId) this.removeAnnotationFromLayer(annotation);
+            else this.removeBoardItem('annotation', annotation.incrementId);
+
+            if (toLayerId) {
+                annotation.layerID = toLayerId;
+                this._addAnnotationToLayer(annotation, toIndex);
+            } else {
+                annotation.layerID = undefined;
+                this.upsertBoardItem('annotation', annotation.incrementId, toIndex);
+            }
+            this.canvas.requestRenderAll();
+        };
+
+        APPLICATION_CONTEXT.history.push(
+            () => { apply(target, undefined); return true; },
+            () => { apply(oldLayerId, oldIndex >= 0 ? oldIndex : undefined); return true; },
+            { name: 'Move annotation to layer' }
+        );
+        return true;
+    }
+
+    /**
+     * Bulk-move every sibling of `annotation` (root-level if root; same layer
+     * otherwise; never crossing layers) that matches `criterion` into a target
+     * layer. The whole batch lands as a single undoable history entry.
+     *
+     * @param {fabric.Object} annotation source annotation; defines the level + value to match
+     * @param {'factory'|'preset'|'author'|'category'} criterion
+     * @param {{kind:'new'}|{kind:'layer', layerId:string}} target
+     * @returns {{moved:number, targetLayerId:(string|null)}} or null on no-op
+     */
+    groupSiblingsByCriterion(annotation, criterion, target) {
+        if (!annotation || !criterion || !target) return null;
+
+        // Resolve match key for an annotation. Normalise to string so number /
+        // string mismatches between persisted and freshly-built annotations
+        // never silently miss. Category lives under `meta.category.value`
+        // (an object), so unwrap to the value itself.
+        const keyOf = (o) => {
+            if (!o) return undefined;
+            let v;
+            switch (criterion) {
+                case 'factory':  v = o.factoryID; break;
+                case 'preset':   v = o.presetID; break;
+                case 'author':   v = o.author ?? o.sessionID; break;
+                case 'category': {
+                    const c = o.meta?.category;
+                    v = (c && typeof c === 'object') ? c.value : c;
+                    break;
+                }
+                default: return undefined;
+            }
+            return v == null || v === '' ? undefined : String(v);
+        };
+        const sourceKey = keyOf(annotation);
+        if (sourceKey === undefined) return null;
+
+        // Resolve siblings at the same level.
+        let siblings;
+        const sourceLayerId = annotation.layerID ? String(annotation.layerID) : null;
+        if (sourceLayerId) {
+            const layer = this.getLayer(sourceLayerId);
+            siblings = layer ? layer.getObjects() : [];
+        } else {
+            siblings = (this.canvas.getObjects() || []).filter(o => this.isAnnotation(o) && !o.layerID);
+        }
+
+        let matching = siblings.filter(o => keyOf(o) === sourceKey);
+        // The source must always be in the resulting group — otherwise
+        // "Group same X" on annotation Y would leave Y outside the group.
+        if (!matching.includes(annotation)) matching = [annotation, ...matching];
+        if (matching.length === 0) return { moved: 0, targetLayerId: null };
+
+        // Resolve / create the target layer.
+        let targetLayerId;
+        if (target.kind === 'new') {
+            const layerName = this._defaultLayerNameForCriterion(criterion, sourceKey);
+            const newId = String(Date.now()) + '-grp';
+            // Hint the panel to collapse this layer on creation.
+            this.collapsedLayerHints.add(newId);
+            this._createLayer({ id: newId, name: layerName, visible: true, _objects: [] });
+            targetLayerId = newId;
+        } else {
+            targetLayerId = String(target.layerId);
+            if (!this.getLayer(targetLayerId)) return null;
+        }
+        if (sourceLayerId === targetLayerId) {
+            // Already in destination — nothing to do.
+            return { moved: 0, targetLayerId };
+        }
+
+        // Snapshot original state for undo. Capture old indices so undo can
+        // restore them; oldBoardIndex is only meaningful for items currently
+        // at root.
+        const snapshot = matching.map(obj => ({
+            obj,
+            oldLayerId: obj.layerID ? String(obj.layerID) : null,
+            oldBoardIndex: !obj.layerID
+                ? this.getBoardItemIndex('annotation', obj.incrementId)
+                : -1,
+        }));
+
+        const moveTo = (targetLayer) => {
+            for (const { obj } of snapshot) {
+                if (obj.layerID) {
+                    const old = this.getLayer(String(obj.layerID));
+                    if (old) old.removeObject(obj);
+                } else {
+                    this.removeBoardItem('annotation', obj.incrementId);
+                }
+                if (targetLayer) {
+                    obj.layerID = String(targetLayer.id);
+                    targetLayer.addObject(obj);
+                } else {
+                    obj.layerID = undefined;
+                    this.upsertBoardItem('annotation', obj.incrementId);
+                }
+            }
+            this.canvas.requestRenderAll();
+            // Tell the panel its row data is stale. addObject/removeObject on
+            // a Layer otherwise emits no events, so a panel that re-rendered
+            // before this microtask ran would keep showing the pre-move count.
+            try {
+                this.raiseEvent('layer-objects-changed', {
+                    layerId: targetLayer ? String(targetLayer.id) : null
+                });
+            } catch (e) { /* non-fatal */ }
+        };
+
+        const restore = () => {
+            for (const entry of snapshot) {
+                const { obj, oldLayerId, oldBoardIndex } = entry;
+                if (obj.layerID) {
+                    const cur = this.getLayer(String(obj.layerID));
+                    if (cur) cur.removeObject(obj);
+                } else {
+                    this.removeBoardItem('annotation', obj.incrementId);
+                }
+                if (oldLayerId) {
+                    const old = this.getLayer(oldLayerId);
+                    obj.layerID = oldLayerId;
+                    if (old) old.addObject(obj);
+                } else {
+                    obj.layerID = undefined;
+                    this.upsertBoardItem('annotation', obj.incrementId,
+                        oldBoardIndex >= 0 ? oldBoardIndex : undefined);
+                }
+            }
+            this.canvas.requestRenderAll();
+            try {
+                this.raiseEvent('layer-objects-changed', { layerId: null });
+            } catch (e) { /* non-fatal */ }
+        };
+
+        APPLICATION_CONTEXT.history.push(
+            () => { moveTo(this.getLayer(targetLayerId)); return true; },
+            () => { restore(); return true; },
+            { name: 'Group annotations by ' + criterion }
+        );
+
+        return { moved: matching.length, targetLayerId };
+    }
+
+    /** Used by groupSiblingsByCriterion to name a freshly-created layer.
+     *  For preset criterion, prefers the preset's own category name and
+     *  falls back to its raw ID so deleted/missing presets still produce a
+     *  readable label. */
+    _defaultLayerNameForCriterion(criterion, value) {
+        const v = (value === undefined || value === null) ? 'unknown' : String(value);
+        switch (criterion) {
+            case 'factory':  return v.charAt(0).toUpperCase() + v.slice(1) + 's';
+            case 'preset': {
+                const preset = this.module?.presets?.get?.(v);
+                const cat = preset?.meta?.category?.value;
+                return 'Preset: ' + (cat && String(cat).trim() ? String(cat) : v);
+            }
+            case 'author':   return 'User: ' + v;
+            case 'category': return 'Category: ' + v;
+            default:         return 'Group: ' + v;
+        }
+    }
+
+    /**
      * Delete object(s) depending on their kind:
      * - Layer: delete via history.
      * - Helper annotations: delete immediately (no history).
@@ -1180,8 +1490,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         || originalObject;
                 } else {
                     factory?.renderAllControls?.(editedObject);
-                    editedObject.hasBorders = false;
-                    editedObject.hasControls = true;
                     editedObject.setCoords?.();
                     resolvedObject = editedObject;
                 }
@@ -1355,8 +1663,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             });
         } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
         if (cancelFlag) return false;
-        return APPLICATION_CONTEXT.history.push(
-            () => this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory),
+        this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory);
+        return APPLICATION_CONTEXT.history.pushExecuted(
+            () => this._addAnnotation(annotation, _raise),
             () => this._deleteAnnotation(annotation, _raise),
             { name: 'Create annotation' }
         );
@@ -1553,6 +1862,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.canvas.remove(annotation);
         this.removeAnnotationFromLayer(annotation);
         if (!annotation.layerID) this.removeBoardItem('annotation', annotation.incrementId);
+        if (annotation.incrementId !== undefined && annotation.incrementId !== null) {
+            this._byIncrementId.delete(Number(annotation.incrementId));
+        }
         this.canvas.requestRenderAll();
 
         if (_raise) {
@@ -1601,6 +1913,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         if (_raise) this.raiseEvent('annotation-create', {object: annotation});
         this.canvas.requestRenderAll();
+        if (annotation.incrementId !== undefined && annotation.incrementId !== null) {
+            this._byIncrementId.set(Number(annotation.incrementId), annotation);
+        }
         return true;
     }
 
@@ -1608,6 +1923,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.addHelperAnnotation(annotation);
         const promoted = this._promoteHelperAnnotation(annotation, _raise, false);
         if (!promoted) this.deleteHelperAnnotation(annotation);
+        else if (annotation && annotation.incrementId !== undefined && annotation.incrementId !== null) {
+            this._byIncrementId.set(Number(annotation.incrementId), annotation);
+        }
         return promoted;
     }
 
@@ -1636,6 +1954,20 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
         this.canvas.remove(previous);
         this.canvas.add(next);
+
+        // Keep the incrementId cache in lock-step with canvas membership.
+        // Without this, findObjectOnCanvasByIncrementId returns the off-canvas
+        // `previous` (cache hit), which then crashes inside Control position
+        // handlers that read fabricObject.canvas.viewportTransform.
+        // The doppelganger temp swap at the start of selection edit is the
+        // canonical case: `next` may not have its own incrementId yet.
+        if (previous.incrementId !== undefined && previous.incrementId !== null) {
+            this._byIncrementId.delete(Number(previous.incrementId));
+        }
+        if (next.incrementId !== undefined && next.incrementId !== null) {
+            this._byIncrementId.set(Number(next.incrementId), next);
+        }
+
         this._applyAnnotationVisibilityState(next);
 
         if (updateUI) {
@@ -1743,6 +2075,136 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             () => this._deleteAnnotation(annotation, _raise),
             { name: 'Add annotation' }
         );
+    }
+
+    /**
+     * Add many annotations at once. Below the threshold this is a synchronous
+     * loop; above it the loop is chunked across animation frames so the UI
+     * stays responsive, and a UI.ProgressDialog (cancellable) is shown.
+     *
+     * The whole batch yields ONE undoable history entry.
+     *
+     * Use this from any large-add path (scripting bulk, JSON / GeoJSON / ASAP /
+     * QuPath import, programmatic seeders) so all such operations share the
+     * same UX.
+     *
+     * @param {fabric.Object[]} annotations already-built fabric objects.
+     * @param {object} [options]
+     * @param {number}  [options.chunkSize=50]
+     * @param {number}  [options.threshold=500]
+     * @param {boolean} [options.progress=true]   show the progress dialog when async path is taken
+     * @param {string}  [options.title='Adding annotations']
+     * @param {Element} [options.anchor]          mount the dialog inside this element
+     * @param {object}  [options.viewer]          viewer-like ref; resolves an anchor automatically
+     * @param {AbortSignal} [options.signal]      external cancel signal
+     * @param {(added:number,total:number)=>void} [options.onProgress]
+     * @param {string}  [options.historyName='Add annotations']
+     * @param {boolean} [options.recordHistory=true]
+     * @param {(item:fabric.Object,indexInBatch:number)=>(boolean|undefined)} [options.addOne]
+     *   Per-item add callback. Defaults to `_addAnnotation(a, false)`. Override
+     *   for callers that need custom per-item setup (e.g., `_loadObjects` runs
+     *   `checkLayer` + `checkAnnotation` + `insertAt` + layer assignment).
+     *   Return `false` to mark an item as skipped.
+     * @param {(item:fabric.Object)=>void} [options.deleteOne]
+     *   Used by the history undo. Defaults to `_deleteAnnotation(a, false)`.
+     * @returns {Promise<{added:number, cancelled:boolean, annotations:fabric.Object[]}>}
+     */
+    async addAnnotationsBulk(annotations, options = {}) {
+        const items = Array.isArray(annotations) ? annotations.filter(Boolean) : [];
+        if (!items.length) return { added: 0, cancelled: false, annotations: [] };
+
+        const opts = options || {};
+        const threshold = opts.threshold ?? 500;
+        const recordHistory = opts.recordHistory !== false;
+        const historyName = opts.historyName || 'Add annotations';
+        const addOne = typeof opts.addOne === 'function'
+            ? opts.addOne
+            : ((a) => this._addAnnotation(a, false));
+        const deleteOne = typeof opts.deleteOne === 'function'
+            ? opts.deleteOne
+            : ((a) => this._deleteAnnotation(a, false));
+
+        const pushHistory = (added) => {
+            if (!recordHistory || !added.length) return;
+            const hist = APPLICATION_CONTEXT?.history;
+            if (!hist?.pushExecuted) return;
+            const snapshot = added.slice();
+            hist.pushExecuted(
+                () => snapshot.forEach((a) => addOne(a)),
+                () => snapshot.forEach((a) => deleteOne(a)),
+                { name: historyName }
+            );
+        };
+
+        const raiseLoaded = (added) => {
+            try { this.raiseEvent('annotation-loaded', { objects: added, bulk: true }); }
+            catch (e) { /* non-fatal */ }
+        };
+
+        // Sync fast path
+        if (items.length < threshold) {
+            const added = [];
+            for (let i = 0; i < items.length; i++) {
+                const a = items[i];
+                if (addOne(a, i) !== false) added.push(a);
+            }
+            pushHistory(added);
+            raiseLoaded(added);
+            return { added: added.length, cancelled: false, annotations: added };
+        }
+
+        // Async chunked path with progress + cancel
+        const chunkSize = Math.max(1, opts.chunkSize | 0 || 50);
+        const ctrl = new AbortController();
+        const externalSignal = opts.signal;
+        if (externalSignal) {
+            if (externalSignal.aborted) ctrl.abort();
+            else externalSignal.addEventListener('abort', () => ctrl.abort(), { once: true });
+        }
+
+        let dialog = null;
+        const UI = globalThis.UI;
+        if (opts.progress !== false && UI?.ProgressDialog) {
+            dialog = UI.ProgressDialog.show({
+                title: opts.title || 'Adding annotations',
+                total: items.length,
+                cancellable: true,
+                anchor: opts.anchor,
+                viewer: opts.viewer,
+            });
+            dialog.onCancel(() => ctrl.abort());
+        }
+
+        const tickProgress = (n) => {
+            if (dialog) dialog.tick(n);
+            if (typeof opts.onProgress === 'function') {
+                try { opts.onProgress(n, items.length); } catch (e) { console.error(e); }
+            }
+        };
+
+        const added = [];
+        try {
+            for (let i = 0; i < items.length; i += chunkSize) {
+                if (ctrl.signal.aborted) break;
+                const end = Math.min(i + chunkSize, items.length);
+                for (let j = i; j < end; j++) {
+                    const a = items[j];
+                    if (addOne(a, j) !== false) added.push(a);
+                }
+                tickProgress(added.length);
+                await new Promise((r) => setTimeout(r, 0));
+            }
+        } catch (err) {
+            if (dialog) dialog.error(err);
+            else throw err;
+        }
+
+        pushHistory(added);
+        raiseLoaded(added);
+
+        if (dialog && !dialog.isError) dialog.done();
+
+        return { added: added.length, cancelled: ctrl.signal.aborted, annotations: added };
     }
 
     /**
@@ -2773,7 +3235,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         });
 
         return new Promise((resolve, reject) => {
-            fabric.util.enlivenObjects(nonFabricObjects, objects => {
+            fabric.util.enlivenObjects(nonFabricObjects, async (objects) => {
                 try {
                     if (clear) {
                         this.canvas.clear();
@@ -2802,7 +3264,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     let insertion = 0;
                     const touchedLayers = new Set();
 
-                    function initObject(obj) {
+                    const initObject = (obj) => {
                         if (inheritSession && !obj.sessionID) {
                             obj.sessionID = self.module.session;
                         }
@@ -2830,15 +3292,21 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                             const boardIndex = obj.hasOwnProperty('_position') ? obj._position : undefined;
                             self.upsertBoardItem('annotation', obj.incrementId, boardIndex);
                         }
-                    }
+                    };
 
-                    for (let obj of objects) {
-                        initObject(obj);
-                    }
-
-                    for (let obj of fabricObjects) {
-                        initObject(obj);
-                    }
+                    // Delegate the per-item loop to the bulk facility so large
+                    // loads chunk + show progress dialog (anchored to this viewer)
+                    // and stay cancellable. loadObjects() wraps history at a
+                    // higher level — we don't push history here.
+                    const allObjects = objects.concat(fabricObjects);
+                    await self.addAnnotationsBulk(allObjects, {
+                        addOne: initObject,
+                        deleteOne: (obj) => self._deleteAnnotation(obj, false),
+                        viewer: self.viewer,
+                        title: 'Loading annotations',
+                        recordHistory: false,
+                        historyName: 'Load annotations',
+                    });
 
                     self.module.assignAnnotationIds(_this.getObjects());
 

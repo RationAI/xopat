@@ -217,6 +217,7 @@ export interface AnnotationsWriteScriptApi extends ScriptApiObject {
     /**
      * Creates multiple annotations, subject to the interactive guard.
      * Each item follows the same factory-specific `parameters` shape as `createAnnotation()`.
+     * Uses batched creation safe for large amounts of annotations.
      */
     createAnnotations(inputs: AnnotationCreateInput[]): Promise<AnnotationRecord[]>;
 

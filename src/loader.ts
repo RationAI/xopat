@@ -3452,8 +3452,16 @@ form.submit();
             // Plugins/modules contribute items via CanvasContextMenu.register(...);
             // when no provider returns items, no menu opens (parity with previous behavior).
             $(viewer.element).on('contextmenu', function (event: any) {
-                event.preventDefault();
                 const orig: MouseEvent = event.originalEvent || event;
+                // Inner overlay (board panel, plugin HUD, …) already claimed this
+                // contextmenu by calling preventDefault — don't double-open.
+                if (orig.defaultPrevented) return;
+                // Only fire on the OSD canvas surface; UI overlays appended to the
+                // grid cell live outside viewer.canvas.
+                const canvasEl: HTMLElement | undefined = (viewer as any).canvas;
+                const target = orig.target as Node | null;
+                if (canvasEl && target && !canvasEl.contains(target)) return;
+                event.preventDefault();
                 let osdPos: { x: number; y: number } = { x: 0, y: 0 };
                 let pixelPos: { x: number; y: number } = { x: 0, y: 0 };
                 try {

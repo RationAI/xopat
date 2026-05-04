@@ -1,7 +1,7 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 
-const { div, input, button, span } = van.tags;
+const { div, input, button, span, label: vanLabel } = van.tags;
 
 /**
  * A lightweight searchable multi-select rendered with DaisyUI classes.
@@ -15,6 +15,9 @@ export class TagSelect extends BaseComponent {
      * @param {string} [options.emptyText]
      * @param {Array<{value:string,label:string,keywords?:string}>} [options.options]
      * @param {string[]} [options.selected]
+     * @param {number} [options.maxVisible] Cap on rendered options (default 100). Selected
+     *   items are always rendered in addition to the cap; remaining matches are summarized
+     *   as "+N more" so the dropdown stays usable for large option sets.
      * @param {(values:string[]) => void} [options.onChange]
      */
     constructor(options = undefined, ...children) {
@@ -25,6 +28,8 @@ export class TagSelect extends BaseComponent {
         this._placeholder = options.placeholder || "Select values";
         this._searchPlaceholder = options.searchPlaceholder || "Search...";
         this._emptyText = options.emptyText || "No values";
+        this._maxVisible = Number.isFinite(options.maxVisible) && options.maxVisible > 0
+            ? Math.floor(options.maxVisible) : 100;
         this._onChange = typeof options.onChange === "function" ? options.onChange : (() => {});
         this._open = false;
         this._query = "";
@@ -189,30 +194,42 @@ export class TagSelect extends BaseComponent {
         });
 
         if (!filtered.length) {
-            const empty = document.createElement("div");
-            empty.className = "px-2 py-3 text-sm opacity-50";
-            empty.textContent = this._emptyText;
-            this.refs.list.replaceChildren(empty);
+            this.refs.list.replaceChildren(
+                div({ class: "px-2 py-3 text-sm opacity-50" }, this._emptyText)
+            );
             return;
         }
 
-        const items = filtered.map(option => {
-            const label = document.createElement("label");
-            label.className = "label cursor-pointer justify-start gap-2 py-1 px-2 rounded hover:bg-base-200";
+        // Always render selected matches; fill remaining capacity with the
+        // top-of-list unselected matches. Anything beyond the cap is summarized
+        // so large option sets (e.g. one entry per annotation) stay usable.
+        const cap = this._maxVisible;
+        const visible = [];
+        let overflowCount = 0;
+        for (const option of filtered) {
+            if (this._selected.has(String(option.value))) visible.push(option);
+            else if (visible.length < cap) visible.push(option);
+            else overflowCount++;
+        }
 
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.className = "checkbox checkbox-xs";
-            checkbox.checked = this._selected.has(String(option.value));
-            checkbox.onchange = () => this._toggleValue(option.value);
+        const items = visible.map(option => vanLabel(
+            { class: "label cursor-pointer justify-start gap-2 py-1 px-2 rounded hover:bg-base-200" },
+            input({
+                type: "checkbox",
+                class: "checkbox checkbox-xs",
+                checked: this._selected.has(String(option.value)),
+                onchange: () => this._toggleValue(option.value)
+            }),
+            span({ class: "label-text text-sm" }, option.label || String(option.value))
+        ));
 
-            const text = document.createElement("span");
-            text.className = "label-text text-sm";
-            text.textContent = option.label || String(option.value);
+        if (overflowCount) {
+            items.push(div(
+                { class: "px-2 py-2 text-xs opacity-60 italic" },
+                `+${overflowCount} more — refine your search`
+            ));
+        }
 
-            label.append(checkbox, text);
-            return label;
-        });
         this.refs.list.replaceChildren(...items);
     }
 }

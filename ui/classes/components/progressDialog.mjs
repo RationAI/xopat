@@ -5,36 +5,41 @@ const { div, span, button, progress: vanProgress } = van.tags;
 
 /**
  * Reusable progress dialog for long-running client-side operations
- * (bulk annotation creation, batch export, etc.).
+ * (bulk annotation creation, batch import / export, etc.).
  *
  * Follows the BaseComponent contract:
  *   - constructor accepts BaseUIOptions + custom fields
  *   - create() returns exactly one HTML Node
  *   - mounted via attachTo(parent) (or use the static show() shortcut)
  *
- * Usage:
+ * Usage (full-screen — default):
  *   const dlg = UI.ProgressDialog.show({
  *       title: 'Adding annotations',
  *       total: 5000,
  *       cancellable: true,
  *   });
- *   dlg.onCancel(() => abort.signal());
- *   dlg.tick(50);
- *   dlg.setLabel('Phase 2');
- *   dlg.error(err);
- *   dlg.done();    // success state + auto-close
- *   dlg.close();   // immediate close
+ *
+ * Usage (anchored over a viewer):
+ *   const dlg = UI.ProgressDialog.show({
+ *       title: 'Loading',
+ *       total: 5000,
+ *       cancellable: true,
+ *       viewer: someOpenSeadragonViewer,    // resolves anchor automatically
+ *       // or: anchor: someElement
+ *   });
  *
  * Non-blocking by default so the user can still interact with the canvas while
  * the operation runs.
  *
  * @typedef {BaseUIOptions} ProgressDialogOptions
  * @property {string}  [title='Working…']
- * @property {number}  [total=100]      Upper bound of the progress bar.
+ * @property {number}  [total=100]
  * @property {boolean} [cancellable=false]
- * @property {string}  [label='']       Optional secondary label text below the bar.
+ * @property {string}  [label='']        Optional secondary label text below the bar.
  * @property {boolean} [isBlocking=false]
  * @property {number}  [autoCloseMs=400] Auto-close delay used by done().
+ * @property {HTMLElement} [anchor]      Mount the dialog inside this element (overlay scoped to it).
+ * @property {object}  [viewer]          Viewer-like ref (.element / .container / .canvas) used to resolve `anchor`.
  */
 export class ProgressDialog extends BaseComponent {
     constructor(options = {}) {
@@ -46,9 +51,21 @@ export class ProgressDialog extends BaseComponent {
         this.isBlocking = options.isBlocking === true;
         this.autoCloseMs = options.autoCloseMs ?? 400;
 
-        // base classMap drives the root element's class via BaseComponent.classState
-        this.classMap.modal = "modal";
-        this.classMap.open = "modal-open";
+        // Anchor resolution: explicit `anchor` wins; else derive from `viewer`.
+        // null = full-screen (default).
+        this._anchorEl = ProgressDialog._resolveAnchor(options.anchor, options.viewer);
+        this._isAnchored = !!(this._anchorEl && this._anchorEl !== document.body);
+        this._restoreParentPosition = null; // remembers prior inline position style if we touched it
+
+        // Base classMap drives the root element's class via BaseComponent.classState.
+        // In anchored mode we use a custom positioning class instead of daisyUI's
+        // fixed-viewport `modal`.
+        if (this._isAnchored) {
+            this.classMap.modal = "absolute inset-0 z-50 flex items-center justify-center bg-black/30";
+        } else {
+            this.classMap.modal = "modal";
+            this.classMap.open = "modal-open";
+        }
 
         // reactive content state
         this._value = van.state(0);
@@ -62,9 +79,28 @@ export class ProgressDialog extends BaseComponent {
         this.root = null;
     }
 
-    static show(options) {
-        const dlg = new ProgressDialog(options || {});
-        dlg.attachTo(document.body);
+    /**
+     * Resolves a viewer-like reference to a DOM element (or returns the
+     * explicit element if given). Returns null when neither yields anything
+     * usable, signalling full-screen mode.
+     */
+    static _resolveAnchor(anchor, viewer) {
+        if (anchor instanceof Element) return anchor;
+        if (viewer) {
+            return (
+                (viewer.element instanceof Element && viewer.element)
+                || (viewer.container instanceof Element && viewer.container)
+                || (viewer.canvas?.parentElement instanceof Element && viewer.canvas.parentElement)
+                || null
+            );
+        }
+        return null;
+    }
+
+    static show(options = {}) {
+        const dlg = new ProgressDialog(options);
+        const mount = dlg._anchorEl || document.body;
+        dlg.attachTo(mount);
         return dlg;
     }
 
@@ -84,7 +120,7 @@ export class ProgressDialog extends BaseComponent {
         const errorHidden = () => this._isError.val ? "" : "hidden";
 
         const box = div(
-            { class: "modal-box relative", style: "width: min(440px, 92vw); max-width: min(440px, 92vw);" },
+            { class: "modal-box relative shadow-lg", style: "width: min(440px, 92vw); max-width: min(440px, 92vw);" },
             div({ class: "text-base font-semibold mb-3" }, this.title),
             div(
                 { class: "flex flex-col gap-2 py-1" },
@@ -125,6 +161,20 @@ export class ProgressDialog extends BaseComponent {
         return this.root;
     }
 
+    /** @override — also ensures the anchor parent is positioned. */
+    attachTo(parent) {
+        if (this._isAnchored && parent && parent.nodeType === 1) {
+            // Container mode requires the parent to participate in positioning.
+            const computed = parent.ownerDocument?.defaultView?.getComputedStyle?.(parent);
+            if (computed && computed.position === "static") {
+                this._restoreParentPosition = parent.style.position || "";
+                parent.style.position = "relative";
+                this._restoreParentRef = parent;
+            }
+        }
+        return super.attachTo(parent);
+    }
+
     /** Update the progress bar to an absolute count (0..total). */
     tick(absoluteCount) {
         if (this._closed) return this;
@@ -163,12 +213,17 @@ export class ProgressDialog extends BaseComponent {
         return this;
     }
 
-    /** Immediate close + DOM detach. */
+    /** Immediate close + DOM detach. Restores any temporary parent style. */
     close() {
         if (this._closed) return this;
         this._closed = true;
         this.setClass("open", "");
         this.remove();
+        if (this._restoreParentRef) {
+            this._restoreParentRef.style.position = this._restoreParentPosition || "";
+            this._restoreParentRef = null;
+            this._restoreParentPosition = null;
+        }
         return this;
     }
 
@@ -178,7 +233,7 @@ export class ProgressDialog extends BaseComponent {
         return this;
     }
 
-    /** Indicates whether the dialog is in error state (read-only). */
+    /** True if the dialog is in error state. */
     get isError() {
         return this._isError.val;
     }
