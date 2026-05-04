@@ -32,6 +32,31 @@ class VisualizationReviewFeedbackError extends Error {
     }
 }
 
+/**
+ * Thrown when the user declines a proposed visualization in the playground
+ * review modal (or dismisses it via X/ESC, which is mapped to decline by
+ * `visualization-review.ts`). Distinct from a feedback decision: there is no
+ * actionable text — the user just said no.
+ *
+ * Worker→main serialization preserves only `error.message`, so the meaningful
+ * signal to LLM-side script runtimes is the message text. The constructor
+ * appends a fixed directive so the assistant treats this as "ask the user,
+ * don't silently retry" instead of as a malformed-script bug. In-process
+ * listeners can still discriminate via `instanceof` or `error.name`.
+ */
+class VisualizationReviewDeclinedError extends Error {
+    declinedMessage: string;
+
+    constructor(declinedMessage: string) {
+        super(
+            declinedMessage +
+            " The user declined the proposal without giving feedback; ask them what they wanted different before retrying with another shader or parameters."
+        );
+        this.name = "VisualizationReviewDeclinedError";
+        this.declinedMessage = declinedMessage;
+    }
+}
+
 function cloneJson<T>(value: T): T {
     if (value === undefined || value === null) {
         return value;
@@ -553,8 +578,10 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
      *                script runtime surfaces it to the LLM as a normal tool error and
      *                the model can re-plan. .feedback / .editedSnapshot are also
      *                attached to the error for richer handling.
-     *   - Decline  → throws Error(rejectedMessage), matching the existing consent
-     *                cancellation contract.
+     *   - Decline  → throws VisualizationReviewDeclinedError whose message wraps
+     *                rejectedMessage with a directive sentence telling the LLM to ask
+     *                the user before retrying. Worker→main serialization preserves
+     *                only message text, so the directive must live there.
      *
      * Honors `bypassConsentDialog` (auto-accept).
      *
@@ -632,7 +659,7 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
             throw new VisualizationReviewFeedbackError(review.feedback, review.editedSnapshot);
         }
         if (review.decision === "decline") {
-            throw new Error(rejectedMessage);
+            throw new VisualizationReviewDeclinedError(rejectedMessage);
         }
         // Accept: return the (possibly edited) snapshot for the caller to commit.
         return review.appliedSnapshot;

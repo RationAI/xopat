@@ -6,6 +6,7 @@ import { handlerMethods, createErrorHandlers } from './methods/handlers.mjs';
 import { ioMethods } from './methods/io.mjs';
 import { presetMethods } from './methods/presets.mjs';
 import { PathologyMetricsWindow } from './components/pathologyMetricsWindow.mjs';
+import { MeasurementsPopover } from './components/measurementsPopover.mjs';
 
 /**
  * GUI/controller layer for the annotations module.
@@ -78,6 +79,67 @@ class AnnotationsGUI extends XOpatPlugin {
         this._copiedPos = { x: 0, y: 0 };
         this._selectedAnnot = null;
         this._refreshCommentsInterval = null;
+
+        this._registerMeasurementsContextMenu();
+    }
+
+    /**
+     * Adds a "View measurements" entry to the canvas right-click menu when the
+     * user clicks over a single annotation (or has exactly one selected). The
+     * provider intentionally returns nothing on multi-selection / empty space
+     * so the menu stays uncluttered for callers that don't want measurements.
+     */
+    _registerMeasurementsContextMenu() {
+        const registry = window.CanvasContextMenu;
+        if (!registry?.register) return;
+        registry.register('annotation-measurements', (ctx) => {
+            const fabric = this.context?.getFabric?.(ctx.viewer?.uniqueId);
+            if (!fabric) return null;
+            const candidate = this._pickAnnotationForContext(fabric, ctx);
+            if (!candidate) return null;
+            return [{
+                title: this.t('annotations.measurements.viewMeasurements'),
+                icon: 'fa-square-poll-horizontal',
+                action: () => this.showMeasurementsPopover(candidate),
+            }];
+        }, 50);
+    }
+
+    _pickAnnotationForContext(fabric, ctx) {
+        // Prefer single-selection scenarios so we don't have to do hit-testing.
+        const sel = fabric.getSelectedAnnotations?.() || [];
+        if (sel.length === 1) return sel[0];
+        // Fall back to the active fabric object when it's an annotation.
+        const active = fabric.canvas?.getActiveObject?.();
+        if (active && fabric.isAnnotation?.(active)) return active;
+        // Hit-test by bounding rect at the right-click slide-pixel position.
+        const px = ctx?.pixelPosition;
+        if (!px || !Number.isFinite(px.x) || !Number.isFinite(px.y)) return null;
+        const objs = fabric.canvas?.getObjects?.() || [];
+        // Prefer the topmost (last drawn) annotation that contains the point.
+        for (let i = objs.length - 1; i >= 0; i--) {
+            const o = objs[i];
+            if (!fabric.isAnnotation?.(o)) continue;
+            const r = o.getBoundingRect?.(true, true);
+            if (!r) continue;
+            if (px.x >= r.left && px.x <= r.left + r.width
+                && px.y >= r.top && px.y <= r.top + r.height) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    showMeasurementsPopover(annotation) {
+        if (!this._measurementsPopover) {
+            this._measurementsPopover = new MeasurementsPopover({
+                plugin: this,
+                annotations: this.context,
+                userInterface: USER_INTERFACE,
+                pluginId: this.id,
+            });
+        }
+        this._measurementsPopover.showFor(annotation);
     }
 
     async setupFromParams() {

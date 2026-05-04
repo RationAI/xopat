@@ -5,6 +5,7 @@ import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
 import { ScriptingManager } from "./classes/scripting-manager";
 import { XOpatHistory } from "./classes/history";
+import { bootstrapVisualizationHistory } from "./classes/visualization-history";
 import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
@@ -507,7 +508,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
 
     initXOpatUI();
     //Prepare xopat core loading utilities and interfaces
-    let runLoader: (() => void) | null = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
+    let runLoader: (() => Promise<void> | void) | null = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
 
     /*--------------------------------------------------------------*/
@@ -1016,9 +1017,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         safeStringify,
         runLoaderOnce: () => {
             if (runLoader) {
-                runLoader();
+                const p = runLoader();
                 runLoader = null;
+                return p;
             }
+            return Promise.resolve();
         },
         visualizationRuntime,
         stateBindings: viewerStateBindings,
@@ -1109,6 +1112,12 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     }
 
     APPLICATION_CONTEXT.history = new XOpatHistory(APPLICATION_CONTEXT.getOption("historySize", 99));
+    // Defer until viewers have actually been opened so reseedAll() can read
+    // viewer.uniqueId without falling into the "no unique ID" warning path
+    // in findViewerUniqueId (loader.ts).
+    VIEWER_MANAGER.addOnceHandler("after-open", () => {
+        bootstrapVisualizationHistory(APPLICATION_CONTEXT.history);
+    });
 
     // Key event handlers - todo create shortcut manager
     $.extend($.scrollTo.defaults, { axis: 'y' });

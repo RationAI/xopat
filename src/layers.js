@@ -140,6 +140,11 @@ function initXOpatLayers() {
         }
     }
 
+    // Canonical state→cfg merge convention. Exported so canonical-scene.ts
+    // (and any future scene serializer) writes structural shader entries
+    // using the same shape importLiveVisualization reads on apply.
+    UTILITIES.applySnapshotState = applySnapshotState;
+
     function ensureSmartNamedStore(store) {
         if (store && store.__version === 2) {
             store.byId = store.byId || {};

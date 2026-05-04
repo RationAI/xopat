@@ -997,6 +997,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     moveAnnotation(annotation, direction) {
         if (!annotation) return false;
         const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
+        const layerId = layer ? String(layer.id) : null;
+        const notify = () => {
+            this.canvas.requestRenderAll();
+            try { this.raiseEvent('layer-objects-changed', { layerId }); } catch (e) { /* non-fatal */ }
+        };
         const swap = () => {
             if (layer) return layer.swapAnnotation(annotation, direction);
             // root annotation: swap in _boardOrder among annotation entries
@@ -1017,7 +1022,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const reverseDir = direction === 'up' ? 'down' : 'up';
         let changed = false;
         APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(); if (changed) this.canvas.requestRenderAll(); return changed; },
+            () => { changed = swap(); if (changed) notify(); return changed; },
             () => {
                 // undo: swap the other direction
                 if (layer) layer.swapAnnotation(annotation, reverseDir);
@@ -1034,10 +1039,108 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         }
                     }
                 }
-                this.canvas.requestRenderAll();
+                notify();
                 return true;
             },
             { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Move a contiguous group of annotations up or down by one position as a
+     * unit. The block is shifted by taking the non-member annotation entry
+     * immediately past the block in the chosen direction and re-inserting it
+     * on the opposite side — equivalent to "the predecessor row jumps over
+     * the entire block". Cost is O(N) over the backing array regardless of
+     * block size.
+     *
+     * Members must all share the same level (root or one specific layer).
+     * Layer entries in `_boardOrder` are treated as transparent (skipped),
+     * matching the per-annotation `moveAnnotation` behaviour.
+     *
+     * @param {fabric.Object[]} annotations the block to move
+     * @param {'up'|'down'} direction
+     * @returns {boolean} true if order changed
+     */
+    moveAnnotationBlock(annotations, direction) {
+        if (!Array.isArray(annotations) || annotations.length === 0) return false;
+        if (annotations.length === 1) return this.moveAnnotation(annotations[0], direction);
+
+        const layer = annotations[0].layerID
+            ? this.getLayer(String(annotations[0].layerID))
+            : null;
+
+        // For layered blocks the backing array is the layer's _objects
+        // (homogeneous: all fabric objects). For root blocks it's _boardOrder
+        // (mixed annotation+layer entries), where layer entries are skipped.
+        const isLayered = !!layer;
+        const memberIds = new Set(annotations.map(a => String(a.incrementId)));
+
+        const findBoundaries = () => {
+            const arr = isLayered ? layer._objects : this._boardOrder;
+            let lo = -1, hi = -1;
+            for (let i = 0; i < arr.length; i++) {
+                const entry = arr[i];
+                const id = isLayered
+                    ? String(entry.incrementId)
+                    : (entry.type === 'annotation' ? String(entry.id) : null);
+                if (id !== null && memberIds.has(id)) {
+                    if (lo === -1) lo = i;
+                    hi = i;
+                }
+            }
+            return { arr, lo, hi };
+        };
+
+        const isAnnotationEntry = (entry) => isLayered || entry?.type === 'annotation';
+        const isMemberEntry = (entry) => {
+            const id = isLayered
+                ? String(entry?.incrementId)
+                : (entry?.type === 'annotation' ? String(entry?.id) : null);
+            return id !== null && memberIds.has(id);
+        };
+
+        const swap = (dir) => {
+            const { arr, lo, hi } = findBoundaries();
+            if (lo === -1) return false;
+
+            if (dir === 'up') {
+                // Predecessor: nearest non-member annotation entry before lo,
+                // skipping layer entries (root only).
+                let pi = lo - 1;
+                while (pi >= 0 && (!isAnnotationEntry(arr[pi]) || isMemberEntry(arr[pi]))) pi--;
+                if (pi < 0) return false;
+                const [predecessor] = arr.splice(pi, 1);
+                // Removing at pi (< hi) shifts hi down by 1. We want to land
+                // the predecessor immediately after the block, i.e. at the
+                // original hi index (which is the new hi+1).
+                arr.splice(hi, 0, predecessor);
+                return true;
+            } else {
+                // Successor: nearest non-member annotation entry after hi.
+                let pj = hi + 1;
+                while (pj < arr.length && (!isAnnotationEntry(arr[pj]) || isMemberEntry(arr[pj]))) pj++;
+                if (pj >= arr.length) return false;
+                const [successor] = arr.splice(pj, 1);
+                // Removing at pj (> hi) does not shift lo. Insert at lo so the
+                // successor lands immediately before the block.
+                arr.splice(lo, 0, successor);
+                return true;
+            }
+        };
+
+        const reverseDir = direction === 'up' ? 'down' : 'up';
+        const notifyLayerId = isLayered ? String(layer.id) : null;
+        const notify = () => {
+            this.canvas.requestRenderAll();
+            try { this.raiseEvent('layer-objects-changed', { layerId: notifyLayerId }); } catch (e) { /* non-fatal */ }
+        };
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = swap(direction); if (changed) notify(); return changed; },
+            () => { swap(reverseDir); notify(); return true; },
+            { name: direction === 'up' ? 'Move group up' : 'Move group down' }
         );
         return changed;
     }
@@ -1052,6 +1155,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     moveLayer(layer, direction) {
         if (!layer) return false;
         const id = String(layer.id);
+        const notify = () => {
+            try { this.raiseEvent('layer-objects-changed', { layerId: null }); } catch (e) { /* non-fatal */ }
+        };
         const swap = (dir) => {
             const order = this._boardOrder;
             const idx = order.findIndex(e => e.type === 'layer' && e.id === id);
@@ -1066,8 +1172,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const reverseDir = direction === 'up' ? 'down' : 'up';
         let changed = false;
         APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(direction); return changed; },
-            () => { swap(reverseDir); return true; },
+            () => { changed = swap(direction); if (changed) notify(); return changed; },
+            () => { const ok = swap(reverseDir); if (ok) notify(); return true; },
             { name: direction === 'up' ? 'Move layer up' : 'Move layer down' }
         );
         return changed;
@@ -1103,6 +1209,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 this.upsertBoardItem('annotation', annotation.incrementId, toIndex);
             }
             this.canvas.requestRenderAll();
+            try {
+                this.raiseEvent('layer-objects-changed', { layerId: toLayerId ?? oldLayerId ?? null });
+            } catch (e) { /* non-fatal */ }
         };
 
         APPLICATION_CONTEXT.history.push(
@@ -1111,6 +1220,103 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             { name: 'Move annotation to layer' }
         );
         return true;
+    }
+
+    /**
+     * Bulk variant of setAnnotationLayer: reparent every annotation in the
+     * input array to `targetLayerId` in a single atomic history entry.
+     * Annotations already in the target layer are skipped silently.
+     * Pass `null` for `targetLayerId` to move to root.
+     *
+     * Modeled on the internal `moveTo` closure of `groupSiblingsByCriterion`
+     * to share the same single-history-entry semantics.
+     *
+     * @param {fabric.Object[]} annotations
+     * @param {string|null} targetLayerId
+     * @returns {number} count of annotations actually moved
+     */
+    setAnnotationsLayer(annotations, targetLayerId) {
+        if (!Array.isArray(annotations) || annotations.length === 0) return 0;
+
+        const target = targetLayerId !== null && targetLayerId !== undefined
+            ? String(targetLayerId)
+            : null;
+        if (target !== null && !this.getLayer(target)) return 0;
+
+        // Snapshot only the annotations whose layerID will actually change.
+        // Each entry captures enough state to undo: oldLayerId, oldBoardIndex
+        // (for root annotations), oldLayerIndex (for layered ones).
+        const snapshot = [];
+        for (const obj of annotations) {
+            if (!obj) continue;
+            const oldLayerId = obj.layerID ? String(obj.layerID) : null;
+            if (oldLayerId === target) continue;
+            const oldBoardIndex = oldLayerId
+                ? -1
+                : this.getBoardItemIndex('annotation', obj.incrementId);
+            const oldLayerIndex = oldLayerId
+                ? (this.getLayer(oldLayerId)?.getAnnotationIndex?.(obj) ?? -1)
+                : -1;
+            snapshot.push({ obj, oldLayerId, oldBoardIndex, oldLayerIndex });
+        }
+        if (snapshot.length === 0) return 0;
+
+        const moveTo = () => {
+            const targetLayer = target ? this.getLayer(target) : null;
+            for (const { obj } of snapshot) {
+                if (obj.layerID) {
+                    const old = this.getLayer(String(obj.layerID));
+                    if (old) old.removeObject(obj);
+                } else {
+                    this.removeBoardItem('annotation', obj.incrementId);
+                }
+                if (targetLayer) {
+                    obj.layerID = String(targetLayer.id);
+                    targetLayer.addObject(obj);
+                } else {
+                    obj.layerID = undefined;
+                    this.upsertBoardItem('annotation', obj.incrementId);
+                }
+            }
+            this.canvas.requestRenderAll();
+            try {
+                this.raiseEvent('layer-objects-changed', {
+                    layerId: target
+                });
+            } catch (e) { /* non-fatal */ }
+        };
+
+        const restore = () => {
+            for (const entry of snapshot) {
+                const { obj, oldLayerId, oldBoardIndex, oldLayerIndex } = entry;
+                if (obj.layerID) {
+                    const cur = this.getLayer(String(obj.layerID));
+                    if (cur) cur.removeObject(obj);
+                } else {
+                    this.removeBoardItem('annotation', obj.incrementId);
+                }
+                if (oldLayerId) {
+                    const old = this.getLayer(oldLayerId);
+                    obj.layerID = oldLayerId;
+                    if (old) old.addObject(obj, oldLayerIndex >= 0 ? oldLayerIndex : undefined);
+                } else {
+                    obj.layerID = undefined;
+                    this.upsertBoardItem('annotation', obj.incrementId,
+                        oldBoardIndex >= 0 ? oldBoardIndex : undefined);
+                }
+            }
+            this.canvas.requestRenderAll();
+            try {
+                this.raiseEvent('layer-objects-changed', { layerId: null });
+            } catch (e) { /* non-fatal */ }
+        };
+
+        APPLICATION_CONTEXT.history.push(
+            () => { moveTo(); return true; },
+            () => { restore(); return true; },
+            { name: target ? 'Move group to layer' : 'Move group to root' }
+        );
+        return snapshot.length;
     }
 
     /**

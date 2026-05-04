@@ -389,7 +389,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
                 const iconCenterX = x + padding + iconSize / 2;
 
-                ctx.font = `900 ${iconSize}px "Font Awesome 5 Free"`;
+                ctx.font = `900 ${iconSize}px "Font Awesome 6 Free"`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillStyle = 'black';
@@ -461,38 +461,249 @@ OSDAnnotations.AnnotationObjectFactory = class {
             'fa-eye': '\uf06e',
             'fa-eye-slash': '\uf070',
             'fa-lock': '\uf023',
+            'fa-lock-open': '\uf3c1',
             'fa-comments': '\uf086',
+            'fa-comment-medical': '\uf7f5',
+            'fa-ellipsis-h': '\uf141',
         };
         return map[icon] || icon || '?';
     }
 
     renderAllControls(ofObject) {
-        const controls = {};
-
-        controls.private = this.renderIcon(
-            (obj) => obj.private ? 'fa-eye-slash' : 'fa-eye',
-            undefined,
-            (eventData, transform) => {
-                const target = transform?.target;
-                if (!target) return;
-                const fabric = this._context.fabric;
-                fabric.setAnnotationPrivate(target, !target.private);
-            },
-        );
-
-        const commentsControl = this.renderIcon(
-            'fa-comments',
-            (obj) => obj.comments?.filter(c => !c.removed).length ?? 0,
-            () => {
-                this._context.raiseEvent('comments-control-clicked');
-            },
-        );
-        commentsControl.getVisibility = () => !!this._context.getCommentsEnabled();
-        controls.comments = commentsControl;
-
-        ofObject.controls = controls;
+        ofObject.controls = {
+            toolbar: this._renderToolbarControl(),
+        };
         ofObject.hasControls = false;
         ofObject.hasBorders = false;
+    }
+
+    /**
+     * Single combined toolbar pill: comment-with-plus + lock + ellipsis.
+     * Per-slot hit-testing in mouseUpHandler dispatches to the matching action.
+     * Comments slot is omitted when the comments feature is disabled.
+     */
+    _renderToolbarControl() {
+        const self = this;
+        const ICON_SIZE = 18;
+        const PAD_X = 10;
+        const SLOT_GAP = 12;
+        const TEXT_GAP = 6;
+        const HEIGHT = 26;
+        const RADIUS = HEIGHT / 2;
+        // Pill alpha = min(1, annotation.opacity * factor). Annotation at 0
+        // hides the pill entirely (and disables clicks).
+        const LABEL_OPACITY_FACTOR = 2;
+
+        const slotsFor = (target) => {
+            const slots = [];
+            const commentsOn = !!self._context.getCommentsEnabled?.();
+            if (commentsOn) {
+                const n = target?.comments
+                    ? target.comments.filter(c => !c.removed).length
+                    : 0;
+                slots.push({
+                    id: 'comments',
+                    icon: 'fa-comment-medical',
+                    countText: n > 0 ? String(n) : '',
+                    onClick: () => self._context.raiseEvent('comments-control-clicked', { object: target }),
+                });
+            }
+            slots.push({
+                id: 'lock',
+                icon: target?.private ? 'fa-lock' : 'fa-lock-open',
+                countText: '',
+                onClick: () => {
+                    const wrapper = self._context.fabric;
+                    if (wrapper && target) wrapper.setAnnotationPrivate(target, !target.private);
+                },
+            });
+            slots.push({
+                id: 'more',
+                icon: 'fa-ellipsis-h',
+                countText: '',
+                onClick: (eventData) => {
+                    self._context.raiseEvent('annotation-more-clicked', {
+                        object: target,
+                        clientX: eventData?.clientX,
+                        clientY: eventData?.clientY,
+                    });
+                },
+            });
+            return slots;
+        };
+
+        const control = new fabric.Control({
+            // Anchor top-center of the bbox; offsetY lifts the pill above
+            // the annotation. sizeX/sizeY are updated each render to match
+            // the actual pill so the entire visual area is clickable.
+            x: 0,
+            y: -0.5,
+            offsetX: 0,
+            offsetY: -22,
+            cursorStyle: 'pointer',
+            sizeX: 120,
+            sizeY: HEIGHT,
+            touchSizeX: 140,
+            touchSizeY: HEIGHT + 8,
+            enabled: true,
+            render: (ctx, left, top, _styleOverride, fabricObject) => {
+                const slots = slotsFor(fabricObject);
+                if (!slots.length) {
+                    control._zones = [];
+                    return;
+                }
+
+                // Tie label visibility to annotation opacity. At 0 the pill
+                // disappears and is non-clickable (empty zones). Otherwise
+                // the pill renders at min(1, opacity * factor) so dimmed
+                // annotations still get readable labels.
+                const annOpacity = fabricObject.opacity ?? 1;
+                if (annOpacity <= 0) {
+                    control._zones = [];
+                    return;
+                }
+                const pillAlpha = Math.min(1, annOpacity * LABEL_OPACITY_FACTOR);
+
+                // Measure each slot's intrinsic width.
+                let totalContentW = 0;
+                for (const s of slots) {
+                    let w = ICON_SIZE;
+                    if (s.countText) {
+                        ctx.font = `600 11px Arial`;
+                        w += TEXT_GAP + ctx.measureText(s.countText).width;
+                    }
+                    s._width = w;
+                    totalContentW += w;
+                }
+                const bubbleWidth = totalContentW + PAD_X * 2 + SLOT_GAP * (slots.length - 1);
+
+                ctx.save();
+                ctx.globalAlpha *= pillAlpha;
+                ctx.translate(left, top);
+                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle || 0));
+
+                const x = -bubbleWidth / 2;
+                const y = -HEIGHT / 2;
+
+                // Pill background
+                ctx.beginPath();
+                ctx.moveTo(x + RADIUS, y);
+                ctx.lineTo(x + bubbleWidth - RADIUS, y);
+                ctx.arcTo(x + bubbleWidth, y,         x + bubbleWidth, y + RADIUS,        RADIUS);
+                ctx.lineTo(x + bubbleWidth, y + HEIGHT - RADIUS);
+                ctx.arcTo(x + bubbleWidth, y + HEIGHT, x + bubbleWidth - RADIUS, y + HEIGHT, RADIUS);
+                ctx.lineTo(x + RADIUS, y + HEIGHT);
+                ctx.arcTo(x, y + HEIGHT, x, y + HEIGHT - RADIUS, RADIUS);
+                ctx.lineTo(x, y + RADIUS);
+                ctx.arcTo(x, y, x + RADIUS, y, RADIUS);
+                ctx.closePath();
+                ctx.fillStyle = 'white';
+                ctx.fill();
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Walk slots, draw glyph + optional count, record local zones.
+                const zones = [];
+                let cursor = x + PAD_X;
+                for (let i = 0; i < slots.length; i++) {
+                    const s = slots[i];
+                    const slotStart = cursor;
+
+                    // Hit-zone covers slot content + half the gap on each side
+                    // (or the pill's padding on the outer edges).
+                    const zoneLeftPad  = i === 0 ? PAD_X : SLOT_GAP / 2;
+                    const zoneRightPad = i === slots.length - 1 ? PAD_X : SLOT_GAP / 2;
+
+                    // Draw icon
+                    const iconCenterX = slotStart + ICON_SIZE / 2;
+                    ctx.font = `900 ${ICON_SIZE}px "Font Awesome 6 Free"`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'black';
+                    ctx.fillText(self._resolveControlGlyph(s.icon), iconCenterX, 1);
+                    cursor += ICON_SIZE;
+
+                    if (s.countText) {
+                        ctx.font = `600 11px Arial`;
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(s.countText, cursor + TEXT_GAP, 1);
+                        cursor += TEXT_GAP + (s._width - ICON_SIZE);
+                    }
+
+                    zones.push({
+                        id: s.id,
+                        x0: slotStart - zoneLeftPad,
+                        x1: cursor + zoneRightPad,
+                        onClick: s.onClick,
+                    });
+
+                    cursor += SLOT_GAP;
+                }
+
+                control._zones = zones;
+                control._lastLeft = left;
+                control._lastTop = top;
+                control._lastAngle = fabricObject.angle || 0;
+                // Match the hit region to the actual pill so clicks land on
+                // any icon, not just a 34px square in the middle. Fabric uses
+                // sizeX/sizeY for control hit-testing in _findTargetCorner.
+                control.sizeX = bubbleWidth;
+                control.sizeY = HEIGHT;
+                control.touchSizeX = bubbleWidth + 12;
+                control.touchSizeY = HEIGHT + 8;
+                ctx.restore();
+            },
+        });
+
+        control.mouseUpHandler = function (eventData, transform, x, y) {
+            eventData?.preventDefault?.();
+            eventData?.stopPropagation?.();
+
+            const target = transform?.target;
+            if (!target) return false;
+
+            const wrapper = target?._factory?.()?._context?.fabric;
+            if (wrapper) {
+                wrapper._controlInteractionActive = false;
+                wrapper.module.cursor.isDown = false;
+                wrapper.module.cursor.mouseTime = Infinity;
+            }
+
+            const zones = control._zones;
+            if (!zones || !zones.length || control._lastLeft == null) return true;
+
+            // Fabric calls mouseUpHandler with (x, y) from `canvas.getPointer(e)`
+            // which returns IMAGE-space coords (pre-viewport-transform). The
+            // pill's recorded `_lastLeft`/`_lastTop` come from positionHandler's
+            // `finalMatrix` — SCREEN-space. Bring the pointer to screen-space
+            // before computing pill-local offsets.
+            const canvas = target.canvas;
+            const vpt = canvas && canvas.viewportTransform;
+            let sx = x, sy = y;
+            if (vpt) {
+                const p = fabric.util.transformPoint({ x, y }, vpt);
+                sx = p.x;
+                sy = p.y;
+            }
+
+            // Undo translate+rotate from render() to get pill-local x.
+            const dx = sx - control._lastLeft;
+            const dy = sy - control._lastTop;
+            const rad = -fabric.util.degreesToRadians(control._lastAngle || 0);
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            const localX = dx * cos - dy * sin;
+
+            const slot = zones.find(z => localX >= z.x0 && localX <= z.x1);
+            if (slot && typeof slot.onClick === 'function') {
+                try { slot.onClick(eventData); } catch (e) { console.error(e); }
+            }
+            return true;
+        };
+
+        return control;
     }
 
     __cloneValue(value) {

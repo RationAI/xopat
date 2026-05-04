@@ -1074,7 +1074,7 @@ export class ChatPanel extends BaseComponent {
         const visibleScriptResultParts = incomingParts.filter((p: any) => p?.type === "script-result");
 
         return {
-            role: "user",
+            role: "tool",
             content: feedbackText,
             parts: [
                 ...visibleScriptResultParts,
@@ -1483,6 +1483,17 @@ export class ChatPanel extends BaseComponent {
         let consecutiveFailedScriptSteps = 0;
         const maxConsecutiveFailedScriptSteps = 3;
 
+        // Idempotent-loop guard: if the assistant emits the same script body and the runtime
+        // returns the same observable result twice in a row, there is nothing further the loop
+        // can produce. Break with a host-feedback nudge instead of looping indefinitely.
+        let lastFingerprint: string | null = null;
+        let identicalRepeatCount = 0;
+        const fingerprintFor = (scriptBody: string, msg: ChatMessage): string => {
+            const norm = String(scriptBody || '').replace(/\s+/g, ' ').trim();
+            const resultText = String(msg?.content || '').slice(0, 4000);
+            return `${norm}${resultText}`;
+        };
+
         this._messageList?.showProgress("Understanding your request…");
 
         try {
@@ -1495,10 +1506,12 @@ export class ChatPanel extends BaseComponent {
                 if (this._shouldStopAssistantLoop()) return;
 
                 const script = chatModule.extractScriptFromAssistantMessage?.(reply);
-                const placeholderOrReply = script ? this._createAssistantScriptPlaceholder(reply) : reply;
-                this._messages.push(placeholderOrReply);
-                if (script && !this._isHiddenInternalMessage(placeholderOrReply)) {
-                    this._messageList?.addMessage(placeholderOrReply);
+                this._messages.push(reply);
+                if (script) {
+                    const placeholder = this._createAssistantScriptPlaceholder(reply);
+                    if (!this._isHiddenInternalMessage(placeholder)) {
+                        this._messageList?.addMessage(placeholder);
+                    }
                 }
                 this._messageList?.updateProgress(this._friendlyProgress(reply, null, step));
 
@@ -1524,7 +1537,7 @@ export class ChatPanel extends BaseComponent {
                     failedScript = true;
                     const errorText = err instanceof Error ? err.message : String(err);
                     executionMessage = {
-                        role: "user",
+                        role: "tool",
                         content:
                             "Script execution failed.\n" +
                             `Error: ${errorText}\n` +
@@ -1553,6 +1566,33 @@ export class ChatPanel extends BaseComponent {
 
                 this._pushInternalMessage(executionMessage);
                 this._messageList?.updateProgress(this._friendlyProgress(reply, executionMessage, step));
+
+                const fingerprint = fingerprintFor(script, executionMessage);
+                if (fingerprint && fingerprint === lastFingerprint) {
+                    identicalRepeatCount += 1;
+                } else {
+                    identicalRepeatCount = 0;
+                    lastFingerprint = fingerprint;
+                }
+                if (identicalRepeatCount >= 1) {
+                    const nudge =
+                        "Identical script with identical result emitted twice in a row. " +
+                        "The runtime has nothing further to produce from this script. " +
+                        "Stop scripting and reply to the user with the result already obtained, " +
+                        "or ask a clarifying question if more input is required.";
+                    const guardMessage: ChatMessage = {
+                        role: "tool",
+                        content: nudge,
+                        parts: [{ type: "host-feedback", text: nudge }],
+                        metadata: {
+                            hiddenFromChatUi: true,
+                            internalSource: "script-runtime",
+                            reason: "idempotent-loop-guard",
+                        } as any,
+                        createdAt: new Date(),
+                    };
+                    this._pushInternalMessage(guardMessage);
+                }
 
                 if (failedScript && consecutiveFailedScriptSteps >= maxConsecutiveFailedScriptSteps) {
                     const terminalError = String(executionMessage.content || "Repeated script execution failures.");
@@ -1594,7 +1634,7 @@ export class ChatPanel extends BaseComponent {
             if (this._shouldStopAssistantLoop()) return;
 
             const capMessage: ChatMessage = {
-                role: "user",
+                role: "tool",
                 content: `Execution stopped after reaching the current limit of ${allowedSteps} script steps. Finish with a final user-facing answer without more scripting.`,
                 parts: [{
                     type: "host-feedback",

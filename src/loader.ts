@@ -2817,6 +2817,17 @@ form.submit();
         }
     };
 
+    // Tab-close guard for unsaved state. Any module that flips the dirty
+    // flag via APPLICATION_CONTEXT.setDirty() (annotations, viewer-open
+    // pipeline, inspector controllers, ...) gets the browser's native
+    // "Leave site?" prompt for free. Modern browsers ignore custom
+    // messages; both setters are still required for the prompt to show.
+    window.addEventListener('beforeunload', (event) => {
+        if (!APPLICATION_CONTEXT.__cache.dirty) return;
+        event.preventDefault();
+        event.returnValue = '';
+    });
+
     /**
      * Focuses all key press events and forwarding to OSD,
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
@@ -3572,6 +3583,7 @@ form.submit();
                 }
             })
 
+            // todo: consider wiring these events later as we access viewerUniqueID too early
             viewer.addHandler('canvas-enter', function (e) {
                 focusOnViewer = e.eventSource;
             });

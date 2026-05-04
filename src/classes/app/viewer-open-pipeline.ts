@@ -26,7 +26,7 @@ export interface ViewerOpenPipelineDependencies {
     getConfig: () => any;
     cloneRuntimeState: <T>(value: T) => T;
     safeStringify: (value: any) => string;
-    runLoaderOnce: () => void;
+    runLoaderOnce: () => Promise<void> | void;
     visualizationRuntime: ViewerVisualizationRuntime;
     stateBindings: ViewerStateBindingController;
 }
@@ -1453,7 +1453,7 @@ export class ViewerOpenPipeline {
         );
 
         let openSucceeded = true;
-        await Promise.allSettled(viewerUpdatePlans.map(openIntoViewer)).then(e => {
+        await Promise.allSettled(viewerUpdatePlans.map(openIntoViewer)).then(async e => {
             let hadRejectedOpen = false;
             for (const promise of e) {
                 if (promise.status === "rejected") {
@@ -1462,8 +1462,6 @@ export class ViewerOpenPipeline {
                     Dialogs.show($.t("error.slide.failed"), 15000, Dialogs.MSG_WARN);
                 }
             }
-
-            this.deps.runLoaderOnce();
 
             if (hadRejectedOpen && strictVisualization) {
                 throw new Error("Failed to apply one or more visualization updates.");
@@ -1474,15 +1472,20 @@ export class ViewerOpenPipeline {
                 maybeLoadingTimeout = undefined;
             }
             clearTimeout(loadTooLongTimeout);
+
+            // Bind active viewer BEFORE plugins boot, so window.VIEWER and
+            // module.viewer getters resolve to a real viewer in pluginReady().
             if (!viewerManager.get() && viewerManager.viewers.length > 0) {
                 viewerManager.setActive(0, "open-complete");
             }
 
-            if (backgroundChanged) {
-                viewerManager.raiseEvent("after-open");
-            } else if (anythingVisibleChanged) {
+            if (backgroundChanged || anythingVisibleChanged) {
                 viewerManager.raiseEvent("after-open");
             }
+
+            // Plugins' pluginReady() runs only after the world is populated
+            // and the active viewer is bound — see plan/lifecycle ordering fix.
+            await this.deps.runLoaderOnce();
 
             USER_INTERFACE.Loading.show(false);
             appContext.setDirty();

@@ -601,23 +601,28 @@ function stripAssistantReasoning(text: string): string {
         .trim();
 }
 
-function hasExecutableAssistantPayload(text: string): boolean {
-    const raw = String(text || '');
-    return /```xopat-script[\s\S]*?```/i.test(raw)
-        || /```xopat-host-script[\s\S]*?```/i.test(raw)
-        || /functions\.xopat-(?:host-)?script\s*:/i.test(raw)
-        || /<\|tool_call_argument_begin\|>/i.test(raw);
-}
-
-function stripExecutableAssistantPayload(text: string): string {
+function stripHarmonyTokens(text: string): string {
+    // GPT-OSS Harmony channel/tool-call markers. The runtime cannot honour them — the only
+    // accepted tool-call surface is the xopat-script fenced block. Strip so they don't leak
+    // into stored history or the next model input.
     return String(text || '')
-        .replace(/```xopat-script[\s\S]*?```/gi, '')
-        .replace(/```xopat-host-script[\s\S]*?```/gi, '')
-        .replace(/```(?:javascript|js|typescript|ts)[\s\S]*?```/gi, '')
         .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, '')
         .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+\s*<\|tool_call_argument_begin\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi, '')
         .replace(/<\|tool_call_argument_begin\|>\s*{[\s\S]*?}\s*(?:<\|tool_call_end\|>|$)/gi, '')
+        .replace(/<\|start\|>[a-z_]+(?:<\|channel\|>[^<]*)?(?:<\|message\|>[\s\S]*?)?(?:<\|call\|>|<\|end\|>|$)/gi, '')
+        .replace(/<\|(?:start|end|message|channel|call|tool_call_(?:argument_)?(?:begin|end)|tool_calls_section_(?:begin|end))\|>/gi, '')
         .trim();
+}
+
+function sanitizeAssistantOutput(text: string): string {
+    return stripAssistantReasoning(stripHarmonyTokens(text));
+}
+
+function isHarmonyStyleModel(modelId: string | null | undefined, providerTypeId?: string | null): boolean {
+    const haystack = `${String(modelId || '')} ${String(providerTypeId || '')}`.toLowerCase();
+    return /\bgpt[-_ ]?oss\b/.test(haystack)
+        || /\bharmony\b/.test(haystack)
+        || /\bopenchat[-_ ]?harmony\b/.test(haystack);
 }
 
 function sanitizeMessageForModel(message: ChatMessage): ChatMessage {
@@ -627,33 +632,16 @@ function sanitizeMessageForModel(message: ChatMessage): ChatMessage {
         : coerceMessageText(message);
 
     if (message.role === 'assistant') {
-        if (hasExecutableAssistantPayload(contentText)) {
-            const summaryText = stripAssistantReasoning(stripExecutableAssistantPayload(contentText));
-            const sanitizedText = summaryText
-                ? `Prepared a viewer automation step. Non-executable summary: ${summaryText}`
-                : 'Prepared a viewer automation step from the current request and runtime feedback.';
+        const cleaned = sanitizeAssistantOutput(contentText);
+        if (cleaned !== contentText) {
             return {
                 ...message,
-                content: sanitizedText,
-                parts: [{ type: 'text', text: sanitizedText }],
+                content: cleaned,
+                parts: [{ type: 'text', text: cleaned }],
                 metadata: {
                     ...metadata,
                     sanitizedForModel: true,
-                    sanitizedReason: 'assistant-script-turn',
-                } as any,
-            };
-        }
-
-        const strippedText = stripAssistantReasoning(contentText);
-        if (strippedText !== contentText) {
-            return {
-                ...message,
-                content: strippedText,
-                parts: [{ type: 'text', text: strippedText }],
-                metadata: {
-                    ...metadata,
-                    sanitizedForModel: true,
-                    sanitizedReason: 'assistant-reasoning-strip',
+                    sanitizedReason: 'assistant-reasoning-or-harmony-strip',
                 } as any,
             };
         }
@@ -685,9 +673,13 @@ function toModelMessage(
     const content = parts.map((part) => {
         switch (part.type) {
             case 'text':
-            case 'host-feedback':
-            case 'script-result':
                 return { type: 'text', text: part.text } as const;
+            case 'host-feedback':
+                return { type: 'text', text: `[host-feedback] ${part.text}` } as const;
+            case 'script-result': {
+                const tag = (part as any).ok === false ? 'script-error' : 'script-result';
+                return { type: 'text', text: `[${tag}] ${part.text}` } as const;
+            }
 
             case 'image': {
                 if (!mediaAllowedForModel('image', capabilities)) {
@@ -1325,12 +1317,17 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         modelId: session.modelId,
         contextId: session.contextId || null,
     });
+    const harmonyAddendum = isHarmonyStyleModel(session.modelId, runtime.type.id)
+        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime and will be discarded. Do not emit them. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
+        : null;
+
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
         scriptSystemContent(input.allowedScriptApi, { executionMode }),
+        harmonyAddendum,
     ]
         .map((x) => String(x || '').trim())
         .filter(Boolean)
@@ -1510,7 +1507,8 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         };
     }
 
-    const text = typeof result.text === 'string' ? result.text : '';
+    const rawText = typeof result.text === 'string' ? result.text : '';
+    const text = sanitizeAssistantOutput(rawText);
     const message: ChatMessage = {
         id: registry.newId('msg'),
         sessionId: session.id,

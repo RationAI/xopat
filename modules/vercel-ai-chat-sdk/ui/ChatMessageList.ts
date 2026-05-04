@@ -151,6 +151,12 @@ export class ChatMessageList {
             if (this._isRuntimeFeedbackMessage(message)) return false;
             return true;
         }
+        if (message.role === "tool") {
+            // Runtime feedback channel: surface the failure/result bubble, but suppress
+            // pure host-feedback nudges that were previously hidden.
+            if (this._hasVisibleScriptResult(message)) return true;
+            return false;
+        }
         if (message.role === "assistant" && !this._isAssistantScriptMessage(message)) return true;
         return false;
     }

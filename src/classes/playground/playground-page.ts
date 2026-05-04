@@ -27,6 +27,11 @@
 
 import { setupIsolatedViewer, type IsolatedViewerHandle } from "../app/setup-isolated-viewer";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "../app/assemble-render-output";
+import {
+    serializeSceneFromViewer,
+    type CanonicalBackground,
+    type CanonicalVisualization,
+} from "../app/canonical-scene";
 
 export interface PlaygroundPageInit {
     /** Stable id (used for draft persistence and result keying). */
@@ -69,6 +74,15 @@ export interface PlaygroundPageHandle {
     isCopiedSinceLastEdit(): boolean;
     /** Returns the edited visualization config (clone merged with current cache/state). */
     getVisualization(): any;
+    /**
+     * Returns the edited slice this page is rendering, in the canonical scene
+     * shape. `background` is a fresh array (mirrors `init.background`) with each
+     * shader's runtime cache/state/type merged in via the canonical
+     * serializer. `visualization` is the page's active viz with runtime state
+     * merged. Used by Apply to write back to the source viewer via
+     * `deserializeScene` / `APPLICATION_CONTEXT.openViewerWith`.
+     */
+    getScene(): { background: CanonicalBackground[]; visualization: CanonicalVisualization | undefined };
     /** Returns UTILITIES.exportLiveVisualization(viewer) for the playground viewer. */
     getLiveState(): any;
     /**
@@ -361,6 +375,27 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         return cloned;
     };
 
+    const getScene = (): { background: CanonicalBackground[]; visualization: CanonicalVisualization | undefined } => {
+        // Canonical serializer: bg shaders are an ARRAY whose renderer ids are
+        // derived (`bgRef.id`, `${bgRef.id}-N`); the helper knows the formula
+        // and merges live cache/state into the right structural slots — fixing
+        // the silent no-op of the previous getBackground impl that walked
+        // bg.shaders as if it were a map.
+        if (!viewerHandle?.viewer) {
+            return {
+                background: Array.isArray(init.background) ? deepClone(init.background) : [],
+                visualization: init.visualization ? deepClone(init.visualization) : undefined,
+            };
+        }
+        // getLiveState() already strips the page namespace, so live keys match
+        // the structural shader ids in init.background / init.visualization.
+        const live = getLiveState();
+        return serializeSceneFromViewer(viewerHandle.viewer, {
+            background: init.background,
+            visualization: init.visualization,
+        }, live ?? null);
+    };
+
     const getEditedPayload = () => ({
         visualization: getVisualization(),
         liveState: getLiveState(),
@@ -388,6 +423,7 @@ export function createPlaygroundPage(init: PlaygroundPageInit): PlaygroundPageHa
         markCopied: () => { copiedSinceLastEdit = true; },
         isCopiedSinceLastEdit: () => copiedSinceLastEdit,
         getVisualization,
+        getScene,
         getLiveState,
         getEditedPayload,
         getRoot: () => root,

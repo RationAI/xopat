@@ -115,6 +115,12 @@ export class AnnotationBoardPanel {
         // contiguous range between this anchor and the clicked row.
         // Stored as the row's incrementId.
         this._selectionAnchorId = null;
+
+        // Header-selectable metric column. 'off' = column hidden (no visual
+        // change for users that don't enable it). Other values: 'area',
+        // 'length', 'mean', 'median', 'percentPositive', 'components'.
+        // Persisted on the plugin so it survives session restore.
+        this._displayMetric = String(this.plugin.getOption?.('boardDisplayMetric', 'off') || 'off');
     }
 
     get fabric() {
@@ -174,14 +180,15 @@ export class AnnotationBoardPanel {
                 )
             ),
             new UI.Div({
-                    extraClasses: 'px-2 py-1 border-b border-base-300 sticky top-[42px] z-10'
+                    extraClasses: 'px-2 py-1 border-b border-base-300 sticky top-[42px] z-10 flex gap-2 items-center'
                 },
                 input({
                     type: 'search',
                     placeholder: this.plugin.t?.('annotations.board.searchPlaceholder') || 'Search annotations…',
-                    class: 'input input-xs input-bordered w-full',
+                    class: 'input input-xs input-bordered flex-1',
                     oninput: (e) => this._onSearchInput(e.target.value)
-                })
+                }),
+                this._buildMetricColumnSelect()
             ),
             new UI.Div({
                 id: this.bodyId,
@@ -291,6 +298,7 @@ export class AnnotationBoardPanel {
             'layer-objects-changed',
             'annotation-selection-changed',
             'layer-selection-changed',
+            'annotation-measurements-updated',
         ];
         const handlers = [];
         const bump = () => {
@@ -483,6 +491,7 @@ export class AnnotationBoardPanel {
                     rows.push({
                         kind: 'group-overflow',
                         groupKey,
+                        layerId,
                         hidden: selectedMembers.length - visible.length,
                     });
                 }
@@ -513,10 +522,35 @@ export class AnnotationBoardPanel {
             // tally them as a single level for grouping.
         }
 
-        // Root annotations: filter directly from the canvas like the previous
-        // builder did, so we get the natural canvas order.
-        const rootAnnotations = (fabric.canvas?.getObjects?.() || [])
-            .filter(o => fabric.isAnnotation?.(o) && this._isRootAnnotation(o));
+        // Root annotations: assembled in _boardOrder sequence so per-row
+        // Move up/down at the root level visibly reorders the panel.
+        // _boardOrder is the canonical root-level sequence maintained by the
+        // wrapper (moveAnnotation, upsertBoardItem, etc.); canvas order is
+        // unrelated. Single pass over _boardOrder + one pass over canvas
+        // objects to catch any annotation that exists on canvas but is
+        // missing from _boardOrder (defensive — recovery paths).
+        const isAnn = fabric.isAnnotation?.bind(fabric);
+        const boardOrder = fabric.getBoardOrder?.() || [];
+        const rootById = new Map();
+        for (const o of fabric.canvas?.getObjects?.() || []) {
+            if (isAnn?.(o) && this._isRootAnnotation(o)
+                && o.incrementId !== undefined && o.incrementId !== null) {
+                rootById.set(String(o.incrementId), o);
+            }
+        }
+        const rootAnnotations = [];
+        const seenRoot = new Set();
+        for (const e of boardOrder) {
+            if (e.type !== 'annotation') continue;
+            const id = String(e.id);
+            const obj = rootById.get(id);
+            if (!obj) continue;
+            rootAnnotations.push(obj);
+            seenRoot.add(id);
+        }
+        for (const [id, obj] of rootById) {
+            if (!seenRoot.has(id)) rootAnnotations.push(obj);
+        }
         if (rootAnnotations.length) {
             emitLevel('root', rootAnnotations, { layerId: null });
         }
@@ -554,25 +588,67 @@ export class AnnotationBoardPanel {
         const frag = document.createDocumentFragment();
         const rows = this._rows || [];
 
-        // The original layout used a top-level container that hosted layer
-        // sub-containers; with grouping we render every row at the same level
-        // (group rows for same-preset clusters carry their indentation visually
-        // via a leading column rather than DOM nesting).
-        for (const row of rows) {
-            let el = null;
-            if (row.kind === 'layer') {
-                el = this._renderLayer(row.layer);
-            } else if (row.kind === 'ann') {
-                el = this._renderAnnotation(row.obj, { parentGroupKey: row.parentGroupKey, layerId: row.layerId });
-            } else if (row.kind === 'group') {
-                el = this._renderPresetGroup(row);
-            } else if (row.kind === 'group-overflow') {
-                el = this._renderGroupOverflow(row);
-            } else if (row.kind === 'search-overflow') {
-                el = this._renderSearchOverflow(row);
+        // Layer-children rows (annotations + groups carrying a `layerId`) are
+        // wrapped in a single sub-container per layer so the whole block gets
+        // ONE tree line on the left, instead of each row drawing its own and
+        // clashing with the per-row preset colour stripe. The container opens
+        // when a layer header is rendered and closes when we hit any non-
+        // layer-child row.
+        let layerChildContainer = null;
+        let openLayerId = null;
+
+        const closeLayerContainer = () => {
+            if (layerChildContainer && layerChildContainer.children.length === 0) {
+                // empty layer (collapsed or no children) — drop the container
+                layerChildContainer.remove?.();
             }
-            if (el) frag.appendChild(el);
+            layerChildContainer = null;
+            openLayerId = null;
+        };
+
+        const renderRow = (row) => {
+            if (row.kind === 'ann') {
+                return this._renderAnnotation(row.obj, { parentGroupKey: row.parentGroupKey, layerId: row.layerId });
+            }
+            if (row.kind === 'group') return this._renderPresetGroup(row);
+            if (row.kind === 'group-overflow') return this._renderGroupOverflow(row);
+            return null;
+        };
+
+        for (const row of rows) {
+            if (row.kind === 'layer') {
+                closeLayerContainer();
+                const layerEl = this._renderLayer(row.layer);
+                if (layerEl) frag.appendChild(layerEl);
+                const layerId = String(row.layer?.id ?? '');
+                if (layerId && !this._collapsedLayers.has(layerId)) {
+                    layerChildContainer = document.createElement('div');
+                    layerChildContainer.dataset.role = 'layer-children';
+                    layerChildContainer.className = 'ml-3 border-l border-base-content/15 bg-base-200/30 mb-1';
+                    openLayerId = layerId;
+                    frag.appendChild(layerChildContainer);
+                }
+                continue;
+            }
+
+            if (row.kind === 'search-overflow') {
+                closeLayerContainer();
+                const el = this._renderSearchOverflow(row);
+                if (el) frag.appendChild(el);
+                continue;
+            }
+
+            const rowLayerId = row.layerId ? String(row.layerId) : null;
+            if (rowLayerId && rowLayerId === openLayerId) {
+                const el = renderRow(row);
+                if (el) layerChildContainer.appendChild(el);
+            } else {
+                closeLayerContainer();
+                const el = renderRow(row);
+                if (el) frag.appendChild(el);
+            }
         }
+        closeLayerContainer();
 
         this.layerLogsEl.replaceChildren(frag);
     }
@@ -607,14 +683,10 @@ export class AnnotationBoardPanel {
 
         if (object.layerID) addItem('(no layer)', () => {
             fabric.setAnnotationLayer?.(object, null);
-            this._dataVersion++;
-            this.requestRender(true);
         });
         for (const l of layers) {
             addItem(l.name || `Layer ${l.id}`, () => {
                 fabric.setAnnotationLayer?.(object, l.id);
-                this._dataVersion++;
-                this.requestRender(true);
             });
         }
         if (!menu.children.length) {
@@ -633,6 +705,64 @@ export class AnnotationBoardPanel {
             }
         };
         // defer one frame so the click that opened the menu doesn't immediately close it
+        requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
+    }
+
+    /**
+     * Bulk variant of _openMoveToLayerMenu: lists destination layers and
+     * reparents the entire `members` array atomically via
+     * `fabric.setAnnotationsLayer`. Members are guaranteed to share a level
+     * (groups are per-level), so we sample the first member's `layerID` to
+     * decide whether the "(no layer)" choice applies and which layers to
+     * exclude as the source.
+     */
+    _openMoveToLayerMenuForGroup(anchorBtn, members) {
+        const fabric = this.fabric;
+        if (!fabric || !members?.length) return;
+
+        const existing = document.body.querySelector('[data-role="board-move-to-layer-menu"]');
+        if (existing) { existing.remove(); }
+
+        const sourceLayerId = members[0]?.layerID ? String(members[0].layerID) : '';
+        const layers = (fabric.getAllLayers?.() || [])
+            .filter(l => String(l.id) !== sourceLayerId);
+
+        const menu = document.createElement('div');
+        menu.dataset.role = 'board-move-to-layer-menu';
+        menu.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
+        menu.style.minWidth = '180px';
+
+        const apply = (targetLayerId) => {
+            fabric.setAnnotationsLayer?.(members, targetLayerId);
+        };
+
+        const addItem = (label, onClick) => {
+            const item = document.createElement('button');
+            item.className = 'btn btn-ghost btn-xs justify-start w-full';
+            item.textContent = label;
+            item.onclick = (e) => { e.stopPropagation(); onClick(); menu.remove(); };
+            menu.appendChild(item);
+        };
+
+        if (sourceLayerId) addItem('(no layer)', () => apply(null));
+        for (const l of layers) {
+            addItem(l.name || `Layer ${l.id}`, () => apply(l.id));
+        }
+        if (!menu.children.length) {
+            addItem('(no other layers)', () => {});
+        }
+
+        document.body.appendChild(menu);
+        const rect = anchorBtn.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+        menu.style.left = `${rect.left + window.scrollX - 120}px`;
+
+        const onDocClick = (ev) => {
+            if (!menu.contains(ev.target)) {
+                menu.remove();
+                document.removeEventListener('mousedown', onDocClick, true);
+            }
+        };
         requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
     }
 
@@ -729,8 +859,6 @@ export class AnnotationBoardPanel {
             if (result && result.targetLayerId) {
                 this._collapsedLayers.add(String(result.targetLayerId));
             }
-            this._dataVersion++;
-            this.requestRender(true);
             dismissParent?.();
             sub.remove();
         };
@@ -760,6 +888,208 @@ export class AnnotationBoardPanel {
             }
         };
         requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
+    }
+
+    _buildMetricColumnSelect() {
+        const { select, option } = globalThis.van.tags;
+        const t = (k) => this.plugin.t(`annotations.board.metricColumn.${k}`);
+        const opts = [
+            { v: 'off', label: t('off') },
+            { v: 'area', label: t('area') },
+            { v: 'length', label: t('length') },
+            { v: 'mean', label: t('mean') },
+            { v: 'median', label: t('median') },
+            { v: 'percentPositive', label: t('percentPositive') },
+            { v: 'components', label: t('components') },
+        ];
+        return select({
+            class: 'select select-xs select-bordered max-w-[7rem]',
+            title: this.plugin.t('annotations.board.metricColumn.label'),
+            oninput: (e) => this._setDisplayMetric(e.target.value),
+        }, ...opts.map(({ v, label }) => option({ value: v, selected: v === this._displayMetric }, label)));
+    }
+
+    _setDisplayMetric(metric) {
+        const next = String(metric || 'off');
+        if (next === this._displayMetric) return;
+        this._displayMetric = next;
+        try { this.plugin.setOption?.('boardDisplayMetric', next); } catch { /* non-fatal */ }
+        this.requestRender(true);
+    }
+
+    /**
+     * Resolve the value for the currently-selected metric on a single
+     * annotation. Returns null when no value is available — callers render
+     * a "↻" affordance so the user can dispatch a measurement run.
+     */
+    _annotationMetricValue(object) {
+        if (this._displayMetric === 'off' || !object) return { kind: 'hidden' };
+        const factory = this.context.getAnnotationObjectFactory?.(object.factoryID);
+        if (this._displayMetric === 'area') {
+            const a = factory?.getArea?.(object);
+            if (Number.isFinite(a)) return { kind: 'value', text: this._formatArea(a) };
+            return { kind: 'missing' };
+        }
+        if (this._displayMetric === 'length') {
+            const l = factory?.getLength?.(object);
+            if (Number.isFinite(l)) {
+                const sb = window.VIEWER?.scalebar;
+                return { kind: 'value', text: sb?.formatLength?.(sb.imageLength(l)) || String(l) };
+            }
+            return { kind: 'missing' };
+        }
+        // Pixel-derived metrics: read from the most recently used cache slot.
+        const slot = this._lookupAnyMeasurementSlot(object);
+        if (!slot) return { kind: 'missing' };
+        switch (this._displayMetric) {
+            case 'mean':
+                return Number.isFinite(slot.mean) ? { kind: 'value', text: slot.mean.toFixed(1) } : { kind: 'missing' };
+            case 'median':
+                return Number.isFinite(slot.median) ? { kind: 'value', text: slot.median.toFixed(1) } : { kind: 'missing' };
+            case 'percentPositive':
+                return Number.isFinite(slot.percentPositive)
+                    ? { kind: 'value', text: `${(slot.percentPositive * 100).toFixed(1)}%` }
+                    : { kind: 'missing' };
+            case 'components':
+                return slot.components && Number.isFinite(slot.components.count)
+                    ? { kind: 'value', text: String(slot.components.count) }
+                    : { kind: 'missing' };
+            default:
+                return { kind: 'missing' };
+        }
+    }
+
+    _isPixelMetric(metric) {
+        return metric === 'mean' || metric === 'median'
+            || metric === 'percentPositive' || metric === 'components';
+    }
+
+    _measurementsEngine() {
+        const mod = (typeof globalThis.singletonModule === 'function')
+            ? globalThis.singletonModule('annotation-measurements')
+            : null;
+        return mod?.getEngine?.() || null;
+    }
+
+    /**
+     * Compute the currently-selected metric for a single annotation. Reuses
+     * the engine's last-used config so the user's most recent channel +
+     * threshold pair flows through. Disables the trigger button while the
+     * compute is running and restores it on completion (success or error).
+     */
+    async _runSingleAnnotation(object, anchorBtn) {
+        const engine = this._measurementsEngine();
+        if (!engine || !object) return;
+        if (anchorBtn) {
+            anchorBtn.disabled = true;
+            anchorBtn.textContent = '…';
+        }
+        try {
+            const includeComponents = this._displayMetric === 'components';
+            await engine.computeForObject(object, { includeComponents });
+        } catch (err) {
+            console.warn('[board] single-annotation measurement failed', err);
+        } finally {
+            if (anchorBtn) {
+                anchorBtn.disabled = false;
+                anchorBtn.textContent = '↻';
+            }
+        }
+    }
+
+    /**
+     * Compute the metric for a batch of annotations (members of a collapsed
+     * group). Yields between objects so the UI stays responsive on 1000s of
+     * polygons; an in-flight call is recorded on the wrapper-keyed map so a
+     * second click on the same group cancels the run.
+     */
+    async _runGroupMeasurement(members, anchorBtn) {
+        const engine = this._measurementsEngine();
+        if (!engine || !members?.length) return;
+        if (!this._activeGroupRuns) this._activeGroupRuns = new Map();
+        const key = members[0]?.presetID ?? 'group';
+        const existing = this._activeGroupRuns.get(key);
+        if (existing) {
+            existing.aborted = true;
+            this._activeGroupRuns.delete(key);
+            if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '↻'; }
+            return;
+        }
+        const handle = { aborted: false };
+        this._activeGroupRuns.set(key, handle);
+        const includeComponents = this._displayMetric === 'components';
+        if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '⏵'; }
+        try {
+            for (let i = 0; i < members.length; i++) {
+                if (handle.aborted) break;
+                await engine.computeForObject(members[i], { includeComponents });
+                if ((i & 7) === 7) await new Promise((r) => requestAnimationFrame(r));
+                if (anchorBtn) anchorBtn.textContent = `${i + 1}/${members.length}`;
+            }
+        } catch (err) {
+            console.warn('[board] group measurement failed', err);
+        } finally {
+            this._activeGroupRuns.delete(key);
+            if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '↻'; }
+        }
+    }
+
+    _lookupAnyMeasurementSlot(object) {
+        const slots = object?._measurements;
+        if (!slots) return null;
+        // Pick the most recently computed slot (highest computedAt).
+        let best = null;
+        for (const key of Object.keys(slots)) {
+            const s = slots[key];
+            if (!s) continue;
+            if (!best || (s.computedAt || 0) > (best.computedAt || 0)) best = s;
+        }
+        return best;
+    }
+
+    /** Aggregate metric value for a group of same-preset members. */
+    _groupMetricValue(members) {
+        if (this._displayMetric === 'off' || !members?.length) return { kind: 'hidden' };
+        if (this._displayMetric === 'area' || this._displayMetric === 'length') {
+            // Sum
+            let sum = 0, n = 0;
+            for (const m of members) {
+                const factory = this.context.getAnnotationObjectFactory?.(m.factoryID);
+                const v = this._displayMetric === 'area' ? factory?.getArea?.(m) : factory?.getLength?.(m);
+                if (Number.isFinite(v)) { sum += v; n++; }
+            }
+            if (!n) return { kind: 'missing' };
+            const sb = window.VIEWER?.scalebar;
+            const text = this._displayMetric === 'area'
+                ? sb?.formatArea?.(sb.imageArea(sum)) || String(sum)
+                : sb?.formatLength?.(sb.imageLength(sum)) || String(sum);
+            return { kind: 'value', text: `Σ ${text}` };
+        }
+        // Pixel-derived metrics: weighted mean (or sum for components).
+        let acc = 0, weight = 0, count = 0;
+        for (const m of members) {
+            const slot = this._lookupAnyMeasurementSlot(m);
+            if (!slot) continue;
+            count++;
+            if (this._displayMetric === 'percentPositive') {
+                acc += (slot.percentPositive || 0) * (slot.pixelCount || 1);
+                weight += (slot.pixelCount || 1);
+            } else if (this._displayMetric === 'mean' || this._displayMetric === 'median') {
+                acc += (this._displayMetric === 'mean' ? slot.mean : slot.median) * (slot.pixelCount || 1);
+                weight += (slot.pixelCount || 1);
+            } else if (this._displayMetric === 'components') {
+                acc += slot.components?.count || 0;
+                weight += 1;
+            }
+        }
+        if (!count) return { kind: 'missing', total: members.length };
+        if (this._displayMetric === 'percentPositive') return weight > 0
+            ? { kind: 'value', text: `${(acc / weight * 100).toFixed(1)}% (${count}/${members.length})` }
+            : { kind: 'missing', total: members.length };
+        if (this._displayMetric === 'components') return { kind: 'value', text: `Σ ${acc | 0} (${count}/${members.length})` };
+        return weight > 0
+            ? { kind: 'value', text: `${(acc / weight).toFixed(1)} (${count}/${members.length})` }
+            : { kind: 'missing', total: members.length };
     }
 
     _onSearchInput(value) {
@@ -965,7 +1295,6 @@ export class AnnotationBoardPanel {
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(upBtn) || layer, 'up');
-                this._dataVersion++; this.requestRender(true);
             };
 
             const downBtn = document.createElement('button');
@@ -975,7 +1304,6 @@ export class AnnotationBoardPanel {
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(downBtn) || layer, 'down');
-                this._dataVersion++; this.requestRender(true);
             };
 
             actions.append(upBtn, downBtn);
@@ -1040,10 +1368,17 @@ export class AnnotationBoardPanel {
         subText.append(time, sep, area, filteredBadge);
         content.append(title, subText);
 
+        // Configurable metric column. Hidden by default; populated by
+        // _renderAnnotation when this._displayMetric !== 'off'.
+        const metricCell = document.createElement('div');
+        metricCell.dataset.tplRole = 'metric';
+        metricCell.className = 'hidden text-xs font-mono opacity-80 ml-2 whitespace-nowrap';
+        metricCell.style.pointerEvents = 'none';
+
         const actions = document.createElement('div');
         actions.dataset.tplRole = 'actions';
 
-        root.append(dragHandle, iconBox, content, actions);
+        root.append(dragHandle, iconBox, content, metricCell, actions);
 
         this._annotationRowTemplate = root;
         return root;
@@ -1061,6 +1396,7 @@ export class AnnotationBoardPanel {
         row.id = this.getAnnotationElementId(object.label);
         row.dataset.id = String(object.incrementId);
         if (opts.parentGroupKey) row.dataset.parentGroup = opts.parentGroupKey;
+        if (opts.layerId) row.dataset.layerId = String(opts.layerId);
         row.className = [
             'group/ann flex items-center gap-3 px-2 py-1 border-l-4 border-transparent history-item-row transition-all',
             isFiltered ? 'opacity-45 saturate-50 cursor-not-allowed' : 'hover:bg-base-300/50 cursor-pointer',
@@ -1078,7 +1414,41 @@ export class AnnotationBoardPanel {
         const timeEl = row.querySelector('[data-tpl-role="time"]');
         const areaEl = row.querySelector('[data-tpl-role="area"]');
         const filteredBadgeEl = row.querySelector('[data-tpl-role="filteredBadge"]');
+        const metricEl = row.querySelector('[data-tpl-role="metric"]');
         const actionsEl = row.querySelector('[data-tpl-role="actions"]');
+
+        // Populate the configurable metric column.
+        metricEl.replaceChildren();
+        metricEl.style.pointerEvents = '';
+        if (this._displayMetric !== 'off') {
+            const metric = this._annotationMetricValue(object);
+            metricEl.classList.remove('hidden');
+            if (metric.kind === 'value') {
+                metricEl.textContent = metric.text;
+                metricEl.classList.remove('opacity-50');
+            } else if (metric.kind === 'missing' && this._isPixelMetric(this._displayMetric)) {
+                // Render a clickable ↻ button so the user can compute on
+                // demand without opening the metrics window.
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-ghost btn-xs px-1 min-h-0 h-5';
+                btn.title = this.plugin.t('annotations.board.compute');
+                btn.textContent = '↻';
+                btn.style.pointerEvents = 'auto';
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    this._runSingleAnnotation(object, btn);
+                };
+                metricEl.appendChild(btn);
+            } else if (metric.kind === 'missing') {
+                metricEl.textContent = this.plugin.t('annotations.board.noData') || '—';
+                metricEl.classList.add('opacity-50');
+            } else {
+                metricEl.classList.add('hidden');
+            }
+        } else {
+            metricEl.classList.add('hidden');
+        }
 
         const objectIcon = factoryIcon(factory?.getIcon?.() || 'fa-tag');
         objectIcon.style.color = color;
@@ -1118,7 +1488,6 @@ export class AnnotationBoardPanel {
                 e.stopPropagation();
                 const obj = targetForRow(upBtn) || object;
                 this.fabric?.moveAnnotation?.(obj, 'up');
-                this._dataVersion++; this.requestRender(true);
             };
 
             const downBtn = document.createElement('button');
@@ -1129,7 +1498,6 @@ export class AnnotationBoardPanel {
                 e.stopPropagation();
                 const obj = targetForRow(downBtn) || object;
                 this.fabric?.moveAnnotation?.(obj, 'down');
-                this._dataVersion++; this.requestRender(true);
             };
 
             const layerBtn = document.createElement('button');
@@ -1220,12 +1588,75 @@ export class AnnotationBoardPanel {
         }
         content.append(titleEl, subText);
 
-        const badge = document.createElement('span');
-        badge.className = 'badge badge-ghost badge-sm font-mono';
-        badge.style.pointerEvents = 'none';
-        badge.textContent = String(members.length);
+        row.append(iconBox, content);
 
-        row.append(iconBox, content, badge);
+        if (this._displayMetric !== 'off') {
+            const groupMetric = this._groupMetricValue(members);
+            if (groupMetric.kind === 'value') {
+                const metricBadge = document.createElement('span');
+                metricBadge.className = 'text-xs font-mono opacity-80 mr-2 whitespace-nowrap';
+                metricBadge.textContent = groupMetric.text;
+                row.appendChild(metricBadge);
+            } else if (groupMetric.kind === 'missing' && this._isPixelMetric(this._displayMetric)) {
+                // Group-level compute: kicks off engine.computeForObject for
+                // every member sequentially, yielding to the UI between items.
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-ghost btn-xs px-1 min-h-0 h-5 mr-2';
+                btn.title = this.plugin.t('annotations.board.compute');
+                btn.textContent = '↻';
+                btn.style.pointerEvents = 'auto';
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    this._runGroupMeasurement(members, btn);
+                };
+                row.appendChild(btn);
+            } else if (groupMetric.kind === 'missing') {
+                const metricBadge = document.createElement('span');
+                metricBadge.className = 'text-xs font-mono opacity-50 mr-2 whitespace-nowrap';
+                metricBadge.textContent = this.plugin.t('annotations.board.noData') || '—';
+                row.appendChild(metricBadge);
+            }
+        }
+
+        // Hover-actions: same affordances as per-annotation rows, but
+        // operating on the whole `members` array. Wrapper APIs do this in
+        // O(N) regardless of group size — no per-member loops on the panel
+        // side, so a 5000-member group's button click stays instant.
+        const actionsEl = document.createElement('div');
+        actionsEl.dataset.tplRole = 'actions';
+        actionsEl.className = 'flex gap-0.5 opacity-0 group-hover/grp:opacity-100';
+
+        const upBtn = document.createElement('button');
+        upBtn.className = 'btn btn-ghost btn-xs btn-square';
+        upBtn.title = 'Move group up';
+        upBtn.appendChild(faIcon('fa-arrow-up', 'text-xs'));
+        upBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.fabric?.moveAnnotationBlock?.(members, 'up');
+        };
+
+        const downBtn = document.createElement('button');
+        downBtn.className = 'btn btn-ghost btn-xs btn-square';
+        downBtn.title = 'Move group down';
+        downBtn.appendChild(faIcon('fa-arrow-down', 'text-xs'));
+        downBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.fabric?.moveAnnotationBlock?.(members, 'down');
+        };
+
+        const layerBtn = document.createElement('button');
+        layerBtn.className = 'btn btn-ghost btn-xs btn-square';
+        layerBtn.title = 'Move group to layer';
+        layerBtn.appendChild(faIcon('fa-layer-group', 'text-xs'));
+        layerBtn.onclick = (e) => {
+            e.stopPropagation();
+            this._openMoveToLayerMenuForGroup(layerBtn, members);
+        };
+
+        actionsEl.append(upBtn, downBtn, layerBtn);
+        row.appendChild(actionsEl);
+
         return row;
     }
 

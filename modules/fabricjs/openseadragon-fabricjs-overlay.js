@@ -57,12 +57,30 @@
         return data;
     };
 
-    // Fabric Controls rendering was mibehaving when replacing objects
+    // Fabric Controls rendering was mibehaving when replacing objects.
+    // Also: selection visuals (controls + borders + selection background)
+    // should follow the annotation's opacity — at opacity 0 they must
+    // disappear together with the shape they belong to.
     const _origDrawControls = fabric.Object.prototype.drawControls;
     fabric.Object.prototype.drawControls = function(ctx, styleOverride) {
-        if (!this.canvas)  return;
+        if (!this.canvas) return;
+        if (this.opacity === 0) return;
         return _origDrawControls.call(this, ctx, styleOverride);
     };
+    const _origDrawBorders = fabric.Object.prototype.drawBorders;
+    if (typeof _origDrawBorders === 'function') {
+        fabric.Object.prototype.drawBorders = function(ctx, styleOverride) {
+            if (this.opacity === 0) return this;
+            return _origDrawBorders.call(this, ctx, styleOverride);
+        };
+    }
+    const _origDrawSelectionBackground = fabric.Object.prototype.drawSelectionBackground;
+    if (typeof _origDrawSelectionBackground === 'function') {
+        fabric.Object.prototype.drawSelectionBackground = function(ctx) {
+            if (this.opacity === 0) return this;
+            return _origDrawSelectionBackground.call(this, ctx);
+        };
+    }
 
     /**
      * Find object under mouse by iterating
@@ -347,11 +365,21 @@
     }
 
     function _drawClusters(ctx, canvas, rects) {
+        // Cluster pills follow the global annotation opacity, with the same
+        // 2× boost (capped at 1.0) used by the per-annotation toolbar pill in
+        // modules/annotations/objects.js. At opacity 0 the pills disappear
+        // along with the annotations they represent.
+        const idx = canvas.__spatialIndex;
+        const annOpacity = idx?.wrapper?.module?.presets?.commonAnnotationVisuals?.opacity ?? 1;
+        if (annOpacity <= 0) return;
+        const pillAlpha = Math.min(1, annOpacity * 2);
+
         // Reset transform to retina-only; pills are drawn in CSS pixel space
         // so their size stays constant regardless of canvas zoom.
         const retina = (canvas.getRetinaScaling && canvas.getRetinaScaling()) || 1;
         ctx.save();
         ctx.setTransform(retina, 0, 0, retina, 0, 0);
+        ctx.globalAlpha *= pillAlpha;
 
         for (let i = 0; i < rects.length; i++) {
             const r = rects[i];

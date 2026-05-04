@@ -554,7 +554,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         });
 
         const asFeedbackMessage = (text: string, ok = true): ChatMessage => withInternalMetadata({
-            role: 'user',
+            role: 'tool',
             parts: [{ ok, type: 'script-result', text } as any],
             content: text,
             createdAt: new Date(),
@@ -652,7 +652,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
 
             return withInternalMetadata({
-                role: 'user',
+                role: 'tool',
                 parts: [{
                     type: 'image',
                     attachmentId: uploaded.id,
@@ -678,7 +678,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
             });
 
             return withInternalMetadata({
-                role: 'user',
+                role: 'tool',
                 parts: [{
                     type: 'file',
                     attachmentId: uploaded.id,
@@ -753,7 +753,7 @@ When scripting is not available or insufficient, explain the limitation clearly.
         }
 
         return withInternalMetadata({
-            role: 'user',
+            role: 'tool',
             parts,
             content: text || 'Script produced non-text output.',
             createdAt: new Date(),

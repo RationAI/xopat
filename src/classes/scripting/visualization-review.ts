@@ -147,6 +147,7 @@ export async function reviewVisualizationProposal(
                         ctx.closeModal("accept");
                     },
                 },
+                // todo: these buttons should come from the user, not the scripting itself -> it does not have to be a llm
                 {
                     id: "feedback",
                     label: tr("playground.review.feedback", "Send to LLM with feedback"),

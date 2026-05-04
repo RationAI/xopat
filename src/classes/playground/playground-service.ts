@@ -30,6 +30,7 @@
 
 import { createPlaygroundPage, type PlaygroundPageHandle } from "./playground-page";
 import { createPlaygroundModal, type ModalAction } from "./visualization-playground-modal";
+import { deserializeScene, type CanonicalScene } from "../app/canonical-scene";
 
 export type PlaygroundActionId = string;
 
@@ -190,7 +191,9 @@ async function openPlayground(options: PlaygroundOpenOptions): Promise<Playgroun
     try {
         const pageInits = resolvePages(options);
         if (pageInits.length === 0) {
-            console.warn("[PlaygroundService] open() with no resolvable pages");
+            const msg = "Could not open the playground: nothing to play with on this viewer.";
+            console.warn(`[PlaygroundService] ${msg}`);
+            showToast(msg, "warn");
             return { actionId: "dismiss", pages: [] };
         }
 
@@ -421,13 +424,11 @@ function buildUserDrivenViewerPageSeed(viewer: any) {
     const APP: any = (window as any).APPLICATION_CONTEXT;
     const cfg = APP?.config || {};
     const visualizations: any[] = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
-    if (!visualizations.length) return null;
 
     const rawIdx = APP?.getOption?.("activeVisualizationIndex", undefined, true, true);
-    const activeVisualizationIndex = normalizeActiveVisualizationIndex(rawIdx);
+    const activeVisualizationIndex = normalizeActiveVisualizationIndex(rawIdx) ?? [0];
     const activeIdx = pickActiveIndex(activeVisualizationIndex);
     const cfgActiveViz = visualizations[activeIdx];
-    if (!cfgActiveViz) return null;
 
     const viewerBackgrounds = collectViewerBackgrounds(viewer);
     const background = viewerBackgrounds.length
@@ -441,9 +442,13 @@ function buildUserDrivenViewerPageSeed(viewer: any) {
     // would only render the background. We rebuild the active visualization
     // from `renderer.getAllShaders()` minus background-id entries.
     const runtimeViz = buildRuntimeVisualizationFromViewer(viewer, cfgActiveViz, background);
-    const activeViz = runtimeViz || deepClone(cfgActiveViz);
+    // Background-only viewers: no cfg viz, no runtime non-bg shaders. Synthesize a
+    // blank visualization so the page opens with the background and the user can
+    // add layers from scratch in-modal.
+    const activeViz = runtimeViz
+        || (cfgActiveViz ? deepClone(cfgActiveViz) : { id: "viewer-runtime", name: "Background only", shaders: {}, order: [] });
 
-    const visualizationsForSnapshot = deepClone(visualizations);
+    const visualizationsForSnapshot = visualizations.length ? deepClone(visualizations) : [];
     visualizationsForSnapshot[activeIdx] = activeViz;
 
     const snapshot = {
@@ -588,6 +593,7 @@ function buildDefaultActions(pages: PlaygroundPageHandle[]): ModalAction[] {
             onClick: async (ctx) => {
                 const page = ctx.activePage;
                 if (!page) return;
+                const APP: any = (window as any).APPLICATION_CONTEXT;
                 const VM: any = (window as any).VIEWER_MANAGER;
                 const target = page.sourceViewerUniqueId
                     ? VM?.getViewer?.(page.sourceViewerUniqueId, false)
@@ -596,14 +602,50 @@ function buildDefaultActions(pages: PlaygroundPageHandle[]): ModalAction[] {
                     showToast(tr("playground.sourceViewerMissing", "Source viewer is no longer available."));
                     return;
                 }
-                const live = page.getLiveState();
-                if (live) {
-                    try {
-                        (window as any).UTILITIES?.importLiveVisualization?.(target, live);
-                    } catch (e) {
-                        console.warn("[PlaygroundService] apply failed", e);
+
+                // Build the canonical scene to deserialize: start from the source
+                // app cfg, then overlay the playground page's edited slice
+                // (background array — bg shader ids derived per
+                // `assemble-render-output.ts:149-150` — and the active
+                // visualization). Round-trip lives in canonical-scene.ts.
+                const cfg = APP?.config || {};
+                const edited = page.getScene?.() ?? { background: undefined, visualization: undefined };
+
+                const activeIdx = pickActiveIndex(
+                    normalizeActiveVisualizationIndex(
+                        APP?.getOption?.("activeVisualizationIndex", undefined, true, true),
+                    ),
+                );
+                const baseVis = Array.isArray(cfg.visualizations) ? cfg.visualizations.map((v: any) => v) : [];
+                if (edited.visualization) {
+                    if (baseVis.length) baseVis[activeIdx] = edited.visualization;
+                    else if (edited.visualization.shaders && Object.keys(edited.visualization.shaders).length) {
+                        baseVis.push(edited.visualization);
                     }
                 }
+
+                const scene: CanonicalScene = {
+                    version: 1,
+                    data: Array.isArray(cfg.data) ? cfg.data : [],
+                    background: Array.isArray(edited.background) && edited.background.length
+                        ? edited.background
+                        : (Array.isArray(cfg.background) ? cfg.background : []),
+                    visualizations: baseVis,
+                    activeBackgroundIndex: undefined,
+                    activeVisualizationIndex: undefined,
+                };
+
+                try {
+                    await deserializeScene(scene, {
+                        historyMode: "visualization-step",
+                        historyLabel: tr("playground.applyHistory", "playground apply"),
+                    });
+                } catch (e) {
+                    console.warn("[PlaygroundService] apply failed", e);
+                    showToast(tr("playground.applyFailed", "Apply failed."), "error");
+                    return;
+                }
+
                 clearDraftFor(page.sourceViewerUniqueId, page.id);
                 ctx.closeModal("apply");
             },

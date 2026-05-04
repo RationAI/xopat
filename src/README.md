@@ -122,7 +122,7 @@ We will use [R] for required and [O] for optional parameters.
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
-    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional)
+    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional). When omitted, the background renders the data through an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced — the background renders only what the `shaders` array says. Tools that round-trip a session (canonical-scene.ts) materialize this implicit entry as `[{ type: "identity", … }]` when the user edits it, so the change persists.
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
     - [O]`lossless` - deprecated
     - [O]`protocol` - deprecated, moved to `DataOverride`
@@ -262,6 +262,19 @@ The runtime opening pipeline is class-based and lives under `src/classes/app/`. 
   - Preferred over the older `updateVisualization(...)` name.
 
 The pipeline options are ambiently typed as `ViewerOpenOptions`, and the per-viewer patch object as `ViewerSelectionPatch`, so plugins/modules can use them without importing from core files.
+
+### Canonical Scene
+
+`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state. Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, and draft persistence all go through it (or will, as Phases 2-3 land).
+
+- `serializeScene()` — captures `cfg` (data, background, visualizations, active indices) and merges per-shader runtime cache/state from every viewer's renderer back into the structural shader entries. Returns a `CanonicalScene` JSON object.
+- `serializeSceneFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
+- `deserializeScene(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed.
+- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
+
+Devtools handle: `window.__SCENE = { serialize, serializeFromViewer, deserialize, … }`. Use it to inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
+
+**Implicit identity rule.** When `cfg.background[i].shaders` is unset, the renderer synthesizes an identity shader at `bg.id`. If a tool edits that implicit shader, the canonical-scene serializer materializes it as `[{ type: "identity", cache: {…} }]` so the change persists across reopens.
 
 ### Session Restore and Lifecycle
 Session bootstrap and restore now live in `ApplicationLifecycleController`.
