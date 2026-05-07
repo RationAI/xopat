@@ -1,0 +1,9 @@
+{
+  "name": "io-github-sink",
+  "version": "0.1.0",
+  "description": "GitHub-backed bundle sink for the xOpat IO pipeline.",
+  "keywords": ["xopat", "io-pipeline", "github", "sink"],
+  "buildEntry": "github-sink.ts",
+  "author": "xOpat",
+  "license": "ISC"
+}

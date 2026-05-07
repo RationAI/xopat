@@ -1,0 +1,23 @@
+{
+    "id": "io-github-sink",
+    "name": "IO GitHub Sink",
+    "description": "GitHub-backed bundle sink for the IO pipeline. Hydrates from and writes back to a configured repository path; admin-routable via ENV.client.io.bindings. The GitHub PAT is held server-side under server.secure.proxies.<alias>.headers — never on the client.",
+    "version": "0.1.0",
+    "requires": [],
+    "sessionCompatible": false,
+    "includes": [
+        "index.workspace.js"
+    ],
+    "permaLoad": true,
+    "github": {
+        "_help": "Per-deployment overrides live in ENV.client.io.sinkOverrides.github. The token does NOT belong here — declare a server proxy alias under server.secure.proxies.<proxy> with Authorization: Bearer <% GITHUB_TOKEN %>. See README.md.",
+        "proxy": "github",
+        "repo": null,
+        "branch": "main",
+        "pathTemplate": "xopat/{ownerId}/{viewerId}.json",
+        "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
+        "committer": null,
+        "author": null,
+        "auth": null
+    }
+}
