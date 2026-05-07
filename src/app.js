@@ -1092,7 +1092,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         config.background = background;
         config.visualizations = visualizations;
 
-        if (reopenCounter >= 0) {
+        if (reopenCounter > 0) {
             APPLICATION_CONTEXT.disableVisualization();
         }
         /**
