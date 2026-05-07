@@ -1588,15 +1588,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             return this.isEditingObject?.(object) || this.isOngoingEditOf?.(object) || false;
         }
 
-        let cancelFlag = false;
-        try {
-            this.raiseEvent('annotation-before-edit', {
-                object: object,
-                isCancelled: () => cancelFlag,
-                setCancelled: (cancelled) => {cancelFlag = cancelled},
-            });
-        } catch (e) { console.error('Error in annotation-before-edit event handler: ', e); }
-        if (cancelFlag) return false;
+        // Sync guard-only check: entering edit mode is a UI transition (no
+        // data mutation yet), so no apply/dispatch — just give external
+        // guards a chance to abort. `kind: 'edit-start'` lets handlers
+        // filter without listening to every pre-update.
+        const veto = this.module.annotationResource.canUpdate(object.incrementId, object, {
+            kind: 'edit-start', object, viewerId: this.viewer?.uniqueId,
+        });
+        if (!veto.ok) return false;
 
         this._selectionEditTransition = true;
         try {
@@ -1626,8 +1625,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
             this.module.setMouseOSDInteractive?.(false);
 
+            // Run the swap + edit setup with edit-selection-sync suspended.
             this.module._runWithoutEditSelectionSync?.(() => {
-                // temporary swap, no history
+                // temporary swap, no history (replaceAnnotation runs its
+                // own guard for kind='replace-doppelganger').
                 this.replaceAnnotation(object, editableObject, true);
 
                 const editTarget =
@@ -1688,7 +1689,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
             if (cancelOnly) {
                 if (originalObject && originalObject !== editedObject) {
-                    // restore original, no history
+                    // restore original, no history (doppelganger swap)
                     this.replaceAnnotation(editedObject, originalObject, true);
                     resolvedObject =
                         this.canvas.getObjects().find(item => item?.internalID === originalObject.internalID)
@@ -1704,7 +1705,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 const finalObject = factory?.recalculate(editedObject, true);
 
                 if (originalObject && originalObject !== editedObject) {
-                    // first restore original without history
+                    // first restore original without history (doppelganger)
                     this.replaceAnnotation(editedObject, originalObject, true);
 
                     const restoredOriginal =
@@ -1713,7 +1714,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                         || originalObject;
 
                     if (finalObject && finalObject !== restoredOriginal) {
-                        // now record exactly one replace in history
+                        // now record exactly one replace in history (real)
                         this.replaceAnnotation(restoredOriginal, finalObject, false);
 
                         resolvedObject =
@@ -1855,26 +1856,31 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @param _dangerousSkipHistory @private, do not touch!
      * @return {boolean} true if annotation was promoted
      */
+    /**
+     * Promote a helper annotation (drawing-in-progress) to a real annotation
+     * through the IO pipeline. External sync guards may abort via
+     * `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-create' })`.
+     * Any bound `crud:annotation` sink receives the create asynchronously
+     * (fire-and-forget); a server refusal triggers rollback because we opt
+     * into `rollbackOnAsyncRefuse: true`. Auto-history is pushed via
+     * `inverseApply`.
+     *
+     * `_dangerousSkipHistory: true` bypasses both the guard phase and the
+     * history push (used for internal helper toggles).
+     *
+     * @return {boolean} true if annotation was promoted (sync local outcome)
+     */
     promoteHelperAnnotation(annotation, _raise=true, _dangerousSkipHistory=false) {
         if (_dangerousSkipHistory) {
             return this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory);
         }
-        // skip event if skipping history - internal logics
-        let cancelFlag = false;
-        try {
-            this.raiseEvent('annotation-before-create', {
-                object: annotation,
-                isCancelled: () => cancelFlag,
-                setCancelled: (cancelled) => {cancelFlag = cancelled},
-            });
-        } catch (e) { console.error('Error in annotation-before-create event handler: ', e); }
-        if (cancelFlag) return false;
-        this._promoteHelperAnnotation(annotation, _raise, _dangerousSkipHistory);
-        return APPLICATION_CONTEXT.history.pushExecuted(
-            () => this._addAnnotation(annotation, _raise),
-            () => this._deleteAnnotation(annotation, _raise),
-            { name: 'Create annotation' }
-        );
+        const result = this.module.annotationResource.create(annotation, {
+            apply:        () => { this._promoteHelperAnnotation(annotation, _raise, false); },
+            inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
+            meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
+            rollbackOnAsyncRefuse: true,
+        });
+        return !!result.ok;
     }
 
     _applyAnnotationVisibilityState(object) {
@@ -2049,19 +2055,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         );
     }
 
+    // Pure local commit. Pre-action veto lives on the public methods that
+    // gate user-driven mutations (deleteAnnotation, replaceAnnotation, …)
+    // through the annotation IO resource. Internal callers (bulk delete,
+    // history replay, edit-cancel paths) reach _deleteAnnotation directly
+    // and bypass the resource — by design.
     _deleteAnnotation (annotation, _raise = true){
-        let cancelFlag = false;
-        try {
-            if (annotation) {
-                this.raiseEvent('annotation-before-delete', {
-                    object: annotation,
-                    isCancelled: () => cancelFlag,
-                    setCancelled: (cancelled) => {cancelFlag = cancelled},
-                });
-            }
-        } catch (e) { console.error("Error in annotation-before-delete handler:", e); }
-        if (cancelFlag) return false;
-
+        if (!annotation) return false;
         // todo, fires event -> respect _raise flag?
         if (this.isAnnotationSelected(annotation)) this.deselectAnnotation(annotation, true);
 
@@ -2421,26 +2421,28 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {boolean} true if preset updated
      */
     changeAnnotationPreset(annotation, presetID, _raise=true) {
-        let cancelFlag = false;
-        try {
-            if (annotation) this.raiseEvent('annotation-before-preset-change', {
-                object: annotation,
-                isCancelled: () => cancelFlag,
-                setCancelled: (cancelled) => {cancelFlag = cancelled},
-            });
-        } catch (e) { console.error("Error in annotation-before-preset-change handler:", e); }
-        if (cancelFlag) return false;
+        if (!annotation) return false;
+        const factory = annotation._factory();
+        if (!factory) return false;
 
-        let factory = annotation._factory();
-        if (factory !== undefined) {
-            const oldPresetID = annotation.presetID;
-            const options = this.module.presets.getAnnotationOptionsFromInstance(this.module.presets.get(presetID));
-            factory.configure(annotation, options);
-            this.canvas.requestRenderAll();
-            if (_raise) this.raiseEvent('annotation-preset-change', {object: annotation, presetID: presetID, oldPresetID: oldPresetID});
-            return true;
-        }
-        return false;
+        const oldPresetID = annotation.presetID;
+        const options = this.module.presets.getAnnotationOptionsFromInstance(this.module.presets.get(presetID));
+        const oldOptions = this.module.presets.getAnnotationOptionsFromInstance(this.module.presets.get(oldPresetID));
+
+        const result = this.module.annotationResource.update(annotation.incrementId, { presetID }, {
+            apply: () => {
+                factory.configure(annotation, options);
+                this.canvas.requestRenderAll();
+                if (_raise) this.raiseEvent('annotation-preset-change', { object: annotation, presetID, oldPresetID });
+            },
+            inverseApply: () => {
+                factory.configure(annotation, oldOptions);
+                this.canvas.requestRenderAll();
+                if (_raise) this.raiseEvent('annotation-preset-change', { object: annotation, presetID: oldPresetID, oldPresetID: presetID });
+            },
+            meta: { kind: 'preset-change', object: annotation, oldPresetID, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
     }
 
     /**
@@ -2455,17 +2457,29 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Delete annotation
+     * Delete annotation through the IO pipeline.
+     *
+     * Routes through `annotationResource.delete` so external guards (registered
+     * via `IO_PIPELINE.registerGuard({ resource: 'annotation', direction: 'pre-delete', … })`)
+     * may abort synchronously, and so any bound `crud:annotation` sink
+     * receives the delete asynchronously in the background. Auto-history is
+     * pushed via `inverseApply`. `rollbackOnAsyncRefuse: true` opts in to
+     * server-refusal rollback (server reject reverts the local removal +
+     * pops the history entry).
+     *
      * @param {fabric.Object} annotation
      * @param _raise @private
-     * @return {boolean} true if annotation was deleted
+     * @return {boolean} true if annotation was deleted (sync local outcome)
      */
     deleteAnnotation(annotation, _raise=true) {
-        return APPLICATION_CONTEXT.history.push(
-            () => this._deleteAnnotation(annotation, _raise),
-            () => this._addAnnotation(annotation, _raise),
-            { name: 'Delete annotation' }
-        );
+        if (!annotation) return false;
+        const result = this.module.annotationResource.delete(annotation.incrementId, {
+            apply:        () => { this._deleteAnnotation(annotation, _raise); },
+            inverseApply: () => { this._addAnnotation(annotation, _raise); },
+            meta: { kind: 'delete', object: annotation, viewerId: this.viewer?.uniqueId },
+            rollbackOnAsyncRefuse: true,
+        });
+        return !!result.ok;
     }
 
     /**
@@ -2540,29 +2554,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {boolean} true if annotation replacemed succeeded
      */
     replaceAnnotation(previous, next, isDoppelganger=false) {
-        // We have to skip history since we will add these to history anyway, avoid duplicate entries
-
-        let cancelFlag = false;
-        if (!isDoppelganger) {
-            try {
-                if (previous) this.raiseEvent('annotation-before-replace', {
-                    object: previous,
-                    isCancelled: () => cancelFlag,
-                    setCancelled: (cancelled) => {cancelFlag = cancelled},
-                });
-            } catch(e) { console.error('Error in annotation-before-replace event handler: ', e); }
-        } else {
-            try {
-                if (previous) this.raiseEvent('annotation-before-replace-doppelganger', {
-                    object: previous,
-                    isCancelled: () => cancelFlag,
-                    setCancelled: (cancelled) => {cancelFlag = cancelled},
-                });
-            } catch (e) { console.error('Error in annotation-before-replace-doppelganger event handler: ', e); }
-        }
-        if (cancelFlag) return false;
-
         if (isDoppelganger) {
+            // Doppelganger swaps are UI helpers (no history, no sink
+            // sync). Run guards for `pre-update` with kind `replace-doppelganger`
+            // synchronously so external listeners can abort an edit-mode swap.
+            if (previous) {
+                const veto = this.module.annotationResource.canUpdate(
+                    previous.incrementId, next, {
+                        kind: 'replace-doppelganger',
+                        previous, next, viewerId: this.viewer?.uniqueId,
+                    });
+                if (!veto.ok) return false;
+            }
+
             // Uses instance ID to track helper annotations on canvas
             const prevIsBeingReplaced = !!previous.internalID;
             const nextIsBeingReplaced = !!next.internalID;
@@ -2604,11 +2608,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             this._promoteHelperAnnotation(next, false, true);
         }
 
-        return APPLICATION_CONTEXT.history.push(
-            () => this._replaceAnnotation(previous, next, true),
-            () => this._replaceAnnotation(next, previous, true),
-            { name: 'Edit annotation' }
-        );
+        // Real replace (edit completion). Routes through annotation IO
+        // resource so sync guards may veto, sinks get the update
+        // (fire-and-forget), and auto-history covers undo/redo. We do NOT
+        // opt into rollbackOnAsyncRefuse here — a server reject on a swap
+        // is easier to live with than flicker; user can manually undo if
+        // they care. Use `result.settled` if you need server confirmation.
+        const result = this.module.annotationResource.update(previous.incrementId, next, {
+            apply:        () => { this._replaceAnnotation(previous, next, true); },
+            inverseApply: () => { this._replaceAnnotation(next, previous, true); },
+            meta: { kind: 'replace', previous, next, viewerId: this.viewer?.uniqueId },
+        });
+        return !!result.ok;
     }
 
     /**
@@ -3422,26 +3433,8 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const zoom = this.canvas.computeGraphicZoom(this.viewer.viewport);
         const graphicZoom = this.canvas.computeGraphicZoom(this.viewer.viewport) / zoom;
 
-        const annotations = input.objects.map(o => $.extend(true, {}, o));
-        const nonFabricObjects = [];
-        const fabricObjects = [];
-
-        annotations.forEach(obj => {
-            const factory = self.module.getAnnotationObjectFactory(obj.factoryID || obj.type);
-            if (!factory) {
-                console.warn("Unknown annotation factory during load, skipping object.", obj);
-                return;
-            }
-
-            if (factory.fabricStructure()) {
-                fabricObjects.push(obj);
-            } else {
-                nonFabricObjects.push(obj);
-            }
-        });
-
         return new Promise((resolve, reject) => {
-            fabric.util.enlivenObjects(nonFabricObjects, async (objects) => {
+            fabric.util.enlivenObjects(input.objects, async (objects) => {
                 try {
                     if (clear) {
                         this.canvas.clear();
@@ -3504,8 +3497,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                     // loads chunk + show progress dialog (anchored to this viewer)
                     // and stay cancellable. loadObjects() wraps history at a
                     // higher level — we don't push history here.
-                    const allObjects = objects.concat(fabricObjects);
-                    await self.addAnnotationsBulk(allObjects, {
+                    await self.addAnnotationsBulk(objects, {
                         addOne: initObject,
                         deleteOne: (obj) => self._deleteAnnotation(obj, false),
                         viewer: self.viewer,

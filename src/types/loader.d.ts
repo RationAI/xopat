@@ -31,8 +31,11 @@ type ViewerLikeItem = OpenSeadragon.Viewer | UniqueViewerId;
 /** Element ID unique to instance — either a plugin ID or a module ID. */
 type XOpatElementID = string;
 
-/** Execution context of an xOpat element. */
-type XOpatExecutionContext = "plugin" | "module";
+/** Execution context of an xOpat element. `"core"` is the synthetic
+ *  owner registered by the loader so APPLICATION_CONTEXT.AppCache /
+ *  AppCookies / sessionStorage flows route through the IO pipeline on
+ *  the same axis as plugins/modules. */
+type XOpatExecutionContext = "plugin" | "module" | "core";
 
 // ── Error / event types ───────────────────────────────────────────────────────
 
@@ -46,28 +49,6 @@ type XOpatErrorEvent = {
 };
 
 // ── Store options ─────────────────────────────────────────────────────────────
-
-/**
- * Options for PostDataStore, extending the base StorageOptions.
- * @property {string} id - Storage namespace id (see StorageOptions).
- * @property {XOpatExecutionContext} xoType - Owner type: 'plugin' or 'module'.
- * @property {boolean} [inViewerContext] - If true, POST IO depends on viewer context.
- * @property {string} [exportKey] - Optional export key for globally exported data.
- */
-type PostDataStoreOptions = {
-    /** Storage namespace id (mirrors StorageOptions.id) */
-    id: string;
-    /** Schema for key validation) */
-    schema?: StorageSchema;
-    /** If true, unknown keys throw in strict mode */
-    strictSchema?: boolean;
-    /** Owner type: 'plugin' or 'module' */
-    xoType: XOpatExecutionContext;
-    /** If true, the POST IO depends on viewer context */
-    inViewerContext?: boolean;
-    /** Optional export key for globally exported data */
-    exportKey?: string;
-};
 
 /** Getter that returns a named UI item for a viewer menu tab. */
 type UINamedItemGetter = (viewer: OpenSeadragon.Viewer) => any;
@@ -88,19 +69,6 @@ type XOpatServerErrorPayload = {
     error: any;
 };
 
-
-// ── PostDataStore (async key-value store for plugin/module data) ──────────────
-
-/**
- * Async key-value store for plugin/module persistent data backed by POST IO.
- * @see XOpatStorage
- */
-interface PostDataStore {
-    get(key: string, defaultValue?: any): Promise<any>;
-    set(key: string, value: string): Promise<void>;
-    delete(key: string): Promise<void>;
-    keys(): Promise<Array<string | null>>;
-}
 
 // ── Base element interfaces ───────────────────────────────────────────────────
 
@@ -123,10 +91,12 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
     readonly uid: string;
     /** Execution context: 'plugin' | 'module' */
     readonly xoContext: XOpatExecutionContext;
-    /** Per-element synchronous cache */
+    /** Per-element synchronous cache (`kv:cache`, default driver: localStorage). */
     readonly cache: InstanceType<typeof XOpatStorage.Cache>;
-    /** Async POST data store for this element */
-    readonly POSTStore: PostDataStore;
+    /** Per-element synchronous cookies façade (`kv:cookies`). */
+    readonly cookies: InstanceType<typeof XOpatStorage.Cookies>;
+    /** Per-element async data store (`kv:data`, default driver: post-data). */
+    readonly data: InstanceType<typeof XOpatStorage.Data>;
 
     /** Return localisation file URL for the given locale. */
     getLocaleFile(locale: string): string;
@@ -146,17 +116,37 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
      */
     warn(e: XOpatErrorEvent, notifyUser: boolean): void;
 
-    /** Initialize the POST IO store for this element. */
-    initPostIO(options?: Partial<PostDataStoreOptions>): Promise<PostDataStore | undefined>;
+    /**
+     * Register this element with the generic IO/persistence pipeline.
+     * Optional. Pass `exportBundle`/`importBundle` hooks to participate
+     * in bundle-level export/import; declare additional capabilities here
+     * or in include.json's `io.capabilities`. See src/IO_PIPELINE.md.
+     */
+    initIO(options?: {
+        capabilities?: IOCapability[];
+        exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
+        importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
+        bundleScope?: "global" | "per-viewer" | "both";
+        ignore?: boolean;
+    }): Promise<void>;
 
-    /** Export data by key (global context). */
-    exportData(key: string): Promise<any>;
-    /** Export viewer-scoped data. */
-    exportViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string): Promise<any>;
-    /** Import data by key (global context). */
-    importData(key: string, data: any): Promise<void>;
-    /** Import viewer-scoped data. */
-    importViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string, data: any): Promise<void>;
+    /** Declare a capability (alternative to passing it through initIO). */
+    defineCapability(cap: IOCapability): void;
+
+    /**
+     * Declare a per-element CRUD resource. Returns a façade with
+     * create/read/update/delete that dispatch through the pipeline. CRUD
+     * is inert (success no-op) until an admin binds the matching
+     * `crud:<name>` capability to a sink.
+     */
+    defineResource<T>(def: IOResourceDef<T>): IOResource<T>;
+
+    /** IO façade for triggering exports / introspecting bindings. */
+    readonly io: {
+        flush(scope?: { capabilityId?: string; viewerId?: string }): Promise<IOResult[]>;
+        capabilities(): IOCapability[];
+        isEnabled(capabilityId?: string): boolean;
+    };
 
     /** Get the viewer-specific context map for the given viewer session ID. */
     getViewerContext(id: UniqueViewerId): Record<string, any> | undefined;
@@ -255,7 +245,6 @@ interface IXOpatViewerSingleton extends OpenSeadragon.EventSource {
  */
 interface IXOpatViewerSingletonModule extends IXOpatModule, IXOpatViewerSingleton {
     destroy(): void;
-    initPostIO(options?: Partial<PostDataStoreOptions>): Promise<PostDataStore | undefined>;
 }
 
 // ── Plugin interfaces ─────────────────────────────────────────────────────────

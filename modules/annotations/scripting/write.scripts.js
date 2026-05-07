@@ -94,15 +94,10 @@ ScriptingManager.registerExternalApi(
         }
 
         _ensurePresetSnapshot() {
-            try {
-                const module = this._getModule();
-                const maybePromise = module.createPresetsCookieSnapshot?.();
-                if (maybePromise && typeof maybePromise.then === "function") {
-                    void maybePromise.catch(() => {});
-                }
-            } catch (e) {
-                // non-fatal
-            }
+            // Preset persistence flows through the IO pipeline now —
+            // PresetManager events drive `presetResource` dispatch.
+            // Kept as a no-op shim for callers; remove once all script
+            // sites stop calling it.
         }
 
         _touchAnnotation(object) {

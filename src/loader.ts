@@ -1,16 +1,25 @@
 import type { XOpatCoreConfig, XOpatElementRecord } from "./types/config";
-import { type StorageLike, type AsyncStorageLike, XOpatStorage } from "./store";
+import { XOpatStorage } from "./store";
 import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import type { IOPipeline } from "./classes/io";
+import { IOResourceImpl } from "./classes/io";
 
 
-/** Token symbols for internal element storage */
-const STORE_TOKEN = Symbol("XOpatElementDataStore");
+/** Token symbol for per-element synchronous cache. */
 const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
+/** Token symbol for per-element synchronous cookies façade (lazy). */
+const COOKIES_TOKEN = Symbol("XOpatElementCookiesStore");
+/** Token symbol for per-element async data façade (lazy). */
+const DATA_TOKEN = Symbol("XOpatElementDataStore");
+/** Symbol where each element keeps the disposer that removes it from IO_PIPELINE on destroy. */
+const IO_DISPOSE_TOKEN = Symbol("XOpatElementIODisposer");
+/** Per-viewer scratch map keyed by element uid (used by getViewerContext). */
+const STORE_TOKEN = Symbol("XOpatViewerScratchStore");
 
 export class XOpatServerCallError extends Error {
     code?: string;
@@ -47,6 +56,18 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
     let LOADING_PLUGIN = false;
     const REQUIRED_SINGLETONS = new Set<any>();
+
+    // The IO pipeline is now bootstrapped earlier (in src/app.ts, via
+    // bootstrapIOPipeline) so that AppCache/AppCookies are functional from the
+    // first `getOption()` call. The loader just consumes the global. Plugins
+    // and modules still register capabilities and bundle hooks via
+    // `this.initIO(...)` / `this.defineResource(...)`; administrators bind
+    // capabilities to sinks in `ENV.client.io` (server-injected, NOT
+    // URL-modifiable). See src/IO_PIPELINE.md.
+    const IO_PIPELINE: IOPipeline = (window as any).IO_PIPELINE;
+    if (!IO_PIPELINE) {
+        throw "XOpatLoader: IO_PIPELINE was not bootstrapped before initXOpatLoader. Call bootstrapIOPipeline(ENV, POST_DATA) first.";
+    }
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -176,10 +197,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             }
             PLUGINS[plugin.id]!.__ready = true;
 
-            if (outsideLoad) {
-                // do not await - let
-                VIEWER_MANAGER.forceDataImportInitialization();
-            }
+            // Note: dynamically loaded plugins no longer need an extra
+            // `forceDataImportInitialization` here — their own `initIO`
+            // catch-up (post-boot) iterates open viewers for per-viewer
+            // bundles. Calling forceDataImportInitialization again would
+            // double-fire `importBundle` for every previously-restored
+            // owner.
 
             /**
              * Plugin was loaded dynamically at runtime.
@@ -526,110 +549,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return Aggregate as any;
     };
 
-    // POST DATA STORAGE - Always implemented via POST, support static IO.
-    /**
-     * @extends XOpatStorage.Data
-     * @type {PostDataStore}
-     */
-    class PostDataStore extends XOpatStorage.Data {
-        /** Internal context type (plugin or module) */
-        contextType!: XOpatExecutionContext;
-
-        /**
-         * @param options the options used in super class XOpatStorage.Data
-         * @param options.xoType type of the owner
-         */
-        constructor(options: PostDataStoreOptions) {
-            // IDs are split by '.' and the first segment is removed to match original logic
-            super({
-                ...options,
-                id: (options.id || "").split(".").filter((_, i) => i > 0).join(".")
-            });
-
-            if (options.xoType !== "plugin" && options.xoType !== "module") {
-                throw "Invalid xoType for PostDataStore!";
-            }
-
-            this.contextType = options.xoType;
-
-            // Accessing the internal storage reference
-            // Cast to any to access internal _withReference if it's not in the public interface
-            (this.getStore() as any)._withReference(this.contextType);
-        }
-
-        /**
-         * The ability to export all relevant data is used mainly with current session exports/shares.
-         * This is used for immediate static export of the current state.
-         * @return {Promise<string>} serialized data
-         */
-        async export() {
-            const exports: Record<string, any> = {};
-            const storage = this.__storage as any;
-            //bit dirty, but we rely on keys implementation as we hardcode storage driver
-            for (let key of storage._keys() as string[]) {
-                if (key.startsWith(this.id)) {
-                    exports[key] = await storage.get(key);
-                }
-            }
-            try {
-                return JSON.stringify(exports);
-            } catch (e) {
-                console.error("Error exporting post data for ", this.id, e);
-                return undefined;
-            }
-        }
-
-        /**
-         * Class argument is unused — this class hardcodes POST DATA 'driver'.
-         */
-        static register(Class: new () => StorageLike | AsyncStorageLike) {
-            super.registerClass(class extends XOpatStorage.AsyncStorage {
-                ref!: string;
-                async getItem(key: string) {
-                    let storage = POST_DATA[this.ref] as Record<string, unknown>;
-                    // backward non-namespaced compatibility
-                    return POST_DATA[key] || (storage && storage[key]);
-                }
-                async setItem(key: string, value: any) {
-                    let storage = POST_DATA[this.ref];
-                    if (!storage) {
-                        storage = POST_DATA[this.ref] = {};
-                    }
-                    storage[key] = value;
-                }
-                async removeItem(key: string) {
-                    delete POST_DATA[key];
-                    let storage = POST_DATA[this.ref];
-                    if (storage) {
-                        delete storage[key];
-                    }
-                }
-                async clear() {
-                    if (POST_DATA[this.ref]) {
-                        POST_DATA[this.ref] = {};
-                    }
-                }
-                get length(): Promise<number> {
-                    let storage = POST_DATA[this.ref];
-                    return Promise.resolve(Object.keys(storage || {}).length);
-                }
-                async key(index: number): Promise<string> {
-                    let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {})[index] ?? "";
-                }
-                _keys(): string[] { //internal loader use
-                    let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {});
-                }
-                _withReference(ref: string) {  //internal loader use
-                    this.ref = ref;
-                }
-            } as any);
-        }
-    }
-    // We hardcode internal storage driver for PostDataStore
-    PostDataStore.register(null as any);
-
     /**
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
@@ -659,6 +578,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             this[CACHE_TOKEN] = new XOpatStorage.Cache({ id: this.__uid });
             REGISTERED_ELEMENTS.push(this);
+
+            // Auto-register with the IO pipeline so include.json `io` block
+            // declarations apply, and so resources/capabilities can be added
+            // later via initIO()/defineResource(). No bundle hooks yet.
+            this[IO_DISPOSE_TOKEN] = IO_PIPELINE.registerOwner(this.__uid, {
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+            });
+            const meta = (executionContextName === "plugin" ? PLUGINS : MODULES)[id];
+            const ioBlock = meta && (meta as any).io;
+            if (ioBlock !== undefined) IO_PIPELINE.applyIncludeBlock(this.__uid, ioBlock);
         }
 
         /**
@@ -683,10 +613,36 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * @return {XOpatStorage.Cache} cache interface
+         * @return {XOpatStorage.Cache} sync per-element cache (kv:cache).
+         * Default driver: localStorage; admin-redirectable via app config.
          */
         get cache() {
             return this[CACHE_TOKEN];
+        }
+
+        /**
+         * Sync per-element cookies façade (kv:cookies). Default driver:
+         * browser cookie jar; admin-redirectable. Lazy.
+         */
+        get cookies() {
+            let c = this[COOKIES_TOKEN];
+            if (!c) {
+                c = this[COOKIES_TOKEN] = new XOpatStorage.Cookies({ id: this.__uid });
+            }
+            return c;
+        }
+
+        /**
+         * Async per-element data store (kv:data). Default driver:
+         * post-data (replaces the legacy POSTStore); admin-redirectable
+         * to http-rest, indexeddb, etc. Lazy.
+         */
+        get data() {
+            let d = this[DATA_TOKEN];
+            if (!d) {
+                d = this[DATA_TOKEN] = new XOpatStorage.Data({ id: this.__uid });
+            }
+            return d;
         }
 
         /**
@@ -715,13 +671,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         setOption(key: string, value: any, cache = true) {
             if (cache) this.cache.set(key, value);
-        }
-
-        /**
-         * @return {PostDataStore}
-         */
-        get POSTStore() {
-            return this[STORE_TOKEN];
         }
 
         /**
@@ -815,103 +764,112 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * Initialize IO in the Element - enables use of export/import functions. Can be initialized
-         * multiple times for multiple individual items (exportKey should differ!)
-         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
-         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
-         * @param {boolean} [options.inViewerContext=true] if true, the POST IO depends on the viewer context and
-         * runs IO wrt. viewer lifecycle
-         * @return {PostDataStore} data store reference, or false if import failed
+         * Initialize this element's participation in the generic IO/persistence
+         * pipeline. Optional. Without this call, the element is registered with
+         * the pipeline (so include.json `io` declarations apply) but has no
+         * bundle hooks — meaning bundle-export/import capabilities, even when
+         * declared, will produce no payload.
+         *
+         * @param options.capabilities  capabilities to declare in addition to
+         *   any declared in include.json. Each is `{ id, kind: 'bundle'|'crud' }`.
+         * @param options.exportBundle  hook called by the pipeline when a
+         *   bundle-export capability is bound to a sink. Return the
+         *   serialized payload (string/Blob/object). Inspect `ctx.viewerId`
+         *   for per-viewer dispatch.
+         * @param options.importBundle  hook called by the pipeline when a
+         *   bundle-import is requested for this owner.
+         * @param options.bundleScope   `'global' | 'per-viewer' | 'both'`.
+         *   Defaults to `'global'`. `'both'` matches the legacy
+         *   `inViewerContext: true` behavior (one global call plus one call
+         *   per active viewer).
+         * @param options.ignore        opt-out at runtime (equivalent to
+         *   the old `ignorePostIO` option).
          */
-        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
-            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
+        async initIO(options: {
+            capabilities?: IOCapability[];
+            exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
+            importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
+            bundleScope?: "global" | "per-viewer" | "both";
+            ignore?: boolean;
+        } = {}): Promise<void> {
+            if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
+                IO_PIPELINE.applyIncludeBlock(this.__uid, false);
                 return;
             }
-
-            options.id = this.uid;
-            options.xoType = this.__xoContext as XOpatExecutionContext;
-            if (options.inViewerContext === undefined) {
-                options.inViewerContext = true;
+            IO_PIPELINE.registerOwner(this.__uid, {
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+                bundleScope: options.bundleScope,
+                exportBundle: options.exportBundle,
+                importBundle: options.importBundle,
+            });
+            for (const cap of options.capabilities ?? []) {
+                IO_PIPELINE.registerCapability(this.__uid, cap);
             }
-            let store = this[STORE_TOKEN];
-            if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
+            // Mirror legacy initPostIO behaviour: pull any pre-existing
+            // global payload from bound bundle sinks immediately so
+            // the owner can rehydrate before any user interaction.
+            if (options.importBundle) {
+                try {
+                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid });
+                } catch (e) {
+                    console.error("IO Failure (initIO restore):", this.constructor.name, e);
+                    this.error({
+                        error: e, code: "W_IO_INIT_ERROR",
+                        message: $.t("error.pluginImportFail",
+                            { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" }),
+                    });
+                }
             }
-
-            const vanillaExportKey = (options.exportKey || "").replace("::", "");
-
-            try {
-                VIEWER_MANAGER.addHandler('export-data', async () => {
-                    const data = await this.exportData(vanillaExportKey);
-                    if (data) {
-                        await store.set(vanillaExportKey, data);
-                    }
-
-                    if (options.inViewerContext) {
-                        const exportKey = vanillaExportKey + "::";
-                        for (let v of VIEWER_MANAGER.viewers) {
-                            const contextID = findViewerUniqueId(v) ?? "__unknown_viewer_ref__";
-                            try {
-                                const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
-                                if (viewerData) {
-                                    await store.set(exportKey + contextID, viewerData);
-                                }
-                            } catch (e) {
-                                console.warn(`Error exporting viewer data ${contextID} for ${this.id}`, e);
-                            }
-                        }
-                    }
-                });
-
-                const data = await store.get(vanillaExportKey);
-                if (data !== undefined) await this.importData(vanillaExportKey, data);
-
-            } catch (e) {
-                console.error('IO Failure:', this.constructor.name, e);
-                this.error({
-                    error: e, code: "W_IO_INIT_ERROR",
-                    message: $.t('error.pluginImportFail',
-                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                });
-            }
-            return store;
         }
 
         /**
-         * Called to export data within 'export-data' event: automatically the post data store object
-         * (returned from initPostIO()) is given the output of this method:
-         * `await dataStore.set(options.exportKey || "", await this.exportData());`
-         * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
-         * upon the event 'export-data', or simply nest objects to fit a single output
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @return {Promise<any>}
+         * Declare that this element supports a `bundle-*` or `crud:*` capability.
+         * Equivalent to passing it via `initIO({ capabilities: [...] })` or
+         * declaring it in include.json's `io.capabilities`.
          */
-        async exportData(key: string): Promise<any> { }
-        /**
-         * Works the same way as @exportData, but for the viewer context.
-         * @param viewer {OpenSeadragon.Viewer} the target viewer
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
-         * @return {Promise<any>}
-         */
-        async exportViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string): Promise<any> {
-            return {};
+        defineCapability(cap: IOCapability): void {
+            IO_PIPELINE.registerCapability(this.__uid, cap);
         }
+
         /**
-         * Called automatically within this.initPostIO if data available
-         * note: parseImportData return value decides if data is parsed data or passed as raw string
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param data {any} data
+         * Declare a per-element CRUD resource (e.g. `'annotation'`, `'preset'`).
+         * Returns a façade with `create/read/update/delete` that dispatch
+         * through the pipeline. CRUD is inert (no-op success) until an admin
+         * binds the matching `crud:<name>` capability to a sink.
          */
-        async importData(key: string, data: any): Promise<void> { }
+        defineResource<T>(def: IOResourceDef<T>): IOResource<T> {
+            IO_PIPELINE.registerCapability(this.__uid, {
+                id: `crud:${def.name}`,
+                kind: "crud",
+                schema: def.schema,
+                label: def.name,
+            });
+            return new IOResourceImpl<T>({
+                ownerUid: this.__uid,
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+                pipeline: IO_PIPELINE,
+                def,
+            });
+        }
+
         /**
-         * Works the same way as @importData, but for the viewer context.
-         * @param viewer {OpenSeadragon.Viewer} the target viewer
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
-         * @param data {any} data
+         * IO façade exposed to plugin/module code. `flush()` triggers a
+         * bundle export for this element (programmatic equivalent of the
+         * user-facing "Export" button); `capabilities()` lists what this
+         * element advertises; `isEnabled()` reports whether any binding
+         * for the given capability is active.
          */
-        async importViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string, data: any): Promise<void> { }
+        get io() {
+            const uid = this.__uid;
+            return {
+                flush: (scope?: { capabilityId?: string; viewerId?: string }) =>
+                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId }),
+                capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
+                isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
+            };
+        }
 
         /**
          * Get context of viewer that is suitable for storing viewer-related data.
@@ -1066,7 +1024,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         /**
          * Infer current viewer id if available.
-         * Uses viewer.id because the server RPC currently expects the transport viewer id.
+         * Uses viewer.id because the server RPC currently expects the sink viewer id.
          */
         protected _defaultServerViewerId(): string | undefined {
             try {
@@ -1580,57 +1538,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             super.destroy();
         }
 
-        /**
-         * Initialize IO in the Element - enables use of export/import functions. Redefinition
-         * of the element base implementation, exports primarily to the viewer it encapsulates.
-         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
-         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
-         * @return {PostDataStore} data store reference, or false if import failed
-         */
-        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
-            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
-                return;
-            }
-
-            options.id = this.uid;
-            options.xoType = this.__xoContext as XOpatExecutionContext;
-            let store = this[STORE_TOKEN];
-            if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
-            }
-
-            const vanillaExportKey = (options.exportKey || "").replace("::", "");
-
-            try {
-                const exportKey = vanillaExportKey + "::";
-                VIEWER_MANAGER.addHandler('export-data', async () => {
-                    const data = await this.exportData(vanillaExportKey);
-                    if (data) {
-                        console.warn("Xopat Module Viewer Singleton should not export to a global context, instead, it should export to a viewer context!");
-                        await store.set(vanillaExportKey, data);
-                    }
-
-                    const contextID = this.viewer.uniqueId;
-                    const viewerData = await this.exportViewerData(this.viewer, vanillaExportKey, contextID);
-                    if (data) {
-                        await store.set(vanillaExportKey + "::" + contextID, viewerData);
-                    }
-                });
-
-                // fallback compatibility, import fo all viewers (importing to just one would make repeated re-import)
-                const data = await store.get(exportKey);
-                if (data !== undefined) await this.importData(exportKey, data);
-
-            } catch (e) {
-                console.error('IO Failure:', this.constructor.name, e);
-                this.error({
-                    error: e, code: "W_IO_INIT_ERROR",
-                    message: $.t('error.pluginImportFail',
-                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                });
-            }
-            return store;
-        }
     } as unknown as XOpatViewerSingletonModuleClass;
 
     /**
@@ -2008,14 +1915,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }
             }
 
-            /**
-             * Event to export your data within the viewer lifecycle
-             * Event handler can by <i>asynchronous</i>, the event can wait.
-             *
-             * @memberof VIEWER_MANAGER
-             * @event export-data
-             */
-            await VIEWER_MANAGER.raiseEventAwaiting('export-data');
+            // Drive the generic IO pipeline: every owner with a bundle-export
+            // capability bound to a sink contributes its payload. The
+            // built-in `post-data` sink writes into POST_DATA, preserving
+            // the legacy HTML-form session export shape. See src/IO_PIPELINE.md.
+            await IO_PIPELINE.flushBundleExport();
             return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
         },
 
@@ -2873,6 +2777,11 @@ form.submit();
     function findViewerUniqueId(viewer: OpenSeadragon.Viewer): UniqueViewerId | undefined {
         let result = viewer.__cachedUUID;
         if (result) return result;
+
+        // Empty world is transient during reset/boot — return undefined
+        // silently instead of the warn+auto-generate path below.
+        if (!viewer.world || viewer.world.getItemCount() === 0) return undefined;
+
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
@@ -3704,53 +3613,28 @@ form.submit();
         }
 
         /**
-         * Initialize static POST data for plugins and modules.
+         * For each currently open viewer, ask the IO pipeline to restore
+         * any pre-existing per-viewer bundle data via bound sinks
+         * (legacy: this pulled from POST_DATA::<viewerUniqueId>). Owners
+         * that registered an `importBundle` hook receive the payload.
          */
         async forceDataImportInitialization() {
-            try {
-                for (let viewer of this.viewers) {
-                    // Find all imports that fit to the target viewer and import to the plugin
-                    const contextID = findViewerUniqueId(viewer);
-                    if (!contextID) {
-                        console.warn("Viewer has no unique ID, skipping plugin data initialization");
-                        continue;
-                    }
-
-                    for (let element of REGISTERED_ELEMENTS) {
-                        if (typeof element.getOption === "function" && element.getOption('ignorePostIO', false)) {
-                            continue;
-                        }
-
-                        const store = (element as any)[STORE_TOKEN];
-                        if (!store) continue;
-                        // todo: how often to import data? only when new viewer is created? what if user has
-                        //  some data and the some reload events rewrites it? for now we do strictly just once
-                        if (!store.__xoDataImported) {
-                            store.__xoDataImported = {};
-                        }
-                        if (store.__xoDataImported[contextID]) continue;
-                        store.__xoDataImported[contextID] = true;
-
-                        for (let key of await store.keys()) {
-                            const keyParts = key.split("::");
-                            if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
-                            const data = await store?.get(key);
-                            try {
-                                if (data !== undefined) await element.importViewerData(viewer, key, contextID!, data);
-                            } catch (e) {
-                                console.error('IO Failure:', element.constructor.name, e);
-                                element.error({
-                                    error: e, code: "W_IO_INIT_ERROR",
-                                    message: $.t('error.pluginImportFail',
-                                        { plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                                });
-                            }
-                        }
-                    }
+            for (let viewer of this.viewers) {
+                const contextID = findViewerUniqueId(viewer);
+                if (!contextID) {
+                    console.warn("Viewer has no unique ID, skipping plugin data initialization");
+                    continue;
                 }
-            } catch (e) {
-                console.error('IO Failure:', e);
+                try {
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID });
+                } catch (e) {
+                    console.error('IO Failure:', e);
+                }
             }
+            // Unlocks per-viewer catch-up inside `initIO` for owners that
+            // register AFTER this pass (lazy singletons instantiated on
+            // first user interaction). See IOPipeline.bootRestorePending.
+            IO_PIPELINE.markBootRestoreComplete();
         }
 
         /**

@@ -17,7 +17,6 @@ export const presetMethods = {
 
     updatePresetEvent() {
         this.updatePresetsHTML();
-        this.context.createPresetsCookieSnapshot();
     },
 
     _setContainerContent(target, ...children) {
@@ -294,7 +293,6 @@ export const presetMethods = {
         const removed = this.context.presets.removePreset(presetId);
         if (removed) {
             buttonNode.closest('[data-preset-id]')?.remove();
-            this.context.createPresetsCookieSnapshot();
             this._updateRightSideMenuPresetList();
             return;
         }
@@ -310,14 +308,20 @@ export const presetMethods = {
         if (!preset) return;
 
         if (propName === 'objectFactory') {
-            preset.objectFactory = this.context.getAnnotationObjectFactory(value) || preset.objectFactory;
-        } else if (propName === 'color') {
-            preset.color = value;
-        } else if (preset.meta[propName]) {
-            preset.meta[propName].value = value;
+            // objectFactory stores a factory instance, not the id string —
+            // keep this path inline and raise preset-update manually so
+            // the IO pipeline still sees the change.
+            const next = this.context.getAnnotationObjectFactory(value);
+            if (next && next !== preset.objectFactory) {
+                preset.objectFactory = next;
+                this.context.raiseEvent('preset-update', { preset });
+            }
+        } else {
+            // PresetManager.updatePreset writes the property and raises
+            // preset-update only when something actually changed.
+            this.context.presets.updatePreset(id, { [propName]: value });
         }
 
-        this.context.createPresetsCookieSnapshot();
         this.updatePresetEvent();
     },
 
@@ -335,7 +339,6 @@ export const presetMethods = {
             const newNode = this._metaFieldHtml(presetId, key, { name, value: '' });
             buttonNode.parentElement.before(newNode);
             inputNode.value = '';
-            this.context.createPresetsCookieSnapshot();
             return;
         }
         Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
@@ -345,7 +348,6 @@ export const presetMethods = {
         if (!this.enablePresetModify) return;
         if (this.context.presets.deleteCustomMeta(presetId, key)) {
             inputNode.parentElement.remove();
-            this.context.createPresetsCookieSnapshot();
             return;
         }
         Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
@@ -561,7 +563,6 @@ export const presetMethods = {
         const id = this.context.presets.addPreset().presetID;
         const newNode = this.getPresetHTMLById(id, isLeftClick);
         buttonNode.before(newNode);
-        this.context.createPresetsCookieSnapshot();
         this._updateRightSideMenuPresetList();
     },
 

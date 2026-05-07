@@ -1,6 +1,11 @@
 import { ViewerSelectionState } from "./viewer-selection-state";
 
 export class ApplicationLifecycleController {
+    /**
+     * Bootstrap-only path: must use raw sessionStorage because it runs
+     * before initXOpatLoader creates IO_PIPELINE. See src/IO_PIPELINE.md
+     * "Bootstrap exception".
+     */
     static restoreLocalState() {
         const sessionStateKey = "__xopat_session__";
 

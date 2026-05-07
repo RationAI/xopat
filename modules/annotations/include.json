@@ -28,6 +28,18 @@
         "freeFormTool.js"
     ],
     "requires": ["fabricjs"],
+    // Generic IO pipeline declarations. Bundle-* covers the legacy
+    // whole-canvas export/import (see src/IO_PIPELINE.md). Per-element
+    // CRUD via "crud:annotation" / "crud:preset" stays inert until an
+    // admin binds the capability to a sink.
+    "io": {
+        "capabilities": [
+            { "id": "bundle-export", "kind": "bundle", "label": "Annotations bundle export" },
+            { "id": "bundle-import", "kind": "bundle", "label": "Annotations bundle import" },
+            { "id": "crud:annotation", "kind": "crud", "label": "Annotation" },
+            { "id": "crud:preset",     "kind": "crud", "label": "Preset" }
+        ]
+    },
     // TODO: parked. The runtime block that consumes this flag is commented out
     // in annotations.js (initPostIO) — it blew localStorage past ~500 annotations.
     // Replaced for now by APPLICATION_CONTEXT.setDirty() + a beforeunload guard

@@ -66,7 +66,6 @@ class AnnotationsGUI extends XOpatPlugin {
 
         await this.setupFromParams();
 
-        this.context.initPostIO();
         this.setupActiveTissue();
         this.initHandlers();
         this.initHTML();

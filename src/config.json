@@ -67,6 +67,61 @@
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
             }
+            /*
+             * Generic IO pipeline admin block. Routes plugin/module bundle &
+             * CRUD capabilities to sinks (file-download, http-rest, github, …)
+             * and ships per-deployment options to those sinks. The pipeline
+             * captures this block at boot — server-only, never URL-modifiable.
+             * Full reference: src/IO_PIPELINE.md.
+             */
+            //"io": {
+            //    /* Hard-disable IO for these owners (highest precedence). */
+            //    //"disabled": ["some-plugin-id"],
+            //
+            //    /*
+            //     * Per-deployment sink options keyed by sink id. Each owning
+            //     * module composes these with its own defaults inside the sink
+            //     * factory's getOptions callback. Secrets do NOT belong here —
+            //     * keep them in server.secure.proxies.<alias> instead.
+            //     */
+            //    "sinkOverrides": {
+            //        /* GitHub bundle sink (modules/io-github-sink). */
+            //        //"github": {
+            //        //    "repo":      "your-org/xopat-state",
+            //        //    "branch":   "main",
+            //        //    /* Path placeholders: {ownerId} {ownerUid} {viewerId} {capabilityId} {xoType}. */
+            //        //    "pathTemplate":          "xopat/{ownerId}/{viewerId}.json",
+            //        //    "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
+            //        //    "committer": { "name": "xOpat Bot", "email": "bot@example.org" },
+            //        //    /* Forwarded to HttpClient verbatim — drop if proxy has auth.enabled:false. */
+            //        //    "auth": { "contextId": "core", "types": ["jwt"], "required": true }
+            //        //},
+            //        /* Generic HTTP REST sink (built-in). */
+            //        //"http-rest": {
+            //        //    "proxy":   "my-service",
+            //        //    "baseURL": "/api/v1/objects",
+            //        //    "auth":    { "contextId": "core", "types": ["jwt"], "required": true }
+            //        //}
+            //    },
+            //
+            //    /*
+            //     * Bindings keyed by ownerId (the include.json `id` field) and
+            //     * capabilityId (advertised in include.json io.capabilities).
+            //     * Multiple sinks can serve one capability — listed in dispatch
+            //     * order. Empty array disables the capability for that owner.
+            //     */
+            //    "bindings": {
+            //        "annotations": {
+            //            "bundle-export": ["github", "file-download"],
+            //            "bundle-import": ["github"],
+            //            "crud:annotation": [],
+            //            "crud:preset":     []
+            //        },
+            //        "core": {
+            //            "bundle-export": ["post-data"]
+            //        }
+            //    }
+            //}
         },
         // We can keep multiple configurations within the file and switch between them...
         "prod": {
@@ -209,6 +264,29 @@
               //                "issuer": "https://login.example.com/",
               //                "audience": "xopat-viewer",
               //                "forward": false,
+              //                "userClaimHeader": "x-user-sub"
+              //            }
+              //        }
+              //    }
+              //},
+              //
+              // Server-side counterpart for the `github` IO sink (modules/io-github-sink).
+              // The fine-grained PAT lives ONLY here; the browser only sees the alias.
+              // Pair with `client.<env>.io.sinkOverrides.github` above.
+              //"github": {
+              //    "baseUrl": "https://api.github.com/",          // for GHE: "https://<host>/api/v3/"
+              //    "headers": {
+              //        "Authorization": "Bearer <% GITHUB_TOKEN %>"
+              //    },
+              //    "auth": {
+              //        "enabled": true,
+              //        "mode": "all",
+              //        "verifiers": {
+              //            "jwt": {
+              //                "secret": "<% VIEWER_JWT_SECRET %>",
+              //                "issuer": "https://login.example.com/",
+              //                "audience": "xopat-viewer",
+              //                "forward": false,                    // strip viewer JWT before upstream call
               //                "userClaimHeader": "x-user-sub"
               //            }
               //        }

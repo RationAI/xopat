@@ -1,9 +1,7 @@
 import type { TileLoadFailedEvent } from "openseadragon";
 import { BackgroundConfig } from "./classes/background-config";
-import { HttpClient } from "./classes/http-client";
 import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
-import { ScriptingManager } from "./classes/scripting-manager";
 import { XOpatHistory } from "./classes/history";
 import { bootstrapVisualizationHistory } from "./classes/visualization-history";
 import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
@@ -12,6 +10,10 @@ import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-r
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 import { SessionSyncController } from "./classes/session/session-sync";
+import { bootstrapIOPipeline } from "./classes/io/bootstrap";
+import { createApplicationContext } from "./classes/app/application-context";
+import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
+import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
 // never wires up and visualization mutations fall back to a plain yes/no consent dialog.
@@ -124,8 +126,10 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     POST_DATA = POST_DATA || {};
     const sessionName = CONFIG.params["sessionName"] || ENV.setup["sessionName"];
 
-    // DEFAULT BROWSER IMPLEMENTATION OF THE COOKIE STORAGE
-    if (!XOpatStorage.Cookies.registered()) {
+    // Configure js-cookie attributes before the IO pipeline's `cookies` KV
+    // driver reads `globalThis.Cookies`. If js-cookie is unavailable the
+    // driver falls back to in-memory storage.
+    if (window.Cookies) {
         Cookies.withAttributes({
             path: ENV.client.js_cookie_path,
             domain: ENV.client.js_cookie_domain || ENV.client.domain,
@@ -133,365 +137,28 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             sameSite: ENV.client.js_cookie_same_site,
             secure: typeof ENV.client.js_cookie_secure === "boolean" ? ENV.client.js_cookie_secure : undefined
         });
-
-        if (window.Cookies) {
-            XOpatStorage.Cookies.registerClass(class {
-                getItem(key: string) {
-                    return Cookies.get(key) || null;
-                }
-                setItem(key: string, value: string) {
-                    Cookies.set(key, value);
-                    if (!Cookies.get(key)) {
-                        console.warn("Cookie value too big to store!", key);
-                    }
-                }
-                removeItem(key: string) {
-                    Cookies.remove(key);
-                }
-                clear() {
-                    const allCookies = Cookies.get();
-                    for (let key in allCookies) {
-                        Cookies.remove(key);
-                    }
-                }
-                get length() {
-                    return Object.keys(Cookies.get()).length;
-                }
-                key(index: number) {
-                    const keys = Object.keys(Cookies.get());
-                    return keys[index] || null;
-                }
-            });
-        } else {
-            console.warn("Cookie.js seems to be blocked.");
-            console.log("Cookies are implemented using local storage. This might be a security vulnerability!");
-            XOpatStorage.Cookies.registerInstance(localStorage);
-        }
         Cookies.remove("test");
+    } else {
+        console.warn("Cookie.js seems to be blocked. The `cookies` KV driver will fall back to in-memory storage.");
     }
 
-    // DEFAULT BROWSER IMPLEMENTATION OF THE CACHE STORAGE
-    if (!XOpatStorage.Cache.registered()) {
-        XOpatStorage.Cache.registerInstance(localStorage);
-    }
+    // Bootstrap the generic IO pipeline before APPLICATION_CONTEXT is built —
+    // AppCache/AppCookies façades resolve through `window.IO_PIPELINE` on first
+    // use, so the pipeline must exist before any `getOption()` call.
+    const IO_PIPELINE = bootstrapIOPipeline(ENV, POST_DATA);
 
     /**
      * @namespace APPLICATION_CONTEXT
      */
-    window.APPLICATION_CONTEXT = /**@lends APPLICATION_CONTEXT*/ ({
-        /**
-         * Viewer Configuration direct access.
-         * @namespace APPLICATION_CONTEXT.config
-         */
-        config: {
-            /**
-             * Get parameters object of the viewer setup.
-             * getOption should be preferred over direct params access
-             */
-            get params(): Readonly<XOpatSetup> {
-                return CONFIG.params || {};
-            },
-            /**
-             * Get default (static) parameters of the viewer setup
-             */
-            get defaultParams(): Readonly<XOpatSetup> {
-                return defaultSetup;
-            },
-            /**
-             * Get all the data WSI identifiers list
-             */
-            get data(): Readonly<DataSpecification[]> {
-                return CONFIG.data || [];
-            },
-            /**
-             * Configuration of the 'image group'
-             */
-            get background(): Readonly<BackgroundItem[]> {
-                return (CONFIG.background || []) as BackgroundItem[];
-            },
-            /**
-             * Configuration of the 'data group'
-             */
-            get visualizations(): Readonly<VisualizationItem[]> {
-                return (CONFIG.visualizations || []) as VisualizationItem[];
-            },
-            /**
-             * Startup configuration of plugins
-             */
-            get plugins(): Readonly<Record<string, XOpatElementItem>> {
-                return (CONFIG.plugins || {}) as Record<string, XOpatElementItem>;
-            },
-        },
-        /**
-         * Global Application Cache. Should not be used directly: cache is avaialble within
-         * plugins as this.cache object.
-         */
-        AppCache: new XOpatStorage.Cache({ id: "" }),
-        /**
-         * Global Application Cookies.
-         */
-        AppCookies: new XOpatStorage.Cookies({ id: "" }),
-        /**
-         * Get sessionName value (fallback refereceId) from the configuration.
-         * @return {string|*}
-         */
-        get sessionName() {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
-            const self = this as unknown as ApplicationContext;
-            const config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background") || {};
-            if (config["sessionName"]) return config["sessionName"];
-            if (sessionName) return sessionName;
-            return self.referencedId();
-        },
-        /**
-         * Check if viewer requires secure mode execution.
-         * @type {boolean}
-         */
-        get secure() {
-            return viewerSecureMode;
-        },
-        /**
-         * Get the ENV configuration used to run the viewer.
-         * @type xoEnv
-         */
-        get env() {
-            return ENV;
-        },
-        /**
-         * Get the current URL (without data, just the index entry point).
-         * @type {string}
-         */
-        get url() {
-            const self = this as unknown as ApplicationContext;
-            const domain = self.env.client.domain;
-            if (!domain.endsWith("/")) return domain + "/" + self.env.client.path;
-            return domain + self.env.client.path;
-        },
-        get settingsMenuId() { return "app-settings"; },
-        get pluginsMenuId() { return "app-plugins"; },
-        /**
-         * Get option, preferred way of accessing the viewer config values.
-         * @param name
-         * @param defaultValue
-         * @param cache
-         * @param parse if true, JSON.parse is applied to the value
-         * @return {string|*}
-         */
-        getOption(name: string, defaultValue: any = undefined, cache = true, parse = false) {
-            const self = this as unknown as ApplicationContext;
-            const builtin = self.config.defaultParams[name];
-            if (builtin === undefined) {
-                console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
-            }
-            if (cache && self.AppCache) {
-                let cached = self.AppCache.get(name);
-                if (parse && typeof cached === "string") {
-                    const trimmed = cached.trim();
-                    if (trimmed === "" || trimmed === "undefined") {
-                        self.AppCache.delete(name);
-                        return undefined;
-                    }
-                    try {
-                        return JSON.parse(trimmed);
-                    } catch (e) {
-                        console.warn("Failed to parse option cached value - erasing", cached);
-                        self.AppCache.delete(name);
-                        cached = undefined;
-                    }
-                }
-                if (cached !== null && cached !== undefined) {
-                    if (cached === "false") cached = false;
-                    else if (cached === "true") cached = true;
-                    return cached;
-                }
-            }
-            let value = self.config.params[name] !== undefined
-                ? self.config.params[name]
-                : (defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
-            if (value === "false") return false;
-            if (value === "true") return true;
-            if (parse && typeof value === "string") {
-                try {
-                    return JSON.parse(value);
-                } catch (e) {
-                    // todo: how to better recognize we should try not to parse real strings?
-                    //pass, just a string
-                }
-            }
-            return value;
-        },
-        /**
-         * Set option, preferred way of accessing the viewer config values.
-         * @param name
-         * @param value
-         * @param cache
-         */
-        setOption(name: string, value: any, cache = true) {
-            const self = this as unknown as ApplicationContext;
-            if (!self.config.defaultParams.hasOwnProperty(name)) {
-                console.warn(`Trying to set non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
-            }
-            if (value === undefined) {
-                self.AppCache.delete(name);
-                delete self.config.params[name];
-                return;
-            }
-            if (typeof value === "object") {
-                try {
-                    value = JSON.stringify(value);
-                } catch (e) {
-                    console.warn("Failed to stringify option value", value);
-                }
-            }
-            if (cache && self.AppCache) self.AppCache.set(name, value);
-            if (value === "false") value = false;
-            else if (value === "true") value = true;
-            self.config.params[name] = value;
-        },
-        setDirty() {
-            (this as unknown as ApplicationContext).__cache.dirty = true;
-        },
-        /**
-         * Get the list of all plugin IDs.
-         * @return {string[]}
-         */
-        pluginIds() {
-            return Object.keys(PLUGINS);
-        },
-        /**
-         * Get the list of active plugin IDs.
-         * @return {string[]}
-         */
-        activePluginIds() {
-            const result = [];
-
-            for (let pid in PLUGINS) {
-                if (!PLUGINS.hasOwnProperty(pid)) continue;
-                const plugin = PLUGINS[pid];
-
-                if (!plugin!.error && plugin!.instance && (plugin!.loaded || plugin!.permaLoad)) {
-                    result.push(pid);
-                }
-            }
-            return result;
-        },
-        /**
-         * Get the current FILE name viewed.
-         * @param {boolean} stripSuffix if true and the returned data is read from config.data
-         *   field, an attempt to return only filename from the file ID.
-         * @return {string}
-         */
-        referencedName(stripSuffix = false) {
-            if (!CONFIG.background || CONFIG.background.length < 0) {
-                return undefined;
-            }
-            const bgConfig = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
-            if (bgConfig) {
-                return UTILITIES.nameFromBGOrIndex(bgConfig, stripSuffix);
-            }
-            return undefined;
-        },
-        /**
-         * Get the current FILE ID viewed.
-         * @return {string}
-         */
-        referencedId() {
-            if (!CONFIG.background || CONFIG.background.length < 0) {
-                return "__anonymous__";
-            }
-            let config;
-            if (VIEWER.scalebar) {
-                config = VIEWER.scalebar.getReferencedTiledImage()?.getConfig("background");
-            } else {
-                config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true)[0]]
-                    || CONFIG.background[0];
-            }
-            return config ? CONFIG.data?.[config.dataReference] : "__anonymous__";
-        },
-        /**
-         * Return the current active visualization
-         * @return {*}
-         */
-        activeVisualizationConfig() {
-            return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
-        },
-        /**
-         * Get the viewer currently considered active by the viewer manager.
-         */
-        activeViewer() {
-            return window.VIEWER_MANAGER?.get?.() || null;
-        },
-        /**
-         * Get index of the viewer currently considered active by the viewer manager.
-         */
-        activeViewerIndex() {
-            return window.VIEWER_MANAGER?.getActiveIndex?.() ?? -1;
-        },
-        /**
-         * Get unique ID of the viewer currently considered active by the viewer manager.
-         */
-        activeViewerId() {
-            return window.VIEWER_MANAGER?.getActiveUniqueId?.();
-        },
-        /**
-         * Check if a viewer reference resolves to the currently active viewer.
-         */
-        isActiveViewer(viewerOrUniqueId: ViewerLikeItem) {
-            return !!window.VIEWER_MANAGER?.isActive?.(viewerOrUniqueId);
-        },
-        _dangerouslyAccessConfig() {
-            //remove in the future?
-            return CONFIG;
-        },
-        _dangerouslyAccessPlugin(id: string) {
-            //remove in the future?
-            return PLUGINS[id];
-        },
-        __cache: {
-            dirty: false
-        },
-        // todo: necessary to keep?
-        prepareRendering: () => {
-            // Placeholder for prepareRendering
-        }
-    }) as unknown as ApplicationContext;
-
-    if (ENV.server.devMode) {
-        APPLICATION_CONTEXT.setOption("debugMode", true);
-    }
-
-    /**
-     * Core HTTP Client.
-     * * @memberof APPLICATION_CONTEXT
-     * @type {import('./path/to/http-client').HttpClient}
-     */
-    APPLICATION_CONTEXT.httpClient = new HttpClient({
-        baseURL: APPLICATION_CONTEXT.url,
-        auth: { contextId: undefined }
+    window.APPLICATION_CONTEXT = createApplicationContext({
+        ENV,
+        CONFIG,
+        PLUGINS,
+        sessionName: sessionName as string | undefined,
+        viewerSecureMode,
+        defaultSetup,
+        ioPipeline: IO_PIPELINE,
     });
-
-    /**
-     * Scripting manager.
-     */
-    APPLICATION_CONTEXT.Scripting = ScriptingManager.instance();
-
-    // todo maybe dont support this, just call directly the static method
-    APPLICATION_CONTEXT.registerConfig = function registerConfig(bg: BackgroundItem) {
-        return BackgroundConfig.from(bg);
-    };
-
-    /**
-     *
-     * @param {BackgroundItem|BackgroundConfig} a
-     * @param b
-     * @return {boolean}
-     */
-    APPLICATION_CONTEXT.sameBackground = function sameBackground(a: BackgroundItem | BackgroundConfig, b: BackgroundItem | BackgroundConfig) {
-        if (a === b) return true;
-        if (!a || !b) return false;
-        return APPLICATION_CONTEXT.registerConfig(a).id === APPLICATION_CONTEXT.registerConfig(b).id;
-    };
-
     // todo make sure our globals dont get out of hand...
     (window as any).LAYOUT = new UI.MainLayout({
         id: "viewer-container",
@@ -510,6 +177,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     //Prepare xopat core loading utilities and interfaces
     let runLoader: (() => Promise<void> | void) | null = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 
+    if (ENV.server.devMode) {
+        APPLICATION_CONTEXT.setOption("debugMode", true);
+    }
 
     /*--------------------------------------------------------------*/
     /*------------ Initialization of  new UI -----------------------*/
@@ -565,387 +235,13 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         get: window.VIEWER_MANAGER.get.bind(window.VIEWER_MANAGER)
     });
 
-    /**
-     * Event to fire if you want to avoid explicit warning handling,
-     * recommended in modules where module should give plugin chance hande it.
-     * The core fires a dialog with provided message if not handled.
-     * @property originType: `"module"`, `"plugin"` or other type of the source
-     * @property originId: unique code component id, e.g. a plugin id
-     * @property code: unique error identifier, e.g. W_MY_MODULE_ERROR
-     * @property message: a brief description of the case
-     * @property preventDefault: if true, the core will not fire default event
-     * @property trace: optional data or context object, e.g. an error object from an exception caught
-     * @memberOf OpenSeadragon.Viewer
-     * @event warn-user
-     */
-    VIEWER_MANAGER.broadcastHandler('warn-user', (e: ErrorUserEvent) => {
-        if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
-    }, null, -Infinity);
-    /**
-     * Event to fire if you want to avoid explicit error handling,
-     * recommended in modules where module should give plugin chance hande it.
-     * The core fires an error dialog with provided message if not handled.
-     * @property originType: `"module"`, `"plugin"` or other type of the source
-     * @property originId: unique code component id, e.g. a plugin id
-     * @property code: unique error identifier, e.g. W_MY_MODULE_ERROR
-     * @property message: a brief description of the case
-     * @property preventDefault: if true, the core will not fire default event
-     * @property trace: optional data or context object, e.g. an error object from an exception caught
-     * @memberOf OpenSeadragon.Viewer
-     * @event error-user
-     */
-    VIEWER_MANAGER.broadcastHandler('error-user', (e: ErrorUserEvent) => {
-        if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
-    }, null, -Infinity);
-    VIEWER_MANAGER.broadcastHandler('plugin-failed', (e: PluginFailedEvent) => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-
-    let notified = false;
-    //todo error?
-    VIEWER_MANAGER.broadcastHandler('add-item-failed', (e: OpenSeadragon.ViewerEventMap["add-item-failed"] & OpenSeadragon.ViewerEvent) => {
-        if (notified) return;
-        const msg = e.message;
-        const statusCode = msg && typeof msg !== 'string' ? msg.statusCode : undefined;
-        if (statusCode) {
-            //todo check if the first background
-            switch (statusCode) {
-                case 401:
-                    e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
-                    Dialogs.show($.t('error.slide.401'),
-                        20000, Dialogs.MSG_ERR);
-                    XOpatUser.instance().logout(); //todo really logout? maybe request login instead?
-                    break;
-                case 403:
-                    e.eventSource.getMenu().getNavigatorTab().setTitle($.t('main.global.tissue'), true);
-                    Dialogs.show($.t('error.slide.403'),
-                        20000, Dialogs.MSG_ERR);
-                    break;
-                case 404:
-                    Dialogs.show($.t('error.slide.404'),
-                        20000, Dialogs.MSG_ERR);
-                    break;
-                default:
-                    break;
-            }
-            notified = true;
-        } else {
-            // Error is thrown by OSD
-            console.info('Item failed to load and the event does not contain reliable information to notify user. Notification was bypassed.');
-        }
-    });
+    wireViewerErrorHandlers(VIEWER_MANAGER);
 
     /*---------------------------------------------------------*/
     /*----------------- MODULE/PLUGIN core API ----------------*/
     /*---------------------------------------------------------*/
 
-    /**
-     * Set current viewer real world measurements. Set undefined values to fallback to pixels.
-     * @param name the wsi name, for dialog message
-     */
-    UTILITIES.setImageMeasurements = function (viewer: OpenSeadragon.Viewer, microns: number | undefined, micronsX: number | undefined, micronsY: number | undefined, name: string) {
-        let ppm = microns, ppmX = micronsX, ppmY = micronsY,
-            lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_LENGTH;
-        if (ppmX && ppmY) {
-            ppm = undefined; //if both specified, just prefer the specific values
-            ppmX = 1e6 / ppmX;
-            ppmY = 1e6 / ppmY;
-        } else if (!ppm) {
-            //else if not anything, just set 1 to measure as pixels
-            lengthFormatter = OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC.bind(null, "px");
-            ppm = 1;
-        } else ppm = 1e6 / ppm;
-
-        const magMicrons = microns || ((micronsX ?? 0) + (micronsY ?? 0)) / 2;
-
-        // todo try read metadata about magnification and warn if we try to guess
-        const values = [4, 2, 2, 4, 1, 10, 0.5, 20, 0.25, 40]; // Micron values at magnification levels
-        let index = 0, best = Infinity, mag: number | undefined;
-        if (magMicrons) {
-            while (index < values.length) {
-                const dev = Math.abs(magMicrons - (values[index] ?? 0));
-                // Select the best match with the smallest deviation
-                if (dev < best && dev <= (values[index] ?? 0)) {
-                    best = dev;
-                    mag = values[index + 1]; // Adjust to get the corresponding magnification
-                }
-                index += 2;
-            }
-            if (mag === undefined) {
-                if (magMicrons > 4) {
-                    Dialogs.show($.t("error.macroImage", { image: name }), 10000, Dialogs.MSG_WARN);
-                } else {
-                    console.error("Failed to find matching magnification for microns!", microns);
-                }
-            }
-        }
-
-        viewer.makeScalebar({
-            pixelsPerMeter: ppm,
-            pixelsPerMeterX: ppmX,
-            pixelsPerMeterY: ppmY,
-            sizeAndTextRenderer: lengthFormatter,
-            stayInsideImage: false,
-            location: OpenSeadragon.ScalebarLocation.BOTTOM_LEFT,
-            xOffset: 5,
-            yOffset: 10,
-            backgroundColor: "rgba(255, 255, 255, 0.5)",
-            fontSize: "small",
-            barThickness: 2,
-            destroy: false,
-            magnification: mag,
-            maxMagnification: 40
-        });
-        if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
-            viewer.scalebar.setActive(false);
-        }
-    };
-
-    /**
-     * Parse & set active background(s) and overlay(s).
-     * - activeBackgroundIndex: undefined | number | number[]
-     * - activeVisualizationIndex: undefined | number | (number|undefined)[]
-     *
-     * If arg is null => erase (set option to undefined).
-     * If arg is undefined => keep the stored option.
-     *
-     * Modifies the viewer session configuration accordingly. Used mainly internally
-     * by openViewerWith(...)
-     *
-     * @param {Number|Array<number>|undefined|null} [bgSpec=undefined]
-     * @param {Number|Array<number>|undefined|null} [vizSpec=undefined]
-     * @param {Object} [opts]
-     * @param {boolean} [opts.deriveOverlayFromBackgroundGoals]
-     *        If true, ignore vizSpec and derive overlays from cfg.background[i].goalIndex.
-     * @return {boolean} true if something needed change
-     */
-    window.UTILITIES.parseBackgroundAndGoal = function (
-        bgSpec = undefined,
-        vizSpec = undefined,
-        { deriveOverlayFromBackgroundGoals = false } = {}
-    ) {
-        const cfg = APPLICATION_CONTEXT.config;
-        let backgrounds = Array.isArray(cfg.background) ? cfg.background : [];
-        const vizCount = Array.isArray(cfg.visualizations) ? cfg.visualizations.length : 0;
-
-        let filteredBackgrounds: Array<BackgroundConfig> = backgrounds.filter((bg: any) => {
-            if (!(bg instanceof BackgroundConfig)) {
-                console.error('Config not of BackgroundConfig instance, filtering out', bg);
-                return false;
-            }
-            return true;
-        });
-        if (filteredBackgrounds.length !== backgrounds.length) {
-            backgrounds = filteredBackgrounds;
-            Dialogs.show('Viewer does not show all files - some were not properly configured!', 8000, Dialogs.MSG_WARN);
-        }
-        // todo also other items should have class models
-
-        const clampIndex = (i: any, max: number): number | undefined =>
-            Number.isInteger(i) && i >= 0 && i < max ? i : undefined;
-
-        const normIndexValue = (v: any, max: number) => (v == null ? undefined : clampIndex(v, max));
-
-        // Normalize an index or array of indices; preserves explicit undefined entries (via null/undefined)
-        const normalizeIndexArg = (arg: any, max: number) => {
-            if (arg == null) return undefined;
-            if (Array.isArray(arg)) {
-                return arg.map(v => normIndexValue(v, max));
-            }
-            return clampIndex(arg, max);
-        };
-
-        // From a bgArg produce: undefined | number | number[]
-        const selectBackgroundIndices = (bgArg: any, bgCount: number) => {
-            const norm = normalizeIndexArg(bgArg, bgCount);
-            if (norm === undefined) return undefined;
-            if (Array.isArray(norm)) {
-                const seen = new Set();
-                const out = [];
-                for (const v of norm) {
-                    if (v === undefined) continue;
-                    if (!seen.has(v)) {
-                        seen.add(v);
-                        out.push(v);
-                    }
-                }
-                if (out.length === 0) return undefined;
-                return out.length === 1 ? out[0] : out;
-            }
-            return norm;
-        };
-
-        // Build visualization spec
-        const buildVis = (visArg: any, bgIndices: number | number[] | undefined) => {
-            if (bgIndices === undefined) return undefined;
-
-            const toAlignedArray = (len: number, sourceArray: any[]) => {
-                const out = new Array(len);
-                for (let i = 0; i < len; i++) {
-                    const raw = sourceArray[i];
-                    out[i] = raw === undefined ? undefined : clampIndex(raw, vizCount);
-                }
-                return out;
-            };
-
-            // If a single number: apply it to all selected backgrounds
-            if (Number.isInteger(visArg)) {
-                if (Array.isArray(bgIndices)) {
-                    const idx = clampIndex(visArg, vizCount);
-                    return bgIndices.map(() => idx);
-                }
-                return clampIndex(visArg, vizCount);
-            }
-
-            // If an array: align 1:1 to backgrounds (truncate/ignore extra overlays)
-            if (Array.isArray(visArg)) {
-                const norm = visArg.map(v => (v == null ? undefined : clampIndex(v, vizCount)));
-                if (Array.isArray(bgIndices)) return toAlignedArray(bgIndices.length, norm);
-                // single bg: preserve an explicit cleared selection (`[undefined]`)
-                // so callers can distinguish "show none" from "leave unchanged".
-                if (norm.length > 0) return [norm[0]];
-                return undefined;
-            }
-
-            // visArg undefined => no overlays
-            if (Array.isArray(bgIndices)) return bgIndices.map(() => undefined);
-            return undefined;
-        };
-
-        // Derive overlays from cfg.background[i].goalIndex (used when flag is on)
-        const deriveVisFromGoals = (bgIndices: number | number[] | undefined) => {
-            const getGoal = (i: number): number | undefined => {
-                const g = backgrounds[i] && typeof backgrounds[i].goalIndex === "number"
-                    ? backgrounds[i].goalIndex
-                    : undefined;
-                return clampIndex(g, vizCount);
-            };
-
-            if (bgIndices === undefined) return undefined;
-
-            if (Array.isArray(bgIndices)) return bgIndices.map(getGoal);
-            return getGoal(bgIndices as number);
-        };
-
-        const normalizeStoredBackgroundSelection = (value: any): number[] | undefined => {
-            if (value == null) return undefined;
-            if (Array.isArray(value)) {
-                const filtered = value
-                    .map((v: any) => clampIndex(v, backgrounds.length))
-                    .filter((v: any) => Number.isInteger(v));
-                return filtered.length > 0 ? filtered : undefined;
-            }
-            const normalized = clampIndex(value, backgrounds.length);
-            return normalized === undefined ? undefined : [normalized];
-        };
-
-        const normalizeStoredVisualizationSelection = (value: any): Array<number | undefined> | undefined => {
-            if (value == null) return undefined;
-            if (Array.isArray(value)) {
-                return value.map((v: any) => clampIndex(v, vizCount));
-            }
-            const normalized = clampIndex(value, vizCount);
-            return normalized === undefined ? undefined : [normalized];
-        };
-
-        let updated = false;
-
-        // ---------- Handle bgSpec (null => erase; undefined => keep; value => set) ----------
-        let effectiveBg = normalizeStoredBackgroundSelection(
-            APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
-        );
-        if (bgSpec === null) {
-            APPLICATION_CONTEXT.setOption("activeBackgroundIndex", undefined);
-            updated = true;
-            effectiveBg = undefined;
-        } else if (bgSpec !== undefined) {
-            const newActiveBg = selectBackgroundIndices(bgSpec, backgrounds.length);
-            const normalizedActiveBg = normalizeStoredBackgroundSelection(newActiveBg);
-            const prevActiveBg = normalizeStoredBackgroundSelection(
-                APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true)
-            );
-            if (JSON.stringify(prevActiveBg) !== JSON.stringify(normalizedActiveBg)) {
-                APPLICATION_CONTEXT.setOption("activeBackgroundIndex", normalizedActiveBg);
-                updated = true;
-            }
-            effectiveBg = normalizedActiveBg;
-        }
-
-        // Always have a convenient array view of selected backgrounds
-        const selectedBgArray =
-            effectiveBg === undefined ? [] : (Array.isArray(effectiveBg) ? effectiveBg : [effectiveBg]);
-
-        // We will need bgIndices in later logic
-        const bgIndicesForViz = effectiveBg === undefined
-            ? undefined
-            : (Array.isArray(effectiveBg) ? effectiveBg : effectiveBg);
-
-        // ---------- Handle vizSpec / derivation ----------
-        if (vizSpec === null) {
-            // erase overlays
-            const prevActiveVis = normalizeStoredVisualizationSelection(
-                APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
-            );
-            if (prevActiveVis !== undefined) {
-                APPLICATION_CONTEXT.setOption("activeVisualizationIndex", undefined);
-                updated = true;
-            }
-            selectedBgArray.forEach((bgIdx) => {
-                const b = backgrounds[bgIdx];
-                if (!b) return;
-                if (b.goalIndex !== undefined) {
-                    b.goalIndex = undefined;
-                    updated = true;
-                }
-            });
-        } else {
-            // When derive flag is ON, derive overlays from per-background goalIndex,
-            // regardless of whether vizSpec is provided or undefined.
-            let desiredActiveVis: undefined | (number | undefined)[] | number;
-            if (deriveOverlayFromBackgroundGoals) {
-                desiredActiveVis = deriveVisFromGoals(bgIndicesForViz);
-            } else if (vizSpec !== undefined) {
-                desiredActiveVis = buildVis(vizSpec, bgIndicesForViz);
-            } // else: vizSpec === undefined and derive flag is false => keep existing option
-
-            if (typeof desiredActiveVis !== "undefined") {
-                const normalizedActiveVis = normalizeStoredVisualizationSelection(desiredActiveVis);
-                const prevActiveVis = normalizeStoredVisualizationSelection(
-                    APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)
-                );
-                if (JSON.stringify(prevActiveVis) !== JSON.stringify(normalizedActiveVis)) {
-                    APPLICATION_CONTEXT.setOption("activeVisualizationIndex", normalizedActiveVis);
-                    updated = true;
-                }
-                desiredActiveVis = normalizedActiveVis;
-
-                // Persist per-background goalIndex when we have a concrete desiredActiveVis
-                if (selectedBgArray.length > 0) {
-                    if (Array.isArray(desiredActiveVis)) {
-                        selectedBgArray.forEach((bgIdx, i) => {
-                            const ov = (desiredActiveVis as Array<number>)[i];
-                            const b = backgrounds[bgIdx];
-                            if (!b) return;
-                            if (b.goalIndex !== ov) {
-                                b.goalIndex = ov;
-                                updated = true;
-                            }
-                        });
-                    } else if (Number.isInteger(desiredActiveVis)) {
-                        selectedBgArray.forEach(bgIdx => {
-                            const b = backgrounds[bgIdx];
-                            if (!b) return;
-                            if (b.goalIndex !== desiredActiveVis) {
-                                b.goalIndex = desiredActiveVis;
-                                updated = true;
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        return updated;
-    };
+    installScalebarUtilities();
 
     const cloneRuntimeState = <T>(value: T): T => {
         if (value === undefined || value === null) {
@@ -1078,6 +374,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
             for (let id in modules) {
                 delete modules[id]!.instance;
             }
+            // Bootstrap-only path — paired with the read in
+            // ApplicationLifecycleController.restoreLocalState. See
+            // src/IO_PIPELINE.md "Bootstrap exception".
             sessionStorage.setItem('__xopat_session__', safeStringify({
                 PLUGINS: plugins, MODULES: modules,
                 ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG

@@ -53,10 +53,13 @@ Always extend `XOpatPlugin`, `XOpatModule`, or `XOpatModuleSingleton` when creat
   - `setOption(key, value)` / `getOption(key)`: manage dynamic configuration and user options. It saves these to the exported visualizer session.
 
 ### Save & Load Data (IO)
-Do not create random backend fetch calls to persist state files. Inherit and override the built-in IO methods:
-- Override `exportData(key)` and `importData(key, data)` for global data.
-- Override `exportViewerData(viewer, key)` and `importViewerData(viewer, key, data)` for viewer-bound state.
-- Initialize it by calling `this.initPostIO({ exportKey: 'my_data' })` in the constructor.
+Use the generic IO pipeline (`window.IO_PIPELINE`, aliased on `APPLICATION_CONTEXT.io`). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+- Declare capabilities in `include.json` `io.capabilities` (e.g. `bundle-export`, `crud:annotation`).
+- In your constructor, call `await this.initIO({ exportBundle, importBundle, bundleScope })` to register bundle hooks. `bundleScope: "per-viewer"` makes the pipeline call your hooks once per active viewer (`ctx.viewerId` set).
+- Per-element CRUD: `this.r = this.defineResource({ name, validate, serialize, deserialize })`. Calls run validate + guards + optional `apply` callback + dispatch. Other code can veto via `IO_PIPELINE.registerGuard({ resource, direction: 'pre-delete', handler })` — no need to invent your own `*-before-*` events. Use `r.canCreate/canUpdate/canDelete` for the guard-only check (two-step idiom).
+- Streamed query: `for await (const item of r.query(params, { signal }))` — use this for on-the-fly hydration on viewport / background events when the collection is too big to fetch up front.
+- Per-element key/value storage: `this.cache` (sync, `kv:cache`), `this.cookies` (sync, `kv:cookies`), `this.data` (async, `kv:data`). Drivers are admin-configurable. Custom namespaces via `IO_PIPELINE.kv(this.uid, "kv:<custom>")`.
+- Administrators bind capabilities to sinks/drivers in `ENV.client.io.bindings`. Default fallback for unbound `bundle-*` is `post-data`; for `kv:cache` it's `local-storage`. Plugins/modules inherit `core`'s `kv:*` binding unless they set their own. Sink-providing modules register their sink at runtime (`IO_PIPELINE.registerSink(...)`) and compose their own defaults with the admin override slot `IO_PIPELINE.sinkOverrides("<sinkId>")` (`ENV.client.io.sinkOverrides[<sinkId>]`).
 
 ### Translation
 - Built-in localization support uses `this.loadLocale(locale, data)`. 
@@ -133,6 +136,7 @@ For a specific and more detailed understanding of each subsystem, read the follo
 - **Core APIs & Communication**:
   - [`src/EVENTS.md`](EVENTS.md) (Lifecycle events and system broadcasts)
   - [`src/HTTP_CLIENT.md`](HTTP_CLIENT.md) (HttpClient, Token Verifiers, and Upstream Proxy integrations)
+  - [`src/IO_PIPELINE.md`](IO_PIPELINE.md) (Generic IO/persistence pipeline: capabilities, sinks, bindings)
 - **UI Architecture**:
   - [`ui/README.md`](../ui/README.md) (Design system setup)
   - [`ui/classes/README.md`](../ui/classes/README.md) (Developing via Van.js and `BaseComponent`)

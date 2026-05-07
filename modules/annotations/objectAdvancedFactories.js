@@ -490,9 +490,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         return "image";
 //     }
 //
-//     fabricStructure() {
-//         return "image";
-//     }
 //
 //     getDescription(ofObject) {
 //         return `Image [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;

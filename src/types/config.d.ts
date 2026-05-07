@@ -13,6 +13,14 @@ type XOpatClientConfig = {
     js_cookie_domain?: string | null;
     secureMode?: boolean | null;
     production?: boolean | null;
+    /**
+     * Admin-controlled IO pipeline configuration. Server-injected, NOT
+     * URL-modifiable (lives in ENV, not in `params`). Carries bindings,
+     * disabled owners/capabilities, and per-sink override slots. See
+     * `src/types/io.d.ts` for the `IOConfigBlock` shape and
+     * `src/IO_PIPELINE.md` for the full design.
+     */
+    io?: IOConfigBlock;
 };
 
 type ViewportSetup = {

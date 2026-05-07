@@ -1,62 +1,130 @@
-# XOpat - Managing the Viewer Storage
+# XOpat — Managing the Viewer Storage
 
-By default, the viewer allows sharing data via
- - URL exports: these carry over only the explicit session storage (and turn off cached storages - cache and cookies -
- when viewed)
- - FILE exports: contain all the viewer data AS-IS (except when a plugin does not properly implement
- the persistence API)
+xOpat exposes one unified IO pipeline (`window.IO_PIPELINE`, also at `APPLICATION_CONTEXT.io`) that subsumes:
 
-More on the default persistence is described in plugins/modules. Other than that,
-the viewer supports web Storage API (and its `async` brother) that can decide on
-where and how all the viewer data is stored.
+- bundle export/import (whole-set serialize/deserialize),
+- per-element CRUD (Create/Read/Update/Delete),
+- key/value storage (sync `cache` & `cookies`, async `data`).
 
-## Managing Custom Storages
+For the full architecture and admin-side guide see [`IO_PIPELINE.md`](IO_PIPELINE.md). This file is the storage-focused quick reference.
 
-xOpat offers three basic abstract storage providers:
- - ``XOpatStorage.Data`` (async)
- - ``XOpatStorage.Cache``
- - ``XOpatStorage.Cookies``
+## Out of the box
 
-Furthermore, ``APPLICATION_CONTEXT`` has `AppCache` and `AppCookies` instances
-that are to be used for the cache and cookies storage. You should use these
-providers to store your temporary data. Plugins nor Modules should need
-to create these, the base class for both offers direct cache store api routed
-exactly to these storages.
+By default, the viewer allows sharing data via:
 
-> If you want to write a simple plugin/module, following knowledge is probably
-irrelevant to you. If you want to control the data flow in the viewer
-(e.g. connecting to desired API), here you can find useful directions.
+- **URL exports** — carry over only the explicit session storage; cached storages (cache, cookies) are turned off when viewed.
+- **FILE / HTML exports** — contain the full viewer data as-is, driven by `IO_PIPELINE.flushBundleExport()`. Owners that declared a `bundle-export` capability and have no admin override land in the legacy `post-data` sink (the HTML form), so the existing session-share semantics are preserved.
 
-### Storage Providers
-Providers are either sync or async, and provide simple pair of
-get-set methods (get can specify default value). Furthermore,
-``Cache`` and `Cookies` are bypassed if the viewer configuration requires so.
+## Sync key-value storage (`kv:cache`, `kv:cookies`)
 
-These storage providers accept storage driver which can be registered for a provider.
-All instances of that provider will use the driver to store the data.
+Plugins and modules get sync per-element accessors automatically:
 
-### Storage Drivers
-Storage drivers are either classes or instances that execute storage actions.
-Available storage interfaces are
- - ``Storage`` (meant for passing e.g. `localStorage`) or `XOpatStorage.Storage` (meant for
- custom class implementation, mirrors the `Storage` interface)
- - ``AsyncStorage`` (does not exist, reserved name for future) or `XOpatStorage.AsyncStorage`
- (custom implementations)
- - ``CookiesStorage`` that, when used with `Cookies` provider can provide additional method `with`
-able to provide set parameters for the consecutive setters (e.g. set custom expiration). Note
-that such options are not (yet) standardized and depend on the underlying driver.
+```ts
+this.cache.set("autoOpen", true);
+const value = this.cache.get("autoOpen", false);
 
-Async drivers are usable only within async providers and vice versa.
+this.cookies.set("token", "...");
+this.cookies.with({ expires: 7 }).set("session", "...");   // builder for cookie attrs
+```
 
-When a provider is crated, it uses the last driver it was registered with.
-Registration checks the direct interface inheritance and can be:
- - ``Provider.registerClass(class extends $Driver {...})`` registered as a class for custom implementations, or
- - ``Provider.registerInstance(localStorage)`` registered as an instance.
+Both delegate to `IO_PIPELINE.kv(this.uid, "kv:cache")` (or `"kv:cookies"`). Default drivers are `local-storage` and `cookies`. The empty-string `id` of legacy `XOpatStorage.Cache({ id: "" })` is now the conventional `"core"` owner.
 
-Registered instances are shared drivers between providers. Registered classes depend on the implementation.
+## Async key-value storage (`kv:data`)
 
-Notable are the builtin ``AppCache`` and `AppCookies` stores, that
-must be registered (if one wants to redefine defaults) with drivers before app lifecycle spins up (see events).
-Already instantiated provider cannot change its driver.
+```ts
+await this.data.set("draft", largePayload);
+const draft = await this.data.get("draft");
+```
 
-> Note: built-in browser 'drivers' such as ``localStorage`` are directly use-able.
+Default driver: `post-data` (writes into the legacy `POST_DATA` bucket so the session HTML export still picks it up). Admins can rebind to `http-rest` (HttpClient-backed) for server persistence.
+
+## Custom namespaces
+
+Declare a custom KV namespace in `include.json` and use it directly:
+
+```jsonc
+"io": {
+  "capabilities": [{ "id": "kv:drafts", "kind": "kv" }]
+}
+```
+
+```ts
+const drafts = IO_PIPELINE.kv(this.uid, "kv:drafts");
+drafts.set("page-1", payload);
+```
+
+## Drivers
+
+A KV driver is **any object satisfying the `localStorage` interface** (`getItem/setItem/removeItem/key/length/clear`). Drivers self-describe sync vs. async, shared vs. owned (shared drivers get auto-prefixed keys to prevent collisions across owners), and optional context-aware mode.
+
+Built-in drivers (registered at boot):
+
+- `local-storage` (sync)   — `window.localStorage`
+- `session-storage` (sync) — `window.sessionStorage`
+- `cookies` (sync)         — `js-cookie` wrapper, with memory fallback
+- `memory` (sync)          — in-process Map
+- `post-data` (async)      — `POST_DATA` bucket (preserves legacy session export shape)
+- `http-rest` (async)      — `HttpClient`-backed; per-deployment overrides in `ENV.client.io.sinkOverrides`
+
+Register a custom driver:
+
+```ts
+IO_PIPELINE.registerKVDriver({
+  id: "indexeddb",
+  mode: "async",
+  shared: true,
+  async getItem(k) { /* … */ },
+  async setItem(k, v) { /* … */ },
+  // … rest of localStorage interface
+});
+```
+
+## Admin redirection
+
+Bindings live in `ENV.client.io`:
+
+```jsonc
+{
+  "bindings": {
+    "core": {
+      "kv:cache":   ["local-storage"],          // also the default
+      "kv:cookies": ["cookies"]
+    },
+    "plugin.playground": {
+      "kv:cache":   ["http-rest:playground"]    // route this plugin's drafts elsewhere
+    }
+  },
+  "sinkOverrides": {
+    "http-rest:playground": { "proxy": "cerit", "baseURL": "/api/v1/drafts" }
+  }
+}
+```
+
+Resolution order for `kv:*`:
+
+1. Admin disabled → no-op.
+2. `bindings[ownerId][capabilityId]` → that exact list.
+3. include.json `io.defaultBindings[capabilityId]` → that list.
+4. **Inherit from `core`** if the admin set one (the "redirect everything" knob).
+5. Built-in fallback per namespace.
+
+A capability bound to multiple drivers mirror-writes; reads consult them in order.
+
+## Sync ↔ async safety
+
+`this.cache` and `this.cookies` are sync. If an admin binds them to an async driver, handle construction throws `IOError` listing the offending drivers. Use `kv:data` (async by contract) for asynchronous backends.
+
+## Direct driver inheritance — base classes
+
+Custom drivers may extend the base classes for type compatibility, but it is not required (any localStorage-shaped object works):
+
+```ts
+import { XOpatStorage } from "./store";
+class MyDriver extends XOpatStorage.Storage { /* sync */ }
+class MyAsyncDriver extends XOpatStorage.AsyncStorage { /* async */ }
+class MyCookieDriver extends XOpatStorage.CookieStorage { /* with .with(opts) */ }
+```
+
+## Bootstrap exception
+
+The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) is the **one storage flow not routed through the pipeline** — it must be readable before `initXOpatLoader` runs. Plugins/modules wanting admin-routable session-scoped storage should use `IO_PIPELINE.kv(uid, "kv:session")` instead.

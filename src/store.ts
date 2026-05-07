@@ -1,3 +1,10 @@
+// XOpatStorage — sync/async key-value façades over the unified IO pipeline
+// (`window.IO_PIPELINE`). The legacy public surface is preserved:
+//   XOpatStorage.Cache    → kv:cache    (sync,  default driver: local-storage)
+//   XOpatStorage.Cookies  → kv:cookies  (sync,  default driver: cookies)
+//   XOpatStorage.Data     → kv:data     (async, default driver: post-data)
+// See src/IO_PIPELINE.md for the full design.
+
 export type StorageSchemaElement = {
     _deprecated: Array<string> | undefined;
 };
@@ -5,12 +12,13 @@ export type StorageSchemaElement = {
 export type StorageSchema = Record<string, StorageSchemaElement>;
 
 export type StorageOptions = {
+    /** Owner uid (legacy: `id`). The empty string means "core". */
     id: string;
     schema?: StorageSchema;
     strictSchema?: boolean;
 };
 
-/** Interface for synchronous storage (like localStorage) */
+/** Interface for synchronous storage (Storage-shaped, used by KV drivers). */
 export interface StorageLike {
     readonly length: number;
     clear(): void;
@@ -20,7 +28,7 @@ export interface StorageLike {
     setItem(key: string, value: string): void;
 }
 
-/** Interface for asynchronous storage */
+/** Interface for asynchronous storage (Promise-returning Storage shape). */
 export interface AsyncStorageLike {
     readonly length: Promise<number>;
     clear(): Promise<void>;
@@ -30,421 +38,134 @@ export interface AsyncStorageLike {
     setItem(key: string, value: string): Promise<void>;
 }
 
+/** Interface for cookies — Storage-shaped plus a builder-pattern option setter. */
 export interface CookieStorageLike extends StorageLike {
     with(options: object): CookieStorageLike;
 }
 
-export class xoStorage {
-
-    get length(): number {
-        throw `${this.constructor.name}::length must be implemented!`;
-    }
-    clear(): void {
-        throw `${this.constructor.name}::clear must be implemented!`;
-    }
-
-    getItem(key: string): any {
-        throw `${this.constructor.name}::getItem must be implemented!`;
-    }
-
-    key(index: number): string {
-        throw `${this.constructor.name}::key must be implemented!`;
-    }
-    removeItem(key: string): void {
-        throw `${this.constructor.name}::removeItem must be implemented!`;
-    }
-    setItem(key: string, value: string): void {
-        throw `${this.constructor.name}::setItem must be implemented!`;
-    }
+/** Base class for sync KV drivers. Existing custom drivers extend these. */
+export class xoStorage implements StorageLike {
+    get length(): number { throw `${this.constructor.name}::length must be implemented!`; }
+    clear(): void { throw `${this.constructor.name}::clear must be implemented!`; }
+    getItem(_key: string): any { throw `${this.constructor.name}::getItem must be implemented!`; }
+    key(_index: number): string | null { throw `${this.constructor.name}::key must be implemented!`; }
+    removeItem(_key: string): void { throw `${this.constructor.name}::removeItem must be implemented!`; }
+    setItem(_key: string, _value: string): void { throw `${this.constructor.name}::setItem must be implemented!`; }
 }
 
 export class xoCookieStorage extends xoStorage {
-    /**
-     * Builder-pattern option setter for cookies storage.
-     * Subsequent setItem calls must inherit these options.
-     */
-    with(options: object): xoCookieStorage {
-        throw `${this.constructor.name}::setItem must be implemented!`;
+    with(_options: object): xoCookieStorage {
+        throw `${this.constructor.name}::with must be implemented!`;
     }
 }
 
-export class xoAsyncStorage {
-    get length(): Promise<number> {
-        throw `${this.constructor.name}::length must be implemented!`;
-    }
-    async clear(): Promise<void> {
-        throw `${this.constructor.name}::clear must be implemented!`;
-    }
-    async getItem(key: string): Promise<any> {
-        throw `${this.constructor.name}::getItem must be implemented!`;
-    }
-    async key(index: number): Promise<string> {
-        throw `${this.constructor.name}::key must be implemented!`;
-    }
-    async removeItem(key: string): Promise<void> {
-        throw `${this.constructor.name}::removeItem must be implemented!`;
-    }
-    async setItem(key: string, value: string): Promise<void> {
-        throw `${this.constructor.name}::setItem must be implemented!`;
-    }
+export class xoAsyncStorage implements AsyncStorageLike {
+    get length(): Promise<number> { throw `${this.constructor.name}::length must be implemented!`; }
+    async clear(): Promise<void> { throw `${this.constructor.name}::clear must be implemented!`; }
+    async getItem(_key: string): Promise<any> { throw `${this.constructor.name}::getItem must be implemented!`; }
+    async key(_index: number): Promise<string | null> { throw `${this.constructor.name}::key must be implemented!`; }
+    async removeItem(_key: string): Promise<void> { throw `${this.constructor.name}::removeItem must be implemented!`; }
+    async setItem(_key: string, _value: string): Promise<void> { throw `${this.constructor.name}::setItem must be implemented!`; }
 }
 
-const storageAPI = Object.keys(window.Storage.prototype);
-function errInstanceApi(instance: object, keys: string[]): string | false {
-    for (let key of keys) {
-        if (!(key in instance)) return `method ${key} is not implemented!`;
+function pipeline(): any {
+    const p = (globalThis as any).IO_PIPELINE;
+    if (!p) {
+        throw "XOpatStorage: IO_PIPELINE is not initialized yet — make sure initXOpatLoader has been called.";
     }
-    return false;
+    return p;
 }
-function errClassApi(cls: Function, keys: string[]): string | false {
-    cls = cls.prototype;
-    for (let key of keys) {
-        if (!(key in cls)) return `method ${key} is not implemented!`;
-    }
-    return false;
+
+function ownerUidOf(opts: StorageOptions): string {
+    if (!opts || opts.id === undefined) throw "XOpatStorage: invalid configuration: missing options.id!";
+    return opts.id || "core";
+}
+
+function bypassed(flag: string): boolean {
+    const ac = (globalThis as any).APPLICATION_CONTEXT;
+    if (!ac?.getOption) return false;
+    // cache=false avoids infinite recursion: getOption itself reads through Cache.
+    return !!ac.getOption(flag, false, false);
 }
 
 /**
- * Data Api Proxy Base Class. Private class.
+ * Sync façade backing both Cache and Cookies. The KV handle is resolved
+ * lazily (façades are constructed in `src/app.ts` before IO_PIPELINE
+ * exists) and then cached — admin re-binding at runtime is not
+ * supported; call `refresh()` if the binding changes.
  */
-class APIProxy {
-    protected __id: string;
-    protected __storage: StorageLike | AsyncStorageLike;
-    protected validateKey: (key: string, withPrefix?: boolean) => string;
-    protected deprecatedKeys: (key: string) => string[];
-
-    constructor(options: StorageOptions) {
-        if (!options?.id && options.id !== "") {
-            throw "Data Store: invalid configuration: missing options.id!";
-        }
-
-        const staticSelf = this.constructor as typeof APIProxy;
-        if (!staticSelf._implementation) {
-            throw "Data Store: invalid configuration: no implementation was registered for the storage!";
-        }
-
-        const uid = options.id;
-        this.__id = (uid && !uid.endsWith(".")) ? (uid + ".") : uid;
-        (this.constructor as typeof APIProxy)._used = true;
-
-        this.__storage = staticSelf._implementsClass
-            ? new (staticSelf._implementation as new () => StorageLike | AsyncStorageLike)()
-            : staticSelf._implementation as StorageLike | AsyncStorageLike;
-        const schema = options.schema;
-
-        if (schema) {
-            options.strictSchema = options.strictSchema ?? true;
-            this.validateKey = (key, withPrefix = true) => {
-                const ref = schema[key];
-                if (ref) {
-                    if (!key) return uid;
-                    if (withPrefix) return this.__id + key;
-                    return key;
-                }
-                if (options.strictSchema) {
-                    throw `${this.constructor.name}: invalid schema key '${key}' for data '${options.id}' in a strict mode!`;
-                }
-                if (withPrefix) return this.__id + key;
-                return key;
-            }
-        } else {
-            this.validateKey = (key, withPrefix = true) => {
-                if (!key) return uid;
-                if (withPrefix) return this.__id + key;
-                return key;
-            };
-        }
-
-        if (schema) {
-            this.deprecatedKeys = (key) => {
-                // validateKey always called first
-                const ref = schema[key];
-                return ref && ref._deprecated || [];
-            }
-        } else {
-            this.deprecatedKeys = (key) => [];
-        }
+class SyncFacade {
+    protected uid: string;
+    private capability: string;
+    private bypassFlag: string;
+    private handle: IOKVHandle | null = null;
+    constructor(opts: StorageOptions, capability: string, bypassFlag: string) {
+        this.uid = ownerUidOf(opts);
+        this.capability = capability;
+        this.bypassFlag = bypassFlag;
     }
-
-    protected stripKeyPrefix(key: string): string {
-        if (key.startsWith( this.__id ) ) {
-            return key.slice( this.__id.length );
-        }
-        return key;
+    protected kv(): IOKVHandle {
+        return this.handle ??= pipeline().kv(this.uid, this.capability);
     }
-
-    get id(): string {
-        return this.__id;
+    /** Force the next operation to re-resolve the binding. */
+    refresh(): void { this.handle = null; }
+    get<T = any>(key: string, defaultValue?: T): T | string | boolean | null | undefined {
+        if (bypassed(this.bypassFlag)) return defaultValue;
+        return this.kv().get(key, defaultValue) as any;
     }
-
-    getStore(): StorageLike | AsyncStorageLike {
-        return this.__storage;
+    set(key: string, value: any): void {
+        if (bypassed(this.bypassFlag)) return;
+        this.kv().set(key, value);
     }
+    delete(key: string): void { this.kv().delete(key); }
+    keys(): string[] { return this.kv().keys() as string[]; }
+}
 
-    static _implementation: (new () => StorageLike | AsyncStorageLike) | StorageLike | AsyncStorageLike | null = null;
-    static _implementsClass = true;
-    static _used = false;
+class CacheFacade extends SyncFacade {
+    constructor(opts: StorageOptions) { super(opts, "kv:cache", "bypassCache"); }
+}
 
-    /**
-     * Register a storage implementation for the particular data proxy.
-     */
-    static register(Class: new () => StorageLike | AsyncStorageLike): void {
-        console.warn("Storage::register() is depreacted: use registerClass!");
-        return this.registerClass(Class);
-    }
-
-    /**
-     * Register a storage implementation for the particular data proxy.
-     */
-    static registerClass(Class: new () => StorageLike | AsyncStorageLike): void {
-        if (this._used) throw "Cannot register a storage implementation after it had been already used!";
-        const err = errClassApi(Class, storageAPI);
-        if (err) throw `XOpatStorage.<*>:registerClass ${err} - ${Class}`;
-        this._implementation = Class;
-        this._implementsClass = true;
-    }
-
-    static registerInstance(instance: StorageLike | AsyncStorageLike): void {
-        if (this._used) throw "Cannot register a storage implementation after it had been already used!";
-        const err = errInstanceApi(instance, storageAPI);
-        if (err) throw `XOpatStorage.<*>:registerInstance ${err} - ${instance}`;
-        this._implementation = instance;
-        this._implementsClass = false;
-    }
-
-    static registered(): boolean {
-        return !!this._implementation;
+class CookiesFacade extends SyncFacade {
+    constructor(opts: StorageOptions) { super(opts, "kv:cookies", "bypassCookies"); }
+    /** Forward to the cookies driver's per-call option setter, if present. */
+    with(options: object): this {
+        const d: any = pipeline().getKVDriver("cookies");
+        if (typeof d?.with === "function") d.with(options);
+        return this;
     }
 }
 
-/**
- * Synchronous Data Generic API. Private class.
- */
-export class SyncAPIProxy extends APIProxy {
-    constructor(options: StorageOptions) {
-        super(options);
+class DataFacade {
+    private uid: string;
+    private handle: IOKVHandle | null = null;
+    constructor(opts: StorageOptions) { this.uid = ownerUidOf(opts); }
+    private kv(): IOKVHandle {
+        return this.handle ??= pipeline().kv(this.uid, "kv:data", { sync: false });
     }
-
-    get(key: string, defaultValue: any = undefined): any {
-        const store = this.__storage as Storage;
-        let value: any = store.getItem(this.validateKey(key));
-
-        if (value === undefined) {
-            //todo not prefix deprecated keys? must be able to configure
-            for (let dKey of this.deprecatedKeys(key)) {
-                value = store.getItem(this.validateKey(dKey, false));
-                if (value !== undefined) break;
-            }
-        }
-
-        if (value === "false") value = false;
-        else if (value === "true") value = true;
-        if (defaultValue !== undefined) {
-            return value === null || value === undefined ? defaultValue : value;
-        }
-        return value;
+    refresh(): void { this.handle = null; }
+    async get<T = any>(key: string, defaultValue?: T): Promise<T | string | boolean | null | undefined> {
+        return (await this.kv().get(key, defaultValue)) as any;
     }
-
-    set(key: string, value: string): void {
-        const store = this.__storage as Storage;
-        key = this.validateKey(key);
-        store.setItem(key, value);
-    }
-
-    delete(key: string): void {
-        const store = this.__storage as Storage;
-        key = this.validateKey(key);
-        store.removeItem(key);
-    }
-
-    keys(): string[] {
-        const store = this.__storage as Storage;
-        // ensure we remove auto-appended prefix so the user uses it without knowledge of prefixing
-        return Array.from(Array(store.length).keys()).map(i => this.stripKeyPrefix(store.key(i) as string));
-    }
-}
-
-/**
- * Asynchronous Data Generic API. Private class.
- */
-export class AsyncAPIProxy extends APIProxy {
-    constructor(options: StorageOptions) {
-        super(options);
-    }
-
-    async get(key: string, defaultValue: any = undefined): Promise<any> {
-        const store = this.__storage as AsyncStorageLike;
-        let value = await store.getItem(this.validateKey(key));
-        if (value === undefined) {
-            for (let dKey of this.deprecatedKeys(key)) {
-                value = await store.getItem(this.validateKey(dKey, false));
-                if (value !== undefined) break;
-            }
-        }
-
-        if (value === "false") value = false;
-        else if (value === "true") value = true;
-        if (defaultValue !== undefined) {
-            return value === null || value === undefined ? defaultValue : value;
-        }
-        return value;
-    }
-
-    async set(key: string, value: string): Promise<void> {
-        const store = this.__storage as AsyncStorageLike;
-        key = this.validateKey(key);
-        await store.setItem(key, value);
-    }
-
-    async delete(key: string): Promise<void> {
-        key = this.validateKey(key);
-        await (this.__storage as AsyncStorageLike).removeItem(key);
-    }
-
-    async keys(): Promise<Array<string | null>> {
-        const store = this.__storage as AsyncStorageLike;
-        // ensure we remove auto-appended prefix so the user uses it without knowledge of prefixing
-        return Promise.all(Array.from(Array(await store.length).keys())
-            .map(async i => this.stripKeyPrefix(await store.key(i) as string)));
-    }
+    async set(key: string, value: any): Promise<void> { await this.kv().set(key, value); }
+    async delete(key: string): Promise<void> { await this.kv().delete(key); }
+    async keys(): Promise<Array<string>> { return (await this.kv().keys()) as string[]; }
 }
 
 /**
  * Storage Namespace for xOpat.
+ *
  * @namespace XOpatStorage
  */
 export const XOpatStorage = {
-
-    /**
-     * Storage API replacement: window.Storage cannot be instantiated.
-     * see https://developer.mozilla.org/en-US/docs/Web/API/Storage
-     * @type {XOpatStorage.Storage}
-     */
     Storage: xoStorage,
-
-    /**
-     * Storage API with extension for cookies.
-     * This storage allows .with(...).setItem(...) syntax
-     * to pass set options explicitly.
-     */
-    CookieStorage: xoCookieStorage,
-
-    /**
-     * Similar to Storage, AsyncStorage supports asynchronous storage interface.
-     * see https://developer.mozilla.org/en-US/docs/Web/API/Storage
-     * @type {XOpatStorage.AsyncStorage}
-     * @memberOf XOpatStorage
-     */
     AsyncStorage: xoAsyncStorage,
-
-    /**
-     * Data Interface for persistent storage of data items.
-     *
-     * This Data class is by default used to save plugin data within HTTP POST.
-     * Apps should extend and use this class to store their data to desired endpoints.
-     *
-     * @type {XOpatStorage.Data}
-     * @extends AsyncAPIProxy
-     * @memberOf XOpatStorage
-     */
-    Data: class extends AsyncAPIProxy { },
-
-    /**
-     * Cache Interface for storage of configuration / metadata.
-     * Cache is meant for cached user configuration and settings to avoid repetitive UI flows.
-     *
-     * This storage _can_ be persistent. This interface must be sync: if you use async server access,
-     * make sure to e.g. prefetch the data in given context.
-     *
-     * The default implementation stores this data within browser local storage.
-     * @type {XOpatStorage.Cache}
-     * @extends SyncAPIProxy
-     * @memberOf XOpatStorage
-     */
-    Cache: class extends SyncAPIProxy {
-        /**
-         * @param {any} key
-         * @param {any} defaultValue returned only in case undefined would be returned
-         * @return {any} value to store, or undefined in the default value is missing
-         */
-        get<T = any>(key: string, defaultValue: T | undefined = undefined): T | string | boolean | null | undefined {
-            // !!! Without cache=false, this would be infinite loop getOption calls this method too
-            if (!APPLICATION_CONTEXT.getOption("bypassCache", false, false)) {
-                return super.get(key, defaultValue);
-            }
-            return defaultValue;
-        }
-
-        /**
-         * @param {string} key
-         * @param {string} value
-         */
-        set(key: string, value: string): void {
-            // !!! Without cache=false, this would be infinite loop getOption calls this method too
-            if (!APPLICATION_CONTEXT.getOption("bypassCache", false, false)) {
-                super.set(key, value);
-            }
-        }
-    },
-
-    /**
-     * Cookie Interface for storage of configuration / metadata.
-     * Cookies should be used only when Cache cannot be used, e.g. ensuring
-     * token security, or caching values only for certain amount of time.
-     *
-     * This storage is NOT persistent. This interface must be sync: if you use async server access,
-     * make sure to e.g. prefetch the data in given context.
-     *
-     * Note that this class _should_ behave like common cookies, e.g. have expiration, share data on common domain/path etc.
-     *
-     * The default implementation stores this data within browser cookies.
-     * @type {XOpatStorage.Cookies}
-     * @extends SyncAPIProxy
-     * @memberOf XOpatStorage
-     */
-    Cookies: class extends SyncAPIProxy {
-        constructor(options: StorageOptions) {
-            super(options); //allow also xoCookieStorage
-        }
-
-        /**
-         * @param {any} key
-         * @param {any} defaultValue returned only in case undefined would be returned
-         * @return {any} value to store, or undefined in the default value is missing
-         */
-        get<T = any>(key: string, defaultValue: T | undefined = undefined): T | string | boolean | null | undefined {
-            if (!APPLICATION_CONTEXT.getOption("bypassCookies", false, false)) {
-                return super.get(key, defaultValue);
-            }
-            return defaultValue;
-        }
-
-        /**
-         * Provide cookie setter with setting options
-         * @param {object} options
-         * @return XOpatStorage.Cookies
-         */
-        with(options: object): this {
-            const storage = this.__storage as StorageLike & Partial<CookieStorageLike>;
-            if (typeof storage.with === "function") {
-                storage.with(options);
-            } else {
-                console.warn("Current cookie storage does not support with() option setter.");
-                this.with = function () { return this; }; //register as no-op
-            }
-            return this;
-        }
-
-        /**
-         * @param {string} key
-         * @param {string} value
-         */
-        set(key: string, value: string): void {
-            if (!APPLICATION_CONTEXT.getOption("bypassCookies", false, false)) {
-                super.set(key, value);
-            }
-        }
-    }
+    CookieStorage: xoCookieStorage,
+    /** Sync per-owner cache, default-routed to localStorage. */
+    Cache: CacheFacade,
+    /** Sync per-owner cookies, default-routed to the browser cookie jar. */
+    Cookies: CookiesFacade,
+    /** Async per-owner data store, default-routed to the POST_DATA bucket. */
+    Data: DataFacade,
 };
 
-window.XOpatStorage = XOpatStorage;
+(window as any).XOpatStorage = XOpatStorage;

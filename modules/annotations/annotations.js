@@ -54,6 +54,119 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // this.addFabricHandler('annotation-replace', reapplyFilters);
         // this.addFabricHandler('annotation-preset-change', reapplyFilters);
         // this.addFabricHandler('annotation-edit-end', reapplyFilters);
+
+        this._initIOPipeline().catch(e => console.error("[annotations] IO pipeline init failed:", e));
+    }
+
+    /**
+     * Generic IO pipeline integration. Bundle export delegates to the
+     * Convertor system once per active viewer (per-viewer scope); bundle
+     * import is dispatched to the matching viewer's fabric wrapper.
+     * Per-element CRUD resources for `annotation` and `preset` are
+     * declared but inert until an admin binds the matching `crud:*`
+     * capability to a sink. See src/IO_PIPELINE.md.
+     */
+    async _initIOPipeline() {
+        const formatOf = (ctx) => (ctx.meta && ctx.meta.format) || this.getExportOptions()?.format || "native";
+        await this.initIO({
+            bundleScope: "per-viewer",
+            exportBundle: async (ctx) => {
+                if (!ctx.viewerId) return undefined;
+                const fabric = this.getFabric(ctx.viewerId);
+                if (!fabric) return undefined;
+                return fabric.export({ format: formatOf(ctx) }, true, true);
+            },
+            importBundle: async (ctx, data) => {
+                if (data === undefined || data === null) return;
+                if (!ctx.viewerId) return;
+                const fabric = this.getFabric(ctx.viewerId);
+                if (!fabric) return;
+                try {
+                    await fabric.import(data, { format: formatOf(ctx) }, true);
+                } catch (e) {
+                    console.warn(`[annotations] importBundle (viewer=${ctx.viewerId}) failed:`, e);
+                }
+            },
+        });
+
+        const requireObject = (item, kind) =>
+            (!item || typeof item !== "object")
+                ? { ok: false, refused: true, reason: `${kind} must be an object` }
+                : null;
+
+        this.annotationResource = this.defineResource({
+            name: "annotation",
+            // Identity for the outbox queue's coalescing pass: incrementId
+            // is the canvas-stable id assigned the moment an annotation
+            // becomes "real" (post-promote). Helper annotations don't reach
+            // the resource API at all.
+            identityOf: (item) => String(item?.incrementId ?? ""),
+            coalesce: true,
+            // Shallow patch merge for the `create + update` rule. Most
+            // annotation patches are a small set of property overrides.
+            merge: (prev, next) => ({ ...(prev || {}), ...(next || {}) }),
+            // Persist pending ops to IndexedDB so server sync survives a
+            // page reload. Per-resource cap + age guard the storage size.
+            persistOutbox: true,
+            persistMaxEntries: 5000,
+            persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+            validate: (item) => {
+                const bad = requireObject(item, "annotation");
+                if (bad) return bad;
+                if (!item.factoryID && !item.type) {
+                    return {
+                        ok: false, refused: true,
+                        reason: "missing factoryID/type",
+                        userMessage: "Cannot save annotation: unknown shape type.",
+                    };
+                }
+                return { ok: true };
+            },
+        });
+        this.presetResource = this.defineResource({
+            name: "preset",
+            identityOf: (item) => String(item?.presetID ?? ""),
+            coalesce: true,
+            merge: (prev, next) => ({ ...(prev || {}), ...(next || {}) }),
+            persistOutbox: true,
+            persistMaxEntries: 1000,
+            persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+            validate: (item) => {
+                const bad = requireObject(item, "preset");
+                if (bad) return bad;
+                const factoryId = item.factoryID || item.factoryId;
+                if (factoryId && !this.getAnnotationObjectFactory(factoryId)) {
+                    return {
+                        ok: false, refused: true,
+                        reason: `unknown factory "${factoryId}"`,
+                        userMessage: `Preset uses an unsupported shape "${factoryId}" and was rejected.`,
+                    };
+                }
+                return { ok: true };
+            },
+        });
+
+        // Mirror PresetManager mutations into the CRUD pipeline so admins
+        // binding `crud:preset` to a sink receive per-preset events.
+        // The local mutation has already run inside PresetManager — we only
+        // dispatch (no `apply`, no history). When unbound the resource is
+        // inert and these calls are no-ops. Bundle round-tripping handled
+        // separately via the convertor.
+        const dispatchUpdate = (e) => {
+            const p = e?.preset;
+            if (p?.presetID) this.presetResource.update(p.presetID, p.toJSONFriendlyObject());
+        };
+        this.addHandler('preset-create', (e) => {
+            const p = e?.preset;
+            if (p) this.presetResource.create(p.toJSONFriendlyObject());
+        });
+        this.addHandler('preset-update', dispatchUpdate);
+        this.addHandler('preset-meta-add', dispatchUpdate);
+        this.addHandler('preset-meta-remove', dispatchUpdate);
+        this.addHandler('preset-delete', (e) => {
+            const p = e?.preset;
+            if (p?.presetID) this.presetResource.delete(p.presetID);
+        });
     }
 
     /**
@@ -380,140 +493,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		return true;
 	}
 
-	/**
-	 * Get the currently used data persistence storage module.
-	 * This initializes the main persitor.
-	 * @return {PostDataStore}
-	 */
-	async initPostIO() {
-		if (this.POSTStore) return this.POSTStore;
-
-		const store = await super.initPostIO({
-			schema: {
-				"": {_deprecated: ["annotations"]},
-			},
-			strictSchema: false
-		});
-
-		// _unsaved cache snapshot disabled — JSON.stringify of the full
-		// canvas blew localStorage quota past ~500 annotations and froze
-		// the UI on every Nth edit + beforeunload. Recovery is delegated
-		// to the core dirty flag (APPLICATION_CONTEXT.setDirty) plus the
-		// beforeunload listener installed in src/loader.ts. The helper
-		// methods below (_writeUnsavedSnapshot / _readUnsavedSnapshot /
-		// _initIoFromCache / _applyPendingUnsavedSnapshot / etc.) are
-		// kept intact so the feature can return once a smarter snapshot
-		// strategy lands (e.g. IndexedDB, delta-only, or size-gated).
-		/*
-		if (this._storeCacheSnapshots) {
-			this._pendingUnsavedSnapshots = this._pendingUnsavedSnapshots || {};
-			this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
-			await this._initIoFromCache();
-
-            let guard = 0; const _this = this;
-
-            function editRoutine(event, force = false) {
-                _this._hasUnsavedAnnotationChanges  = true;
-
-                if (force || guard++ > 10) {
-                    guard = 0;
-                    void (async () => {
-                        const snapshot = await _this._buildUnsavedSnapshot();
-                        await _this._writeUnsavedSnapshot(snapshot);
-                    })();
-                }
-            }
-
-            this.addHandler('export', () => {
-                if (_this._suppressUnsavedExportReset) return;
-                _this._clearUnsavedSnapshotState();
-                _this._hasUnsavedAnnotationChanges = false;
-                void _this._writeUnsavedSnapshot(null);
-                guard = 0;
-            });
-
-            this.addFabricHandler('annotation-create', editRoutine);
-            this.addFabricHandler('annotation-delete', editRoutine);
-            this.addFabricHandler('annotation-replace', editRoutine);
-            this.addFabricHandler('annotation-edit', editRoutine);
-            window.addEventListener("beforeunload", event => {
-                if (guard === 0 || !_this._hasUnsavedAnnotationChanges) return;
-                editRoutine(null, true);
-            });
-			VIEWER_MANAGER.addHandler('viewer-create', event => {
-				const targetId = event?.uniqueId;
-				const viewer = targetId ? VIEWER_MANAGER.getViewer(targetId, false) || event?.viewer : event?.viewer;
-				if (!viewer || !targetId) return;
-				void _this._applyPendingUnsavedSnapshot(viewer, targetId);
-			});
-
-			if (!this._loadedUnsavedPresets) {
-				await this.loadPresetsCookieSnapshot();
-			}
-		}
-		*/
-
-		const markDirty = () => APPLICATION_CONTEXT.setDirty();
-		this.addFabricHandler('annotation-create', markDirty);
-		this.addFabricHandler('annotation-delete', markDirty);
-		this.addFabricHandler('annotation-replace', markDirty);
-		this.addFabricHandler('annotation-edit', markDirty);
-		this.addHandler('export', () => { APPLICATION_CONTEXT.__cache.dirty = false; });
-
-		if (!this._loadedUnsavedPresets) {
-			await this.loadPresetsCookieSnapshot();
-		}
-		return store;
-	}
-
-	async _initIoFromCache() {
-		if (!this._storeCacheSnapshots) return;
-
-		this._pendingUnsavedSnapshots = this._pendingUnsavedSnapshots || {};
-		this._restoredUnsavedViewerIds = this._restoredUnsavedViewerIds || new Set();
-
-		const data = this._readUnsavedSnapshot();
-		if (!data) return;
-
-		if (data.session !== APPLICATION_CONTEXT.sessionName) {
-			await this._writeUnsavedSnapshot(null);
-			this._clearUnsavedSnapshotState();
-			return;
-		}
-
-		let accepted = false;
-		try {
-			accepted = confirm("Your last annotation workspace was not saved! Load cached annotations for this session?");
-		} catch (e) {
-			console.error("Faulty cached data!", e);
-		}
-
-		if (!accepted) {
-			await this._writeUnsavedSnapshot(null);
-			this._clearUnsavedSnapshotState();
-			return;
-		}
-
-		try {
-			if (data.presets) {
-				await this.presets.import(data.presets, true);
-				this._loadedUnsavedPresets = true;
-			}
-
-			this._pendingUnsavedSnapshots = { ...data.viewers };
-
-			for (const viewerTargetID of Object.keys(this._pendingUnsavedSnapshots)) {
-				const viewer = VIEWER_MANAGER.getViewer(viewerTargetID, false);
-				if (!viewer) continue;
-				await this._applyPendingUnsavedSnapshot(viewer, viewerTargetID);
-			}
-		} catch (e) {
-			this._clearUnsavedSnapshotState();
-			await this._writeUnsavedSnapshot(null);
-			console.error("Faulty cached data!", e);
-		}
-	}
-
 	getFormatSuffix(format=undefined) {
 		return OSDAnnotations.Convertor.getSuffix(format);
 	}
@@ -827,47 +806,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 	getAnnotationCommonVisualProperty(propertyName) {
 		return this.presets.getCommonVisualProp(propertyName);
 	}
-
-	/**
-	 * Create preset cache, this cache is loaded automatically with initPostIO request
-	 * @return {boolean}
-	 */
-	async createPresetsCookieSnapshot() {
-		if (this._storeCacheSnapshots) {
-			return await this.cache.set('presets', JSON.stringify(this.presets.toObject()));
-		}
-	}
-
-	/**
-	 * Load cookies cache if available
-	 */
-	async loadPresetsCookieSnapshot(ask=true) {
-		if (!this._storeCacheSnapshots) return;
-
-		const presets = this.presets;
-		const presetCookiesData = this.cache.get('presets');
-
-		if (presetCookiesData) {
-			// todo this might be invalid since snapshot is imported before load of other functionality..
-			if (ask && this.presets._presetsImported) {
-				this.warn({
-					code: 'W_CACHE_IO_COMMITED',
-					message: 'There are presets available in the cache, but did not load since different presets were imported from data.<a onclick="OSDAnnotations.instance().loadPresetsCookieSnapshot(false);" class="pointer">Load anyway.</a>',
-				});
-				return;
-			}
-			try {
-				await presets.import(presetCookiesData);
-			} catch (e) {
-				console.error(e);
-				this.warn({
-					error: e, code: "W_COOKIES_DISABLED",
-					message: "Could not load presets. Please, let us know about this issue and provide exported file.",
-				});
-			}
-		}
-	}
-
 
 	/**
 	 * Check if comments were declared as enabled
