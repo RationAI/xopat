@@ -68,8 +68,8 @@ function initXOpatLayers() {
         }
     }
 
-    const namedCookieCache = parseStore('_layers.namedCache');
-    const orderedCookieCache = parseStore('_layers.orderedCache');
+    const namedShaderCache = parseStore('_layers.namedCache');
+    const orderedShaderCache = parseStore('_layers.orderedCache');
 
     function isObject(value) {
         return !!value && typeof value === "object" && !Array.isArray(value);
@@ -80,8 +80,15 @@ function initXOpatLayers() {
             return {};
         }
 
+        // cfg.cache is flat scalars today (e.g. { use_channel0: "rgba", opacity: 1 }).
+        // Drop only undefined/null and empty plain objects; scalars, booleans, arrays,
+        // and non-empty objects are all valid cache values.
         return Object.fromEntries(
-            Object.entries(value).filter(([_, val]) => isObject(val) && Object.keys(val).length > 0)
+            Object.entries(value).filter(([_, val]) => {
+                if (val === undefined || val === null) return false;
+                if (isObject(val) && Object.keys(val).length === 0) return false;
+                return true;
+            })
         );
     }
 
@@ -91,9 +98,10 @@ function initXOpatLayers() {
         const params = isObject(config?.params) ? config.params : {};
         const state = {};
 
-        if (config?.visible !== undefined) {
-            state.visible = !!config.visible;
-        }
+        // Always record visibility — matches shaderLayer.mjs default
+        // (`this.visible = this.cfg.visible !== false`). Treat 0/false as hidden,
+        // anything else (including undefined and 1) as visible.
+        state.visible = config?.visible !== false && config?.visible !== 0;
         if (params.use_mode !== undefined) {
             state.use_mode = params.use_mode;
         }
@@ -270,16 +278,16 @@ function initXOpatLayers() {
     /*------------ JS utilities and enhancements --------------*/
     /*---------------------------------------------------------*/
 
-    const recordCache = (cookieKey, currentCache, cacheKeyMaker, keepEmpty) => {
+    const recordCache = (cacheKey, currentCache, cacheKeyMaker, keepEmpty) => {
         const entries = collectShaderEntries();
 
-        if (cookieKey === '_layers.namedCache') {
+        if (cacheKey === '_layers.namedCache') {
             currentCache.__version = 2;
             currentCache.byId = {};
             currentCache.byPath = {};
             currentCache.byName = {};
             currentCache.entries = [];
-        } else if (cookieKey === '_layers.orderedCache') {
+        } else if (cacheKey === '_layers.orderedCache') {
             currentCache.__version = 2;
             currentCache.byOrder = {};
             currentCache.byPath = {};
@@ -294,7 +302,7 @@ function initXOpatLayers() {
             }
 
             const primaryKey = cacheKeyMaker(config, index, entry);
-            if (cookieKey === '_layers.namedCache') {
+            if (cacheKey === '_layers.namedCache') {
                 if (config.id) {
                     currentCache.byId[config.id] = cache;
                 }
@@ -327,7 +335,7 @@ function initXOpatLayers() {
             }
         });
 
-        APPLICATION_CONTEXT.AppCache.set(cookieKey, JSON.stringify(currentCache));
+        APPLICATION_CONTEXT.AppCache.set(cacheKey, JSON.stringify(currentCache));
     };
 
     /**
@@ -335,8 +343,8 @@ function initXOpatLayers() {
      * @param {boolean} named cache by layer name if true, position if false
      */
     UTILITIES.storeVisualizationSnapshot = function (named = true) {
-        if (named) recordCache('_layers.namedCache', namedCookieCache, (shader, i) => shader.name, false);
-        else recordCache('_layers.orderedCache', orderedCookieCache, (shader, i) => i, true);
+        if (named) recordCache('_layers.namedCache', namedShaderCache, (shader, i) => shader.name, false);
+        else recordCache('_layers.orderedCache', orderedShaderCache, (shader, i) => i, true);
         Dialogs.show($.t('messages.paramConfSaved'), 5000, Dialogs.MSG_INFO);
     };
 
@@ -346,8 +354,8 @@ function initXOpatLayers() {
      * @param shaderConfigMap
      */
     UTILITIES.applyStoredVisualizationSnapshot = function (shaderConfigMap) {
-        const smartNamedCache = ensureSmartNamedStore(namedCookieCache);
-        const smartOrderedCache = ensureOrderedStore(orderedCookieCache);
+        const smartNamedCache = ensureSmartNamedStore(namedShaderCache);
+        const smartOrderedCache = ensureOrderedStore(orderedShaderCache);
 
         let sid = 0;
         forEachShaderConfig(shaderConfigMap, (config, shaderId, path) => {
@@ -375,14 +383,20 @@ function initXOpatLayers() {
                 applySnapshotState(config, namedSnapshot.state);
                 config._cacheApplied = cacheApplied;
             } else {
+                // Local-snapshot store (browser AppCache) is an explicit user override
+                // that wins over cfg cache. cfg.cache itself is the session-persistence
+                // channel populated by the renderer/shaders and round-tripped via
+                // serialize/deserialize. Only override when the local store actually
+                // has something — otherwise leave cfg cache alone so URL/file imports
+                // are not wiped on cold load.
                 const orderedSnapshot = splitSnapshotPayload(
                     smartOrderedCache.byPath[pathString] || smartOrderedCache.byOrder[String(sid)]
                 );
-                config.cache = orderedSnapshot.cache;
-                applySnapshotState(config, orderedSnapshot.state);
-                config._cacheApplied = Object.keys(orderedSnapshot.cache).length > 0 || Object.keys(orderedSnapshot.state).length > 0
-                    ? (smartOrderedCache.byPath[pathString] ? "order+path" : "order")
-                    : undefined;
+                if (Object.keys(orderedSnapshot.cache).length > 0 || Object.keys(orderedSnapshot.state).length > 0) {
+                    config.cache = orderedSnapshot.cache;
+                    applySnapshotState(config, orderedSnapshot.state);
+                    config._cacheApplied = smartOrderedCache.byPath[pathString] ? "order+path" : "order";
+                }
             }
 
             sid++;

@@ -73,4 +73,4 @@ function stripDocs(o: Record<string, unknown>): Record<string, unknown> {
     return out;
 }
 
-addModule("io-github-sink", IOGithubSink);
+addModule("io-github-sink", IOGithubSink, true);

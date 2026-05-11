@@ -131,7 +131,7 @@ Every bound sink for one dispatch failed (refused, threw, or declined via `accep
 #### `io:conflict` | e: `{ ctx: IOContext, sinkIds: string[] }`
 Reserved for the case when two or more registered sinks both `accepts(ctx)` for the same operation. Not yet emitted by the current implementation (mirror semantics make this expected and not a conflict).
 
-> The legacy `export-data` event was removed when the generic IO pipeline replaced `initPostIO`. Plugins/modules now declare bundle hooks via `this.initIO({ exportBundle, importBundle })` and the loader's `serializeApp` calls `IO_PIPELINE.flushBundleExport()` instead of raising the old event.
+> Bundle export is driven by `IO_PIPELINE.flushBundleExport()` (called by `serializeApp` and the user-facing Export action). Plugins/modules declare bundle hooks via `this.initIO({ exportBundle, importBundle })`. See [`src/IO_PIPELINE.md`](IO_PIPELINE.md).
 
 ## Viewer-Local Events: ``VIEWER/viewer``
 The events below only extend available events in OpenSeadragon. For other input events see the OpenSeadragon documentation.

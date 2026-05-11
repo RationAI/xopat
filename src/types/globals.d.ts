@@ -4,7 +4,7 @@ declare global {
     // Runtime-provided globals available throughout the application
     var $: any;
     var APPLICATION_CONTEXT: ApplicationContext;
-    var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton) => void;
+    var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton, eager?: boolean) => void;
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
     var plugin: (id: string) => IXOpatPlugin | undefined;
     var pluginMeta: (id: string, metaKey: string) => any;

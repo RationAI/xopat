@@ -1878,7 +1878,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             apply:        () => { this._promoteHelperAnnotation(annotation, _raise, false); },
             inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
             meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
-            rollbackOnAsyncRefuse: true,
+            // Re-enable once a real `crud:annotation` sink is wired (see MIGRATION.md):
+            // until then a dispatch refusal must not silently nuke the local create.
+            rollbackOnAsyncRefuse: false,
         });
         return !!result.ok;
     }
@@ -2276,11 +2278,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {boolean} true if annotation was added
      */
     addAnnotation(annotation, _raise=true) {
-        return APPLICATION_CONTEXT.history.push(
-            () => this._addAnnotation(annotation, _raise),
-            () => this._deleteAnnotation(annotation, _raise),
-            { name: 'Add annotation' }
-        );
+        if (!annotation) return false;
+        const result = this.module.annotationResource.create(annotation, {
+            apply:        () => { this._addAnnotation(annotation, _raise); },
+            inverseApply: () => { this._deleteAnnotation(annotation, _raise); },
+            meta: { kind: 'create', object: annotation, viewerId: this.viewer?.uniqueId },
+            // See `promoteHelperAnnotation` — opt back in once a real
+            // `crud:annotation` sink is wired so refusals can roll back.
+            rollbackOnAsyncRefuse: false,
+        });
+        return !!result.ok;
     }
 
     /**
@@ -2984,19 +2991,25 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (object.isHighlight) return false;
 
         let preset = this.module.presets.get(object.presetID);
-        if (preset) {
-            const factory = this.module.getAnnotationObjectFactory(object.factoryID);
-            const visuals = {...this.module.presets.commonAnnotationVisuals};
-            factory.updateRendering(object, preset, visuals, visuals, this.canvas);
-            factory.renderPresetText(object);
-
-            const isSelected = this.isAnnotationSelected(object, selection);
-            if (isSelected) factory?.applySelectionStyle?.(object, this);
-            return true;
+        if (!preset) {
+            // todo consider adding such preset
+            console.warn("[updateSingleAnnotationVisuals] annotation does not have according preset!", object);
+            return false;
         }
-        // todo consider adding such preset
-        console.warn("[updateSingleAnnotationVisuals] annotation does not have according preset!", object);
-        return false;
+
+        // Helper objects (e.g. polygon control-point circles) inherit a presetID
+        // from the in-progress factory's options but have no factoryID. Skip
+        // them — they are visual scaffolding, not real annotations.
+        const factory = this.module.getAnnotationObjectFactory(object.factoryID);
+        if (!factory) return false;
+
+        const visuals = {...this.module.presets.commonAnnotationVisuals};
+        factory.updateRendering(object, preset, visuals, visuals, this.canvas);
+        factory.renderPresetText(object);
+
+        const isSelected = this.isAnnotationSelected(object, selection);
+        if (isSelected) factory.applySelectionStyle?.(object, this);
+        return true;
     }
 
     /**

@@ -51,7 +51,8 @@ export class ShaderLayer extends BaseComponent {
         this.isGroupChild = !!this.htmlContext.isGroupChild;
         this.groupOpen = this.cfg._uiGroupOpen ?? true;
         this.fixed = !!this.cfg.fixed;
-        this.visible = this.cfg.visible !== false;
+        // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
+        this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
         this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "blend" | "clip"
         this.blendMode = this.cfg.params?.use_blend
             || (OpenSeadragon.WebGLModule?.BLEND_MODE?.[0] ?? "mask");
@@ -516,18 +517,21 @@ export class ShaderLayer extends BaseComponent {
             return div({ class: "mt-2" });
         }
 
-        const statusColor = {
-            hit: "text-success",
-            stale: "text-warning",
-            miss: "text-error"
-        }[this.cacheApplied] || "text-base-content/70";
+        // hit/stale/miss are forward-looking statuses; the actual provenance values
+        // written today are id/path/name/name+path/order/order+path/session.
+        // Default to text-info (clearly visible) so users notice the override.
+        const statusStyle = {
+            hit: "text-success bg-success/10",
+            stale: "text-warning bg-warning/10",
+            miss: "text-error bg-error/10"
+        }[this.cacheApplied] || "text-info bg-info/10";
 
         const icon = new FAIcon({ name: "fa-broom" });
         return button(
             {
                 type: "button",
                 class:
-                    `btn-ghost ${statusColor} btn-[10px] min-h-0 px-1 leading-[0] mt-1`,
+                    `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5 mt-1 btn-warning`,
                 title: $.t("main.shaders.cacheInfo"),
                 onclick: () => this._toggleCachePopup()
             },
@@ -729,7 +733,7 @@ export class ShaderLayer extends BaseComponent {
 
     update(shaderConfig) {
         this.cfg = shaderConfig;
-        this.visible = shaderConfig?.visible !== false;
+        this.visible = shaderConfig?.visible !== false && shaderConfig?.visible !== 0;
         this.mode = shaderConfig?.params?.use_mode || "show";
         this.blendMode = shaderConfig?.params?.use_blend || this.blendMode;
         this.type = shaderConfig?.type || this.type;

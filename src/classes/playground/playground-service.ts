@@ -711,53 +711,70 @@ async function confirmCloseIfDirtyPages(pages: PlaygroundPageHandle[]): Promise<
 // ---------------------------------------------------------------------------
 // Draft persistence
 
-function pruneExpiredDrafts() {
+/**
+ * Drafts go through the unified IO pipeline so admins can route them
+ * elsewhere via `ENV.client.io.bindings["plugin.playground"].kv:cache`.
+ * Default driver is `local-storage`. Resolution is memoized — call
+ * `_resetDraftKvCache()` if bindings change at runtime.
+ */
+let _draftKvCache: any = undefined;
+function draftKv() {
+    if (_draftKvCache !== undefined) return _draftKvCache;
     try {
-        const now = Date.now();
-        const ls = window.localStorage;
-        const expired: string[] = [];
-        for (let i = 0; i < ls.length; i++) {
-            const k = ls.key(i);
-            if (!k || !k.startsWith(DRAFT_KEY_PREFIX)) continue;
-            try {
-                const v = JSON.parse(ls.getItem(k) || "null");
-                if (!v?.savedAt || (now - v.savedAt) > DRAFT_TTL_MS) {
-                    expired.push(k);
-                }
-            } catch (e) {
-                expired.push(k);
-            }
-        }
-        for (const k of expired) ls.removeItem(k);
-    } catch (e) { /* noop */ }
+        return _draftKvCache = (window as any).IO_PIPELINE?.kv("plugin.playground", "kv:cache") ?? null;
+    } catch {
+        return _draftKvCache = null;
+    }
 }
 
 function draftKey(sourceUniqueId: string, pageId: string) {
     return `${DRAFT_KEY_PREFIX}${sourceUniqueId}:${pageId}`;
 }
 
+function pruneExpiredDrafts() {
+    const kv = draftKv();
+    if (!kv) return;
+    try {
+        const now = Date.now();
+        const expired: string[] = [];
+        for (const k of kv.keys() as string[]) {
+            if (!k.startsWith(DRAFT_KEY_PREFIX)) continue;
+            try {
+                const v = JSON.parse(kv.getItem(k) || "null");
+                if (!v?.savedAt || (now - v.savedAt) > DRAFT_TTL_MS) expired.push(k);
+            } catch {
+                expired.push(k);
+            }
+        }
+        for (const k of expired) kv.removeItem(k);
+    } catch { /* noop */ }
+}
+
 function loadDraftsForPages(pages: Array<{ sourceViewerUniqueId?: string; id: string }>) {
     const map = new Map<string, any>();
-    try {
-        for (const p of pages) {
-            if (!p.sourceViewerUniqueId) continue;
-            const raw = window.localStorage.getItem(draftKey(p.sourceViewerUniqueId, p.id));
-            if (!raw) continue;
-            try { map.set(p.id, JSON.parse(raw)); } catch (e) { /* noop */ }
-        }
-    } catch (e) { /* localStorage unavailable */ }
+    const kv = draftKv();
+    if (!kv) return map;
+    for (const p of pages) {
+        if (!p.sourceViewerUniqueId) continue;
+        const raw = kv.getItem(draftKey(p.sourceViewerUniqueId, p.id));
+        if (!raw) continue;
+        try { map.set(p.id, JSON.parse(raw)); } catch { /* noop */ }
+    }
     return map;
 }
 
 function writeDraft(sourceUniqueId: string, pageId: string, data: any) {
-    try {
-        window.localStorage.setItem(draftKey(sourceUniqueId, pageId), JSON.stringify(data));
-    } catch (e) { /* quota / unavailable */ }
+    const kv = draftKv();
+    if (!kv) return;
+    try { kv.setItem(draftKey(sourceUniqueId, pageId), JSON.stringify(data)); }
+    catch { /* quota / unavailable */ }
 }
 
 function clearDraftFor(sourceUniqueId: string | undefined, pageId: string) {
     if (!sourceUniqueId) return;
-    try { window.localStorage.removeItem(draftKey(sourceUniqueId, pageId)); } catch (e) { /* noop */ }
+    const kv = draftKv();
+    if (!kv) return;
+    try { kv.removeItem(draftKey(sourceUniqueId, pageId)); } catch { /* noop */ }
 }
 
 function queueRestoreToast(

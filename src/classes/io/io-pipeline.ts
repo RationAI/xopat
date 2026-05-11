@@ -524,7 +524,7 @@ export class IOPipeline implements IOPipelineLike {
         try {
             payload = owner.exportBundle ? await owner.exportBundle(ctx) : undefined;
         } catch (e: any) {
-            results.push(this.failure(ctx, e?.message ?? String(e), "W_IO_EXPORT_THREW"));
+            results.push(this.failure(ctx, e?.message ?? String(e), "W_IO_EXPORT_THREW", e?.userMessage));
             return;
         }
         if (payload === undefined || payload === null) return;
@@ -550,9 +550,42 @@ export class IOPipeline implements IOPipelineLike {
                 if (r.ok) succeeded++;
                 else if (r.refused) this.surfaceRefusal(ctx, r);
             } catch (e: any) {
-                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW");
+                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW", e?.userMessage);
                 results.push(r);
                 dispatchResults.push(r);
+            }
+        }
+        if (sinks.length > 0 && succeeded === 0) {
+            // Last-resort: if every bound sink for a bundle-export refused,
+            // hand the payload to the built-in `file-download` sink so the
+            // user always walks away with their data. Skipped if file-
+            // download was already among the bindings (no point retrying it)
+            // or if it isn't registered. Failures here surface like any
+            // other refusal but don't loop back into this fallback.
+            const FALLBACK_ID = "file-download";
+            const isExport = cap.id.includes("export");
+            const fallback = isExport && !sinks.includes(FALLBACK_ID)
+                ? this.sinks.get(FALLBACK_ID)
+                : undefined;
+            if (fallback?.writeBundle) {
+                try {
+                    const r = await fallback.writeBundle(ctx, payload);
+                    results.push(r);
+                    dispatchResults.push(r);
+                    if (r.ok) {
+                        this.notifier(
+                            `${ctx.ownerId}: remote sinks refused; downloaded a local copy as fallback.`,
+                            "warn",
+                        );
+                        succeeded++;
+                    } else if (r.refused) {
+                        this.surfaceRefusal(ctx, r);
+                    }
+                } catch (e: any) {
+                    const r = this.failure(ctx, e?.message ?? String(e), "W_IO_FALLBACK_THREW", e?.userMessage);
+                    results.push(r);
+                    dispatchResults.push(r);
+                }
             }
         }
         if (sinks.length > 0 && succeeded === 0) {
@@ -659,7 +692,7 @@ export class IOPipeline implements IOPipelineLike {
                 dispatchResults.push({ ok: true });
                 succeeded++;
             } catch (e: any) {
-                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_RESTORE_THREW");
+                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_RESTORE_THREW", e?.userMessage);
                 results.push(r);
                 dispatchResults.push(r);
             }
@@ -694,7 +727,7 @@ export class IOPipeline implements IOPipelineLike {
                     results.push({ ok: true });
                 }
             } catch (e: any) {
-                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_IMPORT_THREW");
+                const r = this.failure(ctx, e?.message ?? String(e), "W_IO_IMPORT_THREW", e?.userMessage);
                 results.push(r);
             }
         }
@@ -739,7 +772,7 @@ export class IOPipeline implements IOPipelineLike {
                     return last;
                 }
             } catch (e: any) {
-                last = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW");
+                last = this.failure(ctx, e?.message ?? String(e), "W_IO_SINK_THREW", e?.userMessage);
                 dispatchResults.push(last);
             }
         }
@@ -847,7 +880,14 @@ export class IOPipeline implements IOPipelineLike {
     private surfaceRefusal(ctx: IOContext, r: Extract<IOResult, { ok: false }>) {
         this.bus.raiseEvent("io:refused", { ctx, result: r });
         const msg = r.userMessage ?? r.reason;
-        if (msg) this.notifier(msg, "warn");
+        if (msg) {
+            // A `userMessage` is the sink author's signal that this refusal
+            // is meant to be shown to the user (e.g. "GitHub rejected the
+            // access token"). Treat that as an error; bare refusals without
+            // a user message stay at warn so soft-route logs don't escalate.
+            const level: "warn" | "error" = r.userMessage ? "error" : "warn";
+            this.notifier(msg, level);
+        }
         try {
             const vm = (globalThis as any).VIEWER_MANAGER;
             if (vm?.raiseEvent) vm.raiseEvent("io:refused", { ctx, result: r });
@@ -880,8 +920,14 @@ export class IOPipeline implements IOPipelineLike {
         } catch { /* viewer manager may not yet exist */ }
     }
 
-    private failure(ctx: IOContext, reason: string, code: string): IOResult {
-        const r = { ok: false as const, refused: true as const, reason, code };
+    private failure(ctx: IOContext, reason: string, code: string, userMessage?: string): IOResult {
+        // `userMessage`, when supplied (typically by an owner that wraps its
+        // exception with a `userMessage` property), escalates the resulting
+        // toast in `surfaceRefusal` to error-level so user-facing failures
+        // are clearly distinguished from internal warnings.
+        const r: IOResult = userMessage
+            ? { ok: false as const, refused: true as const, reason, code, userMessage }
+            : { ok: false as const, refused: true as const, reason, code };
         this.surfaceRefusal(ctx, r);
         return r;
     }

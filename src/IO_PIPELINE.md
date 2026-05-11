@@ -89,7 +89,7 @@ await this.initIO({
 
 1. registers your bundle hooks with the pipeline
 2. adds any extra capabilities you pass via `options.capabilities`
-3. immediately calls `IO_PIPELINE.tryRestoreImport({ ownerUid })` so any preexisting global payload is rehydrated (mirrors the legacy `initPostIO` boot-time behaviour). Per-viewer rehydration happens automatically via `forceDataImportInitialization` whenever a viewer opens.
+3. immediately calls `IO_PIPELINE.tryRestoreImport({ ownerUid })` so any preexisting global payload is rehydrated. Per-viewer rehydration happens automatically via `forceDataImportInitialization` whenever a viewer opens.
 
 ### Per-element CRUD
 
@@ -544,7 +544,7 @@ await this.io.flush({ viewerId: someViewer });      // for one viewer
 await this.io.flush({ capabilityId: 'bundle-export' });
 ```
 
-`UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go, replacing the legacy `'export-data'` event.
+`UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go.
 
 ---
 
@@ -635,6 +635,10 @@ Use `IO_PIPELINE.isEnabled(ownerUid, capabilityId)` (or `this.io.isEnabled(...)`
 | `file-upload` | `bundle` | Pops a file picker, reads the file, returns the contents. Used as the readable side of session restore from disk. |
 | `http-rest` | `bundle`, `crud` | Generic `HttpClient`-backed sink. Per-deployment overrides in `ENV.client.io.sinkOverrides[<id>]` (see above). |
 
+### Round-trip contract
+
+A transport sink **must round-trip payloads byte-equivalent**. The sink may decode wire encodings (base64, gzip, …) so the owner gets back the same logical payload it produced, but it **must not interpret the payload's semantics** — no `JSON.parse`, no schema-aware reshaping, no whitespace stripping. Decoding bundle contents (string → object, array → typed model, etc.) belongs in the owner's `importBundle`, because only the owner knows the payload's format. Sinks that violate this contract silently break any owner that round-trips a JSON string the owner expects to parse itself.
+
 Custom sinks are registered with `IO_PIPELINE.registerSink(mySink)` — they're plain objects implementing the `IOSink` ambient interface. Distinct ids let the admin route different owners to different `http-rest` instances; the owning module composes its own defaults with the admin override slot:
 
 ```ts
@@ -692,7 +696,7 @@ Beyond bundle export/import and per-element CRUD, every owner — including a sy
 | `kv:cache`    | `local-storage`   | sync  | `XOpatStorage.Cache`    |
 | `kv:cookies`  | `cookies`         | sync  | `XOpatStorage.Cookies`  |
 | `kv:session`  | `session-storage` | sync  | direct `sessionStorage` (where applicable) |
-| `kv:data`     | `post-data`       | async | `XOpatStorage.Data` / the removed `POSTStore` |
+| `kv:data`     | `post-data`       | async | `XOpatStorage.Data` |
 | `kv:<custom>` | none — declare in include.json `io.defaultBindings` or via app config |
 
 ### Drivers
@@ -756,9 +760,9 @@ The app's session-recovery payload (`__xopat_session__` in `sessionStorage`) is 
 
 ## Compatibility notes
 
-The legacy `XOpatElement` API (`initPostIO`, `exportData`, `exportViewerData`, `importData`, `importViewerData`, `POSTStore`) was removed in this migration. Repo grep confirmed there were zero downstream consumers (only loader internals and stale documentation). New plugins/modules should use `initIO` + `defineResource` exclusively.
+Persistence is implemented exclusively through `initIO` + `defineResource`. Plugins and modules that previously relied on the older POST-IO override API have been migrated; see each subsystem's `MIGRATION.md` (e.g. [`modules/annotations`](../../modules/annotations/), [`modules/recorder/MIGRATION.md`](../../modules/recorder/MIGRATION.md), [`plugins/recorder/MIGRATION.md`](../../plugins/recorder/MIGRATION.md), [`plugins/questionaire-new/MIGRATION.md`](../../plugins/questionaire-new/MIGRATION.md)).
 
-The `'export-data'` event is no longer raised; `serializeApp` now calls `IO_PIPELINE.flushBundleExport()` directly. The two new events `io:refused` and `io:conflict` replace it (see `EVENTS.md`).
+`serializeApp` now calls `IO_PIPELINE.flushBundleExport()` directly; subscribe to `io:refused` and `io:conflict` (see `EVENTS.md`) for visibility into individual sink outcomes.
 
 ---
 

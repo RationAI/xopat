@@ -25,7 +25,11 @@ export function bootstrapIOPipeline(
             const D = (window as any).Dialogs;
             if (D?.show) {
                 const lvl = l === "error" ? D.MSG_ERR : l === "warn" ? D.MSG_WARN : D.MSG_INFO;
-                D.show(m, 5000, lvl);
+                // Errors and warnings persist long enough that a user
+                // glancing away briefly still catches them; info stays
+                // short so successful-write confirmations don't pile up.
+                const duration = l === "info" ? 5000 : 12000;
+                D.show(m, duration, lvl);
             } else {
                 (l === "error" ? console.error : l === "warn" ? console.warn : console.info)(`[IO] ${m}`);
             }

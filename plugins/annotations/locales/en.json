@@ -29,13 +29,18 @@
     },
     "export": {
       "menuTitle": "Annotations",
-      "forSlide": "for slide {{slide}}",
       "description": "Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.",
-      "fileSection": "File Download / Upload",
-      "scopeLabel": "Export scope (annotations):",
+      "formatSection": "File format",
+      "exportSection": "Export",
+      "importSection": "Import",
+      "scopeLabel": "Annotations to export:",
       "replaceOnImport": "Replace existing data on import",
-      "downloadPresets": "Download presets.",
-      "downloadAnnotations": "Download annotations.",
+      "downloadPresets": "Download presets",
+      "downloadAnnotations": "Download annotations",
+      "chooseFileButton": "Choose file to import…",
+      "fromSlide": "From slide:",
+      "intoSlide": "Into slide:",
+      "focusedMarker": "(focused)",
       "scopeOptions": {
         "all": "All",
         "selected": "Selected"
@@ -157,7 +162,23 @@
       "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
     },
     "presets": {
-      "dialogTitle": "Annotation Class Presets"
+      "dialogTitle": "Annotation Class Presets",
+      "filterPlaceholder": "Filter classes...",
+      "addNew": "Add new class",
+      "addField": "Add field",
+      "newFieldPlaceholder": "Field name...",
+      "valuePlaceholder": "Value...",
+      "add": "Add",
+      "color": "Color",
+      "delete": "Delete class",
+      "typeLabel": "Type",
+      "fieldsLabel": "Fields",
+      "unnamed": "Unnamed Class",
+      "emptyState": "No classes yet. Use \"Add new class\" below to create one.",
+      "noFilterResults": "No classes match your filter.",
+      "useLeft": "Use for Left Click",
+      "useRight": "Use for Right Click",
+      "finishEditing": "Finish Editing"
     },
     "board": {
       "title": "Annotation list",

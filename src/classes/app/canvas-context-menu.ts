@@ -16,6 +16,14 @@ export interface CanvasContextMenuContext {
     event: MouseEvent;
     osdPosition: { x: number; y: number };       // viewport coords (or fallback)
     pixelPosition: { x: number; y: number };     // image-pixel coords (or fallback)
+    /**
+     * Pre-resolved active target (e.g. an annotation). Set when the menu is
+     * opened from a UI surface other than a right-click on the canvas, where
+     * the caller already knows which object the menu pertains to and standard
+     * hit-testing on `event` would not resolve it. Providers that care about
+     * the active object should prefer `ctx.active` over re-deriving it.
+     */
+    active?: any;
 }
 
 export interface CanvasContextMenuItem {

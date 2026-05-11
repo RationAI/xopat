@@ -131,6 +131,7 @@ addPlugin('slide-info', class extends XOpatPlugin {
                 ownerPluginId: this.id,
             });
             this.menu.attachToMainLayout();
+            if (!this.hasCustomBrowser) this.menu.refresh();
         }
     }
 

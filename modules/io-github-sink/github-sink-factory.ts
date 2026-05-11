@@ -216,9 +216,12 @@ export function makeGithubSink(opts: GithubSinkOptions): IOSink {
                 if (file.encoding && file.encoding !== "base64") {
                     return fail(`unexpected encoding "${file.encoding}"`, "W_GITHUB_ENCODING");
                 }
-                const text = base64ToUtf8(String(file.content ?? ""));
-                let payload: unknown = text;
-                try { payload = JSON.parse(text); } catch { /* leave as raw text */ }
+                // Round-trip the bytes verbatim. The sink decodes the wire
+                // encoding (base64) but must NOT reinterpret payload
+                // semantics — owners (e.g. annotations' native Convertor)
+                // own the JSON.parse step and rely on receiving the same
+                // string they exported. See src/IO_PIPELINE.md.
+                const payload = base64ToUtf8(String(file.content ?? ""));
                 return { ok: true, payload };
             } catch (e: any) {
                 shaCache.delete(path);

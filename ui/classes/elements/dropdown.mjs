@@ -68,10 +68,11 @@ class Dropdown extends BaseSelectableComponent {
             buttonClasses = {flex: "flex flex-col items-center", padding: ""};
         if (this._useActiveSelection) {
             dropdownIcon = i(
-                { "data-dropdown-arrow": "1", class: "ml-1 p-3" },
+                { "data-dropdown-arrow": "1", class: "ml-0 pr-3 pl-1" },
                 new FAIcon({ name: "fa-caret-down" }).create()
             );
             buttonClasses['padding'] = 'pr-0';
+            inIcon.setClass('dropdownPadding', 'pl-2')
         }
         return new Button({
             id: this.parentId + "-b-" + this.id,

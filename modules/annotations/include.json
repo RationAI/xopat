@@ -40,11 +40,6 @@
             { "id": "crud:preset",     "kind": "crud", "label": "Preset" }
         ]
     },
-    // TODO: parked. The runtime block that consumes this flag is commented out
-    // in annotations.js (initPostIO) — it blew localStorage past ~500 annotations.
-    // Replaced for now by APPLICATION_CONTEXT.setDirty() + a beforeunload guard
-    // in src/loader.ts. Re-enable once a smarter snapshot strategy lands.
-    "storeCacheSnapshots": true,
     // Whether to include private annotations in module export
     "exportPrivate" : false,
     // If default preset should be provided

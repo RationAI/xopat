@@ -312,7 +312,8 @@ export class FullscreenMenus {
             img({
                 src: `${APPLICATION_CONTEXT.url}src/assets/logos/xopat-logo.png`,
                 alt: "xOpat Viewer",
-                class: "h-5 w-5 object-contain"
+                class: "object-contain",
+                style: "height: 32px"
             }),
             div({ class: "flex flex-col leading-tight" },
                 span({ class: "text-sm font-semibold" }, "Viewer"),

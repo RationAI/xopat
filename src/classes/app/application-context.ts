@@ -110,8 +110,15 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         get url() {
             const self = this as unknown as ApplicationContext;
             const domain = self.env.client.domain;
-            if (!domain.endsWith("/")) return domain + "/" + self.env.client.path;
-            return domain + self.env.client.path;
+            const raw = !domain.endsWith("/")
+                ? domain + "/" + self.env.client.path
+                : domain + self.env.client.path;
+            // Collapse runs of `/` into a single `/` except after the
+            // protocol scheme (`http://`). Misconfigured combinations of
+            // trailing-slash domain + leading-slash path otherwise produce
+            // `host//path`, which makes server-side route matching like
+            // `pathname.startsWith("/proxy/")` silently fail.
+            return raw.replace(/([^:])\/{2,}/g, "$1/");
         },
         get settingsMenuId() { return "app-settings"; },
         get pluginsMenuId() { return "app-plugins"; },

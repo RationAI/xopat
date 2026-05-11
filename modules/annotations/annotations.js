@@ -84,7 +84,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 try {
                     await fabric.import(data, { format: formatOf(ctx) }, true);
                 } catch (e) {
+                    // Rethrow so the IO pipeline surfaces the failure to the
+                    // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
+                    // `userMessage` is honored by `surfaceRefusal` as the
+                    // error-level dialog text; bare `reason` falls back to it.
+                    const reason = e?.message ?? String(e);
                     console.warn(`[annotations] importBundle (viewer=${ctx.viewerId}) failed:`, e);
+                    const wrapped = new Error(`Failed to import annotations for viewer ${ctx.viewerId}: ${reason}`);
+                    wrapped.userMessage = `Could not import annotations into viewer ${ctx.viewerId}. ${reason}`;
+                    throw wrapped;
                 }
             },
         });
@@ -1378,7 +1386,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._annotationAutoIncrement = 0;
         this._annotationLabelIncrement = 0;
         this._annotationFilters = [];
-		this._storeCacheSnapshots = this.getStaticMeta("storeCacheSnapshots", false);
 		this._exportPrivateAnnotations = this.getStaticMeta("exportPrivate", false); // todo make this more configurable
 		this._provideDefaultPresets = this.getStaticMeta("provideDefaultPresets", true);
         this.cursor = {

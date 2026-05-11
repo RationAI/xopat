@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-05-02
-//! Git commit: --3326e6e-dirty
+//! Built on 2026-05-04
+//! Git commit: --168232c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19635,8 +19635,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-05-02
-//! Git commit: --3326e6e-dirty
+//! Built on 2026-05-04
+//! Git commit: --168232c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19921,10 +19921,11 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
-//! Built on 2026-05-02
-//! Git commit: --3326e6e-dirty
+//! Built on 2026-05-04
+//! Git commit: --168232c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

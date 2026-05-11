@@ -41,150 +41,63 @@ export const globalPluginWindowMethods = {
 
     /**
      * Popover menu opened from the annotation toolbar's "..." control.
-     * Items dispatch to the wrapper that owns the clicked annotation.
+     * Aggregates items from the same `CanvasContextMenu` providers that feed
+     * the canvas right-click menu (annotations, measurements, playground, ...)
+     * so the two surfaces stay in lock-step. "Mark as private" is filtered
+     * out here because the annotation row already exposes that toggle inline
+     * via its own control.
      */
     _openAnnotationMoreMenu(object, clientX, clientY) {
-        document.body.querySelector('[data-role="annotation-more-menu"]')?.remove();
-
         const wrapper = this._wrapperForAnnotation(object);
         if (!wrapper) return;
 
-        const menu = document.createElement('div');
-        menu.dataset.role = 'annotation-more-menu';
-        menu.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-        menu.style.minWidth = '180px';
+        // Make the active selection match the annotation the user clicked on
+        // so handlers (Copy/Cut/Delete/preset change) operate on it.
+        if (wrapper.canvas?.setActiveObject) {
+            wrapper.canvas.setActiveObject(object);
+            wrapper.canvas.renderAll?.();
+        }
 
-        const dismiss = () => menu.remove();
-
-        const addItem = (label, onClick, opts = {}) => {
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-ghost btn-xs justify-start w-full';
-            btn.textContent = label;
-            if (opts.disabled) btn.disabled = true;
-            btn.onclick = (ev) => {
-                ev.stopPropagation();
-                try { onClick(); } catch (err) { console.error(err); }
-                dismiss();
-            };
-            menu.appendChild(btn);
+        const px = clientX ?? 100;
+        const py = clientY ?? 100;
+        const syntheticEvent = {
+            preventDefault: () => {},
+            pageX: px, pageY: py,
+            clientX: px, clientY: py,
+            x: px, y: py,
         };
 
-        // Delete
-        addItem('Delete', () => {
-            wrapper.deleteObject?.(object);
+        const ctx = {
+            viewer: wrapper.viewer,
+            event: syntheticEvent,
+            osdPosition: { x: 0, y: 0 },
+            pixelPosition: { x: 0, y: 0 },
+            active: object,
+        };
+
+        const registry = window.CanvasContextMenu;
+        const items = registry?.collect ? registry.collect(ctx) : [];
+        const filtered = items.filter((item) => {
+            const t = item?.title;
+            return t !== 'Mark as private' && t !== 'Unmark as private' && t !== 'Modify annotation:';
         });
+        if (!filtered.length) return;
 
-        // Move to layer ▶
-        const layers = wrapper.getAllLayers?.() || [];
-        if (typeof wrapper.setAnnotationLayer === 'function') {
-            const moveBtn = document.createElement('div');
-            moveBtn.className = 'dropdown dropdown-right';
-            const trigger = document.createElement('button');
-            trigger.className = 'btn btn-ghost btn-xs justify-between w-full';
-            trigger.innerHTML = '<span>Move to layer</span><span class="opacity-60">▶</span>';
-            trigger.onclick = (ev) => {
-                ev.stopPropagation();
-                document.body.querySelector('[data-role="annotation-more-submenu"]')?.remove();
-                const sub = document.createElement('div');
-                sub.dataset.role = 'annotation-more-submenu';
-                sub.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-                sub.style.minWidth = '180px';
-                const rect = trigger.getBoundingClientRect();
-                sub.style.top = `${rect.top + window.scrollY}px`;
-                sub.style.left = `${rect.right + window.scrollX + 4}px`;
-
-                const sAdd = (label, layerId) => {
-                    const b = document.createElement('button');
-                    b.className = 'btn btn-ghost btn-xs justify-start w-full';
-                    b.textContent = label;
-                    b.onclick = (e) => {
-                        e.stopPropagation();
-                        wrapper.setAnnotationLayer(object, layerId);
-                        sub.remove();
-                        dismiss();
-                    };
-                    sub.appendChild(b);
-                };
-                sAdd('(no layer)', null);
-                for (const l of layers) sAdd(l.name || `Layer ${l.id}`, l.id);
-
-                document.body.appendChild(sub);
-                const onDoc = (ev) => {
-                    if (!sub.contains(ev.target)) {
-                        sub.remove();
-                        document.removeEventListener('mousedown', onDoc, true);
-                    }
-                };
-                requestAnimationFrame(() => document.addEventListener('mousedown', onDoc, true));
-            };
-            moveBtn.appendChild(trigger);
-            menu.appendChild(moveBtn);
-        }
-
-        // Group siblings by ▶
-        if (typeof wrapper.groupSiblingsByCriterion === 'function') {
-            const trigger = document.createElement('button');
-            trigger.className = 'btn btn-ghost btn-xs justify-between w-full';
-            trigger.innerHTML = '<span>Group siblings by</span><span class="opacity-60">▶</span>';
-            trigger.onclick = (ev) => {
-                ev.stopPropagation();
-                document.body.querySelector('[data-role="annotation-more-submenu"]')?.remove();
-                const sub = document.createElement('div');
-                sub.dataset.role = 'annotation-more-submenu';
-                sub.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-                sub.style.minWidth = '180px';
-                const rect = trigger.getBoundingClientRect();
-                sub.style.top = `${rect.top + window.scrollY}px`;
-                sub.style.left = `${rect.right + window.scrollX + 4}px`;
-
-                const sAdd = (label, criterion) => {
-                    const b = document.createElement('button');
-                    b.className = 'btn btn-ghost btn-xs justify-start w-full';
-                    b.textContent = label;
-                    b.onclick = (e) => {
-                        e.stopPropagation();
-                        wrapper.groupSiblingsByCriterion(object, criterion, { kind: 'new' });
-                        sub.remove();
-                        dismiss();
-                    };
-                    sub.appendChild(b);
-                };
-                sAdd('Same shape type', 'factory');
-                sAdd('Same preset', 'preset');
-                sAdd('Same author', 'author');
-                sAdd('Same category', 'category');
-
-                document.body.appendChild(sub);
-                const onDoc = (ev) => {
-                    if (!sub.contains(ev.target)) {
-                        sub.remove();
-                        document.removeEventListener('mousedown', onDoc, true);
-                    }
-                };
-                requestAnimationFrame(() => document.addEventListener('mousedown', onDoc, true));
-            };
-            menu.appendChild(trigger);
-        }
-
-        // Copy ID
-        if (object.incrementId !== undefined) {
-            addItem('Copy ID', () => {
-                try { navigator.clipboard?.writeText?.(String(object.incrementId)); } catch {}
-            });
-        }
-
-        document.body.appendChild(menu);
-        menu.style.top = `${(clientY ?? 100) + window.scrollY}px`;
-        menu.style.left = `${(clientX ?? 100) + window.scrollX}px`;
-
-        const onDoc = (ev) => {
-            if (!menu.contains(ev.target)) {
-                dismiss();
-                document.body.querySelector('[data-role="annotation-more-submenu"]')?.remove();
-                document.removeEventListener('mousedown', onDoc, true);
-            }
-        };
-        requestAnimationFrame(() => document.addEventListener('mousedown', onDoc, true));
+        // Prefer the van.js-based `ContextMenu` (cascading flyouts for items
+        // with `children`); fall back to the legacy `window.DropDown` until
+        // the UI bundle has been rebuilt to expose the new component.
+        // The setTimeout(0) defers past the document-level click listener
+        // that `window.DropDown` installs at init: the native click on the
+        // canvas (which became this fabric onClick via OSD's mouseup → click
+        // sequence) would otherwise bubble to that listener and close the
+        // menu the moment it opened. The new ContextMenu uses
+        // FloatingManager which registers its outside-click listener in a
+        // microtask, so the deferral is harmless either way.
+        setTimeout(() => {
+            const ctxMenu = window.ContextMenu;
+            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, filtered);
+            else window.DropDown?.open(syntheticEvent, filtered);
+        }, 0);
     },
 
     _initGlobalPluginWindow() {
@@ -284,7 +197,7 @@ export const globalPluginWindowMethods = {
             this._shapeChoice = new ui.ToolbarChoiceGroup({
                 headerMode: 'selectOrExpand',
                 itemID: 'cg-shapes',
-                defaultSelected: factories[0]?.id || 'none',
+                defaultSelected: factories[0]?.factoryID || 'none',
                 onChange: (factoryId) => {
                     this.switchModeActive(modes.CUSTOM.getId(), factoryId, true);
                 }

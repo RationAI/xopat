@@ -6,6 +6,7 @@ import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import { serializeScene } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
 
@@ -362,12 +363,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * Strongly recommended for all modules.
      * @param id module id
      * @param ModuleClass class/class-like-function to register (not an instance!)
+     * @param eager if true, force `ModuleClass.instance()` immediately so the
+     *   constructor runs at script-load time. Use for sink/registrar singletons
+     *   whose constructor must populate global state (e.g. `IO_PIPELINE.registerSink`)
+     *   before owner modules resolve bindings against it. Default false.
      */
-    (window as any).addModule = function addModule(id: string, ModuleClass: any) {
+    (window as any).addModule = function addModule(id: string, ModuleClass: any, eager: boolean = false) {
         if (!id || !ModuleClass) return;
         ModuleClass.$id = id;
-        let xmods = (window as any).xmodules = (window as any).xmodules || {};
+        const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
+        if (eager && typeof ModuleClass.instance === "function") {
+            try { ModuleClass.instance(); }
+            catch (e) { console.error(`[loader] eager init of module "${id}" failed:`, e); }
+        }
     };
 
     /**
@@ -634,8 +643,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         /**
          * Async per-element data store (kv:data). Default driver:
-         * post-data (replaces the legacy POSTStore); admin-redirectable
-         * to http-rest, indexeddb, etc. Lazy.
+         * post-data; admin-redirectable to http-rest, indexeddb, etc. Lazy.
          */
         get data() {
             let d = this[DATA_TOKEN];
@@ -806,9 +814,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             for (const cap of options.capabilities ?? []) {
                 IO_PIPELINE.registerCapability(this.__uid, cap);
             }
-            // Mirror legacy initPostIO behaviour: pull any pre-existing
-            // global payload from bound bundle sinks immediately so
-            // the owner can rehydrate before any user interaction.
+            // Pull any pre-existing global payload from bound bundle sinks
+            // immediately so the owner can rehydrate before any user
+            // interaction.
             if (options.importBundle) {
                 try {
                     await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid });
@@ -2061,8 +2069,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * When opened, it automatically loads the saved session.
          */
         export: async function () {
-
-            let doc = `<!DOCTYPE html>
+            // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
+            // round-trip to remote sinks (github, http-rest, …) for several
+            // seconds. Show the global loading UI so the user knows we're
+            // working and can't trigger duplicate exports.
+            const showLoading = USER_INTERFACE?.Loading?.show;
+            try { showLoading?.(true); } catch (_) { /* no-op */ }
+            try {
+                const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
@@ -2070,8 +2084,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 ${await UTILITIES.getForm()}
 </body></html>`;
 
-            UTILITIES.downloadAsFile("export.html", doc);
-            APPLICATION_CONTEXT.__cache.dirty = false;
+                UTILITIES.downloadAsFile("export.html", doc);
+                APPLICATION_CONTEXT.__cache.dirty = false;
+            } finally {
+                try { showLoading?.(false); } catch (_) { /* no-op */ }
+            }
         },
 
         /**
@@ -2419,6 +2436,17 @@ ${await UTILITIES.getForm()}
             const data = { ...APPLICATION_CONTEXT.config } as any;
             data.params = { ...APPLICATION_CONTEXT.config.params };
             delete data.defaultParams;
+
+            // Merge live shader cache/state from every viewer's renderer back into
+            // the structural background+visualizations. The renderer keeps its own
+            // copies of shader configs and no longer mutates APPLICATION_CONTEXT.config,
+            // so without this the export drops user edits (opacity, colormap, …).
+            // serializeScene() handles multi-viewport, implicit-identity backgrounds,
+            // structural appends, and sanitized-id mapping. Active indices are already
+            // covered by data.params via setOption.
+            const scene = serializeScene();
+            data.background = scene.background;
+            data.visualizations = scene.visualizations;
 
             if (staticPreview) data.params.isStaticPreview = true;
             if (!withCookies) data.params.bypassCookies = true;
@@ -3031,7 +3059,7 @@ form.submit();
             this._singletonsKey = Symbol('singletons');
 
             // layout container
-            this.layout = new UI.StretchGrid({ cols: 1, gap: "2px" });
+            this.layout = new UI.StretchGrid({ cols: "auto", gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer
@@ -3410,7 +3438,17 @@ form.submit();
                     pixelPosition: pixelPos,
                 });
                 if (items.length) {
-                    (window as any).DropDown?.open(orig, items);
+                    // Prefer the van.js-based `ContextMenu` which supports
+                    // cascading flyouts for items with `children: [...]`.
+                    // Falls back to the legacy flat `window.DropDown` for
+                    // pre-rebuild environments where the new component is
+                    // not yet bundled into `ui/index.js`.
+                    const ctxMenu = (window as any).ContextMenu;
+                    if (ctxMenu?.open) {
+                        ctxMenu.open(orig, items);
+                    } else {
+                        (window as any).DropDown?.open(orig, items);
+                    }
                 }
             });
 

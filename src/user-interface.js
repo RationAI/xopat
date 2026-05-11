@@ -217,7 +217,7 @@ function initXOpatUI() {
                     clbck(opts.selected);
                     window.DropDown._toggle(undefined, undefined);
                 });
-                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0" 
+                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0"
 style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";

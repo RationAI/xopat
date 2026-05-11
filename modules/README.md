@@ -227,58 +227,130 @@ This is especially important now that viewer opening supports surgical world upd
 Check plugin's README in case you did not. The available API is described there to greater detail.
 
 ## IO Handling
-Plugins are free to implement their own IO handling. If you are writing a plugin that connects e.g. annotations
-to some database, you can use (and the authors of the target plugin you want to save data from) rich event system
-to react upon the data item lifecycle.
 
-In case you are writing a plugin (or module) that has no given service it should save data to, you
-should:
-- provide a way to export data via lifecycle of the data item(s) through events
-- register to the default POST IO system the xOpat offers.
+xOpat ships a generic IO pipeline (`src/classes/io/`) that decouples *what* a
+module persists from *where* the bytes go. Modules declare capabilities;
+admins bind them to sinks (file download, GitHub, HTTP REST, custom). See
+[`src/IO_PIPELINE.md`](../src/IO_PIPELINE.md) for the full reference.
 
-This way, one can use static file export to share their data with others, or
-turn on some storage logics for the data. In that case, the data source plugin or module can be disabled
-to load the POST IO data using ``ignorePostIO`` option (works only if the target interface implements `getOption()`).
+Two flavors of persistence are supported per element:
 
-### Default POST IO
+- **Bundle export/import** — the whole module's state as one blob
+  (annotations bundle, recorder timeline, questionaire schema, …).
+  Round-trips through whatever sink the admin binds.
+- **Per-item CRUD** — each entity (annotation, recorder step, answer …)
+  dispatched as `create`/`update`/`delete` to a sink. Comes with a
+  durable outbox so offline edits replay on reconnect.
 
-> **IMPORTANT**: The IO distinguishes between global and viewer-local data. You can have two viewers open
-> at the same time and you need to deliver different data to each of them? Use the viewer local export.
+Both are opt-in. Declare them in `include.json` and wire them in your
+constructor with `initIO` + `defineResource`. The legacy
+`exportData`/`importData`/`exportViewerData`/`importViewerData` overrides
+and `initPostIO()` helper have been removed; existing modules that used
+them have migration notes in their own `MIGRATION.md` files (see
+[`modules/annotations`](annotations/), [`modules/recorder`](recorder/MIGRATION.md)).
 
-All you need to do is to override ``exportData`` and `importData` methods (for global)
-or ``exportViewerData`` and ``importViewerData`` methods (for viewer-local)
-in the element root class
-and call ``this.initPostIO()`` at the startup. You can call the initialization repeatedly
-for different keys.
+### Declare in `include.json`
 
-````js
-constructor(id) {
-    super(id);
-    this.initPostIO({
-        exportKey: "", // unique data-context key, default empty string
-        inViewerContext: false  // or true, in that case `exportViewerData` and `importViewerData` will be used
+```jsonc
+{
+  "id": "my-module",
+  "io": {
+    "capabilities": [
+      { "id": "bundle-export", "kind": "bundle", "label": "My module export" },
+      { "id": "bundle-import", "kind": "bundle", "label": "My module import" },
+      { "id": "crud:thing",    "kind": "crud",   "label": "Thing" }
+    ]
+  }
+}
+```
+
+Set `"io": false` to hard-disable IO regardless of admin bindings.
+
+### Wire in the constructor
+
+```js
+constructor() {
+    super();
+    // …other init…
+    this._initIOPipeline().catch(e => console.error("[my-module] IO init failed:", e));
+}
+
+async _initIOPipeline() {
+    await this.initIO({
+        bundleScope: "global",            // "global" | "per-viewer" | "both"
+        exportBundle: async (ctx) => JSON.stringify(this._state),
+        importBundle: async (ctx, data) => {
+            try {
+                await APPLICATION_CONTEXT.history.withoutRecording(() => {
+                    this._state = typeof data === "string" ? JSON.parse(data) : data;
+                    this._render();
+                });
+            } catch (e) {
+                // Surface a user-facing toast via the pipeline. `userMessage`
+                // escalates the dialog to error-level.
+                const wrapped = new Error(`Failed to load: ${e?.message ?? e}`);
+                wrapped.userMessage = "Could not load my-module data.";
+                throw wrapped;
+            }
+        },
+    });
+
+    this.thingResource = this.defineResource({
+        name: "thing",
+        identityOf: t => String(t?.id ?? ""),
+        coalesce: true,
+        merge: (prev, next) => ({ ...prev, ...next }),
+        persistOutbox: true,
+        persistMaxEntries: 1000,
+        persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+        validate: t => t?.id ? { ok: true } : { ok: false, refused: true, reason: "missing id" },
     });
 }
-````
+```
 
-If you want to have a custom logics with the IO initialization,
-you can override the initialization like this:
-````js
-async initPostIO(opts) {
-    const postStore = await super.initPostIO(opts);
-    if (postStore) {
-        //... do something
-        // e.g. read key 'key'
-        const data = await postStore.get('key');
-    }
-    return postStore;
-}
-````
-This might come in handy if you for example want to do additional IO initialization logics.
+`bundleScope: "per-viewer"` makes the pipeline call `exportBundle` /
+`importBundle` once per active viewer (with `ctx.viewerId` set), which is
+the right choice when state is keyed to a tiled image — see the
+annotations module for a worked example. `"global"` is for module-wide
+state spanning all viewers.
 
-> **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
-> ``module[<module_id>.key] = value;``. Nested keys are up to the module to manage for itself,
-> e.g. ``module[<module_id>.parentKey.subKey] = value;``.
+### Dispatch local mutations through the resource
+
+Mirror in-process events to the resource so admins binding a CRUD sink get
+free upstream sync:
+
+```js
+this.addHandler("thing-create", e => this.thingResource.create(e.thing));
+this.addHandler("thing-update", e => this.thingResource.update(e.thing.id, e.patch));
+this.addHandler("thing-delete", e => this.thingResource.delete(e.thing.id));
+```
+
+When unbound the resource is inert and these calls are no-ops. When bound
+they dispatch through the configured sink with the outbox handling
+offline replay automatically.
+
+### Hydration on boot
+
+`initIO` triggers `IO_PIPELINE.tryRestoreImport({ ownerUid })` automatically
+for global state, and the loader fires the per-viewer pass on each viewer
+open. Wrap the body of your `importBundle` callback in
+`APPLICATION_CONTEXT.history.withoutRecording(...)` so hydration doesn't
+pollute the undo stack.
+
+### Triggering exports
+
+Programmatically: `await APPLICATION_CONTEXT.io.flushBundleExport({ ownerUid: "my-module" })`.
+The user-facing Export action (`UTILITIES.export()`) fans out to every
+owner with bundle capabilities. If every bound sink for your module
+refuses, the pipeline's automatic `file-download` fallback kicks in so
+the user always walks away with their data.
+
+### Errors
+
+Sink refusals (`{ ok: false, refused: true, userMessage }`) and exceptions
+thrown from `importBundle` / `exportBundle` automatically surface as
+12-second toasts (error-level when a `userMessage` is supplied,
+warning-level otherwise) via `IOPipeline.surfaceRefusal`.
 
 ## Viewer Multiplexing
 There can be multiple viewers open at once. You might need to create:
