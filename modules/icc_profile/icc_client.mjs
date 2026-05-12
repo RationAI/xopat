@@ -328,5 +328,4 @@ function drawDelta(beforeCanvas, afterCanvas, deltaCanvas) {
     }
     dctx.putImageData(new ImageData(out, w, h), 0, 0);
 }
-ICCProfile.instance();
-addModule('icc-profiles', ICCProfile);
+addModule('icc-profiles', ICCProfile, true);
