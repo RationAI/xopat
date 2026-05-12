@@ -28,6 +28,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         this._dataFormat = "rasterBlob";
     }
 
+    // Returns CSRF header if token is available (used when routing through xOpat proxy).
+    _csrfHeaders() {
+        return window?.XOPAT_CSRF_TOKEN ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN } : {};
+    }
+
     /**
      * WSI Server Source Options. For available options see the server documentation.
      * @param {SlideSourceOptions} options
@@ -287,7 +292,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     _getInfo(url, tilesUrl) {
         fetch(url, {
-            headers: this.ajaxHeaders || {}
+            headers: { ...this.ajaxHeaders, ...this._csrfHeaders() },
+            credentials: "same-origin",
         }).then(async res => {
             const text = await res.text();
             let json;
@@ -350,8 +356,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     async getThumbnail({ targetWidth = 512 } = {}) {
         // todo multifetch - how to handle multiple thumbnails?
         targetWidth = Math.min(targetWidth, 500); //default max value
-        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`)
-            .then(async res => res.blob());
+        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`, {
+            headers: this._csrfHeaders(),
+            credentials: "same-origin",
+        }).then(async res => res.blob());
     }
 
     /**
@@ -359,7 +367,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     async downloadICCProfile() {
         const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
-        return fetch(url).then(async res => res.arrayBuffer());
+        return fetch(url, {
+            headers: this._csrfHeaders(),
+            credentials: "same-origin",
+        }).then(async res => res.arrayBuffer());
     }
 
     _setDownloadHandler(isMultiplex) {
@@ -391,6 +402,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
                 var dataStore = context.userData;
                 if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
+                const csrf = window?.XOPAT_CSRF_TOKEN;
+                if (csrf) context.ajaxHeaders["X-XOPAT-CSRF"] = csrf;
+                context.ajaxWithCredentials = true;
                 const _this = this;
 
                 dataStore.request = OpenSeadragon.makeAjaxRequest({
@@ -476,7 +490,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             mode: 'cors',
             cache: 'no-cache',
             credentials: 'same-origin',
-            headers: imageJob.ajaxHeaders || {},
+            headers: { ...imageJob.ajaxHeaders, ...this._csrfHeaders() },
             body: null
         }).then(res => res.blob()).then(data => {
             imageJob.finish(data, null, this._dataFormat);

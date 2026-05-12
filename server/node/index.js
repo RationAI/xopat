@@ -261,6 +261,20 @@ async function responseProxy(req, res, requestUrl) {
         return res.end(`Proxy target alias '${alias}' is not allowed or not configured.`);
     }
 
+    // Session + CSRF check, skipped when proxy is explicitly configured with auth.enabled: false.
+    if (proxyConfig.auth?.enabled !== false) {
+        const session = getSession(req);
+        if (!session) {
+            res.writeHead(401, { 'Content-Type': 'text/plain' });
+            return res.end('Unauthorized: missing or invalid session');
+        }
+        const clientToken = req.headers['x-xopat-csrf'];
+        if (!clientToken || clientToken !== session.csrfToken) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            return res.end('Forbidden: invalid CSRF token');
+        }
+    }
+
     const targetUrl = proxyConfig.baseUrl.replace(/\/$/, '') + targetPath;
 
     // 4. Read body
@@ -567,24 +581,9 @@ const server = http.createServer(async (req, res) => {
             return serverRuntime.handleRpc(req, res, core, session, urlObj);
         }
 
-        // --- New: proxy endpoint with session check ---
         if (urlObj.pathname.startsWith("/proxy/")) {
-            const session = getSession(req);
-            if (!session) {
-                res.writeHead(401, { 'Content-Type': 'text/plain' });
-                return res.end('Unauthorized: missing or invalid session');
-            }
-
-            // optional: CSRF header check
-            const clientToken = req.headers['x-xopat-csrf'];
-            if (!clientToken || clientToken !== session.csrfToken) {
-                res.writeHead(403, { 'Content-Type': 'text/plain' });
-                return res.end('Forbidden: invalid CSRF token');
-            }
-
-            return responseProxy(req, res, urlObj, session);
+            return responseProxy(req, res, urlObj);
         }
-        // --- end new proxy route ---
 
         // Treat suffix paths as attempt to access existing files
         if (urlObj.pathname.match(/.+\..{2,5}$/g)) {
