@@ -320,7 +320,7 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             hide: function() {
                 $("#system-message").addClass("hidden");
-                $("#viewer-container").removeClass("disabled");
+                $("body").removeClass("disabled");
                 USER_INTERFACE.Tools.open();
                 this.active = false;
             }
@@ -531,9 +531,27 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
          * @namespace USER_INTERFACE.Tutorials
          */
         Tutorials: {
-            tutorials: $("#tutorials"),
             steps: [],
             prerequisites: [],
+            _entries: [],
+            _modal: null,
+            running: false,
+
+            _ensureModal: function () {
+                if (this._modal) return this._modal;
+                this._modal = new UI.TutorialsModal({
+                    onSelect: (index) => USER_INTERFACE.Tutorials.run(index),
+                    onClose: () => {
+                        USER_INTERFACE.Tutorials.running = false;
+                        APPLICATION_CONTEXT.AppCookies.set('_shadersPin', 'false');
+                    },
+                    exitLabel: $.t('common.Exit'),
+                });
+                this._modal.mount(document.body);
+                this._modal.setEntries(this._entries);
+                return this._modal;
+            },
+
             /**
              * Open the tutorials selection screen
              * @param {string} title title to show
@@ -543,12 +561,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 if (USER_INTERFACE.Errors.active || this.running) return;
 
                 if (!title) title = $.t('tutorials.menu.title');
-                if (!description) description = $.t('tutorials.menu.description')
+                if (!description) description = $.t('tutorials.menu.description');
 
-                $("#tutorials-container").removeClass("hidden");
-                $("#tutorials-overlay").removeClass("hidden");
-                $("#tutorials-title").html(title);
-                $("#tutorials-description").html(description);
+                const modal = this._ensureModal();
+                modal.setTitle(title);
+                modal.setDescription(description);
+                modal.setExitLabel($.t('common.Exit'));
+                modal.open();
                 this.running = true;
             },
 
@@ -560,10 +579,10 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
 
             _hideImpl: function () {
-                $("#tutorials-container").addClass("hidden");
-                $("#tutorials-overlay").addClass("hidden");
-                this.running = false;
-                APPLICATION_CONTEXT.AppCookies.set('_shadersPin', 'false');
+                // running flag + cookie cleanup is handled by the modal's onClose hook,
+                // so this works regardless of whether the close was triggered by the X
+                // button, backdrop, Exit button, or a programmatic hide() call.
+                this._modal?.close();
             },
 
             /**
@@ -577,16 +596,17 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              * @param prerequisites a function to execute at the beginning, default undefined
              */
             add: function(plugidId, name, description, icon, steps, prerequisites = undefined) {
-                if (!icon) icon = "fa-school";
                 const pluginName = pluginMeta(plugidId, "name");
-                plugidId = plugidId ? `${plugidId}-plugin-root` : "";
-                const label = pluginName ? `<span class="rounded-2 px-3 py-1 position-absolute top-1 right-1 bg-opacity" style="font-size: 9px">${pluginName}</span>` : "";
-                this.tutorials.append(`
-<div class='d-inline-block px-2 pb-2 pt-3 m-1 pointer position-relative v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
-${label}
-<span class="d-block fa-auto ${icon} f1 text-center my-2"></span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
+                this._entries.push({
+                    name,
+                    description,
+                    icon: icon || "fa-school",
+                    pluginName,
+                    pluginRootClass: plugidId ? `${plugidId}-plugin-root` : "",
+                });
                 this.steps.push(steps);
                 this.prerequisites.push(prerequisites);
+                this._modal?.setEntries(this._entries);
             },
 
             /**
@@ -629,8 +649,10 @@ ${label}
                         window.removeEventListener("click", enjoyhintInstance.rePaint, false);
                     }
                 });
-                for (let viewerMenu of VIEWER_MANAGER.viewerMenus) {
-                    viewerMenu.menu.focusAll();
+                // VIEWER_MANAGER.viewerMenus is a Record<cellId, RightSideViewerMenu>,
+                // not an array — iterate values, not the object itself.
+                for (let viewerMenu of Object.values(VIEWER_MANAGER.viewerMenus)) {
+                    viewerMenu?.menu?.focusAll?.();
                 }
                 enjoyhintInstance.set(data);
                 this.hide();
