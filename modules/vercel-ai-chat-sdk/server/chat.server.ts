@@ -1,13 +1,39 @@
 import { generateText } from 'ai';
 import { ChatServerRegistry } from './chatRegistry.server';
 
-const LLM_DEBUG = true;
+const FORCE_LLM_DEBUG = /^(1|true|yes|on)$/i.test(String((globalThis as any)?.process?.env?.XOPAT_CHAT_DEBUG || ''));
 
-function llmLog(label: string, data: any) {
-    if (!LLM_DEBUG) return;
+function truncateDebugText(value: string, maxChars = 8_000): string {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+}
+
+function serializeDebugValue(value: any, depth = 0): any {
+    if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+    if (typeof value === 'string') return truncateDebugText(value);
+    if (depth >= 8) return '[Max debug depth reached]';
+    if (Array.isArray(value)) return value.slice(0, 50).map((item) => serializeDebugValue(item, depth + 1));
+    if (typeof value === 'object') {
+        const output: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value).slice(0, 50)) {
+            output[key] = serializeDebugValue(item, depth + 1);
+        }
+        return output;
+    }
+    return String(value);
+}
+
+function isChatDebugEnabled(input?: { debugMode?: boolean } | null, session?: ChatSession | null): boolean {
+    return FORCE_LLM_DEBUG
+        || input?.debugMode === true
+        || session?.metadata?.debugMode === true;
+}
+
+function llmLog(debugEnabled: boolean, label: string, data: any) {
+    if (!debugEnabled) return;
 
     try {
-        console.log(`[LLM DEBUG] ${label}`, JSON.stringify(data, null, 2));
+        console.log(`[LLM DEBUG] ${label}`, JSON.stringify(serializeDebugValue(data), null, 2));
     } catch {
         console.log(`[LLM DEBUG] ${label}`, data);
     }
@@ -369,12 +395,12 @@ Host automation rules:
         const methods = ns.methods.map((method) => {
             const args = (method.params || []).map((p) => `${p.name}: ${p.type}`).join(', ');
             const signature = method.tsSignature || `${method.name}(${args}) => ${method.returns || 'void'}`;
-            const description = method.description ? ` — ${method.description}` : '';
+            const description = method.description ? ` - ${method.description}` : '';
             const declaration = method.tsDeclaration ? `
     TS: ${method.tsDeclaration}` : '';
             return `  - ${signature}${description}${declaration}`;
         }).join('\n');
-        const namespaceDescription = ns.description ? ` — ${ns.description}` : '';
+        const namespaceDescription = ns.description ? ` - ${ns.description}` : '';
         const namespaceDeclaration = ns.tsDeclaration ? `
   Namespace TS:
   ${ns.tsDeclaration}` : '';
@@ -382,7 +408,16 @@ Host automation rules:
 ${methods}`;
     }).join('\n\n');
 
+    const visualizationGuidance = visualizationNamespaceGuidance(allowedScriptApi);
+
     return `Viewer scripting is available.
+
+### Runtime contract (read first; the runtime enforces this)
+- Your script body runs at top level inside an async wrapper. Use \`await\` directly; do not wrap in your own \`async () => { ... }\` IIFE.
+- The runtime only captures the value passed to a top-level \`return\`. Anything else is dropped — including a trailing expression, a Promise that resolves to a value, or the return of an inner function.
+  ✗  \`(async () => { return await visualization.getVisualizations(); })()\`     // discards the value
+  ✗  \`const x = await visualization.getVisualizations(); x;\`                    // last-expression value is NOT captured
+  ✓  \`return await visualization.getVisualizations();\`                          // top-level return — the only thing the runtime sees
 
 Do not use scripting for greetings, thanks, or simple acknowledgements that do not require viewer inspection or action.
 Scripting has priority whenever the allowed API can perform the task, inspect state, fetch viewer data, or automate a multi-step action.
@@ -390,20 +425,17 @@ When scripting can help, you MUST use it instead of describing manual steps.
 Do not assume any previous script succeeded unless its result is explicitly present in the conversation.
 If the user asks who created, authored, or owns annotations, comments, or other viewer items, only answer if the available information identifies the current user. Otherwise state the limitation briefly instead of inferring.
 
-Critical output rules:
-- If you use scripting, return exactly one fenced code block with language tag xopat-script.
+Output rules:
+- Return exactly one fenced code block with language tag xopat-script: \`\`\`xopat-script ... \`\`\`.
 - Do NOT return XML, pseudo-XML, JSON call envelopes, function-call objects, or tags such as <call>, <message>, <start|assistant|>, commentary, or tool-call formats.
 - Do NOT say "run this script", "execute this", "here is a script", "use the API", or similar technical wording unless the user explicitly asks for technical details.
-- Your only executable output format is exactly one fenced code block tagged xopat-script like so: \`\`\`xopat-script [executable here] \`\`\`.
-- Even if the scripting definition does not say it, you need to **await** all API method calls as they are being routed through asynchronous gate.
-- You MUST explicitly \`return\` the final value that should be fed back into the conversation. The runtime only captures the async function's return value.
-- A trailing expression such as \`result;\` or \`contexts;\` is not enough. Use \`return result;\`.
 - Prefer returning plain JSON-serializable values: string, number, boolean, object, array, or null.
 - For user-facing findings, prefer returning a plain object or array with the exact fields you want to inspect next.
 - If you produce an image or file, return it together with a short textual summary when possible, for example \`return ["Viewport screenshot captured.", screenshotDataUrl, metadata];\`.
-- Do not rely on console output, side effects, or the last expression statement for feedback. Only the returned value is guaranteed to be passed back.
+- Do not rely on console output or side effects for feedback. Only the returned value is guaranteed to be passed back.
 - If a requested action does not map cleanly to an allowed method, do not invent a method. Ask a brief clarification question or use the closest valid method sequence.
 - Assume the application executes xopat-script automatically.
+- When the allowed scripting API exposes discovery or documentation methods for the task, inspect those first before mutating state. Prefer exploring available options over guessing field names, layer shapes, or method usage.
 - For non-technical users, speak naturally about the result or next step, not about the implementation mechanism.
 - Do not mention workers, async, namespaces, or code execution unless the user explicitly asks for technical details.
 - Never invent namespaces or methods.
@@ -421,9 +453,56 @@ Recommended patterns:
 - To report annotations: \`const annotations = await annotationsRead.getAnnotations(); return annotations.map(a => ({ id: a.id, presetID: a.presetID, label: a.label }));\`
 
 If scripting is not needed, answer normally in plain user-facing language.
-
+${visualizationGuidance}
 Allowed scripting API:
 ${namespacesText}`;
+}
+
+/**
+ * When the `visualization` namespace is part of the allowed API, inject a
+ * compact, prompt-budget-friendly guidance block: the canonical shader-type
+ * vocabulary (so the LLM does not invent names like `color-mapping`), one
+ * worked example for `colormap` (the most-attempted shader in past
+ * sessions), and the dry-run mandate that pairs with
+ * `validateProposedVisualization`.
+ *
+ * The shader list mirrors `schema.$defs.shaderLayers` keys at the time of
+ * writing. If the renderer adds new types, the LLM can discover them via
+ * `visualization.getSchema()` — this list narrows the guess space, it
+ * doesn't gate it.
+ */
+function visualizationNamespaceGuidance(allowedScriptApi?: AllowedScriptApiManifest): string {
+    if (!allowedScriptApi?.namespaces?.length) return '';
+    if (!allowedScriptApi.namespaces.some((ns) => ns.namespace === 'visualization')) return '';
+
+    // todo maybe too specific?
+    return `
+### Visualization namespace — required workflow
+- Canonical shader \`type\` values and other syntax details are discoverable by the API - conform to the scheme exactly.
+- Shader layer fields: \`id\`, \`type\`, a per-type \`params\` object, and ONE OF \`dataReferences: number[]\` (preferred — persisted form, indexes into \`config.data\`; the host resolves them at render time and can bind sources that are not yet loaded into the viewer world) or \`tiledImages: number[]\` (renderer form, concrete OSD world indices; only use after inspecting \`viewer.world\`). Prefer \`dataReferences\` so the visualization survives across sessions and works for not-yet-loaded data. Do NOT invent names like \`blendMode\`, \`color-mapping\`, \`colorMapping\`, \`source\`, etc. — they are not in the schema.
+- For the canonical minimal layer for any type, read \`visualization.getSchema().$defs.shaderLayers.<type>.examples[0]\`. For cross-field invariants (e.g. colormap palette size vs threshold breaks), read \`.x-controlCouplings\` on that schema entry.
+- BEFORE \`addVisualization\` / \`updateVisualizationAt\` / \`replaceVisualizations\`, you MUST call \`visualization.validateProposedVisualization(viz)\`. If \`result.ok === false\`, read \`result.schemaErrors\` and \`result.couplingViolations\`, fix the input, and re-validate. Only call the mutating method when \`ok === true\`.
+- Inside a layer's \`params\`, each control envelope is discriminated by its own \`type\` field (the SAME field name as the shader layer's \`type\`, just one nesting level deeper — context disambiguates). Do NOT use \`uiType\`.
+- For the colormap envelope: \`default\` is the SELECTED palette name and \`mode\` constrains which palettes are valid. Pick \`mode\` to match the palette family — \`singlehue\` for single-colour ramps (Blues, Greens, Greys, Purples, Reds); \`sequential\` for perceptual ramps (Viridis, Plasma, Magma, Inferno, Turbo, Hot, YlGnBu, etc.); \`diverging\` for two-ended ramps (RdBu, BrBG, PiYG, Spectral, etc.); \`qualitative\` for categorical sets (Set1, Set2, Paired, Dark2, Accent, etc.). A \`default\` not in the chosen \`mode\`'s group is silently substituted with that mode's default and the user sees the wrong colour. Read \`visualization.getSchema()\` if unsure which group a palette belongs to.
+- If the user declines the visualization review without sending feedback (the script error contains "declined the proposal without giving feedback"), do NOT silently retry with a different shader or palette. Ask the user one short clarifying question — what they wanted different — and only re-propose after they answer.
+- Worked example (colormap rendering channel-0 intensity in Blues with two breaks → three steps):
+  \`\`\`
+  const viz = {
+    name: "Blue intensity overlay",
+    shaders: { L1: {
+      id: "L1", type: "colormap", dataReferences: [0],
+      params: {
+        color:     { type: "colormap", default: "Blues", steps: 3, mode: "singlehue" },
+        threshold: { type: "advanced_slider", breaks: [0.33, 0.66] },
+        connect: true,
+      },
+    } },
+  };
+  const check = await visualization.validateProposedVisualization(viz);
+  if (!check.ok) return { error: "validation failed", details: check };
+  return await visualization.addVisualization(viz, { makeActive: true });
+  \`\`\`
+`;
 }
 
 function sessionPreamble(
@@ -515,6 +594,62 @@ function stripDataUrlPrefix(value: string | undefined | null): { mediaType?: str
     return { data: raw };
 }
 
+function stripAssistantReasoning(text: string): string {
+    return String(text || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function stripHarmonyTokens(text: string): string {
+    // GPT-OSS Harmony channel/tool-call markers. The runtime cannot honour them — the only
+    // accepted tool-call surface is the xopat-script fenced block. Strip so they don't leak
+    // into stored history or the next model input.
+    return String(text || '')
+        .replace(/<\|tool_calls_section_begin\|>[\s\S]*?<\|tool_calls_section_end\|>/gi, '')
+        .replace(/functions\.xopat-(?:host-)?script\s*:\s*\d+\s*<\|tool_call_argument_begin\|>[\s\S]*?(?:<\|tool_call_end\|>|$)/gi, '')
+        .replace(/<\|tool_call_argument_begin\|>\s*{[\s\S]*?}\s*(?:<\|tool_call_end\|>|$)/gi, '')
+        .replace(/<\|start\|>[a-z_]+(?:<\|channel\|>[^<]*)?(?:<\|message\|>[\s\S]*?)?(?:<\|call\|>|<\|end\|>|$)/gi, '')
+        .replace(/<\|(?:start|end|message|channel|call|tool_call_(?:argument_)?(?:begin|end)|tool_calls_section_(?:begin|end))\|>/gi, '')
+        .trim();
+}
+
+function sanitizeAssistantOutput(text: string): string {
+    return stripAssistantReasoning(stripHarmonyTokens(text));
+}
+
+function isHarmonyStyleModel(modelId: string | null | undefined, providerTypeId?: string | null): boolean {
+    const haystack = `${String(modelId || '')} ${String(providerTypeId || '')}`.toLowerCase();
+    return /\bgpt[-_ ]?oss\b/.test(haystack)
+        || /\bharmony\b/.test(haystack)
+        || /\bopenchat[-_ ]?harmony\b/.test(haystack);
+}
+
+function sanitizeMessageForModel(message: ChatMessage): ChatMessage {
+    const metadata = (message as any)?.metadata || {};
+    const contentText = typeof message.content === 'string'
+        ? message.content
+        : coerceMessageText(message);
+
+    if (message.role === 'assistant') {
+        const cleaned = sanitizeAssistantOutput(contentText);
+        if (cleaned !== contentText) {
+            return {
+                ...message,
+                content: cleaned,
+                parts: [{ type: 'text', text: cleaned }],
+                metadata: {
+                    ...metadata,
+                    sanitizedForModel: true,
+                    sanitizedReason: 'assistant-reasoning-or-harmony-strip',
+                } as any,
+            };
+        }
+    }
+
+    return message;
+}
+
 function toModelMessage(
     message: ChatMessage,
     attachmentIndex?: Map<string, ChatAttachmentRecord>,
@@ -538,9 +673,13 @@ function toModelMessage(
     const content = parts.map((part) => {
         switch (part.type) {
             case 'text':
-            case 'host-feedback':
-            case 'script-result':
                 return { type: 'text', text: part.text } as const;
+            case 'host-feedback':
+                return { type: 'text', text: `[host-feedback] ${part.text}` } as const;
+            case 'script-result': {
+                const tag = (part as any).ok === false ? 'script-error' : 'script-result';
+                return { type: 'text', text: `[${tag}] ${part.text}` } as const;
+            }
 
             case 'image': {
                 if (!mediaAllowedForModel('image', capabilities)) {
@@ -1087,7 +1226,13 @@ export async function uploadAttachment(ctx: any, input: {
 
 export async function appendMessages(ctx: any, input: { sessionId: string; messages: ChatMessage[] }): Promise<{ messages: ChatMessage[] }> {
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
+    const debugEnabled = isChatDebugEnabled(input, hydrated.session);
     const messages = input.messages.map(normalizeIncomingMessage);
+    llmLog(debugEnabled, "APPEND_MESSAGES_INPUT", {
+        sessionId: input.sessionId,
+        existingMessageCount: hydrated.messages?.length || 0,
+        appendedMessages: messages,
+    });
     const appended = await getRegistry().getSessionStore().appendMessages(input.sessionId, messages);
     const hasManualTitle = !!hydrated.session.metadata?.manualTitle;
 
@@ -1100,6 +1245,10 @@ export async function appendMessages(ctx: any, input: { sessionId: string; messa
         });
     }
 
+    llmLog(debugEnabled, "APPEND_MESSAGES_OUTPUT", {
+        sessionId: input.sessionId,
+        storedMessages: appended,
+    });
     return { messages: appended };
 }
 
@@ -1149,6 +1298,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const sessionStore = registry.getSessionStore();
     const hydrated = await requireSessionAccess(ctx, input.sessionId);
     const session = hydrated.session;
+    const debugEnabled = isChatDebugEnabled(input as any, session);
     const runtime = await registry.getProviderRuntime(session.providerId);
     const adapter = registry.getAdapter(runtime.type.adapter);
     if (!adapter) throw new Error(`Unknown provider adapter '${runtime.type.adapter}'.`);
@@ -1158,7 +1308,7 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
     const maxRecentMessages = Math.max(1, Math.min(50, Number(input.maxRecentMessages || 14)));
     const recentMessages = mergeAdjacentUserMultimodalTurns(
         hydrated.messages.slice(-maxRecentMessages)
-    );
+    ).map((message) => sanitizeMessageForModel(message));
 
     const attachmentIndex = buildAttachmentIndex(hydrated.attachments || []);
 
@@ -1167,12 +1317,17 @@ export async function sendTurn(ctx: any, input: SendTurnInput): Promise<ChatTurn
         modelId: session.modelId,
         contextId: session.contextId || null,
     });
+    const harmonyAddendum = isHarmonyStyleModel(session.modelId, runtime.type.id)
+        ? "Channel/tool-call tokens such as <|start|>, <|channel|>, <|message|>, <|call|>, <|tool_call_argument_begin|>, and <|tool_call_end|> are NOT recognised by this runtime and will be discarded. Do not emit them. The only accepted tool-call surface is the ```xopat-script ... ``` fenced block contract documented above."
+        : null;
+
     const mergedSystemContent = [
         sessionPreamble(runtime.instance.label, input.allowedScriptApi, { executionMode }),
         `Active personality: ${personality.label}
 
 ${input.personalityPrompt || personality.systemPrompt}`,
         scriptSystemContent(input.allowedScriptApi, { executionMode }),
+        harmonyAddendum,
     ]
         .map((x) => String(x || '').trim())
         .filter(Boolean)
@@ -1204,8 +1359,7 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         secrets: runtime.secrets,
     });
 
-
-    console.debug('[chat-debug/sendTurn]', {
+    if (debugEnabled) console.debug('[chat-debug/sendTurn]', serializeDebugValue({
         sessionId: session.id,
         providerId: session.providerId,
         modelId: session.modelId,
@@ -1222,9 +1376,9 @@ ${input.personalityPrompt || personality.systemPrompt}`,
             dataUrlLen: typeof att.dataUrl === 'string' ? att.dataUrl.length : 0,
         })),
         conversation: conversation.map(summarizeModelMessage),
-    });
+    }));
 
-    llmLog("MODEL_INPUT", {
+    llmLog(debugEnabled, "MODEL_INPUT", {
         messageCount: [...systemMessages, ...conversation].length,
         messages: [...systemMessages, ...conversation].map((m: any) => ({
             role: m.role,
@@ -1284,9 +1438,18 @@ ${input.personalityPrompt || personality.systemPrompt}`,
                 messages: [...systemMessages, ...conversation],
                 maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
             });
+            llmLog(debugEnabled, "MODEL_OUTPUT", {
+                text: typeof result?.text === 'string' ? result.text : null,
+                usage: (result as any)?.usage || (result as any)?.totalUsage || null,
+                retryConversationSize: count,
+            });
             lastContextError = null;
             break;
         } catch (error) {
+            llmLog(debugEnabled, "MODEL_ERROR", {
+                retryConversationSize: count,
+                error,
+            });
             if (isInvalidImageInputError(error)) {
                 const text = buildInvalidImageInputGuidance(error);
                 const message: ChatMessage = {
@@ -1344,7 +1507,8 @@ ${input.personalityPrompt || personality.systemPrompt}`,
         };
     }
 
-    const text = typeof result.text === 'string' ? result.text : '';
+    const rawText = typeof result.text === 'string' ? result.text : '';
+    const text = sanitizeAssistantOutput(rawText);
     const message: ChatMessage = {
         id: registry.newId('msg'),
         sessionId: session.id,
@@ -1359,6 +1523,17 @@ ${input.personalityPrompt || personality.systemPrompt}`,
     const updatedSession = await sessionStore.updateSession(session.id, { title });
 
     const usage = (result as any).usage || (result as any).totalUsage;
+    llmLog(debugEnabled, "TURN_RESULT", {
+        sessionId: session.id,
+        message,
+        usage: usage
+            ? {
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                totalTokens: usage.totalTokens,
+            }
+            : undefined,
+    });
     return {
         message,
         session: updatedSession,

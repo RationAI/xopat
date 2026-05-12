@@ -67,6 +67,61 @@
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
             }
+            /*
+             * Generic IO pipeline admin block. Routes plugin/module bundle &
+             * CRUD capabilities to sinks (file-download, http-rest, github, …)
+             * and ships per-deployment options to those sinks. The pipeline
+             * captures this block at boot — server-only, never URL-modifiable.
+             * Full reference: src/IO_PIPELINE.md.
+             */
+            //"io": {
+            //    /* Hard-disable IO for these owners (highest precedence). */
+            //    //"disabled": ["some-plugin-id"],
+            //
+            //    /*
+            //     * Per-deployment sink options keyed by sink id. Each owning
+            //     * module composes these with its own defaults inside the sink
+            //     * factory's getOptions callback. Secrets do NOT belong here —
+            //     * keep them in server.secure.proxies.<alias> instead.
+            //     */
+            //    "sinkOverrides": {
+            //        /* GitHub bundle sink (modules/io-github-sink). */
+            //        //"github": {
+            //        //    "repo":      "your-org/xopat-state",
+            //        //    "branch":   "main",
+            //        //    /* Path placeholders: {ownerId} {ownerUid} {viewerId} {capabilityId} {xoType}. */
+            //        //    "pathTemplate":          "xopat/{ownerId}/{viewerId}.json",
+            //        //    "commitMessageTemplate": "xopat: sync {ownerId} {viewerId}",
+            //        //    "committer": { "name": "xOpat Bot", "email": "bot@example.org" },
+            //        //    /* Forwarded to HttpClient verbatim — drop if proxy has auth.enabled:false. */
+            //        //    "auth": { "contextId": "core", "types": ["jwt"], "required": true }
+            //        //},
+            //        /* Generic HTTP REST sink (built-in). */
+            //        //"http-rest": {
+            //        //    "proxy":   "my-service",
+            //        //    "baseURL": "/api/v1/objects",
+            //        //    "auth":    { "contextId": "core", "types": ["jwt"], "required": true }
+            //        //}
+            //    },
+            //
+            //    /*
+            //     * Bindings keyed by ownerId (the include.json `id` field) and
+            //     * capabilityId (advertised in include.json io.capabilities).
+            //     * Multiple sinks can serve one capability — listed in dispatch
+            //     * order. Empty array disables the capability for that owner.
+            //     */
+            //    "bindings": {
+            //        "annotations": {
+            //            "bundle-export": ["github", "file-download"],
+            //            "bundle-import": ["github"],
+            //            "crud:annotation": [],
+            //            "crud:preset":     []
+            //        },
+            //        "core": {
+            //            "bundle-export": ["post-data"]
+            //        }
+            //    }
+            //}
         },
         // We can keep multiple configurations within the file and switch between them...
         "prod": {
@@ -112,7 +167,12 @@
      *   bypassCache: ?boolean,
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
-     *   disablePluginsUi: ?boolean
+     *   disablePluginsUi: ?boolean,
+     *   valueInspectorEnabled: ?boolean,
+     *   visualizationInspectorEnabled: ?boolean,
+     *   visualizationInspectorMode: ?string,
+     *   visualizationInspectorRadiusPx: ?number,
+     *   visualizationInspectorLensZoom: ?number
      * }} xoParams
      */
     "setup": {
@@ -128,7 +188,7 @@
         "statusBar": true,
         // default background color, a hex RGB or RGBA
         "backgroundColor": null,
-        // todo update docs, this can carry multiple viewport configurations, also consider moving multiple params to the viewer-dependent configuration
+        // todo consider moving multiple params to the viewer-dependent configuration
         // object that has {"zoomLevel":<zoom>,"point":{"x":<x>,"y":<y>}} default viewport position definition
         // point is in the viewport coordinate system of OpenSeadragon
         "viewport": null,
@@ -147,12 +207,17 @@
         // can be dimmed, dark, light, auto
         "theme": "auto",
         "maxImageCacheCount": 1200,
-        // can be 1.0 or 2.0
+        // can be only 2.0 for now
         "webGlPreferredVersion": "2.0",
         // deprecated
         "preferredFormat": "zip",
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
+        "valueInspectorEnabled": false,
+        "visualizationInspectorEnabled": false,
+        "visualizationInspectorMode": "reveal-inside",
+        "visualizationInspectorRadiusPx": 96,
+        "visualizationInspectorLensZoom": 2,
         // Renders viewer in standalone mode, all data is static (leave as false if unsure)
         "isStaticPreview": false,
         "historySize": 50,
@@ -199,6 +264,29 @@
               //                "issuer": "https://login.example.com/",
               //                "audience": "xopat-viewer",
               //                "forward": false,
+              //                "userClaimHeader": "x-user-sub"
+              //            }
+              //        }
+              //    }
+              //},
+              //
+              // Server-side counterpart for the `github` IO sink (modules/io-github-sink).
+              // The fine-grained PAT lives ONLY here; the browser only sees the alias.
+              // Pair with `client.<env>.io.sinkOverrides.github` above.
+              //"github": {
+              //    "baseUrl": "https://api.github.com/",          // for GHE: "https://<host>/api/v3/"
+              //    "headers": {
+              //        "Authorization": "Bearer <% GITHUB_TOKEN %>"
+              //    },
+              //    "auth": {
+              //        "enabled": true,
+              //        "mode": "all",
+              //        "verifiers": {
+              //            "jwt": {
+              //                "secret": "<% VIEWER_JWT_SECRET %>",
+              //                "issuer": "https://login.example.com/",
+              //                "audience": "xopat-viewer",
+              //                "forward": false,                    // strip viewer JWT before upstream call
               //                "userClaimHeader": "x-user-sub"
               //            }
               //        }
@@ -268,6 +356,7 @@
             "kinetic": "kinetic-v5.1.0.min.js",
             "scroll_to": "scrollTo.min.js",
             "unzip_it": "unzipit.min.js",
+            "ajv": "ajv7.min.js",
             "render": "flex-renderer/flex-renderer.js"
         },
         // src/external  key: source / [sources,list]
@@ -305,7 +394,6 @@
               "dist/app.js",
               "user-interface.js",
               "layers.js",
-              "dist/tile-source.js"
             ]
         },
         "ui": {
@@ -326,7 +414,7 @@
             "nouislider": "nouislider.css"
         },
         "src": {
-          "env": ["assets/style.css", "assets/xopat.css", "assets/custom.css"]
+          "env": ["assets/style.css", "assets/custom.css"]
         }
     }
 }

@@ -51,7 +51,8 @@ export class ShaderLayer extends BaseComponent {
         this.isGroupChild = !!this.htmlContext.isGroupChild;
         this.groupOpen = this.cfg._uiGroupOpen ?? true;
         this.fixed = !!this.cfg.fixed;
-        this.visible = this.cfg.visible !== false;
+        // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
+        this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
         this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "blend" | "clip"
         this.blendMode = this.cfg.params?.use_blend
             || (OpenSeadragon.WebGLModule?.BLEND_MODE?.[0] ?? "mask");
@@ -197,11 +198,6 @@ export class ShaderLayer extends BaseComponent {
                 blendName
             );
 
-        // small chevron to indicate open/closed advanced section
-        const chevronIcon = new FAIcon({
-            name: this.blendOpen ? "fa-chevron-up" : "fa-chevron-down"
-        });
-
         const chevronBtn = button(
             {
                 type: "button",
@@ -210,7 +206,7 @@ export class ShaderLayer extends BaseComponent {
                 title: $.t("main.shaders.blendConfigure"),
                 onclick: () => this._toggleBlendPopup()
             },
-            chevronIcon.create()
+            new FAIcon({name: "fa-cogs"}).create()
         );
 
         return div(
@@ -444,7 +440,7 @@ export class ShaderLayer extends BaseComponent {
             };
             rows.push(
                 div(
-                    { class: "shader-controls-row flex items-center px-2" },
+                    { class: "shader-controls-row shader-controls-row--grid px-2", "data-columns": "2" },
                     label({ class: "text-xs mr-2" }, f.name + ":"),
                     input({
                         type: "number",
@@ -457,6 +453,50 @@ export class ShaderLayer extends BaseComponent {
             );
         }
         return div({}, ...rows);
+    }
+
+    _wrapShaderControlRow(html) {
+        if (typeof html !== "string") {
+            return "";
+        }
+
+        const content = html.trim();
+        if (!content) {
+            return "";
+        }
+
+        return `<div class="shader-controls-row shader-controls-row--renderer w-full px-2 pb-1">${content}</div>`;
+    }
+
+    _renderShaderControls(shader) {
+        if (!shader) {
+            return "";
+        }
+
+        const fragments = [];
+        const controls = shader._controls || {};
+        for (const controlName in controls) {
+            const control = shader[controlName] || controls[controlName];
+            if (!control || typeof control.toHtml !== "function") {
+                continue;
+            }
+
+            const wrapped = this._wrapShaderControlRow(control.toHtml());
+            if (wrapped) {
+                fragments.push(wrapped);
+            }
+        }
+
+        if (shader._renderer) {
+            fragments.push(`<h4>Rendering as ${shader._renderer.constructor.name()}</h4>`);
+            fragments.push(this._renderShaderControls(shader._renderer));
+        }
+
+        if (shader._delegateShader) {
+            fragments.push(this._renderShaderControls(shader._delegateShader));
+        }
+
+        return fragments.filter(Boolean).join("");
     }
 
     // ---- cache icon + submenu
@@ -477,18 +517,21 @@ export class ShaderLayer extends BaseComponent {
             return div({ class: "mt-2" });
         }
 
-        const statusColor = {
-            hit: "text-success",
-            stale: "text-warning",
-            miss: "text-error"
-        }[this.cacheApplied] || "text-base-content/70";
+        // hit/stale/miss are forward-looking statuses; the actual provenance values
+        // written today are id/path/name/name+path/order/order+path/session.
+        // Default to text-info (clearly visible) so users notice the override.
+        const statusStyle = {
+            hit: "text-success bg-success/10",
+            stale: "text-warning bg-warning/10",
+            miss: "text-error bg-error/10"
+        }[this.cacheApplied] || "text-info bg-info/10";
 
         const icon = new FAIcon({ name: "fa-broom" });
         return button(
             {
                 type: "button",
                 class:
-                    `btn-ghost ${statusColor} btn-[10px] min-h-0 px-1 leading-[0] mt-1`,
+                    `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5 mt-1 btn-warning`,
                 title: $.t("main.shaders.cacheInfo"),
                 onclick: () => this._toggleCachePopup()
             },
@@ -549,11 +592,11 @@ export class ShaderLayer extends BaseComponent {
     }
 
     _buildMainControls() {
-        const htmlControls = this.layer?.htmlControls
-            ? this.layer.htmlControls(html =>
-                `<div class="shader-controls-row w-full px-2 pb-1">${html}</div>`
-            )
-            : "";
+        const htmlControls = this._renderShaderControls(this.layer) || (
+            this.layer?.htmlControls
+                ? this.layer.htmlControls(html => this._wrapShaderControlRow(html))
+                : ""
+        );
 
         const hasHtmlControls = typeof htmlControls === "string"
             ? htmlControls.trim().length > 0
@@ -690,7 +733,7 @@ export class ShaderLayer extends BaseComponent {
 
     update(shaderConfig) {
         this.cfg = shaderConfig;
-        this.visible = shaderConfig?.visible !== false;
+        this.visible = shaderConfig?.visible !== false && shaderConfig?.visible !== 0;
         this.mode = shaderConfig?.params?.use_mode || "show";
         this.blendMode = shaderConfig?.params?.use_blend || this.blendMode;
         this.type = shaderConfig?.type || this.type;

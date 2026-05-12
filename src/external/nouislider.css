@@ -295,7 +295,7 @@
 /* Panel-friendly, readable slider */
 .noUi-target { background: oklch(var(--bc) / 0.14); }
 .noUi-connect {
-    background: oklch(var(--p)) !important;
+    background: oklch(var(--b3));
 }
 .noUi-vertical { width: 6px; }                           /* match JS width */
 .noUi-handle {

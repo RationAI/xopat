@@ -55,7 +55,8 @@ export class FullscreenMenu extends BaseComponent{
         // todo - better usage design? prevent using this directly...
         this._children = [];
         this.mobile = false;
-        if (window.innerWidth < 600) {
+        this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        if (window.innerWidth < this.maxMobileWidth) {
             this.mobile = true;
         }
     }
@@ -134,7 +135,7 @@ export class FullscreenMenu extends BaseComponent{
     }
 
     onLayoutChange(details) {
-        if (details.width < 600) {
+        if (details.width < this.maxMobileWidth) {
             document.getElementById("overlay").classList.add("mobile");
         } else {
             document.getElementById("overlay").classList.remove("mobile");

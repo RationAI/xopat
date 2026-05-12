@@ -16,6 +16,62 @@ function ensureDate(value?: Date | string): Date {
     return value instanceof Date ? value : value ? new Date(value) : new Date();
 }
 
+let enabled: boolean | undefined = undefined;
+function isChatDebugModeEnabled(): boolean {
+    if (enabled === undefined) {
+        enabled = APPLICATION_CONTEXT.getOption("debugMode", true, true);
+    }
+    return !!enabled;
+}
+
+function truncateChatDebugText(value: string, maxChars = 4_000): string {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, maxChars)}\n...[truncated ${value.length - maxChars} chars]`;
+}
+
+function serializeChatDebugValue(value: any, depth = 0): any {
+    if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+    if (typeof value === 'string') return truncateChatDebugText(value);
+    if (depth >= 6) return '[Max debug depth reached]';
+
+    if (Array.isArray(value)) {
+        return value.slice(0, 25).map((item) => serializeChatDebugValue(item, depth + 1));
+    }
+
+    if (typeof value === 'object') {
+        const output: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value).slice(0, 25)) {
+            output[key] = serializeChatDebugValue(item, depth + 1);
+        }
+        return output;
+    }
+
+    return String(value);
+}
+
+function summarizeChatDebugMessage(message: any): any {
+    return serializeChatDebugValue({
+        id: message?.id || null,
+        role: message?.role || null,
+        content: typeof message?.content === 'string' ? message.content : undefined,
+        parts: Array.isArray(message?.parts) ? message.parts : [],
+        metadata: message?.metadata,
+        createdAt: message?.createdAt,
+    });
+}
+
+function chatDebugLog(label: string, data?: unknown, level="debug"): void {
+    if (!isChatDebugModeEnabled()) return;
+
+    if (typeof data === 'undefined') {
+        // @ts-ignore
+        console[level](`[CHAT DEBUG] ${label}`);
+        return;
+    }
+    // @ts-ignore
+    console[level](`[CHAT DEBUG] ${label}`, serializeChatDebugValue(data));
+}
+
 export class ChatService {
     _providers: Map<string, ChatProviderClientRegistration>;
     _providerTypes: Map<string, ChatProviderTypeRecord>;
@@ -75,6 +131,10 @@ export class ChatService {
         const scope = this._serverFactory?.() || (window as any)?.xserver?.module?.["vercel-ai-chat-sdk"];
         if (!scope) throw new Error('ChatService: server RPC scope for module "chat" is not available.');
         return scope;
+    }
+
+    _getDebugModeFlag(): boolean {
+        return isChatDebugModeEnabled();
     }
 
     _getRpcHttpClient(): any {
@@ -420,13 +480,19 @@ export class ChatService {
 
         let result: any;
         try {
-            result = await this._server().sendTurn!({
+            const requestPayload = {
                 sessionId,
                 allowedScriptApi: hasAllowedScriptApi ? options?.allowedScriptApi : this.getAllowedScriptApi(),
                 personalityId: hasPersonalityId ? options?.personalityId ?? null : this._currentPersonalityId,
                 personalityPrompt: hasPersonalityPrompt ? options?.personalityPrompt ?? null : (personality?.systemPrompt || null),
                 executionMode: options?.executionMode,
-            }, {
+            };
+            chatDebugLog('SEND_TURN_REQUEST', {
+                sessionId,
+                providerId: options?.providerId || null,
+                payload: requestPayload,
+            }, "log");
+            result = await this._server().sendTurn!(requestPayload, {
                 httpClient: this._getRpcHttpClient(),
                 signal: controller.signal,
             });
@@ -461,6 +527,12 @@ export class ChatService {
         });
 
         const message = result?.message || result;
+        chatDebugLog('SEND_TURN_RESPONSE', {
+            sessionId,
+            providerId: result?.session?.providerId || options?.providerId || null,
+            usage: result?.usage || null,
+            message: summarizeChatDebugMessage(message),
+        }, "log");
         return {
             ...message,
             role: message.role || 'assistant',
@@ -534,6 +606,12 @@ export class ChatService {
 
         const state = this._sessionState.get(sessionId) || { syncedCount: 0, providerId };
         const delta = messages.slice(state.syncedCount);
+        chatDebugLog('SEND_MESSAGE', {
+            sessionId,
+            providerId,
+            totalMessages: messages.length,
+            deltaMessages: delta.map(summarizeChatDebugMessage),
+        }, "log");
         if (delta.length) {
             await this.appendMessages(sessionId, delta);
         }
@@ -620,6 +698,9 @@ export class ChatService {
             ...(input.metadata || {}),
             sessionOwnerKey: this._normalizeContextId((input.metadata as any)?.sessionOwnerKey) || this._sessionOwnerKey,
             source: this._normalizeContextId((input.metadata as any)?.source) || this._legacySessionSource || undefined,
+            debugMode: typeof (input.metadata as any)?.debugMode === 'boolean'
+                ? (input.metadata as any)?.debugMode
+                : this._getDebugModeFlag(),
         };
         const session = await this._server().createSession!({
             ...input,
@@ -676,8 +757,15 @@ export class ChatService {
             parts: m.parts || (typeof m.content === "string" ? [{ type: "text", text: m.content }] : []),
             content: typeof m.content === "string" ? m.content : undefined,
         }));
+        chatDebugLog('APPEND_MESSAGES_REQUEST', {
+            sessionId,
+            messages: normalized.map(summarizeChatDebugMessage),
+        });
 
-        const result = await this._server().appendMessages!({ sessionId, messages: normalized });
+        const result = await this._server().appendMessages!({
+            sessionId,
+            messages: normalized,
+        });
 
         const state = this._sessionState.get(sessionId);
         const nextCount = (state?.syncedCount || 0) + normalized.length;
@@ -685,6 +773,10 @@ export class ChatService {
         this._sessionState.set(sessionId, {
             ...(state || { providerId: "" }),
             syncedCount: nextCount,
+        });
+        chatDebugLog('APPEND_MESSAGES_RESPONSE', {
+            sessionId,
+            messages: (result?.messages || []).map(summarizeChatDebugMessage),
         });
 
         return (result?.messages || []).map((m: ChatMessage) => ({

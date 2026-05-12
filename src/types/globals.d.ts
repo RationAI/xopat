@@ -4,16 +4,24 @@ declare global {
     // Runtime-provided globals available throughout the application
     var $: any;
     var APPLICATION_CONTEXT: ApplicationContext;
-    var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton) => void;
+    var addModule: (id: string, moduleClass: new () => IXOpatModuleSingleton, eager?: boolean) => void;
     var addPlugin: (id: string, pluginClass: new (id: string) => IXOpatPlugin) => void;
+    var plugin: (id: string) => IXOpatPlugin | undefined;
+    var pluginMeta: (id: string, metaKey: string) => any;
+    var singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
+    var viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
+    var registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
+    var requireViewerSingletonPresence: (singletonClass: XOpatViewerSingletonClass) => void;
     var XOpatModuleSingleton: new () => IXOpatModuleSingleton;
     var XOpatPlugin: new (id: string) => IXOpatPlugin;
     var VIEWER_MANAGER: any;
     var VIEWER: OpenSeadragon.Viewer;
+    var SESSION: SessionSync;
     var USER_INTERFACE: any;
     var van: any;
     var UI: any;
     var UTILITIES: XOpatUtilities;
+    var xmodules: Record<string, any>;
 
     // Third-party globals loaded at runtime
     var i18next: any;
@@ -32,6 +40,14 @@ declare global {
         APPLICATION_CONTEXT: ApplicationContext;
         VIEWER_MANAGER: any;
         VIEWER: OpenSeadragon.Viewer;
+        SESSION: SessionSync;
+        plugin: (id: string) => IXOpatPlugin | undefined;
+        pluginMeta: (id: string, metaKey: string) => any;
+        singletonModule: (id: string) => IXOpatModuleSingleton | undefined;
+        viewerSingletonModule: (className: string, viewer: ViewerLikeItem) => IXOpatViewerSingletonModule | IXOpatViewerSingleton | undefined;
+        registerViewerSingleton: (singletonClass: XOpatViewerSingletonClass | XOpatViewerSingletonModuleClass, className?: string) => void;
+        requireViewerSingletonPresence: (singletonClass: XOpatViewerSingletonClass) => void;
+        xmodules: Record<string, any>;
         HTTPError: any;
         UI: any;
         van: any;
@@ -152,7 +168,44 @@ declare global {
             "module-singleton-created": ModuleSingletonCreatedEvent;
             "viewer-singleton-created": ViewerSingletonCreatedEvent;
             "viewer-reset": ViewerResetEvent;
-            "export-data": ExportDataEvent;
+            /** Mirrored from IO_PIPELINE: an IO call was refused (sink
+             *  tried and returned `{ refused: true }`, or threw). Carries a
+             *  user-facing toast automatically. See src/IO_PIPELINE.md. */
+            "io:refused": { ctx: IOContext; result: IOResult };
+            /** Mirrored from IO_PIPELINE: a bound sink's `accepts(ctx)`
+             *  returned false — it opted out before trying. Distinct from
+             *  `io:refused` so observers can tell route-skip from
+             *  tried-and-failed. */
+            "io:rejected-by-accepts": { ctx: IOContext; sinkId: string };
+            /** Mirrored from IO_PIPELINE: every bound sink for one
+             *  dispatch failed (refused, threw, or declined via accepts).
+             *  Signal that data was silently dropped — usually a
+             *  misconfigured `ENV.client.io.bindings`. */
+            "io:fully-refused": { ctx: IOContext; results: IOResult[] };
+            /** Mirrored from IO_PIPELINE: two sinks both accept the
+             *  same context. Reserved; not yet emitted. */
+            "io:conflict": { ctx: IOContext; sinkIds: string[] };
+            /** A per-resource outbox queue has stalled (sink refused
+             *  after retries; usually network/5xx). Fires once per stall
+             *  episode. UI can show "syncing failed / offline" badge. */
+            "io:queue-stalled": { ownerUid: string; resourceName: string; pending: number };
+            /** Outbox resumed after a stall (next op succeeded). */
+            "io:queue-resumed": { ownerUid: string; resourceName: string };
+            /** Outbox drained — last pending op resolved. Useful for
+             *  "all changes saved" indicators. */
+            "io:queue-empty":   { ownerUid: string; resourceName: string };
+            /** Persistent outbox: per-resource cap reached. New ops are
+             *  refused with `W_IO_OUTBOX_FULL`. */
+            "io:outbox-full":   { ownerUid: string; resourceName: string; pending: number };
+            /** Persistent outbox: stale entries pruned on boot or sweep. */
+            "io:outbox-pruned": { ownerUid: string; resourceName: string; count: number };
+            /** Persistent outbox: navigator.storage usage exceeded 80% of quota. */
+            "io:outbox-quota-warn": { usage: number; quota: number; ratio: number };
+            /** Persistent outbox: IndexedDB is unavailable; resources fall
+             *  back to in-memory queue. Fired once at boot. */
+            "io:outbox-unavailable": { reason: string };
+            /** Persistent outbox: boot replay finished for one resource. */
+            "io:outbox-replayed": { ownerUid: string; resourceName: string; count: number };
         }
 
         // ── TiledImage extension ────────────────────────────────────────────

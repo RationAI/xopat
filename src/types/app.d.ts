@@ -251,6 +251,25 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
     whenIdle(): Promise<void>;
 }
 
+type ViewerOpenOptions = {
+    deriveOverlayFromBackgroundGoals?: boolean;
+    dataMode?: "replace" | "merge";
+    backgroundMode?: "replace" | "merge";
+    historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
+    fromHistory?: boolean;
+    preserveHistoryOnBackgroundChange?: boolean;
+    warnOnHistoryBoundary?: boolean;
+    historyLabel?: string;
+    strictVisualization?: boolean;
+    skipVisualizationCapabilityCheck?: boolean;
+    suppressDialogsOnVisualizationFailure?: boolean;
+};
+
+type ViewerSelectionPatch = {
+    backgroundIndex?: number | null;
+    visualizationIndex?: number | null;
+};
+
 interface ApplicationContext {
     config: ApplicationContextConfig;
     AppCache: any;
@@ -284,19 +303,15 @@ interface ApplicationContext {
         visualizations?: VisualizationItem[],
         bgSpec?: number | number[] | null,
         vizSpec?: number | number[] | null,
-        opts?: {
-            deriveOverlayFromBackgroundGoals?: boolean;
-            historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
-            fromHistory?: boolean;
-            preserveHistoryOnBackgroundChange?: boolean;
-            warnOnHistoryBoundary?: boolean;
-            historyLabel?: string;
-            strictVisualization?: boolean;
-            skipVisualizationCapabilityCheck?: boolean;
-            suppressDialogsOnVisualizationFailure?: boolean;
-        }
+        opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
     updateVisualization(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
+    updateViewerSelection(
+        viewerIndex: number,
+        selection: ViewerSelectionPatch,
+        opts?: ViewerOpenOptions
+    ): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -346,19 +361,15 @@ interface ApplicationContext {
         visualizations?: VisualizationItem[],
         bgSpec?: number | number[] | null,
         vizSpec?: number | number[] | null,
-        opts?: {
-            deriveOverlayFromBackgroundGoals?: boolean;
-            historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
-            fromHistory?: boolean;
-            preserveHistoryOnBackgroundChange?: boolean;
-            warnOnHistoryBoundary?: boolean;
-            historyLabel?: string;
-            strictVisualization?: boolean;
-            skipVisualizationCapabilityCheck?: boolean;
-            suppressDialogsOnVisualizationFailure?: boolean;
-        }
+        opts?: ViewerOpenOptions
     ): Promise<boolean>;
+    replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
     updateVisualization(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
+    updateViewerSelection(
+        viewerIndex: number,
+        selection: ViewerSelectionPatch,
+        opts?: ViewerOpenOptions
+    ): Promise<boolean>;
     _dangerouslyAccessConfig(): any;
     _dangerouslyAccessPlugin(id: string): any;
     __cache: { dirty: boolean };
@@ -424,9 +435,20 @@ interface XOpatUtilities {
         opts?: { deriveOverlayFromBackgroundGoals?: boolean }
     ): boolean;
 
+    toggleVisualizationInspector(enabled?: boolean): boolean;
+
+    toggleValueInspector(enabled?: boolean): boolean;
+
+    setVisualizationInspectorRadius(radiusPx: number): number;
+
+    adjustVisualizationInspectorRadius(deltaPx: number): number;
+
+    setVisualizationInspectorMode(mode: string): string;
+
     storePageState(includedPluginsList?: Record<string, any>): boolean;
 
     setIsCanvasFocused(focused: boolean | OpenSeadragon.Viewer | null): void;
 
     [key: string]: any;
 }
+

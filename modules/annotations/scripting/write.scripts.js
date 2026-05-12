@@ -94,15 +94,10 @@ ScriptingManager.registerExternalApi(
         }
 
         _ensurePresetSnapshot() {
-            try {
-                const module = this._getModule();
-                const maybePromise = module.createPresetsCookieSnapshot?.();
-                if (maybePromise && typeof maybePromise.then === "function") {
-                    void maybePromise.catch(() => {});
-                }
-            } catch (e) {
-                // non-fatal
-            }
+            // Preset persistence flows through the IO pipeline now —
+            // PresetManager events drive `presetResource` dispatch.
+            // Kept as a no-op shim for callers; remove once all script
+            // sites stop calling it.
         }
 
         _touchAnnotation(object) {
@@ -185,7 +180,7 @@ ScriptingManager.registerExternalApi(
             if (incomingCount > this.MAX_SCRIPT_ANNOTATIONS_PER_CALL) {
                 await this.requireActionConsent({
                     title: "Allow annotations?",
-                    description: `The script wants to add more than ${this.MAX_SCRIPT_ANNOTATIONS_PER_CALL} annotations at once.`,
+                    description: `The script wants to add ${incomingCount} annotations at once.`,
                     details: [
                         "Allowing this script to add more than one annotation at once may pollute the workspace or cause performance issues.",
                     ],
@@ -339,23 +334,32 @@ ScriptingManager.registerExternalApi(
             return this._serializeAnnotation(annotation);
         }
 
-        async createAnnotations(inputs) {
+        async createAnnotations(inputs, options) {
             const items = Array.isArray(inputs) ? inputs : [];
             if (items.length === 0) return [];
 
             await this._assertCreateBudget(items.length);
-
+            const opts = options || {};
             const fabric = this._getFabric();
             const annotations = items.map((input) => this._buildAnnotationFromInput(input));
 
-            for (const annotation of annotations) {
-                const ok = fabric.addAnnotation?.(annotation);
-                if (ok === false) {
-                    throw new Error("One of the annotations could not be created.");
-                }
-            }
+            // Threshold (default 500) lives on the wrapper bulk facility; we
+            // pass through any caller overrides. The wrapper handles
+            // chunking + progress dialog (anchored to its viewer) + cancel +
+            // single batch history entry.
+            const result = await fabric.addAnnotationsBulk(annotations, {
+                chunkSize: opts.chunkSize,
+                threshold: opts.async === true ? 0 : (opts.threshold ?? undefined),
+                progress: opts.progress,
+                title: opts.title || 'Adding annotations',
+                viewer: opts.viewer ?? fabric.viewer,
+                anchor: opts.anchor,
+                signal: opts.signal,
+                onProgress: opts.onProgress,
+                historyName: 'Add annotations',
+            });
 
-            return annotations.map((annotation) => this._serializeAnnotation(annotation));
+            return result.annotations.map((annotation) => this._serializeAnnotation(annotation));
         }
 
         deleteAnnotation(ref) {

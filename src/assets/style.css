@@ -486,37 +486,65 @@ input.selectable-image-row-context:checked + div {
     to { opacity: 1; }
 }
 
-/* One row of controls */
 .shader-controls-row {
+    width: 100%;
+}
+
+.shader-controls-row--renderer {
+    display: block;
+}
+
+.shader-controls-row--renderer > .er-control {
+    width: 100%;
+    max-width: 100%;
+}
+
+/* One row of controls */
+.shader-controls-row--grid {
     display: grid;
-    grid-template-columns:
-    minmax(0, var(--side, 30%))  /* left, max 30% */
-    minmax(0, 1fr)               /* middle, flexible */
-    minmax(0, var(--side, 30%)); /* right, max 30% */
-    gap: .5rem;                    /* adjust as needed */
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr) minmax(0, var(--side, 30%));
+    gap: .5rem;
     align-items: center;
 }
 
-/* Let arbitrary incoming children shrink and not overflow */
-.shader-controls-row > * {
+.shader-controls-row--grid > * {
     min-width: 0;
-    overflow: hidden;              /* optional: hide overly wide inner HTML */
+    max-width: 100%;
 }
 
-/* Place elements into columns depending on how many arrive */
-.shader-controls-row > :nth-child(1) { grid-column: 1; }
-.shader-controls-row > :nth-child(2) { grid-column: 2; }
-.shader-controls-row > :nth-child(3) { grid-column: 3; }
+.shader-controls-row--grid[data-columns="1"] {
+    grid-template-columns: minmax(0, 1fr);
+}
 
-/* If there's only one child, center it (the “mid” rule) */
-.shader-controls-row > :only-child { grid-column: 2; }
+.shader-controls-row--grid[data-columns="2"] {
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr);
+}
+
+.shader-controls-row--grid[data-columns="3"] {
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr) minmax(0, var(--side, 30%));
+}
+
+.shader-controls-row--grid[data-columns="1"] > :nth-child(1) { grid-column: 1; }
+.shader-controls-row--grid[data-columns="2"] > :nth-child(1) { grid-column: 1; }
+.shader-controls-row--grid[data-columns="2"] > :nth-child(2) { grid-column: 2; }
+.shader-controls-row--grid[data-columns="3"] > :nth-child(1) { grid-column: 1; }
+.shader-controls-row--grid[data-columns="3"] > :nth-child(2) { grid-column: 2; }
+.shader-controls-row--grid[data-columns="3"] > :nth-child(3) { grid-column: 3; }
+
+.shader-controls-row--grid[data-columns="1"] > :is(input, select, textarea, .form-control),
+.shader-controls-row--grid[data-columns="2"] > :nth-child(2):is(input, select, textarea, .form-control),
+.shader-controls-row--grid[data-columns="3"] > :nth-child(2):is(input, select, textarea, .form-control),
+.shader-controls-row--grid[data-columns="3"] > :nth-child(3):is(input, select, textarea, .form-control) {
+    width: 100%;
+    max-width: 100%;
+}
 
 /* Small screens: stack vertically */
 @media (max-width: 560px) {
-    .shader-controls-row {
+    .shader-controls-row--grid {
         grid-template-columns: 1fr;
     }
-    .shader-controls-row > * { grid-column: auto; }
+    .shader-controls-row--grid > * { grid-column: auto; }
 }
 
 @keyframes toastbar { from { transform: scaleX(1); transform-origin:left } to { transform: scaleX(0); transform-origin:left } }
@@ -588,4 +616,101 @@ canvas { outline: none;-webkit-tap-highlight-color: rgba(255, 255, 255, 0);borde
     #osd .xo-viewer-host::before {
         transition: none;
     }
+}
+
+/*This is copied style block from flex-renderer library here because I am just too lazy to add new css file.*/
+.er-control {
+    display: grid;
+    width: 100%;
+    gap: .5rem;
+    align-items: center;
+}
+
+.er-control > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.er-control[data-columns="1"] {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.er-control[data-columns="2"] {
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr);
+}
+
+.er-control[data-columns="3"] {
+    grid-template-columns: minmax(0, var(--side, 30%)) minmax(0, 1fr) minmax(0, var(--side, 30%));
+}
+
+.er-control__title {
+    grid-column: 1;
+}
+
+.er-control[data-columns="1"] > .er-control__body {
+    grid-column: 1;
+}
+
+.er-control[data-columns="2"] > .er-control__body {
+    grid-column: 2;
+}
+
+.er-control[data-columns="3"] > .er-control__body {
+    grid-column: 2;
+}
+
+.er-control[data-columns="3"] > .er-control__aux {
+    grid-column: 3;
+}
+
+.er-control__body,
+.er-control__aux {
+    min-width: 0;
+    width: 100%;
+}
+
+.er-control__body > :is(input, select, textarea, .form-control, .er-control__input, .er-control__display, .er-control__widget),
+.er-control__aux > :is(input, select, textarea, .form-control, .er-control__input, .er-control__display, .er-control__widget) {
+    width: 100%;
+    max-width: 100%;
+}
+
+@media (max-width: 560px) {
+    .er-control {
+        grid-template-columns: 1fr !important;
+    }
+
+    .er-control__title,
+    .er-control__body,
+    .er-control__aux {
+        grid-column: 1 !important;
+    }
+}
+
+.er-control--slider-with-input > .er-control__body,
+.er-control--slider-with-input > .er-control__aux {
+    min-width: 0;
+    width: 100%;
+}
+
+.er-control__body--slider-with-input > .er-control,
+.er-control__aux--slider-with-input > .er-control {
+    display: block;
+}
+
+.er-control__body--slider-with-input > .er-control > .er-control__body,
+.er-control__aux--slider-with-input > .er-control > .er-control__body {
+    display: block;
+}
+.er-control__popup.er-control__popup--icon {
+    width: 327px !important;
+}
+
+.er-control__preview.er-control__preview--icon > * {
+    font-size: 16px !important;
+}
+
+.er-control__button.er-control__button--icon-trigger {
+    min-height: 30px !important;
+    height: 30px !important;
 }

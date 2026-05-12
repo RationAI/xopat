@@ -29,13 +29,18 @@
     },
     "export": {
       "menuTitle": "Annotations",
-      "forSlide": "for slide {{slide}}",
       "description": "Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.",
-      "fileSection": "File Download / Upload",
-      "scopeLabel": "Export scope (annotations):",
+      "formatSection": "File format",
+      "exportSection": "Export",
+      "importSection": "Import",
+      "scopeLabel": "Annotations to export:",
       "replaceOnImport": "Replace existing data on import",
-      "downloadPresets": "Download presets.",
-      "downloadAnnotations": "Download annotations.",
+      "downloadPresets": "Download presets",
+      "downloadAnnotations": "Download annotations",
+      "chooseFileButton": "Choose file to import…",
+      "fromSlide": "From slide:",
+      "intoSlide": "Into slide:",
+      "focusedMarker": "(focused)",
       "scopeOptions": {
         "all": "All",
         "selected": "Selected"
@@ -87,8 +92,62 @@
       "helperText": "Area in unit\u00b2, length in unit (aggregate per preset).",
       "metrics": {
         "area": "Area",
-        "length": "Length"
+        "length": "Length",
+        "mean": "Mean intensity",
+        "median": "Median intensity",
+        "percentPositive": "% positive",
+        "components": "Component count",
+        "componentSize": "Component size (mean)",
+        "circularity": "Circularity (mean)"
       },
+      "tabs": {
+        "geometric": "Geometric",
+        "intensity": "Intensity",
+        "components": "Components"
+      },
+      "channelLabel": "Channel",
+      "channelSource": {
+        "raw": "Raw image",
+        "shader": "Shader output"
+      },
+      "channels": {
+        "L": "Luminance",
+        "R": "Red",
+        "G": "Green",
+        "B": "Blue"
+      },
+      "thresholdLabel": "Threshold",
+      "scopeLabel": "Scope",
+      "scope": {
+        "preset": "Preset",
+        "selection": "Selection",
+        "visible": "Visible",
+        "all": "All"
+      },
+      "run": "Run",
+      "cancel": "Cancel",
+      "running": "Running\u2026",
+      "progress": "{{done}} / {{total}}",
+      "noPolygon": "No polygon-shaped annotations to measure for this scope.",
+      "noPixels": "No raster pixels could be sampled.",
+      "outOfViewport": "Some annotations were outside the current viewport. Pan/zoom to cover them or switch to raw image source.",
+      "tooSmallSkipped": "{{count}} annotation(s) too small to sample.",
+      "noCoverageSkipped": "{{count}} annotation(s) had no rendered tiles under them. Pan/zoom over them, then re-run.",
+      "componentsTitle": "Connected components",
+      "componentsHelper": "Threshold the chosen channel inside each annotation, then label connected regions.",
+      "componentMinSize": "Min size (px)",
+      "componentMaxSize": "Max size (px, 0 = unlimited)",
+      "componentTotal": "Total components: {{count}}",
+      "componentPercentiles": "Size p10 / p50 / p90: {{p10}} / {{p50}} / {{p90}}",
+      "componentMeanCircularity": "Mean circularity: {{value}}",
+      "perAnnotationTitle": "Per annotation",
+      "perAnnotationEmpty": "Run a measurement to populate per-annotation values.",
+      "annotationLabel": "#{{id}} ({{type}})",
+      "channelHint": "{{source}} \u00b7 {{channel}}",
+      "shaderUnavailable": "Shader output sampling is not yet wired in this build. Use raw image for now.",
+      "viewMeasurements": "View measurements",
+      "computeMissing": "Compute missing",
+      "popoverTitle": "Annotation measurements",
       "combineTitle": "Combine results",
       "resultLabel": "Result",
       "saveResult": "Save as result",
@@ -103,7 +162,23 @@
       "unitMismatch": "Unit mismatch ({{a}} vs {{b}})"
     },
     "presets": {
-      "dialogTitle": "Annotation Class Presets"
+      "dialogTitle": "Annotation Class Presets",
+      "filterPlaceholder": "Filter classes...",
+      "addNew": "Add new class",
+      "addField": "Add field",
+      "newFieldPlaceholder": "Field name...",
+      "valuePlaceholder": "Value...",
+      "add": "Add",
+      "color": "Color",
+      "delete": "Delete class",
+      "typeLabel": "Type",
+      "fieldsLabel": "Fields",
+      "unnamed": "Unnamed Class",
+      "emptyState": "No classes yet. Use \"Add new class\" below to create one.",
+      "noFilterResults": "No classes match your filter.",
+      "useLeft": "Use for Left Click",
+      "useRight": "Use for Right Click",
+      "finishEditing": "Finish Editing"
     },
     "board": {
       "title": "Annotation list",
@@ -112,7 +187,20 @@
       "layerName": "Layer {{name}}",
       "deleteSelection": "Delete selection",
       "refresh": "Refresh list",
-      "area": "Area"
+      "area": "Area",
+      "searchPlaceholder": "Search...",
+      "metricColumn": {
+        "label": "Metric",
+        "off": "—",
+        "area": "Area",
+        "length": "Length",
+        "mean": "Mean",
+        "median": "Median",
+        "percentPositive": "% pos.",
+        "components": "Comp."
+      },
+      "compute": "Compute",
+      "noData": "—"
     },
     "filters": {
       "title": "Filtering",

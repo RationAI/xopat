@@ -1,14 +1,26 @@
 import type { XOpatCoreConfig, XOpatElementRecord } from "./types/config";
-import { type StorageLike, type AsyncStorageLike, XOpatStorage } from "./store";
+import { XOpatStorage } from "./store";
 import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
 import { HTTPError } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
+import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
+import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
+import { serializeScene } from "./classes/app/canonical-scene";
+import type { IOPipeline } from "./classes/io";
+import { IOResourceImpl } from "./classes/io";
 
 
-/** Token symbols for internal element storage */
-const STORE_TOKEN = Symbol("XOpatElementDataStore");
+/** Token symbol for per-element synchronous cache. */
 const CACHE_TOKEN = Symbol("XOpatElementCacheStore");
+/** Token symbol for per-element synchronous cookies façade (lazy). */
+const COOKIES_TOKEN = Symbol("XOpatElementCookiesStore");
+/** Token symbol for per-element async data façade (lazy). */
+const DATA_TOKEN = Symbol("XOpatElementDataStore");
+/** Symbol where each element keeps the disposer that removes it from IO_PIPELINE on destroy. */
+const IO_DISPOSE_TOKEN = Symbol("XOpatElementIODisposer");
+/** Per-viewer scratch map keyed by element uid (used by getViewerContext). */
+const STORE_TOKEN = Symbol("XOpatViewerScratchStore");
 
 export class XOpatServerCallError extends Error {
     code?: string;
@@ -45,6 +57,18 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     let REGISTERED_PLUGINS: IXOpatPlugin[] | undefined = [];
     let LOADING_PLUGIN = false;
     const REQUIRED_SINGLETONS = new Set<any>();
+
+    // The IO pipeline is now bootstrapped earlier (in src/app.ts, via
+    // bootstrapIOPipeline) so that AppCache/AppCookies are functional from the
+    // first `getOption()` call. The loader just consumes the global. Plugins
+    // and modules still register capabilities and bundle hooks via
+    // `this.initIO(...)` / `this.defineResource(...)`; administrators bind
+    // capabilities to sinks in `ENV.client.io` (server-injected, NOT
+    // URL-modifiable). See src/IO_PIPELINE.md.
+    const IO_PIPELINE: IOPipeline = (window as any).IO_PIPELINE;
+    if (!IO_PIPELINE) {
+        throw "XOpatLoader: IO_PIPELINE was not bootstrapped before initXOpatLoader. Call bootstrapIOPipeline(ENV, POST_DATA) first.";
+    }
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -174,10 +198,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             }
             PLUGINS[plugin.id]!.__ready = true;
 
-            if (outsideLoad) {
-                // do not await - let
-                VIEWER_MANAGER.forceDataImportInitialization();
-            }
+            // Note: dynamically loaded plugins no longer need an extra
+            // `forceDataImportInitialization` here — their own `initIO`
+            // catch-up (post-boot) iterates open viewers for per-viewer
+            // bundles. Calling forceDataImportInitialization again would
+            // double-fire `importBundle` for every previously-restored
+            // owner.
 
             /**
              * Plugin was loaded dynamically at runtime.
@@ -337,12 +363,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      * Strongly recommended for all modules.
      * @param id module id
      * @param ModuleClass class/class-like-function to register (not an instance!)
+     * @param eager if true, force `ModuleClass.instance()` immediately so the
+     *   constructor runs at script-load time. Use for sink/registrar singletons
+     *   whose constructor must populate global state (e.g. `IO_PIPELINE.registerSink`)
+     *   before owner modules resolve bindings against it. Default false.
      */
-    (window as any).addModule = function addModule(id: string, ModuleClass: any) {
+    (window as any).addModule = function addModule(id: string, ModuleClass: any, eager: boolean = false) {
         if (!id || !ModuleClass) return;
         ModuleClass.$id = id;
-        let xmods = (window as any).xmodules = (window as any).xmodules || {};
+        const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
+        if (eager && typeof ModuleClass.instance === "function") {
+            try { ModuleClass.instance(); }
+            catch (e) { console.error(`[loader] eager init of module "${id}" failed:`, e); }
+        }
     };
 
     /**
@@ -524,110 +558,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         return Aggregate as any;
     };
 
-    // POST DATA STORAGE - Always implemented via POST, support static IO.
-    /**
-     * @extends XOpatStorage.Data
-     * @type {PostDataStore}
-     */
-    class PostDataStore extends XOpatStorage.Data {
-        /** Internal context type (plugin or module) */
-        contextType!: XOpatExecutionContext;
-
-        /**
-         * @param options the options used in super class XOpatStorage.Data
-         * @param options.xoType type of the owner
-         */
-        constructor(options: PostDataStoreOptions) {
-            // IDs are split by '.' and the first segment is removed to match original logic
-            super({
-                ...options,
-                id: (options.id || "").split(".").filter((_, i) => i > 0).join(".")
-            });
-
-            if (options.xoType !== "plugin" && options.xoType !== "module") {
-                throw "Invalid xoType for PostDataStore!";
-            }
-
-            this.contextType = options.xoType;
-
-            // Accessing the internal storage reference
-            // Cast to any to access internal _withReference if it's not in the public interface
-            (this.getStore() as any)._withReference(this.contextType);
-        }
-
-        /**
-         * The ability to export all relevant data is used mainly with current session exports/shares.
-         * This is used for immediate static export of the current state.
-         * @return {Promise<string>} serialized data
-         */
-        async export() {
-            const exports: Record<string, any> = {};
-            const storage = this.__storage as any;
-            //bit dirty, but we rely on keys implementation as we hardcode storage driver
-            for (let key of storage._keys() as string[]) {
-                if (key.startsWith(this.id)) {
-                    exports[key] = await storage.get(key);
-                }
-            }
-            try {
-                return JSON.stringify(exports);
-            } catch (e) {
-                console.error("Error exporting post data for ", this.id, e);
-                return undefined;
-            }
-        }
-
-        /**
-         * Class argument is unused — this class hardcodes POST DATA 'driver'.
-         */
-        static register(Class: new () => StorageLike | AsyncStorageLike) {
-            super.registerClass(class extends XOpatStorage.AsyncStorage {
-                ref!: string;
-                async getItem(key: string) {
-                    let storage = POST_DATA[this.ref] as Record<string, unknown>;
-                    // backward non-namespaced compatibility
-                    return POST_DATA[key] || (storage && storage[key]);
-                }
-                async setItem(key: string, value: any) {
-                    let storage = POST_DATA[this.ref];
-                    if (!storage) {
-                        storage = POST_DATA[this.ref] = {};
-                    }
-                    storage[key] = value;
-                }
-                async removeItem(key: string) {
-                    delete POST_DATA[key];
-                    let storage = POST_DATA[this.ref];
-                    if (storage) {
-                        delete storage[key];
-                    }
-                }
-                async clear() {
-                    if (POST_DATA[this.ref]) {
-                        POST_DATA[this.ref] = {};
-                    }
-                }
-                get length(): Promise<number> {
-                    let storage = POST_DATA[this.ref];
-                    return Promise.resolve(Object.keys(storage || {}).length);
-                }
-                async key(index: number): Promise<string> {
-                    let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {})[index] ?? "";
-                }
-                _keys(): string[] { //internal loader use
-                    let storage = POST_DATA[this.ref];
-                    return Object.keys(storage || {});
-                }
-                _withReference(ref: string) {  //internal loader use
-                    this.ref = ref;
-                }
-            } as any);
-        }
-    }
-    // We hardcode internal storage driver for PostDataStore
-    PostDataStore.register(null as any);
-
     /**
      * Implements common interface for plugins and modules. Cannot
      * be instantiated as it is hidden in closure. Private, but
@@ -657,6 +587,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             this[CACHE_TOKEN] = new XOpatStorage.Cache({ id: this.__uid });
             REGISTERED_ELEMENTS.push(this);
+
+            // Auto-register with the IO pipeline so include.json `io` block
+            // declarations apply, and so resources/capabilities can be added
+            // later via initIO()/defineResource(). No bundle hooks yet.
+            this[IO_DISPOSE_TOKEN] = IO_PIPELINE.registerOwner(this.__uid, {
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+            });
+            const meta = (executionContextName === "plugin" ? PLUGINS : MODULES)[id];
+            const ioBlock = meta && (meta as any).io;
+            if (ioBlock !== undefined) IO_PIPELINE.applyIncludeBlock(this.__uid, ioBlock);
         }
 
         /**
@@ -681,10 +622,35 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * @return {XOpatStorage.Cache} cache interface
+         * @return {XOpatStorage.Cache} sync per-element cache (kv:cache).
+         * Default driver: localStorage; admin-redirectable via app config.
          */
         get cache() {
             return this[CACHE_TOKEN];
+        }
+
+        /**
+         * Sync per-element cookies façade (kv:cookies). Default driver:
+         * browser cookie jar; admin-redirectable. Lazy.
+         */
+        get cookies() {
+            let c = this[COOKIES_TOKEN];
+            if (!c) {
+                c = this[COOKIES_TOKEN] = new XOpatStorage.Cookies({ id: this.__uid });
+            }
+            return c;
+        }
+
+        /**
+         * Async per-element data store (kv:data). Default driver:
+         * post-data; admin-redirectable to http-rest, indexeddb, etc. Lazy.
+         */
+        get data() {
+            let d = this[DATA_TOKEN];
+            if (!d) {
+                d = this[DATA_TOKEN] = new XOpatStorage.Data({ id: this.__uid });
+            }
+            return d;
         }
 
         /**
@@ -713,13 +679,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          */
         setOption(key: string, value: any, cache = true) {
             if (cache) this.cache.set(key, value);
-        }
-
-        /**
-         * @return {PostDataStore}
-         */
-        get POSTStore() {
-            return this[STORE_TOKEN];
         }
 
         /**
@@ -813,103 +772,112 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         }
 
         /**
-         * Initialize IO in the Element - enables use of export/import functions. Can be initialized
-         * multiple times for multiple individual items (exportKey should differ!)
-         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
-         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
-         * @param {boolean} [options.inViewerContext=true] if true, the POST IO depends on the viewer context and
-         * runs IO wrt. viewer lifecycle
-         * @return {PostDataStore} data store reference, or false if import failed
+         * Initialize this element's participation in the generic IO/persistence
+         * pipeline. Optional. Without this call, the element is registered with
+         * the pipeline (so include.json `io` declarations apply) but has no
+         * bundle hooks — meaning bundle-export/import capabilities, even when
+         * declared, will produce no payload.
+         *
+         * @param options.capabilities  capabilities to declare in addition to
+         *   any declared in include.json. Each is `{ id, kind: 'bundle'|'crud' }`.
+         * @param options.exportBundle  hook called by the pipeline when a
+         *   bundle-export capability is bound to a sink. Return the
+         *   serialized payload (string/Blob/object). Inspect `ctx.viewerId`
+         *   for per-viewer dispatch.
+         * @param options.importBundle  hook called by the pipeline when a
+         *   bundle-import is requested for this owner.
+         * @param options.bundleScope   `'global' | 'per-viewer' | 'both'`.
+         *   Defaults to `'global'`. `'both'` matches the legacy
+         *   `inViewerContext: true` behavior (one global call plus one call
+         *   per active viewer).
+         * @param options.ignore        opt-out at runtime (equivalent to
+         *   the old `ignorePostIO` option).
          */
-        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
-            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
+        async initIO(options: {
+            capabilities?: IOCapability[];
+            exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
+            importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
+            bundleScope?: "global" | "per-viewer" | "both";
+            ignore?: boolean;
+        } = {}): Promise<void> {
+            if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
+                IO_PIPELINE.applyIncludeBlock(this.__uid, false);
                 return;
             }
-
-            options.id = this.uid;
-            options.xoType = this.__xoContext as XOpatExecutionContext;
-            if (options.inViewerContext === undefined) {
-                options.inViewerContext = true;
+            IO_PIPELINE.registerOwner(this.__uid, {
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+                bundleScope: options.bundleScope,
+                exportBundle: options.exportBundle,
+                importBundle: options.importBundle,
+            });
+            for (const cap of options.capabilities ?? []) {
+                IO_PIPELINE.registerCapability(this.__uid, cap);
             }
-            let store = this[STORE_TOKEN];
-            if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
+            // Pull any pre-existing global payload from bound bundle sinks
+            // immediately so the owner can rehydrate before any user
+            // interaction.
+            if (options.importBundle) {
+                try {
+                    await IO_PIPELINE.tryRestoreImport({ ownerUid: this.__uid });
+                } catch (e) {
+                    console.error("IO Failure (initIO restore):", this.constructor.name, e);
+                    this.error({
+                        error: e, code: "W_IO_INIT_ERROR",
+                        message: $.t("error.pluginImportFail",
+                            { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" }),
+                    });
+                }
             }
-
-            const vanillaExportKey = (options.exportKey || "").replace("::", "");
-
-            try {
-                VIEWER_MANAGER.addHandler('export-data', async () => {
-                    const data = await this.exportData(vanillaExportKey);
-                    if (data) {
-                        await store.set(vanillaExportKey, data);
-                    }
-
-                    if (options.inViewerContext) {
-                        const exportKey = vanillaExportKey + "::";
-                        for (let v of VIEWER_MANAGER.viewers) {
-                            const contextID = findViewerUniqueId(v) ?? "__unknown_viewer_ref__";
-                            try {
-                                const viewerData = await this.exportViewerData(v, vanillaExportKey, contextID);
-                                if (viewerData) {
-                                    await store.set(exportKey + contextID, viewerData);
-                                }
-                            } catch (e) {
-                                console.warn(`Error exporting viewer data ${contextID} for ${this.id}`, e);
-                            }
-                        }
-                    }
-                });
-
-                const data = await store.get(vanillaExportKey);
-                if (data !== undefined) await this.importData(vanillaExportKey, data);
-
-            } catch (e) {
-                console.error('IO Failure:', this.constructor.name, e);
-                this.error({
-                    error: e, code: "W_IO_INIT_ERROR",
-                    message: $.t('error.pluginImportFail',
-                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                });
-            }
-            return store;
         }
 
         /**
-         * Called to export data within 'export-data' event: automatically the post data store object
-         * (returned from initPostIO()) is given the output of this method:
-         * `await dataStore.set(options.exportKey || "", await this.exportData());`
-         * note: for multiple objects, you can either manually add custom keys to the `dataStore` reference
-         * upon the event 'export-data', or simply nest objects to fit a single output
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @return {Promise<any>}
+         * Declare that this element supports a `bundle-*` or `crud:*` capability.
+         * Equivalent to passing it via `initIO({ capabilities: [...] })` or
+         * declaring it in include.json's `io.capabilities`.
          */
-        async exportData(key: string): Promise<any> { }
-        /**
-         * Works the same way as @exportData, but for the viewer context.
-         * @param viewer {OpenSeadragon.Viewer} the target viewer
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
-         * @return {Promise<any>}
-         */
-        async exportViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string): Promise<any> {
-            return {};
+        defineCapability(cap: IOCapability): void {
+            IO_PIPELINE.registerCapability(this.__uid, cap);
         }
+
         /**
-         * Called automatically within this.initPostIO if data available
-         * note: parseImportData return value decides if data is parsed data or passed as raw string
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param data {any} data
+         * Declare a per-element CRUD resource (e.g. `'annotation'`, `'preset'`).
+         * Returns a façade with `create/read/update/delete` that dispatch
+         * through the pipeline. CRUD is inert (no-op success) until an admin
+         * binds the matching `crud:<name>` capability to a sink.
          */
-        async importData(key: string, data: any): Promise<void> { }
+        defineResource<T>(def: IOResourceDef<T>): IOResource<T> {
+            IO_PIPELINE.registerCapability(this.__uid, {
+                id: `crud:${def.name}`,
+                kind: "crud",
+                schema: def.schema,
+                label: def.name,
+            });
+            return new IOResourceImpl<T>({
+                ownerUid: this.__uid,
+                ownerId: this.__id,
+                xoType: this.__xoContext,
+                pipeline: IO_PIPELINE,
+                def,
+            });
+        }
+
         /**
-         * Works the same way as @importData, but for the viewer context.
-         * @param viewer {OpenSeadragon.Viewer} the target viewer
-         * @param key {string} the data contextual ID it was exported with, default empty string
-         * @param viewerTargetID {string} the viewer contextual ID it was exported with, default empty string
-         * @param data {any} data
+         * IO façade exposed to plugin/module code. `flush()` triggers a
+         * bundle export for this element (programmatic equivalent of the
+         * user-facing "Export" button); `capabilities()` lists what this
+         * element advertises; `isEnabled()` reports whether any binding
+         * for the given capability is active.
          */
-        async importViewerData(viewer: OpenSeadragon.Viewer, key: string, viewerTargetID: string, data: any): Promise<void> { }
+        get io() {
+            const uid = this.__uid;
+            return {
+                flush: (scope?: { capabilityId?: string; viewerId?: string }) =>
+                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId }),
+                capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
+                isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
+            };
+        }
 
         /**
          * Get context of viewer that is suitable for storing viewer-related data.
@@ -1064,7 +1032,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
         /**
          * Infer current viewer id if available.
-         * Uses viewer.id because the server RPC currently expects the transport viewer id.
+         * Uses viewer.id because the server RPC currently expects the sink viewer id.
          */
         protected _defaultServerViewerId(): string | undefined {
             try {
@@ -1332,11 +1300,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             if (state) {
                 for (const [eventName, perHandler] of state.entries()) {
                     for (const [, record] of perHandler.entries()) {
-                        const wrapper = record.wrappers.get(this);
+                        const wrappers = record?.wrappers;
+                        if (!wrappers?.get || !wrappers?.delete) {
+                            continue;
+                        }
+                        const wrapper = wrappers.get(this);
                         if (wrapper) {
                             try { this.removeHandler(eventName, wrapper); } catch (_) { /* ignore */ }
                         }
-                        record.wrappers.delete(this);
+                        wrappers.delete(this);
                     }
                 }
             }
@@ -1574,57 +1546,6 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             super.destroy();
         }
 
-        /**
-         * Initialize IO in the Element - enables use of export/import functions. Redefinition
-         * of the element base implementation, exports primarily to the viewer it encapsulates.
-         * @param {XOpatStorage.StorageOptions?} options where id value is ignored (overridden)
-         * @param {string?} [options.exportKey=""] optional export key for the globally exported data through exportData
-         * @return {PostDataStore} data store reference, or false if import failed
-         */
-        async initPostIO(options: Partial<PostDataStoreOptions> = {}) {
-            if (typeof this.getOption === "function" && this.getOption('ignorePostIO', false)) {
-                return;
-            }
-
-            options.id = this.uid;
-            options.xoType = this.__xoContext as XOpatExecutionContext;
-            let store = this[STORE_TOKEN];
-            if (!store) {
-                this[STORE_TOKEN] = store = new PostDataStore(options as PostDataStoreOptions);
-            }
-
-            const vanillaExportKey = (options.exportKey || "").replace("::", "");
-
-            try {
-                const exportKey = vanillaExportKey + "::";
-                VIEWER_MANAGER.addHandler('export-data', async () => {
-                    const data = await this.exportData(vanillaExportKey);
-                    if (data) {
-                        console.warn("Xopat Module Viewer Singleton should not export to a global context, instead, it should export to a viewer context!");
-                        await store.set(vanillaExportKey, data);
-                    }
-
-                    const contextID = this.viewer.uniqueId;
-                    const viewerData = await this.exportViewerData(this.viewer, vanillaExportKey, contextID);
-                    if (data) {
-                        await store.set(vanillaExportKey + "::" + contextID, viewerData);
-                    }
-                });
-
-                // fallback compatibility, import fo all viewers (importing to just one would make repeated re-import)
-                const data = await store.get(exportKey);
-                if (data !== undefined) await this.importData(exportKey, data);
-
-            } catch (e) {
-                console.error('IO Failure:', this.constructor.name, e);
-                this.error({
-                    error: e, code: "W_IO_INIT_ERROR",
-                    message: $.t('error.pluginImportFail',
-                        { plugin: this.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                });
-            }
-            return store;
-        }
     } as unknown as XOpatViewerSingletonModuleClass;
 
     /**
@@ -2002,14 +1923,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 }
             }
 
-            /**
-             * Event to export your data within the viewer lifecycle
-             * Event handler can by <i>asynchronous</i>, the event can wait.
-             *
-             * @memberof VIEWER_MANAGER
-             * @event export-data
-             */
-            await VIEWER_MANAGER.raiseEventAwaiting('export-data');
+            // Drive the generic IO pipeline: every owner with a bundle-export
+            // capability bound to a sink contributes its payload. The
+            // built-in `post-data` sink writes into POST_DATA, preserving
+            // the legacy HTML-form session export shape. See src/IO_PIPELINE.md.
+            await IO_PIPELINE.flushBundleExport();
             return { app: UTILITIES.serializeAppConfig(withCookies, staticPreview), data: POST_DATA };
         },
 
@@ -2151,8 +2069,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          * When opened, it automatically loads the saved session.
          */
         export: async function () {
-
-            let doc = `<!DOCTYPE html>
+            // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
+            // round-trip to remote sinks (github, http-rest, …) for several
+            // seconds. Show the global loading UI so the user knows we're
+            // working and can't trigger duplicate exports.
+            const showLoading = USER_INTERFACE?.Loading?.show;
+            try { showLoading?.(true); } catch (_) { /* no-op */ }
+            try {
+                const doc = `<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head><meta charset="utf-8"><title>Visualization export</title></head>
 <body><!--Todo errors might fail to be stringified - cyclic structures!-->
@@ -2160,8 +2084,11 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 ${await UTILITIES.getForm()}
 </body></html>`;
 
-            UTILITIES.downloadAsFile("export.html", doc);
-            APPLICATION_CONTEXT.__cache.dirty = false;
+                UTILITIES.downloadAsFile("export.html", doc);
+                APPLICATION_CONTEXT.__cache.dirty = false;
+            } finally {
+                try { showLoading?.(false); } catch (_) { /* no-op */ }
+            }
         },
 
         /**
@@ -2510,6 +2437,17 @@ ${await UTILITIES.getForm()}
             data.params = { ...APPLICATION_CONTEXT.config.params };
             delete data.defaultParams;
 
+            // Merge live shader cache/state from every viewer's renderer back into
+            // the structural background+visualizations. The renderer keeps its own
+            // copies of shader configs and no longer mutates APPLICATION_CONTEXT.config,
+            // so without this the export drops user edits (opacity, colormap, …).
+            // serializeScene() handles multi-viewport, implicit-identity backgrounds,
+            // structural appends, and sanitized-id mapping. Active indices are already
+            // covered by data.params via setOption.
+            const scene = serializeScene();
+            data.background = scene.background;
+            data.visualizations = scene.visualizations;
+
             if (staticPreview) data.params.isStaticPreview = true;
             if (!withCookies) data.params.bypassCookies = true;
             data.params.bypassCacheLoadTime = true;
@@ -2811,6 +2749,17 @@ form.submit();
         }
     };
 
+    // Tab-close guard for unsaved state. Any module that flips the dirty
+    // flag via APPLICATION_CONTEXT.setDirty() (annotations, viewer-open
+    // pipeline, inspector controllers, ...) gets the browser's native
+    // "Leave site?" prompt for free. Modern browsers ignore custom
+    // messages; both setters are still required for the prompt to show.
+    window.addEventListener('beforeunload', (event) => {
+        if (!APPLICATION_CONTEXT.__cache.dirty) return;
+        event.preventDefault();
+        event.returnValue = '';
+    });
+
     /**
      * Focuses all key press events and forwarding to OSD,
      * attaching `focusCanvas` flag to recognize if key pressed while OSD on focus
@@ -2856,6 +2805,11 @@ form.submit();
     function findViewerUniqueId(viewer: OpenSeadragon.Viewer): UniqueViewerId | undefined {
         let result = viewer.__cachedUUID;
         if (result) return result;
+
+        // Empty world is transient during reset/boot — return undefined
+        // silently instead of the warn+auto-generate path below.
+        if (!viewer.world || viewer.world.getItemCount() === 0) return undefined;
+
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
@@ -2900,6 +2854,165 @@ form.submit();
     OpenSeadragon.Viewer.prototype.getMenu = function () {
         return VIEWER_MANAGER.getMenu(this);
     };
+
+    /**
+     * Monkey-patches drawer/renderer methods to log the flex-renderer init/reload sequence.
+     * Enabled by APPLICATION_CONTEXT.getOption("webglDebugMode").
+     * Each log line is tagged with [flex:<drawer>] so the full transcript is grep-friendly.
+     */
+    function installFlexRendererDiagnostics(viewer: OpenSeadragon.Viewer) {
+        const seq = (() => { let i = 0; return () => String(++i).padStart(3, "0"); })();
+        const log = (tag: string, msg: string, data?: any) => {
+            if (data !== undefined) console.log(`[flex:${tag}] #${seq()} ${msg}`, data);
+            else console.log(`[flex:${tag}] #${seq()} ${msg}`);
+        };
+
+        const instrumentDrawer = (drawer: any, tag: string) => {
+            if (!drawer || drawer.__xopatInstrumented) return;
+            drawer.__xopatInstrumented = true;
+
+            const summarize = () => ({
+                worldCount: drawer.viewer?.world?.getItemCount?.() ?? null,
+                canvas: drawer.canvas ? `${drawer.canvas.width}x${drawer.canvas.height}` : null,
+                configuredExternally: drawer._configuredExternally,
+                suspendDepth: drawer._suspendRenderingDepth,
+                pendingRebuild: !!drawer._pendingRebuildRequest,
+                shaders: Object.keys(drawer.renderer?._shaders || {}),
+                shaderOrder: drawer.renderer?._shadersOrder,
+            });
+
+            const wrap = (name: string, extra?: (args: any[]) => any) => {
+                const orig = drawer[name];
+                if (typeof orig !== "function") return;
+                drawer[name] = function (...args: any[]) {
+                    log(tag, `${name} CALL`, { args: extra ? extra(args) : args, state: summarize() });
+                    try {
+                        const r = orig.apply(this, args);
+                        log(tag, `${name} RET`, { state: summarize() });
+                        return r;
+                    } catch (e) {
+                        log(tag, `${name} THREW`, { error: String(e), state: summarize() });
+                        throw e;
+                    }
+                };
+            };
+
+            wrap("overrideConfigureAll", args => ({
+                shaderIds: args[0] ? Object.keys(args[0]) : null,
+                order: args[1],
+            }));
+            wrap("tiledImageCreated", args => ({
+                idx: drawer.viewer?.world?.getIndexOfItem?.(args[0]),
+                priorShaderId: args[0]?.__shaderConfig?.id,
+            }));
+            wrap("configureTiledImage", args => ({
+                shaderId: args[1]?.id,
+                shaderType: args[1]?.type,
+            }));
+            wrap("_requestRebuild", args => ({ timeout: args[0], force: args[1], bypassSuspend: args[2] }));
+            wrap("suspendRendering", args => ({ reason: args[0] }));
+            wrap("resumeRendering", args => ({ reason: args[0] }));
+
+            // Classify each incoming shader-source-request so we can tell
+            // whether the library short-circuited (int/descriptor) or fell
+            // through to our resolver.
+            const originalHandleShaderSourceRequest = drawer._handleShaderSourceRequest;
+            if (typeof originalHandleShaderSourceRequest === "function") {
+                drawer._handleShaderSourceRequest = function (request: any = {}) {
+                    const entry = request.entry;
+                    let branch = "resolver";
+                    const directInt = Number.parseInt(entry, 10);
+                    if (Number.isFinite(directInt) && String(directInt) === String(entry).trim()) {
+                        branch = "integer";
+                    } else if (entry && typeof entry === "object" && (
+                        entry.tileSource !== undefined ||
+                        entry.source !== undefined ||
+                        entry.open !== undefined ||
+                        entry.openOptions !== undefined
+                    )) {
+                        branch = "descriptor";
+                    } else if (entry && typeof entry === "object" && entry.__xopatSourceRef) {
+                        branch = "resolver(token)";
+                    }
+                    log(tag, "shader-source-request", {
+                        branch,
+                        shaderId: request.shaderId,
+                        sourceIndex: request.sourceIndex,
+                        reason: request.reason,
+                        entryType: entry === null ? "null" : typeof entry,
+                        loadKey: entry && entry.loadKey,
+                    });
+                    return originalHandleShaderSourceRequest.apply(this, arguments as any);
+                };
+            }
+
+            const r = drawer.renderer;
+            if (r) {
+                r.addHandler("program-used", (e: any) => {
+                    log(tag, "event program-used", {
+                        name: e.name,
+                        shaderIds: Object.keys(e.shaderLayers || {}),
+                        state: summarize(),
+                    });
+                });
+                r.addHandler("html-controls-created", (e: any) => {
+                    log(tag, "event html-controls-created", {
+                        shaderIds: Object.keys(e.shaderLayers || {}),
+                    });
+                });
+                r.addHandler("visualization-change", (e: any) => {
+                    log(tag, "event visualization-change", {
+                        reason: e.reason,
+                        order: e.snapshot?.order,
+                    });
+                });
+            }
+
+            // Observe world changes for this drawer's viewer
+            drawer.viewer?.world?.addHandler("add-item", (e: any) => {
+                log(tag, "world add-item", {
+                    idx: drawer.viewer.world.getIndexOfItem(e.item),
+                    count: drawer.viewer.world.getItemCount(),
+                });
+            });
+            drawer.viewer?.world?.addHandler("remove-item", (e: any) => {
+                log(tag, "world remove-item", {
+                    count: drawer.viewer.world.getItemCount(),
+                });
+            });
+        };
+
+        instrumentDrawer(viewer.drawer, "main");
+        // Navigator drawer is sometimes created later; retry a few frames.
+        let attempts = 0;
+        const waitForNav = () => {
+            const nd = (viewer.navigator as any)?.drawer;
+            if (nd) {
+                instrumentDrawer(nd, "nav");
+            } else if (attempts++ < 30) {
+                setTimeout(waitForNav, 50);
+            } else {
+                log("main", "navigator drawer never appeared (instrumentation skipped)");
+            }
+        };
+        waitForNav();
+
+        // Surface GL errors from either context so they're interleaved with the log.
+        const tapGl = (gl: any, tag: string) => {
+            if (!gl || gl.__xopatErrorTapInstalled) return;
+            gl.__xopatErrorTapInstalled = true;
+            const origGetError = gl.getError.bind(gl);
+            // Can't easily hook every gl call; instead poll briefly around events below.
+            (gl as any).__xopatGetError = origGetError;
+        };
+        tapGl(viewer.drawer?._gl, "main-gl");
+        tapGl((viewer.navigator as any)?.drawer?._gl, "nav-gl");
+
+        log("main", "instrumentation installed", {
+            webglDebugMode: true,
+            showNavigator: !!viewer.navigator,
+        });
+    }
 
     // 2) Manager that tracks the active viewer
     /**
@@ -2946,12 +3059,12 @@ form.submit();
             this._singletonsKey = Symbol('singletons');
 
             // layout container
-            this.layout = new UI.StretchGrid({ cols: 1, gap: "2px" });
+            this.layout = new UI.StretchGrid({ cols: "auto", gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
 
             // add initial viewer
-            this.add(0);
-            this.setActive(0, 'initial');
+            this.add(0, false);
+            // this.setActive(0, 'initial');
             (window as any).LAYOUT.bindViewerManager?.();
             (window as any).LAYOUT.syncActiveViewerMobile?.();
         }
@@ -3167,7 +3280,7 @@ form.submit();
          * Create or replace a viewer at the given index and mount it into the grid layout.
          * Replaces existing viewer if present at that index.
          */
-        add(index: number) {
+        add(index: number, setActive = true) {
             if (this.viewers[index]) this.delete(index);
 
             // make a unique cell inside the grid
@@ -3239,6 +3352,34 @@ form.submit();
             ));
             (viewer as any).__renderingCapability = renderingCapability;
 
+            // Per-viewer broker for shader source (time-series) rebind requests.
+            // The resolver must be installed on the drawer's options so the
+            // flex-renderer dispatches scrub requests into xOpat instead of
+            // blindly appending to viewer.world.
+            const shaderSourceController = new ViewerShaderSourceController(viewer);
+            (viewer as any).__shaderSourceController = shaderSourceController;
+            const attachResolver = (drawer: any) => {
+                if (!drawer || drawer.__xopatShaderResolverAttached) return;
+                drawer.options = drawer.options || {};
+                drawer.options.shaderSourceResolver = shaderSourceController.resolver;
+                drawer.__xopatShaderResolverAttached = true;
+            };
+            attachResolver(viewer.drawer);
+            let navResolverAttempts = 0;
+            const waitForNavResolver = () => {
+                const nd = (viewer.navigator as any)?.drawer;
+                if (nd) {
+                    attachResolver(nd);
+                } else if (navResolverAttempts++ < 30) {
+                    setTimeout(waitForNavResolver, 50);
+                }
+            };
+            waitForNavResolver();
+
+            if (APPLICATION_CONTEXT.getOption("webglDebugMode")) {
+                installFlexRendererDiagnostics(viewer);
+            }
+
             viewer.makeScalebar({
                 pixelsPerMeter: 1,
                 sizeAndTextRenderer: OpenSeadragon.ScalebarSizeAndTextRenderer.METRIC_GENERIC.bind(null, "px"),
@@ -3255,8 +3396,60 @@ form.submit();
                 viewer.scalebar.setActive(false);
             }
 
-            $(viewer.element).on('contextmenu', function (event: Event) {
+            // Canvas right-click → CanvasContextMenu registry → window.DropDown.
+            // Plugins/modules contribute items via CanvasContextMenu.register(...);
+            // when no provider returns items, no menu opens (parity with previous behavior).
+            $(viewer.element).on('contextmenu', function (event: any) {
+                const orig: MouseEvent = event.originalEvent || event;
+                // Inner overlay (board panel, plugin HUD, …) already claimed this
+                // contextmenu by calling preventDefault — don't double-open.
+                if (orig.defaultPrevented) return;
+                // Only fire on the OSD canvas surface; UI overlays appended to the
+                // grid cell live outside viewer.canvas.
+                const canvasEl: HTMLElement | undefined = (viewer as any).canvas;
+                const target = orig.target as Node | null;
+                if (canvasEl && target && !canvasEl.contains(target)) return;
                 event.preventDefault();
+                let osdPos: { x: number; y: number } = { x: 0, y: 0 };
+                let pixelPos: { x: number; y: number } = { x: 0, y: 0 };
+                try {
+                    const rect = (viewer.element as HTMLElement).getBoundingClientRect();
+                    const offsetX = orig.clientX - rect.left;
+                    const offsetY = orig.clientY - rect.top;
+                    const Pt = (window as any).OpenSeadragon?.Point;
+                    if (Pt && viewer.viewport) {
+                        const vp = viewer.viewport.pointFromPixel(new Pt(offsetX, offsetY));
+                        osdPos = { x: vp.x, y: vp.y };
+                        const tiledImage = viewer.world?.getItemAt?.(0);
+                        if (tiledImage && typeof tiledImage.viewportToImageCoordinates === "function") {
+                            const ip = tiledImage.viewportToImageCoordinates(vp);
+                            pixelPos = { x: ip.x, y: ip.y };
+                        } else {
+                            pixelPos = osdPos;
+                        }
+                    }
+                } catch (e) {
+                    // best-effort: still hand the event to providers without coordinates
+                }
+                const items = CanvasContextMenu.collect({
+                    viewer,
+                    event: orig,
+                    osdPosition: osdPos,
+                    pixelPosition: pixelPos,
+                });
+                if (items.length) {
+                    // Prefer the van.js-based `ContextMenu` which supports
+                    // cascading flyouts for items with `children: [...]`.
+                    // Falls back to the legacy flat `window.DropDown` for
+                    // pre-rebuild environments where the new component is
+                    // not yet bundled into `ui/index.js`.
+                    const ctxMenu = (window as any).ContextMenu;
+                    if (ctxMenu?.open) {
+                        ctxMenu.open(orig, items);
+                    } else {
+                        (window as any).DropDown?.open(orig, items);
+                    }
+                }
             });
 
             for (let event in this.broadcastEvents) {
@@ -3312,91 +3505,6 @@ form.submit();
                 }
 
                 if (e.firstLoad) {
-                    const DELAY = 90;
-                    let last = 0;
-                    new OpenSeadragon.MouseTracker({
-                        element: "viewer-container",
-                        moveHandler: function (e) {
-                            // if we are the main active viewer
-                            if (VIEWER === viewer) {
-                                const now = Date.now();
-                                if (now - last < DELAY) return;
-                                last = now;
-                                const image = viewer.scalebar.getReferencedTiledImage() || viewer.world.getItemAt(0);
-                                if (!image) return;
-                                const screen = new OpenSeadragon.Point((e.originalEvent as MouseEvent).x, (e.originalEvent as MouseEvent).y);
-                                const position = image.windowToImageCoordinates(screen);
-
-                                let result = [`${Math.round(position.x)}, ${Math.round(position.y)} px`];
-                                const hasBg = APPLICATION_CONTEXT.config.background.length > 0;
-                                let tidx = 0;
-
-                                const viewport = VIEWER.viewport.windowToViewportCoordinates(screen);
-                                if (hasBg) {
-                                    const pixel = getPixelData(screen, viewport, tidx);
-                                    if (pixel) {
-                                        result.push(`tissue: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
-                                    } else {
-                                        result.push(`tissue: -`)
-                                    }
-                                    tidx++;
-                                }
-
-                                // TODO return overlay info logging
-                                // if (vis) {
-                                //     const pixel = getPixelData(screen, viewport, tidx);
-                                //     if (pixel) {
-                                //         result.push(`overlay: R${pixel[0]} G${pixel[1]} B${pixel[2]}`)
-                                //     } else {
-                                //         result.push(`overlay: -`)
-                                //     }
-                                // }
-                                USER_INTERFACE.Status.show(result.join("<br>"));
-                            }
-                        }
-                    });
-
-                    /**
-                     * @param screen
-                     * @param viewportPosition
-                     * @param {number|OpenSeadragon.TiledImage} tiledImage
-                     */
-                    function getPixelData(screen: any, viewportPosition: any, tiledImage: any) {
-                        // todo fix this
-                        return;
-                        function changeTile() {
-                            let tiles = tiledImage.lastDrawn;
-                            //todo verify tiles order, need to ensure we prioritize higher resolution!!!
-                            for (let i = 0; i < tiles.length; i++) {
-                                if (tiles[i].bounds.containsPoint(viewportPosition)) {
-                                    return tiles[i];
-                                }
-                            }
-                            return undefined;
-                        }
-
-                        if (Number.isInteger(tiledImage)) {
-                            tiledImage = viewer.world.getItemAt(tiledImage);
-                            if (!tiledImage) {
-                                //some error since we are missing the tiled image
-                                return undefined;
-                            }
-                        }
-                        let tile;
-                        tile = changeTile();
-                        if (!tile) return undefined;
-
-                        // get position on a current tile
-                        let x = screen.x - tile.position.x;
-                        let y = screen.y - tile.position.y;
-
-                        //todo: reads canvas context out of the result, not the original data
-                        let canvasCtx = tile.getCanvasContext();
-                        let relative_x = Math.round((x / tile.size.x) * canvasCtx.canvas.width);
-                        let relative_y = Math.round((y / tile.size.y) * canvasCtx.canvas.height);
-                        return canvasCtx.getImageData(relative_x, relative_y, 1, 1).data;
-                    }
-
                     // call here only when ready, otherwise the event is called after plugin initialization
                     if (pluginsWereInitialized()) {
                         /**
@@ -3422,6 +3530,7 @@ form.submit();
                 }
             })
 
+            // todo: consider wiring these events later as we access viewerUniqueID too early
             viewer.addHandler('canvas-enter', function (e) {
                 focusOnViewer = e.eventSource;
             });
@@ -3483,10 +3592,12 @@ form.submit();
             this.viewers.splice(index, 0, viewer);
             this._wire(viewer);
 
-            if (!this.active) {
-                this._commitActive(viewer, 'add');
-            } else {
-                this._syncActiveViewState();
+            if (setActive) {
+                if (!this.active) {
+                    this._commitActive(viewer, 'add');
+                } else {
+                    this._syncActiveViewState();
+                }
             }
         }
 
@@ -3540,53 +3651,28 @@ form.submit();
         }
 
         /**
-         * Initialize static POST data for plugins and modules.
+         * For each currently open viewer, ask the IO pipeline to restore
+         * any pre-existing per-viewer bundle data via bound sinks
+         * (legacy: this pulled from POST_DATA::<viewerUniqueId>). Owners
+         * that registered an `importBundle` hook receive the payload.
          */
         async forceDataImportInitialization() {
-            try {
-                for (let viewer of this.viewers) {
-                    // Find all imports that fit to the target viewer and import to the plugin
-                    const contextID = findViewerUniqueId(viewer);
-                    if (!contextID) {
-                        console.warn("Viewer has no unique ID, skipping plugin data initialization");
-                        continue;
-                    }
-
-                    for (let element of REGISTERED_ELEMENTS) {
-                        if (typeof element.getOption === "function" && element.getOption('ignorePostIO', false)) {
-                            continue;
-                        }
-
-                        const store = (element as any)[STORE_TOKEN];
-                        if (!store) continue;
-                        // todo: how often to import data? only when new viewer is created? what if user has
-                        //  some data and the some reload events rewrites it? for now we do strictly just once
-                        if (!store.__xoDataImported) {
-                            store.__xoDataImported = {};
-                        }
-                        if (store.__xoDataImported[contextID]) continue;
-                        store.__xoDataImported[contextID] = true;
-
-                        for (let key of await store.keys()) {
-                            const keyParts = key.split("::");
-                            if (keyParts.length < 2 || keyParts[1] !== contextID) continue;
-                            const data = await store?.get(key);
-                            try {
-                                if (data !== undefined) await element.importViewerData(viewer, key, contextID!, data);
-                            } catch (e) {
-                                console.error('IO Failure:', element.constructor.name, e);
-                                element.error({
-                                    error: e, code: "W_IO_INIT_ERROR",
-                                    message: $.t('error.pluginImportFail',
-                                        { plugin: element.id, action: "USER_INTERFACE.highlightElementId('global-export');" })
-                                });
-                            }
-                        }
-                    }
+            for (let viewer of this.viewers) {
+                const contextID = findViewerUniqueId(viewer);
+                if (!contextID) {
+                    console.warn("Viewer has no unique ID, skipping plugin data initialization");
+                    continue;
                 }
-            } catch (e) {
-                console.error('IO Failure:', e);
+                try {
+                    await IO_PIPELINE.tryRestoreImport({ viewerId: contextID });
+                } catch (e) {
+                    console.error('IO Failure:', e);
+                }
             }
+            // Unlocks per-viewer catch-up inside `initIO` for owners that
+            // register AFTER this pass (lazy singletons instantiated on
+            // first user interaction). See IOPipeline.bootRestorePending.
+            IO_PIPELINE.markBootRestoreComplete();
         }
 
         /**
@@ -3708,7 +3794,6 @@ form.submit();
 
             try {
                 // Clear all items
-                delete viewer.__cachedUUID;
                 if (viewer.world && viewer.world.getItemCount() > 0) {
                     const count = viewer.world.getItemCount();
                     for (let i = count - 1; i >= 0; i--) {
@@ -3726,6 +3811,8 @@ form.submit();
                      */
                     this.raiseEvent('viewer-reset', { viewer: viewer, uniqueId: viewer.uniqueId, index });
                 } // else no need to call reset, not opened
+
+                delete viewer.__cachedUUID;
             } catch (e) {
                 console.warn("Viewer reset failed - will recreate. Cause:", e);
                 this.add(index); //recreate force

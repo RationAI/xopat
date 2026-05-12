@@ -48,11 +48,20 @@ OSDAnnotations.Preset = class {
      * @return {OSDAnnotations.Preset} instantiated preset
      */
     static fromJSONFriendlyObject(parsedObject, context) {
-        let factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
+        const factory = context.getAnnotationObjectFactory(parsedObject.factoryID);
         if (factory === undefined) {
-            console.error("Invalid preset type.", parsedObject.factoryID, "of", parsedObject,
-                "No factory for such object available.");
-            factory = context.getAnnotationObjectFactory("polygon"); //rely on polygon presence
+            // No silent polygon fallback. Refuse the import so the
+            // user-facing toast surfaces the unknown factory id; the
+            // surrounding bulk import skips this preset and continues.
+            // Migrators relying on the legacy fallback should either
+            // adjust the source data or register an IO_PIPELINE guard
+            // (resource: 'preset', direction: 'pre-create') that maps
+            // unknown factories to a desired substitute.
+            const Dialogs = (globalThis).Dialogs;
+            Dialogs?.show?.(
+                `Preset uses an unsupported shape "${parsedObject.factoryID}" and was rejected.`,
+                5000, Dialogs.MSG_WARN);
+            throw new Error(`[OSDAnnotations.Preset] unknown factory "${parsedObject.factoryID}"`);
         }
 
         const id = typeof parsedObject.presetID === "string" ? parsedObject.presetID : `${parsedObject.presetID}`;
@@ -453,7 +462,7 @@ OSDAnnotations.PresetManager = class {
      */
     toObject(usedOnly=false) {
         let exported = [];
-        for (const [key, preset] in this._presets) {
+        for (const [key, preset] of this._presets) {
             if (!usedOnly || this._context.fabric.canvas._objects.some(x => x.presetID === preset.presetID)) {
                 exported.push(preset.toJSONFriendlyObject());
             }
@@ -471,7 +480,7 @@ OSDAnnotations.PresetManager = class {
     async import(presets, clear=false) {
         const _this = this;
 
-        for (const [pid, preset] in this._presets) {
+        for (const [pid, preset] of this._presets) {
             // TODO: clear might remove presets that are attached to existing annotations!
             if (clear || this.isUnusedPreset(preset)) {
                 this._context.raiseEvent('preset-delete', {preset});
@@ -485,8 +494,18 @@ OSDAnnotations.PresetManager = class {
 
         let first;
         if (Array.isArray(presets)) {
-            for (let p of presets) {
-                p = OSDAnnotations.Preset.fromJSONFriendlyObject(p, _this._context);
+            for (let raw of presets) {
+                let p;
+                try {
+                    p = OSDAnnotations.Preset.fromJSONFriendlyObject(raw, _this._context);
+                } catch (e) {
+                    // fromJSONFriendlyObject now throws on unknown factory
+                    // (replaces the legacy silent polygon fallback). The
+                    // toast is already shown; skip this preset and keep
+                    // importing the rest.
+                    console.warn("[Presets.import] skipping preset:", e?.message ?? e);
+                    continue;
+                }
                 if (!this._presets.has(p.presetID)) {
                     this._context.raiseEvent('preset-create', {preset: p});
                     this._presets.set(p.presetID, p);

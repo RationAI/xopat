@@ -187,100 +187,144 @@ This (global) function will register the plugin and initialize it. It will make 
 
 
 ## IO Handling
-Plugins are free to implement their own IO handling. If you are writing a plugin that connects e.g. annotations
-to some database, you can use (and the authors of the target plugin you want to save data from) rich event system
-to react upon the data item lifecycle.
 
-In case you are writing a plugin (or module) that has no given service it should save data to, you
-should:
- - provide a way to export data via lifecycle of the data item(s) through events
- - register to the default POST IO system the xOpat offers.
+xOpat ships a generic IO pipeline (`src/classes/io/`) that decouples *what* a
+plugin persists from *where* the bytes go. Plugins declare capabilities;
+admins bind them to sinks (file download, GitHub, HTTP REST, custom). See
+[`src/IO_PIPELINE.md`](../src/IO_PIPELINE.md) for the full reference.
 
-This way, one can use static file export to share their data with others, or 
-turn on some storage logics for the data. In that case, the data source plugin or module can be disabled
-to load the POST IO data using ``ignorePostIO`` option (works only if the target interface implements `getOption()`).
+Two flavors of persistence are supported per element:
 
-### Default POST IO
+- **Bundle export/import** — the whole plugin's state as one blob
+  (annotations bundle, recorder timeline, questionaire schema, …).
+  Round-trips through whatever sink the admin binds.
+- **Per-item CRUD** — each entity (annotation, step, answer, …)
+  dispatched as `create`/`update`/`delete` to a sink, with a durable
+  outbox so offline edits replay on reconnect.
 
-> **IMPORTANT**: The IO distinguishes between global and viewer-local data. You can have two viewers open
-> at the same time and you need to deliver different data to each of them? Use the viewer local export.
+Both are opt-in. Declare them in `include.json` and wire them in your
+constructor with `initIO` + `defineResource`. The legacy
+`exportData`/`importData`/`exportViewerData`/`importViewerData` overrides
+and the `initPostIO()` helper have been removed; existing plugins that
+used them have migration notes in their own `MIGRATION.md` files (see
+[`plugins/recorder/MIGRATION.md`](recorder/MIGRATION.md),
+[`plugins/questionaire-new/MIGRATION.md`](questionaire-new/MIGRATION.md)).
 
-All you need to do is to override ``exportData`` and `importData` methods (for global)
-or ``exportViewerData`` and ``importViewerData`` methods (for viewer-local)
-in the element root class
-and call ``this.initPostIO()`` at the startup. You can call the initialization repeatedly
-for different keys.
+### Declare in `include.json`
 
-````js
+```jsonc
+{
+  "id": "my-plugin",
+  "io": {
+    "capabilities": [
+      { "id": "bundle-export", "kind": "bundle", "label": "My plugin export" },
+      { "id": "bundle-import", "kind": "bundle", "label": "My plugin import" },
+      { "id": "crud:thing",    "kind": "crud",   "label": "Thing" }
+    ]
+  }
+}
+```
+
+Set `"io": false` to hard-disable IO regardless of admin bindings.
+
+### Wire in the constructor
+
+```js
 constructor(id) {
     super(id);
-    this.initPostIO({
-        exportKey: "", // unique data-context key, default empty string
-        inViewerContext: false  // or true, in that case `exportViewerData` and `importViewerData` will be used
+    this._initIOPipeline().catch(e => console.error("[my-plugin] IO init failed:", e));
+}
+
+async _initIOPipeline() {
+    await this.initIO({
+        bundleScope: "global",         // "global" | "per-viewer" | "both"
+        exportBundle: async (ctx) => JSON.stringify(this._state),
+        importBundle: async (ctx, data) => {
+            try {
+                await APPLICATION_CONTEXT.history.withoutRecording(() => {
+                    this._state = typeof data === "string" ? JSON.parse(data) : data;
+                    this._render();
+                });
+            } catch (e) {
+                // Surface a user-facing toast via the pipeline. `userMessage`
+                // escalates the dialog to error-level.
+                const wrapped = new Error(`Failed to load: ${e?.message ?? e}`);
+                wrapped.userMessage = "Could not load my-plugin data.";
+                throw wrapped;
+            }
+        },
+    });
+
+    this.thingResource = this.defineResource({
+        name: "thing",
+        identityOf: t => String(t?.id ?? ""),
+        coalesce: true,
+        merge: (prev, next) => ({ ...prev, ...next }),
+        persistOutbox: true,
+        persistMaxEntries: 1000,
+        persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+        validate: t => t?.id ? { ok: true } : { ok: false, refused: true, reason: "missing id" },
     });
 }
-````
+```
 
-If you want to have a custom logics with the IO initialization,
-you can override the initialization like this:
-````js
-async initPostIO(opts) {
-    const postStore = await super.initPostIO(opts);
-    if (postStore) {
-        //... do something
-        // e.g. read key 'key'
-        const data = await postStore.get('key');
-    }
-    return postStore;
-}
-````
-This might come in handy if you for example want to do additional IO initialization logics.
+`bundleScope: "per-viewer"` makes the pipeline call `exportBundle` /
+`importBundle` once per active viewer (with `ctx.viewerId` set), which is
+the right choice when state is keyed to a tiled image — see the
+annotations module for a worked example. `"global"` is for plugin-wide
+state that spans all viewers.
 
+### Dispatch local mutations through the resource
 
-> **Note**: plugin & module data are namespaced in POST. If you want to send post data manually, use:
-> ``plugin[<plugin_id>.key] = value;``. Nested keys are up to the plugin to manage for itself,
-> e.g. ``plugin[<plugin_id>.parentKey.subKey] = value;``.
+Mirror your in-process events to the resource so admins binding a CRUD
+sink get free upstream sync:
 
-The example below shows how to implement IO within with proper function overrides.
-````js
-async exportData(key) {
-    return await this.export(key); //our internal function returns a string promise
-}
+```js
+this.addHandler("thing-create", e => this.thingResource.create(e.thing));
+this.addHandler("thing-update", e => this.thingResource.update(e.thing.id, e.patch));
+this.addHandler("thing-delete", e => this.thingResource.delete(e.thing.id));
+```
 
-async importData(key, data) {
-    await this.import(key, data); //our import function expects data as a serialized string
-}
+When unbound the resource is inert and these calls are no-ops.
 
-async exportViewerData(viewer, key, viewerContextID) {
-    // somehow handle the export of data meant for a target viewer
-}
+### Hydration on boot
 
-async importViewerData(viewer, key, viewerContextID, data) {
-    // somehow handle the import of data meant for a target viewer
-}
-````
+`initIO` triggers `IO_PIPELINE.tryRestoreImport({ ownerUid })` automatically
+for global state, and the loader fires the per-viewer pass on each viewer
+open. Wrap `importBundle`'s body in
+`APPLICATION_CONTEXT.history.withoutRecording(...)` so hydration doesn't
+pollute the undo stack.
 
-As you might've noticed, there are no options to export _multiple items_ - and it is intended.
-The module should export (for simplicity) all its data in one serialized object, e.g. annotations would
-export something like:
-````
-{
-  "version": 1.2.0
-  "objects": [...]
-  "presets": [...]
-}
-````
-When the viewer is exported as a file, it will mark the flag `isStaticPreview` to `true`.
-In this case, plugins should **not fetch** any data that is included in the export, to avoid duplicity.
+### Triggering exports
+
+Programmatically: `await APPLICATION_CONTEXT.io.flushBundleExport({ ownerUid: "my-plugin" })`.
+The user-facing Export action (`UTILITIES.export()`) fans out to every
+owner with bundle capabilities. If every bound sink for your plugin
+refuses, the pipeline's automatic `file-download` fallback kicks in so
+the user always walks away with their data.
+
+### Errors
+
+Sink refusals (`{ ok: false, refused: true, userMessage }`) and exceptions
+thrown from `importBundle` / `exportBundle` automatically surface as
+12-second toasts (error-level when a `userMessage` is supplied,
+warning-level otherwise) via `IOPipeline.surfaceRefusal`.
+
+### Static-preview mode
+
+When the viewer is exported as a self-contained file (HTML), the option
+`isStaticPreview` is set to `true`. Plugins that fetch their own data
+from a backend should skip that fetch in static-preview mode to avoid
+duplication with the bundle:
 
 ```js
 if (APPLICATION_CONTEXT.getOption("isStaticPreview")) {
-    // skip data fetching
+    // skip backend fetch — the IO pipeline restores state from the bundle
 }
 ```
 
 ### Data Management Options
-There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings), 
+There are generally **five** different ways to manage data. For metadata (e.g., configurations, settings),
 three different options are available:
 
  1. `getOption`, `setOption` suitable for small configuration metadata, present in the configuration of _viewer URL and file exports_.
@@ -291,11 +335,10 @@ three different options are available:
 And one global meta store meant for reading only global viewer metadata:
  4. `APPLICATION_CONTEXT.metadata` as an instance of `MetaStore` class.
 
-For data IO, you have two options:
- 1. `async importData`, `async exportData` suitable for data in general, present in _viewer file exports_.
- 2. Custom service storing data at server
-    - this requires your own implementation to access a third party storage service.
-    - prefer the use of the `HttpClient` class to communicate, as it automatically integrates with the authentication system.
+For data IO:
+ 1. **`initIO` + `defineResource`** (the IO pipeline above) — the canonical path. Bundle for whole-state round-trips, CRUD for per-item upstream sync. Admin-routable, sink-agnostic, with offline outbox replay and automatic file-download fallback.
+ 2. Custom service stored at a server
+    - prefer wiring it as an `http-rest` sink (or your own custom sink registered with `IO_PIPELINE.registerSink(...)`) rather than calling `fetch`/`HttpClient` directly. That way admins keep one binding surface.
 
 ### Events
 Modules (and plugins) can have their own event system - in that case, the `EVENTS.md` description
@@ -337,9 +380,20 @@ First, get familiar with (sorted in importance order):
  - ``window.HTTPClient`` for seamless auth integration
     - Third party code (see below)
  - `window.APPLICATION_CONTEXT`
-    - note that this interface is meant for inner logic and you probably do not need to access it
+    - supported runtime entrypoint for session/viewer transactions
     - to access the configuration, should be used in read-only manner: `APPLICATION_CONTEXT.config`
-    - to access the viewer parameters, use `[set|get]Option(...)` method
+    - to access viewer parameters, use `[set|get]Option(...)`
+    - to mutate viewer/session opening state, use:
+      - `APPLICATION_CONTEXT.openViewerWith(...)`
+      - `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, selection, opts?)`
+      - `APPLICATION_CONTEXT.replaceVisualizations(...)`
+    - `APPLICATION_CONTEXT.updateVisualization(...)` still exists for compatibility, but prefer `replaceVisualizations(...)` in new code
+ - `window.plugin(id)`
+   - preferred way to access another plugin instance when it is already active
+ - `window.singletonModule(id)` and `window.viewerSingletonModule(className, viewerRef)`
+   - preferred lazy accessors for singleton modules and viewer singletons
+ - `window.registerViewerSingleton(...)` and `window.requireViewerSingletonPresence(...)`
+   - register and auto-materialize viewer-scoped helpers from plugins/modules
  - ``window.LAYOUT`` 
    - the main app layout
   
@@ -391,6 +445,8 @@ or an object to specify a file on the web. The object properties (almost) map to
 There can be multiple viewers open at once. You might need to create:
 - custom viewer-oriented menus: use ``VIEWER_MANAGER.getMenu(...)`` method to access desired menu component and add custom content
 - custom viewer-oriented data models: use `XOpatViewerSingleton` if you need only instance per viewer.
+
+If your plugin needs to switch only one viewer, do not rebuild the whole session manually. Use `APPLICATION_CONTEXT.updateViewerSelection(...)`, which goes through the same synchronized open pipeline as full session opens.
 
 ### ``XOpatViewerSingleton``
 The `XOpatViewerSingleton` exists one per active viewer, and have ``destroy()`` you can use to react on viewer context being lost. By default, instances ARE NOT

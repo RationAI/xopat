@@ -102,7 +102,15 @@
             return { type: "object", additionalProperties: { $ref: "#/$defs/VisualizationShaderGroupOrLayer" } };
         }
         if (type.includes("|")) {
-            return { anyOf: type.split("|").map(part => schemaFromTsType(part.trim())) };
+            const branches = type.split("|").map(part => schemaFromTsType(part.trim()));
+            // Collapse a `string|null` style union into the compact `type: [...]` form when
+            // every branch is a single primitive type. Keeps the published schema readable.
+            const allSimple = branches.every(branch =>
+                branch && typeof branch.type === "string" && Object.keys(branch).length === 1);
+            if (allSimple) {
+                return { type: branches.map(b => b.type) };
+            }
+            return { anyOf: branches };
         }
         if (type.includes("OpenSeadragon.TileSource")) {
             return { description: "Runtime-only OpenSeadragon.TileSource instance; not serializable through session JSON." };
@@ -110,6 +118,12 @@
         return {};
     }
 
+    /**
+     * Take a base schema and a default value and return a copy with the default attached and
+     * `null` accepted when the default is null. Prefers the compact `type: ["X","null"]` form
+     * over `anyOf: [..., {type:"null"}]` whenever the base schema is just a single type — keeps
+     * the published schema readable.
+     */
     function mergeSchemaWithDefault(schema, defaultValue) {
         if (defaultValue === undefined) {
             return schema;
@@ -126,6 +140,19 @@
             return { ...schema, default: null };
         }
 
+        // Compact: `type: "string"` + null default → `type: ["string", "null"]`.
+        if (typeof schema.type === "string") {
+            return { ...schema, type: [schema.type, "null"], default: null };
+        }
+        if (Array.isArray(schema.type)) {
+            return {
+                ...schema,
+                type: schema.type.includes("null") ? schema.type : schema.type.concat("null"),
+                default: null
+            };
+        }
+
+        // Existing `anyOf` form: append a null branch only if not already there.
         if (Array.isArray(schema.anyOf)) {
             const hasNull = schema.anyOf.some(item => item?.type === "null");
             return {
@@ -142,11 +169,7 @@
             };
         }
 
-        return {
-            ...schema,
-            type: Array.isArray(schema.type) ? schema.type.concat("null") : [schema.type].filter(Boolean).concat("null"),
-            default: null
-        };
+        return { ...schema, default: null };
     }
 
     function buildObjectSchemaFromFields(fields, overrides = {}) {
@@ -159,150 +182,97 @@
         return { type: "object", properties, required, additionalProperties: true };
     }
 
-    function normalizeShaderDocsCollection(shaderModel) {
-        const shaders = shaderModel?.shaders;
-        if (Array.isArray(shaders)) {
-            return shaders.filter(entry => entry && typeof entry === "object");
-        }
-        if (shaders && typeof shaders === "object") {
-            return Object.values(shaders).filter(entry => entry && typeof entry === "object");
-        }
-        return [];
-    }
-
-    function sanitizeShaderCatalogEntry(entry) {
-        const type = typeof entry?.type === "string" ? entry.type : undefined;
-        if (!type) return null;
-
-        const result = {
-            type,
-            name: typeof entry?.name === "string" ? entry.name : type
-        };
-
-        if (Array.isArray(entry?.inputs)) {
-            result.inputs = entry.inputs.map(input => {
-                const sanitizedInput = {};
-                if (Number.isInteger(input?.index)) sanitizedInput.index = input.index;
-                if (Array.isArray(input?.acceptedChannelCounts)) sanitizedInput.acceptedChannelCounts = input.acceptedChannelCounts;
-                if (typeof input?.description === "string") sanitizedInput.description = input.description;
-                return sanitizedInput;
-            });
-        }
-
-        if (entry?.parameters && typeof entry.parameters === "object") {
-            result.parameters = stripClassDocs(entry.parameters);
-        } else if (entry?.params && typeof entry.params === "object") {
-            result.parameters = stripClassDocs(entry.params);
-        } else if (Array.isArray(entry?.controls)) {
-            result.parameters = stripClassDocs(entry.controls);
-        }
-
-        return result;
-    }
-
-    function stripClassDocs(value) {
-        if (Array.isArray(value)) {
-            return value.map(item => stripClassDocs(item));
-        }
-        if (!value || typeof value !== "object") {
-            return value;
-        }
-
-        const result = {};
-        for (const [key, entry] of Object.entries(value)) {
-            if (key === "classDocs") continue;
-            result[key] = stripClassDocs(entry);
-        }
-        return result;
-    }
-
-    function buildShaderCatalog(shaderModel) {
-        const byType = {};
-        for (const shader of normalizeShaderDocsCollection(shaderModel)) {
-            const sanitized = sanitizeShaderCatalogEntry(shader);
-            if (sanitized) {
-                byType[sanitized.type] = sanitized;
-            }
-        }
-        return byType;
-    }
-
-    function buildShaderLayerBaseSchema(shaderCatalog, { requireDataReferences = false, allowGroupType = true } = {}) {
-        const shaderTypes = Object.keys(shaderCatalog || {});
-        const allowedTypes = allowGroupType ? shaderTypes.concat("group") : shaderTypes;
-        const properties = {
-            id: { type: "string" },
-            type: { type: "string", enum: allowedTypes },
-            name: { type: "string" },
-            visible: { anyOf: [{ type: "integer", enum: [0, 1] }, { type: "boolean" }] },
-            fixed: { type: "boolean" },
-            dataReferences: { type: "array", items: { type: "integer", minimum: 0 } },
-            params: {
-                type: "object",
-                additionalProperties: true,
-                description: "Shader parameter values authored in the viewer session."
-            },
-            cache: {
-                type: "object",
-                additionalProperties: true,
-                description: "Optional viewer snapshot/cache payload persisted with the session."
-            }
-        };
-        const required = ["type"];
-        if (requireDataReferences) {
-            required.push("dataReferences");
-        }
-
-        return {
-            type: "object",
-            properties,
-            required,
-            additionalProperties: true
-        };
-    }
-
-    function buildShaderGroupSchema(childRef) {
-        return {
-            type: "object",
-            properties: {
-                id: { type: "string" },
-                type: { const: "group" },
-                name: { type: "string" },
-                visible: { anyOf: [{ type: "integer", enum: [0, 1] }, { type: "boolean" }] },
-                shaders: {
-                    type: "object",
-                    additionalProperties: { $ref: childRef },
-                    description: "Map of child shader id to child shader or group configuration."
-                },
-                order: {
+    /**
+     * Take a renderer-published shader layer schema (from `compileConfigSchemaModel().$defs.shaderLayers.<type>`)
+     * and adapt it for use in the AUTHORED session schema:
+     *   - drop `tiledImages` (runtime-only, computed by app.ts from `dataReferences`)
+     *   - add `dataReferences` (session-format wiring; absent from runtime schema)
+     *   - for `group`, rewire the nested `shaders.additionalProperties` to point at a session-flavored
+     *     children-or-layer ref (background or visualization context)
+     *
+     * Returns a fresh object; the renderer schema is not mutated.
+     */
+    function adaptRendererLayerForSession(layerSchema, type, options) {
+        const adapted = JSON.parse(JSON.stringify(layerSchema || {}));
+        if (adapted.properties && typeof adapted.properties === "object") {
+            delete adapted.properties.tiledImages;
+            if (!adapted.properties.dataReferences) {
+                adapted.properties.dataReferences = {
                     type: "array",
-                    items: { type: "string" },
-                    description: "Optional ordered list of child shader ids."
-                }
-            },
-            required: ["type", "shaders"],
-            additionalProperties: true
-        };
+                    items: { type: "integer", minimum: 0 },
+                    description: "Indexes into the session-level `data` array. The viewer resolves these to runtime tiledImages before reaching the renderer."
+                };
+            }
+        }
+        if (type === "group" && options && typeof options.childrenRef === "string") {
+            const groupShaders = adapted.properties && adapted.properties.shaders;
+            if (groupShaders && typeof groupShaders === "object") {
+                groupShaders.additionalProperties = { $ref: options.childrenRef };
+            }
+        }
+        return adapted;
     }
 
-    function buildPluginSchemas(plugins) {
-        const properties = {};
-        for (const [pluginId, pluginRecord] of Object.entries(plugins || {})) {
-            const defaults = pluginRecord?.defaults || {};
-            const nestedProperties = {};
-            for (const [key, value] of Object.entries(defaults)) {
-                nestedProperties[key] = inferSchemaFromDefault(value, key);
-            }
-            properties[pluginId] = {
-                type: "object",
-                title: pluginRecord?.meta?.name || pluginId,
-                description: pluginRecord?.meta?.description || "",
-                properties: nestedProperties,
-                default: defaults,
-                additionalProperties: true
-            };
+    /**
+     * Build the session-format `$defs` block that proxies the renderer's shader layer schemas.
+     * One adapted entry per non-group shader (shared by both background and visualization),
+     * plus two `group` flavors (one per side) so each side's recursion lands in the right
+     * children-or-layer ref.
+     */
+    function buildSessionShaderDefs(rendererSchema) {
+        const rendererShaderLayers = rendererSchema && rendererSchema.$defs && rendererSchema.$defs.shaderLayers
+            ? rendererSchema.$defs.shaderLayers
+            : null;
+        const rendererTypedefs = rendererSchema && rendererSchema.$defs && rendererSchema.$defs.uiControlEnvelopes
+            ? JSON.parse(JSON.stringify(rendererSchema.$defs.uiControlEnvelopes))
+            : null;
+
+        if (!rendererShaderLayers) {
+            return { available: false };
         }
-        return properties;
+
+        const allTypes = Object.keys(rendererShaderLayers);
+        const nonGroupTypes = allTypes.filter(t => t !== "group");
+        const sessionLayerDefs = {};
+
+        for (const type of nonGroupTypes) {
+            sessionLayerDefs[`SessionShaderLayer_${type}`] = adaptRendererLayerForSession(rendererShaderLayers[type], type);
+        }
+        if (rendererShaderLayers.group) {
+            sessionLayerDefs.SessionShaderLayer_group_background = adaptRendererLayerForSession(
+                rendererShaderLayers.group,
+                "group",
+                { childrenRef: "#/$defs/BackgroundShaderGroupOrLayer" }
+            );
+            sessionLayerDefs.SessionShaderLayer_group_visualization = adaptRendererLayerForSession(
+                rendererShaderLayers.group,
+                "group",
+                { childrenRef: "#/$defs/VisualizationShaderGroupOrLayer" }
+            );
+        }
+
+        // Non-group session layers are referenced as-is from background OR-Layer.
+        // Visualization OR-Layer requires `dataReferences` on every non-group layer (background
+        // doesn't, since the background item itself carries `dataReference`).
+        const backgroundOneOf = nonGroupTypes.map(type => ({ $ref: `#/$defs/SessionShaderLayer_${type}` }));
+        const visualizationOneOf = nonGroupTypes.map(type => ({
+            allOf: [
+                { $ref: `#/$defs/SessionShaderLayer_${type}` },
+                { required: ["dataReferences"] }
+            ]
+        }));
+        if (rendererShaderLayers.group) {
+            backgroundOneOf.push({ $ref: "#/$defs/SessionShaderLayer_group_background" });
+            visualizationOneOf.push({ $ref: "#/$defs/SessionShaderLayer_group_visualization" });
+        }
+
+        return {
+            available: true,
+            rendererTypedefs,
+            sessionLayerDefs,
+            backgroundOneOf,
+            visualizationOneOf
+        };
     }
 
     function buildSchema(payload, options = {}) {
@@ -316,10 +286,16 @@
         const viewportSetupFields = parseTypeFields(configTypesSource, "ViewportSetup");
         const setupFields = parseTypeFields(configTypesSource, "XOpatSetup");
         const configurator = window.OpenSeadragon?.FlexRenderer?.ShaderConfigurator;
-        const shaderModel = configurator?.compileDocsModel ? configurator.compileDocsModel() : null;
-        const shaderCatalog = buildShaderCatalog(shaderModel);
-        const backgroundLayerBaseSchema = buildShaderLayerBaseSchema(shaderCatalog, { requireDataReferences: false, allowGroupType: false });
-        const visualizationLayerBaseSchema = buildShaderLayerBaseSchema(shaderCatalog, { requireDataReferences: true, allowGroupType: false });
+
+        // The renderer's full JSON Schema (compileConfigSchemaModel) is the source of truth for
+        // shader layer shape - including per-shader params, typed control envelopes, and group
+        // recursion. We adapt it for the session format (drop runtime `tiledImages`, add authored
+        // `dataReferences`) and embed it under our $defs. The legacy docs model is no longer
+        // queried; the new schema covers everything we previously hand-rolled.
+        const rendererSchema = configurator?.compileConfigSchemaModel
+            ? configurator.compileConfigSchemaModel()
+            : null;
+        const sessionShaderDefs = buildSessionShaderDefs(rendererSchema);
 
         const defs = {
             DataID: {
@@ -339,18 +315,33 @@
             })(),
             DataSpecification: {
                 anyOf: [{ $ref: "#/$defs/DataID" }, { $ref: "#/$defs/DataOverride" }]
-            },
-            BackgroundShaderLayer: backgroundLayerBaseSchema,
-            BackgroundShaderGroup: buildShaderGroupSchema("#/$defs/BackgroundShaderGroupOrLayer"),
-            VisualizationShaderLayer: visualizationLayerBaseSchema,
-            VisualizationShaderGroup: buildShaderGroupSchema("#/$defs/VisualizationShaderGroupOrLayer")
+            }
         };
-        defs.BackgroundShaderGroupOrLayer = {
-            anyOf: [{ $ref: "#/$defs/BackgroundShaderLayer" }, { $ref: "#/$defs/BackgroundShaderGroup" }]
-        };
-        defs.VisualizationShaderGroupOrLayer = {
-            anyOf: [{ $ref: "#/$defs/VisualizationShaderLayer" }, { $ref: "#/$defs/VisualizationShaderGroup" }]
-        };
+
+        if (sessionShaderDefs.available) {
+            // Embed the renderer's typed control envelopes verbatim. The session-flavored shader
+            // layer schemas reference them via `$ref: #/$defs/uiControlEnvelopes/<type>`.
+            defs.uiControlEnvelopes = sessionShaderDefs.rendererTypedefs;
+            // Per-shader session-flavored layer schemas (`SessionShaderLayer_<type>`).
+            Object.assign(defs, sessionShaderDefs.sessionLayerDefs);
+            defs.BackgroundShaderGroupOrLayer = {
+                description: "One authored background shader layer. Schema is the renderer's, adapted: tiledImages stripped, dataReferences added.",
+                oneOf: sessionShaderDefs.backgroundOneOf
+            };
+            defs.VisualizationShaderGroupOrLayer = {
+                description: "One authored visualization shader layer. Same as background but every non-group layer must declare `dataReferences`.",
+                oneOf: sessionShaderDefs.visualizationOneOf
+            };
+        } else {
+            // Renderer schema unavailable (older renderer build, or schema compile failed). Fall
+            // back to a permissive placeholder so sessions still validate structurally.
+            defs.BackgroundShaderGroupOrLayer = {
+                type: "object",
+                additionalProperties: true,
+                description: "Renderer schema unavailable - shader layer shape not enforced."
+            };
+            defs.VisualizationShaderGroupOrLayer = defs.BackgroundShaderGroupOrLayer;
+        }
 
         const backgroundSchema = buildObjectSchemaFromFields(backgroundFields, {
             dataReference: { type: "integer", minimum: 0 },
@@ -385,7 +376,7 @@
         const schema = {
             $schema: "https://json-schema.org/draft/2020-12/schema",
             title: `${payload?.viewer?.name || "xOpat"} Session Schema`,
-            description: "Deployment-aware viewer session schema assembled from config.json defaults, server plugin records, viewer session types, parse-input handling, and viewer-side shader support metadata.",
+            description: "Deployment-aware viewer session schema assembled from config.json defaults, viewer session types, parse-input handling, and the renderer's published JSON Schema (shader layer shapes are reused verbatim, adapted for session-format data wiring).",
             type: "object",
             required: ["data"],
             properties: {
@@ -408,15 +399,20 @@
                     items: visualizationSchema
                 },
                 plugins: {
+                    // Plugin live-session config shape is not introspectable from the host today
+                    // (include.json defaults describe admin-time static metadata, not the runtime
+                    // session API). We accept any plugin id mapping to any object; per-plugin
+                    // validation can be wired later if plugins start publishing schema fragments.
                     type: "object",
-                    properties: buildPluginSchemas(payload?.plugins || {}),
-                    additionalProperties: false,
+                    description: "Map of plugin id -> per-plugin session config object. Per-plugin shape is not enforced at this layer; validation belongs to the plugin owner.",
+                    additionalProperties: { type: "object", additionalProperties: true },
                     default: {}
                 }
             },
             additionalProperties: false,
             anyOf: [
                 {
+                    description: "A session must declare at least one background OR at least one visualization. Empty sessions have nothing to render.",
                     required: ["background"],
                     properties: {
                         background: { type: "array", minItems: 1 }
@@ -455,9 +451,24 @@
             };
             schema["x-runtimeNotes"] = {
                 backgroundDataReference: "Published session schema uses data indexes. The viewer may internally resolve richer runtime objects later.",
-                tiledImages: "Not part of authored session input. Computed by app.ts before passing shader config to the renderer."
+                tiledImages: "Not part of authored session input. Computed by app.ts before passing shader config to the renderer.",
+                shaderLayerSource: "Shader layer schemas under $defs.SessionShaderLayer_* are derived from the renderer's compileConfigSchemaModel(). The full renderer schema is the source of truth; the session adapter only strips runtime-only fields and adds session-format wiring."
             };
-            schema["x-shaderCatalog"] = shaderCatalog;
+            // Slim per-shader summary derived directly from the renderer schema we already embedded.
+            // No second source of truth - this is purely a tooling convenience.
+            if (sessionShaderDefs.available && rendererSchema && rendererSchema.$defs && rendererSchema.$defs.shaderLayers) {
+                const catalog = {};
+                for (const [type, layerSchema] of Object.entries(rendererSchema.$defs.shaderLayers)) {
+                    catalog[type] = {
+                        type,
+                        name: layerSchema.title || type,
+                        description: layerSchema.description || "",
+                        intent: layerSchema["x-intent"] || "",
+                        expects: layerSchema["x-expects"] || {}
+                    };
+                }
+                schema["x-shaderCatalog"] = catalog;
+            }
             schema["x-deployment"] = {
                 viewer: payload?.viewer || {},
                 pluginIds: Object.keys(payload?.plugins || {})

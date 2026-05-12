@@ -4,14 +4,16 @@
     "description": "A module that brings annotations functionality.",
     "version": "0.1.0",
     "includes" : [
-        "scripting/read.scripts.js",
-        "scripting/write.scripts.js",
         "annotations.js",
-        "annotations-canvas.js",
         "ext/Sortable.min.js",
         "ext/greiner-hormann.min.js",
         "ext/magic-wand.js",
         "ext/polygon-intersect.js",
+        "ext/rbush.min.js",
+        "scripting/read.scripts.js",
+        "scripting/write.scripts.js",
+        "spatial-index.js",
+        "annotations-canvas.js",
         "convert/convertor.js",
         "convert/native.js",
         "convert/asapXml.js",
@@ -26,8 +28,18 @@
         "freeFormTool.js"
     ],
     "requires": ["fabricjs"],
-    // Whether to store presets in the local storage
-    "storeCacheSnapshots": true,
+    // Generic IO pipeline declarations. Bundle-* covers the legacy
+    // whole-canvas export/import (see src/IO_PIPELINE.md). Per-element
+    // CRUD via "crud:annotation" / "crud:preset" stays inert until an
+    // admin binds the capability to a sink.
+    "io": {
+        "capabilities": [
+            { "id": "bundle-export", "kind": "bundle", "label": "Annotations bundle export" },
+            { "id": "bundle-import", "kind": "bundle", "label": "Annotations bundle import" },
+            { "id": "crud:annotation", "kind": "crud", "label": "Annotation" },
+            { "id": "crud:preset",     "kind": "crud", "label": "Preset" }
+        ]
+    },
     // Whether to include private annotations in module export
     "exportPrivate" : false,
     // If default preset should be provided

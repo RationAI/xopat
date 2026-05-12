@@ -15,14 +15,54 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
         this.disabled = APPLICATION_CONTEXT.config.visualizations.length < 1;
         this.tiledImageIndex = APPLICATION_CONTEXT.config.background.length;
+
+        this._invalidate = () => { this._invalidData = Date.now(); };
+        this._framewatchViewer = null;
+    }
+
+    _bindFrameWatchers(viewer) {
+        if (!viewer || this._framewatchViewer === viewer) return;
+        this._unbindFrameWatchers();
+        viewer.addHandler('update-viewport', this._invalidate);
+        this._framewatchViewer = viewer;
+
+        // 'visualization-change' fires on control edits (slider, color, inverse,
+        // visibility, channel mapping) with reason: "control-change". Without
+        // this the cached snapshot keeps stale control values.
+        const renderer = viewer.drawer && viewer.drawer.renderer;
+        if (renderer && typeof renderer.addHandler === 'function') {
+            renderer.addHandler('visualization-change', this._invalidate);
+            this._framewatchRenderer = renderer;
+        }
+    }
+
+    _unbindFrameWatchers() {
+        const viewer = this._framewatchViewer;
+        if (viewer) {
+            viewer.removeHandler('update-viewport', this._invalidate);
+            this._framewatchViewer = null;
+        }
+        const renderer = this._framewatchRenderer;
+        if (renderer && typeof renderer.removeHandler === 'function') {
+            renderer.removeHandler('visualization-change', this._invalidate);
+            this._framewatchRenderer = null;
+        }
     }
 
     handleClickUp(o, point, isLeftClick, objectFactory) {
         if (this._allowCreation && this.annotations) {
             for (let i = 0; i < this.annotations.length; i++) {
-                delete this.annotations[i].strokeDashArray;
-                this.context.fabric.deleteHelperAnnotation(this.annotations[i]);
-                this.context.fabric.addAnnotation(this.annotations[i]);
+                const annot = this.annotations[i];
+                // Strip the preview/highlight markers so the committed
+                // annotation looks like every other annotation of the preset.
+                // The factory's onZoom path will rescale strokeWidth on the
+                // next zoom event.
+                delete annot.strokeDashArray;
+                delete annot.isHighlight;
+                delete annot.strokeLineCap;
+                if (annot.originalStrokeWidth) annot.strokeWidth = annot.originalStrokeWidth;
+                this.context.fabric.deleteHelperAnnotation(annot);
+                this.context.fabric.addAnnotation(annot);
             }
 
             this.annotations = [];
@@ -36,9 +76,14 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     handleClickDown(o, point, isLeftClick, objectFactory) {
-        if (!objectFactory || this.disabled) {
+        const noViz = !this._renderConfig || Object.keys(this._renderConfig).length === 0;
+        if (!objectFactory || this.disabled || noViz) {
             this.abortClick(isLeftClick);
-            Dialogs.show(this.disabled ? 'There are no overlays to segment!' : 'Select a preset to annotate!');
+            let msg;
+            if (this.disabled) msg = 'There are no overlays to segment!';
+            else if (noViz) msg = 'No visualization layer to segment from. Toggle one on, or load a visualization.';
+            else msg = 'Select a preset to annotate!';
+            Dialogs.show(msg);
             return;
         }
 
@@ -51,12 +96,17 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         const willKeepViewer = super.locksViewer(oldViewerRef, newViewerRef);
         if (!willKeepViewer) {
             this._cleanState();
+            this._unbindFrameWatchers();
         }
         return willKeepViewer;
     }
 
     async handleMouseHover(event, point) {
         if (!this.context.presets.left || this.isZooming) {
+            this._invalidData = Date.now();
+            return;
+        }
+        if (!this._renderConfig || Object.keys(this._renderConfig).length === 0) {
             this._invalidData = Date.now();
             return;
         }
@@ -77,14 +127,29 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this._lastViewportKey !== key;
 
         if (needsNewScreenshot) {
+            // Yield one frame so the main viewer's first-pass for the current
+            // viewport has a chance to render before we steal its textures.
+            await new Promise(r => requestAnimationFrame(r));
             await this.prepareViewportScreenshot();
             this._lastViewportKey = key;
+            // Snapshot changed — drop the alpha short-circuit so the recompute
+            // below runs even if currentAlpha matches the previous hover.
+            this._lastAlpha = null;
         }
 
         if (!this.data) return;
 
         const currentAlpha = this._getPixelAlpha(point);
-        if (this._lastAlpha && this._lastAlpha === currentAlpha) {
+        if (!currentAlpha) {
+            // Cursor is over background — _getBinaryMask would invert and trace the
+            // whole non-visualization area, which the user perceives as "the
+            // polygon doesn't shrink, it grows huge". Clear any stale helper
+            // polygon and wait for the cursor to come back over the heatmap.
+            if (this.annotations && this.annotations.length) this._cleanState();
+            this._lastAlpha = currentAlpha;
+            return;
+        }
+        if (this._lastAlpha === currentAlpha) {
             return;
         }
 
@@ -110,6 +175,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     setFromAuto() {
         this._tiRef = this.context.viewer.scalebar.getReferencedTiledImage();
         this.prepareShaderConfig();
+        this._bindFrameWatchers(this.context.viewer);
         this.prepareViewportScreenshot();
 
         this.context.setOSDTracking(false);
@@ -120,6 +186,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
 
     setToAuto(temporary) {
         this._cleanState();
+        this._unbindFrameWatchers();
 
         this.data = null;
         if (temporary) return false;
@@ -143,21 +210,68 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             this.drawer = OpenSeadragon.makeStandaloneFlexDrawer(this.context.viewer);
         }
 
-        const shaders = this.context.viewer.drawer.renderer.getAllShaders();
-        const result = {};
-        // Todo maybe delete this if, for now we just use the entire shader list, meaning we process the WHOLE viz stack, supporting single
-        //  layer is tricky, as blending modes are in play (so it might not accuarelly select what is user seeing)
-        if (shaders[this._selectedShader]) {
-            result[this._selectedShader] = shaders[this._selectedShader].getConfig();
-        } else {
-            for (let id in shaders) {
-                result[id] = shaders[id].getConfig();
-            }
+        this._renderConfig = this._buildEffectiveConfig();
+        if (Object.keys(this._renderConfig).length === 0) {
+            this.data = null;
         }
-        this._renderConfig = result;
+    }
+
+    // Build the shader config map handed to drawWithConfiguration from the
+    // live renderer state. Each entry is a shallow top-level copy of the live
+    // config; cache (opacity, threshold, color, inverse, use_channelX, …) is
+    // preserved on cfg.cache and read by the standalone shader's controls via
+    // loadProperty() during construct().
+    _buildEffectiveConfig() {
+        const renderer = this.context.viewer.drawer.renderer;
+        const order = renderer.getShaderLayerOrder() || [];
+        const bgIds = this._collectBackgroundShaderIds();
+        const out = {};
+        for (const id of order) {
+            if (bgIds.has(id)) continue;
+            const cfg = renderer.getShaderLayerConfig(id);
+            if (!cfg || cfg.error) continue;
+            if (cfg.visible === 0 || cfg.visible === false) continue;
+            // Pass the live config through. User-edited values live on cfg.cache;
+            // the standalone shader's controls read them via loadProperty() during
+            // construct(). Do not spread cache into params — slider controls need
+            // their full {default, min, max, step, …} definition from the shader
+            // type's defaultControls, which a scalar in params would collapse.
+            out[id] = { ...cfg };
+        }
+        return out;
+    }
+
+    // Subtracts background shaders from the renderer's shader stack so the
+    // segmentation pass only sees visualization layers. Renderer ids are
+    // sanitized via $.FlexRenderer.sanitizeKey, so the raw bg.id derived from
+    // canonical-scene must be sanitized to match the order returned by
+    // renderer.getShaderLayerOrder().
+    _collectBackgroundShaderIds() {
+        const out = new Set();
+        const sanitize = (k) => OpenSeadragon.FlexRenderer.sanitizeKey(k);
+        const scene = window.__SCENE;
+        const bgArr = APPLICATION_CONTEXT.config.background || [];
+        for (const bg of bgArr) {
+            if (!bg || !bg.id) continue;
+            const ids = (scene && typeof scene.backgroundShaderRendererIds === "function")
+                ? scene.backgroundShaderRendererIds(bg)
+                : ((Array.isArray(bg.shaders) ? bg.shaders : [null]).map((_, i) => i === 0 ? bg.id : `${bg.id}-${i}`));
+            for (const id of ids) out.add(sanitize(id));
+        }
+        return out;
     }
 
     async prepareViewportScreenshot(x, y, w, h) {
+        // Refresh from the live renderer every snapshot — picks up control
+        // edits (cache mutations) and any wholesale config.cache reassignments
+        // from session-import paths.
+        const effective = this._buildEffectiveConfig();
+        this._renderConfig = effective;
+        if (Object.keys(effective).length === 0) {
+            this.data = null;
+            this._invalidData = false;
+            return null;
+        }
         const viewer = this.context.viewer;
         x = x || 0;
         y = y || 0;
@@ -167,15 +281,29 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this.contentSize = {x, y, w, h};
         this._invalidData = true;
 
+        // Drop the cached first-pass refs so flex-renderer re-steals the
+        // main viewer's current first-pass textures (handles texture
+        // reallocations after resize/layer-count changes).
+        if (this.drawer && this.drawer.renderer) {
+            this.drawer.renderer.__firstPassResult = null;
+        }
+
+        // The standalone offscreen WebGL canvas does not auto-clear between
+        // draws. Without this clear, transparent areas of the new frame would
+        // leak the previous frame's pixels — making it impossible for the
+        // traced polygon to shrink when the heatmap shrinks. Mirrors the same
+        // pattern in modules/annotations/magic-wand.js:100.
+        const gl = this.drawer.renderer.gl;
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
         await this.drawer.drawWithConfiguration(
             viewer.world._items,
-            this._renderConfig,
+            effective,
             viewer.drawer,
             { x: w, y: h }
         );
 
         const data = new Uint8Array(w * h * 4); // RGBA8
-        const gl   = this.drawer.renderer.gl;
         gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
         gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
 
@@ -313,7 +441,10 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this._cleanState();
 
         const visualProps = this.context.presets.getAnnotationOptions(this._isLeft);
-        visualProps.strokeDashArray = [15, 15];
+        const baseStrokeWidth = visualProps.originalStrokeWidth ?? 3;
+        // Zoom value the fabric.Object.prototype.zooming hook (annotations.js:1333)
+        // consumes — same value used by other helper/highlight visuals.
+        const zoom = this.context.fabric.canvas.getZoom();
 
         annotationsPoints.forEach(points => {
             if (points.length === 1) {
@@ -325,7 +456,16 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             }
         });
 
-        this.annotations.forEach(annotation => this.context.fabric.addHelperAnnotation(annotation));
+        // Mark each preview as a highlight so the zoom hook keeps its stroke
+        // and dash pattern screen-relative across zooms; apply the scaled
+        // values immediately for the first render.
+        this.annotations.forEach(annotation => {
+            annotation.isHighlight = true;
+            annotation.originalStrokeWidth = baseStrokeWidth;
+            annotation.strokeLineCap = 'round';
+            if (typeof annotation.zooming === 'function') annotation.zooming(zoom);
+            this.context.fabric.addHelperAnnotation(annotation);
+        });
     }
 
     _cleanState() {

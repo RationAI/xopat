@@ -37,12 +37,17 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     setSourceOptions(options) {
         const params = new URLSearchParams(this._qArgs || '');
-        if (options.format) {
-            params.set('image_format', options.format);
-            if (options.format === 'tiff') {
-                this._dataFormat = 'rawTiff';
-            }
+        const availableChannels = this.data && this.data.channels;
+        const channelCount = Array.isArray(availableChannels) ? availableChannels.length : undefined;
+        const format =
+            options.format !== undefined
+                ? options.format
+                : (channelCount !== undefined && channelCount !== 3 && channelCount !== 4 ? 'tiff' : undefined);
+
+        if (format) {
+            params.set('image_format', format);
         }
+        this._dataFormat = format === 'tiff' ? 'rawTiff' : 'rasterBlob';
 
         if (options.quality) {
             params.set('image_quality', options.quality);
@@ -51,14 +56,14 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         const channelsOpt =
             options.channels !== undefined
                 ? options.channels
-                : options.image_channels;
-
-        const availableChannels = this.data && this.data.channels;
+                : (options.image_channels !== undefined ? options.image_channels : 'all');
 
         const addChannelParam = id => {
             if (id === undefined || id === null) return;
             params.append('image_channels', String(id));
         };
+
+        params.delete('image_channels');
 
         if (channelsOpt === 'all') {
             // Use all IDs from slide info if available

@@ -36,6 +36,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.closeButton;
         this.mainDiv;
         this.id = item.id;
+        this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
     }
 
     _createTab(item) {
@@ -59,7 +60,7 @@ class MultiPanelMenuTab extends MenuTab {
             extraClasses: { display: "display-none" },
             extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
             onClick: (event) => {
-                if (window.innerWidth < 600) {
+                if (window.innerWidth < this.maxMobileWidth) {
                     return;
                 }
                 this.togglePinned();
@@ -85,7 +86,7 @@ class MultiPanelMenuTab extends MenuTab {
             orientation: Button.ORIENTATION.HORIZONTAL,
             extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
-                if (window.innerWidth < 600) {
+                if (window.innerWidth < this.maxMobileWidth) {
                     return;
                 }
                 this.visibilityManager.toggle();
@@ -100,7 +101,7 @@ class MultiPanelMenuTab extends MenuTab {
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
             extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px; pointer-events: auto;" },
             onClick: () => {
-                if (window.innerWidth < 600) {
+                if (window.innerWidth < this.maxMobileWidth) {
                     return;
                 }
                 this.focus();

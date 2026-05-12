@@ -163,7 +163,10 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
             const mod = objectList[modId];
             if (mod["loaded"]) {
                 for (let requirement of mod["requires"]) {
-                    objectList[requirement]["loaded"] = true;
+                    if (objectList[requirement]) {
+                        objectList[requirement]["loaded"] = true;
+                    }
+                    // todo if error then support bubbling up & invalidation (maybe it happens in later stage)
                 }
             }
         }

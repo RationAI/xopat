@@ -624,7 +624,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return object;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         delete visualProperties["stroke"];
         delete visualProperties["fill"];
         delete visualProperties["strokeWidth"];
@@ -874,7 +874,9 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      */
     create(parameters, options) {
         const instance = new fabric.Ellipse({left: parameters.x, top: parameters.y});
-        return this.configure(instance, options);
+        const conf = this.configure(instance, options);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -888,7 +890,9 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         const copy = this.copyProperties(ofObject);
         copy.left = parameters.x;
         copy.top = parameters.y;
-        return new fabric.Ellipse(copy);
+        const conf = new fabric.Ellipse(copy);
+        this.renderAllControls(conf);
+        return conf;
     }
 
     /**
@@ -932,12 +936,12 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         // visualProperties.modeOutline = false;
         visualProperties.stroke = preset.color;
         // delete visualProperties.strokeWidth;
         // delete visualProperties.stroke;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     edit(theObject) {
@@ -1136,13 +1140,17 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     _polygonPositionHandler(dim, finalMatrix, fabricObject) {
         var x = (fabricObject.points[this.pointIndex].x - fabricObject.pathOffset.x),
             y = (fabricObject.points[this.pointIndex].y - fabricObject.pathOffset.y);
-        return fabric.util.transformPoint(
-            { x: x, y: y },
-            fabric.util.multiplyTransformMatrices(
-                fabricObject.canvas.viewportTransform,
-                fabricObject.calcTransformMatrix()
-            )
-        );
+        // While the polygon transitions between canvases (selection-edit
+        // doppelganger swap, history undo/redo) fabric may invoke setCoords
+        // on an object whose `.canvas` is briefly undefined. Skip the
+        // viewport-transform pre-multiply in that case; the corner
+        // positions get refreshed correctly on the next setCoords once the
+        // object is fully re-attached.
+        const canvas = fabricObject.canvas;
+        const transform = canvas
+            ? fabric.util.multiplyTransformMatrices(canvas.viewportTransform, fabricObject.calcTransformMatrix())
+            : fabricObject.calcTransformMatrix();
+        return fabric.util.transformPoint({ x: x, y: y }, transform);
     }
 
     _actionHandler(eventData, transform, x, y) {
@@ -1444,9 +1452,9 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2"];
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     /**
@@ -1731,9 +1739,9 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return instance;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;
-        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
     }
 
     getDescription(ofObject) {
@@ -1892,10 +1900,10 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         ofObject.forEachObject(o => {
             const factory = o._factory();
-            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties);
+            factory && factory.updateRendering(o, preset, visualProperties, defaultVisualProperties, targetCanvas);
         });
     }
 
@@ -2156,13 +2164,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         const pt = fabricObject.points[ringIdx][ptIdx];
         const x = (pt.x - fabricObject.pathOffset.x);
         const y = (pt.y - fabricObject.pathOffset.y);
-        return fabric.util.transformPoint(
-            { x, y },
-            fabric.util.multiplyTransformMatrices(
-                fabricObject.canvas.viewportTransform,
-                fabricObject.calcTransformMatrix()
-            )
-        );
+        const canvas = fabricObject.canvas;
+        const transform = canvas
+            ? fabric.util.multiplyTransformMatrices(canvas.viewportTransform, fabricObject.calcTransformMatrix())
+            : fabricObject.calcTransformMatrix();
+        return fabric.util.transformPoint({ x, y }, transform);
     }
 
     _multiActionHandler(eventData, transform, x, y) {

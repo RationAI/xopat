@@ -1,3 +1,5 @@
+import { PresetCard } from '../components/presetCard.mjs';
+
 const { div, span, input, select, option, button, i, b, a, br, h4 } = globalThis.van.tags;
 
 function iconNode(icon, extraClass = '', style = '') {
@@ -17,7 +19,6 @@ export const presetMethods = {
 
     updatePresetEvent() {
         this.updatePresetsHTML();
-        this.context.createPresetsCookieSnapshot();
     },
 
     _setContainerContent(target, ...children) {
@@ -50,20 +51,13 @@ export const presetMethods = {
         return [span(String(item))];
     },
 
-    _selectPresetCard(card, presetId) {
-        const parent = card?.parentElement;
-        if (!parent) return;
-
-        // Remove highlight from others
-        parent.querySelectorAll('.card').forEach(el => {
-            el.classList.remove('border-primary', 'ring-2', 'ring-primary/20');
-            el.classList.add('border-transparent');
-        });
-
-        // Add to current
-        card.classList.remove('border-transparent');
-        card.classList.add('border-primary', 'ring-2', 'ring-primary/20');
-        this._presetSelection = presetId;
+    _selectPresetCard(presetId, sourceCard) {
+        if (!this._presetCards) return;
+        const next = this._presetSelection === presetId ? undefined : presetId;
+        for (const [id, card] of this._presetCards) {
+            card.setSelected(id === next);
+        }
+        this._presetSelection = next;
     },
 
     updatePresetsMouseButtons() {
@@ -220,82 +214,43 @@ export const presetMethods = {
         const isSelected = preset.presetID === defaultPreset?.presetID;
         if (isSelected) this._presetSelection = preset.presetID;
 
-        // Main Card Container
-        const card = div({
-            'data-preset-id': preset.presetID,
-            class: `card card-compact m-1 bg-base-200 shadow-sm border-2 transition-all cursor-pointer hover:border-primary/50 ${isSelected ? 'border-primary ring-2 ring-primary/20' : 'border-transparent'}`,
-            style: 'width: 240px; display: inline-block' // Fixed width for grid consistency
+        const card = new PresetCard({
+            preset,
+            isSelected,
+            enableModify: this.enablePresetModify,
+            allowedFactories: this._allowedFactories,
+            t: (key) => this.t(key),
+            callbacks: {
+                getFactory: (id) => this.context.getAnnotationObjectFactory(id),
+                onSelect: (id) => this._selectPresetCard(id),
+                onDelete: (id, instance) => this._removePresetCard(id, instance),
+                onColorChange: (id, value) => this.updatePresetWith(id, 'color', value),
+                onFactoryChange: (id, value) => this.updatePresetWith(id, 'objectFactory', value),
+                onMetaChange: (id, key, value) => this.updatePresetWith(id, key, value),
+                onMetaDelete: (id, key, rowEl) => this._deleteMetaField(id, key, rowEl),
+                onMetaAdd: (id, name) => this._addMetaField(id, name),
+            },
         });
 
-        card.onclick = () => this._selectPresetCard(card, preset.presetID);
-
-        // Header: Title and Delete
-        const header = div({ class: 'flex items-center justify-between p-2 pb-0' },
-            this.enablePresetModify
-                ? this._metaFieldHtml(
-                    preset.presetID,
-                    'category',
-                    preset.meta.category || {value: ''},
-                    false,
-                    'input-xs font-bold bg-transparent border-none hover:bg-base-300 focus:bg-base-100 transition-colors'
-                )
-                : span({ class: 'text-sm font-bold px-2' }, preset.meta.category?.value || 'Class'),
-            this.enablePresetModify ? button({
-                class: 'btn btn-ghost btn-xs btn-square text-error',
-                onclick: (e) => { e.stopPropagation(); this.removePreset(e.currentTarget, preset.presetID); }
-            }, iconNode('fa-trash')) : null
-        );
-
-        // Body: Color and Factory
-        const body = div({ class: 'card-body p-3 pt-1 gap-2' },
-            div({ class: 'flex gap-2 items-center' },
-                // Color Picker (DaisyUI Styled)
-                div({ class: 'tooltip tooltip-top', 'data-tip': 'Color' },
-                    input({
-                        class: 'p-0 border-none bg-transparent cursor-pointer w-8 h-8 rounded-lg overflow-hidden',
-                        type: 'color',
-                        value: preset.color,
-                        disabled: !this.enablePresetModify,
-                        onchange: (e) => this.updatePresetWith(preset.presetID, 'color', e.target.value)
-                    })
-                ),
-                // Factory Select
-                div({ class: 'flex-1' }, this._createFactorySelect(preset))
-            ),
-
-            // Metadata Fields
-            div({ class: 'space-y-1' },
-                Object.entries(preset.meta)
-                    .filter(([key]) => key !== 'category')
-                    .map(([key, meta]) => this._metaFieldHtml(preset.presetID, key, meta, true, 'input-xs w-full'))
-            ),
-
-            // Add Metadata Button
-            this.enablePresetModify ? div({ class: 'join w-full mt-1' },
-                input({
-                    class: 'input input-xs input-bordered join-item flex-1',
-                    placeholder: 'New field...',
-                    onclick: (e) => e.stopPropagation()
-                }),
-                button({
-                    class: 'btn btn-xs btn-primary join-item',
-                    onclick: (e) => { e.stopPropagation(); this.insertPresetMeta(e.currentTarget, preset.presetID); }
-                }, 'Add')
-            ) : null
-        );
-
-        card.append(header, body);
-        return card;
+        if (!this._presetCards) this._presetCards = new Map();
+        this._presetCards.set(preset.presetID, card);
+        return card.create();
     },
 
     removePreset(buttonNode, presetId) {
         if (!this.enablePresetModify) return;
+        this._removePresetCard(presetId, undefined, buttonNode?.closest('[data-preset-id]'));
+    },
 
+    _removePresetCard(presetId, instance, fallbackEl) {
+        if (!this.enablePresetModify) return;
         const removed = this.context.presets.removePreset(presetId);
         if (removed) {
-            buttonNode.closest('[data-preset-id]')?.remove();
-            this.context.createPresetsCookieSnapshot();
+            const node = instance?.root || fallbackEl || this._presetCards?.get(presetId)?.root;
+            node?.remove();
+            this._presetCards?.delete(presetId);
             this._updateRightSideMenuPresetList();
+            this._updatePresetEmptyState();
             return;
         }
         if (removed === false) {
@@ -304,20 +259,53 @@ export const presetMethods = {
         }
     },
 
+    _addMetaField(presetId, name) {
+        if (!this.enablePresetModify) return null;
+        const key = this.context.presets.addCustomMeta(presetId, name, '');
+        if (!key) {
+            Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
+            return null;
+        }
+        return this._metaFieldHtml(presetId, key, { name, value: '' }, true, 'input-xs w-full');
+    },
+
+    _deleteMetaField(presetId, key, rowEl) {
+        if (!this.enablePresetModify) return;
+        if (this.context.presets.deleteCustomMeta(presetId, key)) {
+            rowEl?.remove();
+            return;
+        }
+        Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
+    },
+
+    _updatePresetEmptyState() {
+        if (!this._presetCardsContainer) return;
+        const empty = this._presetCardsContainer.parentElement?.querySelector?.('[data-preset-empty]');
+        if (!empty) return;
+        const hasAny = (this._presetCards?.size || 0) > 0;
+        empty.classList.toggle('hidden', hasAny);
+    },
+
     updatePresetWith(id, propName, value) {
         if (!this.enablePresetModify) return;
         const preset = this.context.presets.get(id);
         if (!preset) return;
 
         if (propName === 'objectFactory') {
-            preset.objectFactory = this.context.getAnnotationObjectFactory(value) || preset.objectFactory;
-        } else if (propName === 'color') {
-            preset.color = value;
-        } else if (preset.meta[propName]) {
-            preset.meta[propName].value = value;
+            // objectFactory stores a factory instance, not the id string —
+            // keep this path inline and raise preset-update manually so
+            // the IO pipeline still sees the change.
+            const next = this.context.getAnnotationObjectFactory(value);
+            if (next && next !== preset.objectFactory) {
+                preset.objectFactory = next;
+                this.context.raiseEvent('preset-update', { preset });
+            }
+        } else {
+            // PresetManager.updatePreset writes the property and raises
+            // preset-update only when something actually changed.
+            this.context.presets.updatePreset(id, { [propName]: value });
         }
 
-        this.context.createPresetsCookieSnapshot();
         this.updatePresetEvent();
     },
 
@@ -335,7 +323,6 @@ export const presetMethods = {
             const newNode = this._metaFieldHtml(presetId, key, { name, value: '' });
             buttonNode.parentElement.before(newNode);
             inputNode.value = '';
-            this.context.createPresetsCookieSnapshot();
             return;
         }
         Dialogs.show(`Failed to create new metadata field ${name}`, 2500, Dialogs.MSG_ERR);
@@ -345,14 +332,13 @@ export const presetMethods = {
         if (!this.enablePresetModify) return;
         if (this.context.presets.deleteCustomMeta(presetId, key)) {
             inputNode.parentElement.remove();
-            this.context.createPresetsCookieSnapshot();
             return;
         }
         Dialogs.show('Failed to delete meta field.', 2500, Dialogs.MSG_ERR);
     },
 
     _createPresetDialogHeader() {
-        return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-4 pb-2' },
+        return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 pb-2' },
             div({ class: 'flex items-center gap-2' },
                 iconNode('fa-tags', 'text-primary'),
                 h4({ class: 'text-lg font-bold' }, this.t('annotations.presets.dialogTitle'))
@@ -365,7 +351,7 @@ export const presetMethods = {
                     id: 'preset-filter-select',
                     class: 'input input-bordered input-sm w-full pl-9 focus:input-primary',
                     type: 'text',
-                    placeholder: 'Filter classes...',
+                    placeholder: this.t('annotations.presets.filterPlaceholder') || 'Filter classes...',
                     oninput: (e) => this._applyPresetFilter(e.target.value)
                 })
             )
@@ -375,37 +361,59 @@ export const presetMethods = {
     _createAddNewPresetButton(isLeftClick) {
         return div({
                 id: 'preset-add-new',
-                class: 'card card-compact w-[240px] m-1 bg-base-100 border-2 border-dashed border-base-content/20 hover:border-primary/50 hover:bg-base-200 transition-all cursor-pointer group flex items-center justify-center min-h-[180px]',
-                style: 'display: inline-block',
+                class: 'flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-base-content/20 bg-base-100 hover:border-primary/60 hover:bg-base-200 transition-all cursor-pointer group min-h-[64px] py-3',
                 onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
             },
-            div({ class: 'flex flex-col items-center gap-2 opacity-40 group-hover:opacity-100 transition-opacity' },
-                iconNode('fa-circle-plus', 'text-3xl'),
-                span({ class: 'font-bold text-sm uppercase tracking-widest pt-4' }, 'Add New Class')
+            iconNode('fa-circle-plus', 'text-base opacity-60 group-hover:opacity-100'),
+            span({ class: 'text-sm font-semibold uppercase tracking-wide opacity-60 group-hover:opacity-100' },
+                this.t('annotations.presets.addNew') || 'Add new class'
+            )
+        );
+    },
+
+    _createPresetEmptyState() {
+        return div({
+            'data-preset-empty': '',
+            class: 'flex flex-col items-center justify-center gap-2 py-6 text-center text-base-content/60 hidden'
+        },
+            iconNode('fa-tag', 'text-2xl opacity-60'),
+            span({ class: 'text-sm' },
+                this.t('annotations.presets.emptyState') || 'No classes yet. Use "Add new class" below to create one.'
+            )
+        );
+    },
+
+    _createPresetNoResults() {
+        return div({
+            'data-preset-no-results': '',
+            class: 'flex flex-col items-center justify-center gap-1 py-4 text-center text-base-content/60 hidden'
+        },
+            span({ class: 'text-sm' },
+                this.t('annotations.presets.noFilterResults') || 'No classes match your filter.'
             )
         );
     },
 
     _createPresetDialogFooter(allowSelect) {
-        const container = div({ class: 'flex justify-end items-center gap-3 w-full p-4 border-t border-base-300 bg-base-200/50' });
+        const container = div({ class: 'flex justify-end items-center gap-2 w-full pt-3 mt-1 border-t border-base-300' });
 
         if (allowSelect) {
             container.append(
                 button({
                     class: 'btn btn-outline btn-sm',
                     onclick: () => this._clickPresetSelect(false)
-                }, 'Use for Right Click'),
+                }, this.t('annotations.presets.useRight') || 'Use for Right Click'),
                 button({
                     class: 'btn btn-primary btn-sm',
                     onclick: () => this._clickPresetSelect(true)
-                }, 'Use for Left Click')
+                }, this.t('annotations.presets.useLeft') || 'Use for Left Click')
             );
         } else {
             container.append(
                 button({
-                    class: 'btn btn-primary px-8',
-                    onclick: () => this._presetDialog?.close?.()
-                }, 'Finish Editing')
+                    class: 'btn btn-primary btn-sm px-6',
+                    onclick: () => this._closePresetDialog()
+                }, this.t('annotations.presets.finishEditing') || 'Finish Editing')
             );
         }
         return container;
@@ -413,13 +421,24 @@ export const presetMethods = {
 
     _applyPresetFilter(searchValue = '') {
         const search = String(searchValue || '').toLowerCase();
-        this._presetCardsContainer?.querySelectorAll?.('.preset-option')?.forEach((el) => {
-            const meta = this.context.presets._presets[el.dataset.presetId]?.meta || {};
+        const cards = this._presetCardsContainer?.querySelectorAll?.('[data-preset-id]');
+        if (!cards) return;
+
+        let visible = 0;
+        cards.forEach((el) => {
+            const meta = this.context.presets.get(el.dataset.presetId)?.meta || {};
             const value = String(meta.category?.value || '').toLowerCase();
             const collection = String(meta.collection?.name || '').toLowerCase();
-            const shouldShow = !search || value.includes(search) || ('unknown'.includes(search) && !value) || collection.includes(search);
+            const shouldShow = !search
+                || value.includes(search)
+                || ('unknown'.includes(search) && !value)
+                || collection.includes(search);
             el.classList.toggle('hidden', !shouldShow);
+            if (shouldShow) visible++;
         });
+
+        const hint = this._presetCardsContainer.parentElement?.querySelector?.('[data-preset-no-results]');
+        if (hint) hint.classList.toggle('hidden', visible > 0 || cards.length === 0);
     },
 
     showPresets(isLeftClick) {
@@ -427,15 +446,27 @@ export const presetMethods = {
             Dialogs.show('Annotations are disabled. Enable them first.', 2500, Dialogs.MSG_WARN);
             return;
         }
+        // Close any prior dialog first — _closePresetDialog clears the
+        // card map and container refs, so it must run before we (re)build them.
+        this._closePresetDialog();
+
         const allowSelect = isLeftClick !== undefined;
         this._presetSelection = undefined;
+        this._presetCards = new Map();
 
-        const currentPreset = this.context.getPreset(isLeftClick) || this.context.presets.get();
-        const body = div({ class: 'w-full max-w-5xl' });
-        const cardsContainer = div({ });
+        const currentPreset = allowSelect
+            ? (this.context.getPreset(isLeftClick) || this.context.presets.get())
+            : undefined;
+
+        const cardsContainer = div({
+            class: 'flex flex-col gap-1 max-h-[60vh] overflow-y-auto pr-1'
+        });
         this._presetCardsContainer = cardsContainer;
 
-        const event = { presets: Object.values(this.context.presets._presets) };
+        const emptyState = this._createPresetEmptyState();
+        const noResults = this._createPresetNoResults();
+
+        const event = { presets: Array.from(this.context.presets._presets.values()) };
         this.raiseEvent('render-annotation-presets', event);
 
         for (const item of event.presets) {
@@ -447,25 +478,46 @@ export const presetMethods = {
             }
         }
 
-        if (this.enablePresetModify) {
-            cardsContainer.appendChild(this._createAddNewPresetButton(isLeftClick));
-        }
+        if (this._presetCards.size === 0) emptyState.classList.remove('hidden');
 
-        body.appendChild(cardsContainer);
+        const addNewWrapper = this.enablePresetModify
+            ? div({ class: 'mt-3' }, this._createAddNewPresetButton(isLeftClick))
+            : null;
+
+        const body = div({ class: 'flex flex-col gap-2' },
+            emptyState,
+            cardsContainer,
+            noResults,
+            addNewWrapper
+        );
 
         const header = this._createPresetDialogHeader();
         const footer = this._createPresetDialogFooter(allowSelect);
 
-        this._closePresetDialog();
-        this._presetDialog = Dialogs.showCustom('preset-modify-dialog', header, body, footer, {
+        const modal = new UI.Modal({
+            header,
+            body,
+            footer,
+            width: 'min(36rem, 92vw)',
             allowResize: true,
-            width: 'max-w-6xl'
+            allowClose: true,
+            isBlocking: true,
         });
+        modal.create().classList.add('preset-modify-dialog');
+        document.body.appendChild(modal.root);
+        modal.open();
+        this._presetDialog = modal;
     },
 
     _closePresetDialog() {
-        this._presetDialog?.close?.();
+        const dialog = this._presetDialog;
+        if (dialog) {
+            dialog.close?.();
+            dialog.root?.remove?.();
+        }
         this._presetDialog = null;
+        this._presetCards = null;
+        this._presetCardsContainer = null;
     },
 
     _clickPresetSelect(isLeft, presetID = undefined) {
@@ -560,8 +612,12 @@ export const presetMethods = {
     createNewPreset(buttonNode, isLeftClick) {
         const id = this.context.presets.addPreset().presetID;
         const newNode = this.getPresetHTMLById(id, isLeftClick);
-        buttonNode.before(newNode);
-        this.context.createPresetsCookieSnapshot();
+        if (this._presetCardsContainer) {
+            this._presetCardsContainer.appendChild(newNode);
+        } else {
+            buttonNode.before(newNode);
+        }
+        this._updatePresetEmptyState();
         this._updateRightSideMenuPresetList();
     },
 

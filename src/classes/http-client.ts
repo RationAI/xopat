@@ -140,7 +140,10 @@ export class HttpClient {
             throw new Error("HttpClient: baseURL or proxy alias is required");
         }
 
-        this.baseURL = base.replace(/\/$/, "");
+        // Collapse accidental `//` (e.g. trailing-slash domain + leading-
+        // slash path) so server-side route matching like `pathname.
+        // startsWith("/proxy/")` doesn't silently fail. Preserves `://`.
+        this.baseURL = base.replace(/([^:])\/{2,}/g, "$1/").replace(/\/$/, "");
         this.timeoutMs = timeoutMs;
         this.maxRetries = Math.max(0, maxRetries);
         this.secretStore = XOpatUser.instance();

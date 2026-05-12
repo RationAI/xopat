@@ -217,7 +217,7 @@ function initXOpatUI() {
                     clbck(opts.selected);
                     window.DropDown._toggle(undefined, undefined);
                 });
-                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0" 
+                const icon = opts.icon ? `<span class="fa-auto ${opts.icon} pl-0"
 style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick=""></span>`
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
@@ -466,12 +466,6 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 }
             },
         },
-
-        /**
-         * Status bar
-         * @namespace USER_INTERFACE.Status
-         */
-        Status: new UI.StatusBar(),
 
         /**
          * UI Fullscreen Loading
@@ -724,8 +718,6 @@ ${label}
             }));
         }, 200);
     });
-    // todo better way, some layout api
-    USER_INTERFACE.Status.attachTo(document.getElementById('osd'));
     // todo: maybe allow contextual override (based on http client)
     window.XOpatSessionRecovery = {
         isReloading: false,

@@ -2,6 +2,7 @@ import type {ScriptApiMetadata} from "./abstract-types";
 import type {ApplicationScriptApi, GlobalContextInfo, ViewerContextId, ScriptProjectInfo} from "./app-api.scripts";
 
 import {XOpatScriptingApi} from "./abstract-api";
+import { ViewerSelectionState } from "../app/viewer-selection-state";
 
 export class XOpatApplicationScriptApi extends XOpatScriptingApi implements ApplicationScriptApi {
     static ScriptApiMetadata: ScriptApiMetadata<XOpatApplicationScriptApi> = {
@@ -33,9 +34,10 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
             let serverPath: string | null = null;
 
             const firstItem =
-                viewer.world && viewer.world.getItemCount() > 0
+                viewer.scalebar?.getReferencedTiledImage?.() ||
+                (viewer.world && viewer.world.getItemCount() > 0
                     ? viewer.world.getItemAt(0)
-                    : null;
+                    : null);
 
             const bgConfig = firstItem?.getConfig?.("background");
             const dataRef = bgConfig?.dataReference;
@@ -69,7 +71,11 @@ export class XOpatApplicationScriptApi extends XOpatScriptingApi implements Appl
             }
 
             const activeVizIndex =
-                APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)?.[0] ?? null;
+                ViewerSelectionState.getViewerSelectionIndex(
+                    viewer,
+                    "activeVisualizationIndex",
+                    APPLICATION_CONTEXT
+                ) ?? null;
             const activeViz =
                 activeVizIndex != null ? config?.visualizations?.[activeVizIndex] : null;
 

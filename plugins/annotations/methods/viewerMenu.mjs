@@ -114,7 +114,8 @@ export const viewerMenuMethods = {
                 searchPlaceholder: this.t('annotations.filters.searchPlaceholder'),
                 emptyText: this.t('annotations.filters.noneAvailable'),
                 options: available[type] || [],
-                selected: activeByType.get(type)?.values || []
+                selected: activeByType.get(type)?.values || [],
+                maxVisible: 20
             });
             wrapper.appendChild(select.create());
             return { wrapper, select };
@@ -374,6 +375,114 @@ export const viewerMenuMethods = {
         });
     },
 
+    /**
+     * Build the unified action list shown by the canvas right-click menu and
+     * the annotation board's "..." popover. Both surfaces converge on the same
+     * structure so users see one mental model.
+     *
+     * @param {fabric.Object|null} active currently-targeted annotation; null when there is none
+     * @param {OSDAnnotations.FabricWrapper} fabric wrapper that owns `active` (or the active viewer's wrapper when there's no target)
+     * @param {Object} opts
+     * @param {Event}   opts.originalEvent original DOM event (for paste-position math)
+     * @param {boolean} [opts.includePresetSelection=true]
+     * @param {boolean} [opts.includeMarkAsPrivate=true]
+     * @param {boolean} [opts.includeMoveToLayer=true]
+     */
+    _buildAnnotationContextActions(active, fabric, opts = {}) {
+        const {
+            originalEvent,
+            includePresetSelection = true,
+            includeMarkAsPrivate = true,
+            includeMoveToLayer = true,
+        } = opts;
+        const wrapped = { originalEvent };
+        const actions = [];
+
+        // Cascading flyouts are only rendered when `window.ContextMenu` is
+        // available (van.js component bundled into ui/index.js). Until then,
+        // emit a flat list with section header so the legacy
+        // `window.DropDown` fallback still shows the items.
+        const supportsFlyouts = typeof window !== 'undefined' && !!window.ContextMenu?.open;
+
+        if (includePresetSelection) {
+            const handler = active
+                ? this._clickAnnotationChangePreset.bind(this, active)
+                : this._clickPresetSelect.bind(this, true);
+            const parentTitle = active ? 'Change annotation to' : 'Select preset for left click';
+            const presetItems = [];
+            this.context.presets.foreach((preset) => {
+                const category = preset.getMetaValue('category') || 'unknown';
+                const icon = preset.objectFactory.getIcon();
+                const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
+                presetItems.push({
+                    icon,
+                    iconCss: `color: ${preset.color};`,
+                    containerCss,
+                    title: category,
+                    action: () => {
+                        this._presetSelection = preset.presetID;
+                        handler();
+                    }
+                });
+            });
+            if (presetItems.length) {
+                if (supportsFlyouts) {
+                    actions.push({ title: parentTitle, icon: 'fa-tag', children: presetItems });
+                } else {
+                    actions.push({ title: `${parentTitle}:` });
+                    actions.push(...presetItems);
+                }
+            }
+        }
+
+        if (active && includeMarkAsPrivate) {
+            const props = this._getAnnotationProps(active);
+            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+            actions.push({ title: 'Modify annotation:' });
+            actions.push({
+                title: props.private ? 'Unmark as private' : 'Mark as private',
+                icon: props.private ? 'visibility' : 'visibility_lock',
+                action: () => handlerMarkPrivate()
+            });
+        }
+
+        if (active && includeMoveToLayer && typeof fabric?.setAnnotationLayer === 'function') {
+            const layers = fabric.getAllLayers?.() || [];
+            const layerItems = [{
+                title: '(no layer)',
+                icon: 'fa-layer-group',
+                action: () => fabric.setAnnotationLayer(active, null),
+            }];
+            for (const layer of layers) {
+                layerItems.push({
+                    title: layer.name || `Layer ${layer.id}`,
+                    icon: 'fa-layer-group',
+                    action: () => fabric.setAnnotationLayer(active, layer.id),
+                });
+            }
+            if (supportsFlyouts) {
+                actions.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
+            } else {
+                actions.push({ title: 'Move to layer:' });
+                actions.push(...layerItems);
+            }
+        }
+
+        actions.push({ title: 'Actions:' });
+        const mousePos = this._getMousePosition(wrapped);
+        const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+        actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
+        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+        actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
+        const canPaste = this._canPasteAnnotation(wrapped);
+        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
+        actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
+        const handlerDelete = this._deleteAnnotation.bind(this, active);
+        actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
+
+        return actions;
+    },
+
     _bindViewerFabricEvents(viewerOrId) {
         const viewerId = this._resolveViewerId(viewerOrId);
         if (!viewerId) return;
@@ -424,62 +533,42 @@ export const viewerMenuMethods = {
             this._refreshAllAuthorLists();
         };
 
-        const dropDown = (e) => {
-            if (this.context.presets.right || (Date.now() - e.pressTime) > 250) return;
-
-            let actions = [];
-            let handler;
-            const active = this.context.fabric.canvas.findTarget(e.originalEvent);
-            if (active) {
-                this.context.fabric.canvas.setActiveObject(active);
-                this.context.fabric.canvas.renderAll();
-                actions.push({ title: 'Change annotation to:' });
-                handler = this._clickAnnotationChangePreset.bind(this, active);
-            } else {
-                actions.push({ title: 'Select preset for left click:' });
-                handler = this._clickPresetSelect.bind(this, true);
+        // Canvas right-click menu provider. Registered with the global
+        // CanvasContextMenu registry so all providers (annotations, playground,
+        // future plugins) aggregate into a single DropDown opened by loader.ts.
+        // Returns null to opt out (drawing-with-right-click mode, long-press drag,
+        // or wrong viewer in a multi-viewport layout).
+        const contextMenuProviderId = `annotations-${viewerId}`;
+        const contextMenuProvider = (ctx) => {
+            if (ctx.viewer?.uniqueId !== viewerId) return null;
+            if (this.context.disabledInteraction) return null;
+            // Right-click drawing/drag suppressions only apply when the menu
+            // was actually opened by a right-click. Callers that supply
+            // `ctx.active` (e.g. the annotation row's "..." button) invoked
+            // the menu explicitly and must not be silenced by these rules.
+            if (!ctx.active) {
+                if (this.context.presets.right) return null;
+                // Suppress on right-click drag: cursor.mouseTime is set on press by
+                // annotations-canvas.js handleRightClickDown and not reset on the
+                // typical release path, so press-duration is still measurable here.
+                const cursor = this.context.cursor;
+                if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return null;
             }
 
-            this.context.presets.foreach((preset) => {
-                const category = preset.getMetaValue('category') || 'unknown';
-                const icon = preset.objectFactory.getIcon();
-                const containerCss = this.isUnpreferredPreset(preset.presetID) && 'opacity-50';
-                actions.push({
-                    icon,
-                    iconCss: `color: ${preset.color};`,
-                    containerCss,
-                    title: category,
-                    action: () => {
-                        this._presetSelection = preset.presetID;
-                        handler();
-                    }
-                });
+            // Prefer a pre-resolved target (set by callers that open the menu
+            // from a non-canvas surface, e.g. the annotation row's "..." button)
+            // before falling back to hit-testing the right-click event.
+            const active = ctx.active ?? fabric.canvas.findTarget(ctx.event);
+            if (active && fabric.canvas.getActiveObject?.() !== active) {
+                fabric.canvas.setActiveObject(active);
+                fabric.canvas.renderAll();
+            }
+            return this._buildAnnotationContextActions(active, fabric, {
+                originalEvent: ctx.event,
+                includeMarkAsPrivate: true,
+                includeMoveToLayer: true,
+                includePresetSelection: true,
             });
-
-            if (active) {
-                const props = this._getAnnotationProps(active);
-                const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
-                actions.push({ title: 'Modify annotation:' });
-                actions.push({
-                    title: props.private ? 'Unmark as private' : 'Mark as private',
-                    icon: props.private ? 'visibility' : 'visibility_lock',
-                    action: () => handlerMarkPrivate()
-                });
-            }
-
-            actions.push({ title: 'Actions:' });
-            const mousePos = this._getMousePosition(e);
-            const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
-            actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
-            const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
-            actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
-            const canPaste = this._canPasteAnnotation(e);
-            const handlerPaste = this._pasteAnnotation.bind(this, e);
-            actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
-            const handlerDelete = this._deleteAnnotation.bind(this, active);
-            actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
-
-            USER_INTERFACE.DropDown.open(e.originalEvent, actions);
         };
 
         state._fabricEventBindings = {
@@ -488,7 +577,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
-            dropDown
+            contextMenuProviderId
         };
 
         fabric.addHandler('annotation-selection-changed', annotationSelectionChanged);
@@ -504,7 +593,8 @@ export const viewerMenuMethods = {
         fabric.addHandler('layer-added', sideRefresh);
         fabric.addHandler('layer-removed', sideRefresh);
 
-        fabric.addHandler('nonprimary-release-not-handled', dropDown);
+        // Higher priority than the playground (10) so annotation entries appear first.
+        window.CanvasContextMenu?.register(contextMenuProviderId, contextMenuProvider, 20);
     },
 
     _unbindViewerFabricEvents(viewerOrId) {
@@ -521,7 +611,7 @@ export const viewerMenuMethods = {
             layerSelectionChanged,
             activeLayerChanged,
             sideRefresh,
-            dropDown
+            contextMenuProviderId
         } = bindings;
 
         fabric.removeHandler('annotation-selection-changed', annotationSelectionChanged);
@@ -535,7 +625,7 @@ export const viewerMenuMethods = {
         fabric.removeHandler('layer-added', sideRefresh);
         fabric.removeHandler('layer-removed', sideRefresh);
 
-        fabric.removeHandler('nonprimary-release-not-handled', dropDown);
+        if (contextMenuProviderId) window.CanvasContextMenu?.unregister(contextMenuProviderId);
 
         delete state._fabricEventBindings;
     },

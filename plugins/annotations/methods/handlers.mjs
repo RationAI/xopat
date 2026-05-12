@@ -47,19 +47,16 @@ export const handlerMethods = {
         });
 
         this.context.addHandler('preset-delete', () => {
-            this.context.createPresetsCookieSnapshot();
             this.updatePresetEvent?.();
             this._refreshAllPresetLists?.();
         });
 
         this.context.addHandler('preset-meta-add', () => {
-            this.context.createPresetsCookieSnapshot();
             this.updatePresetEvent?.();
             this._refreshAllPresetLists?.();
         });
 
         this.context.addHandler('preset-meta-remove', () => {
-            this.context.createPresetsCookieSnapshot();
             this.updatePresetEvent?.();
             this._refreshAllPresetLists?.();
         });

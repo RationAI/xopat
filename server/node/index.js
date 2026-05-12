@@ -540,7 +540,13 @@ ${fs.readFileSync(
 const server = http.createServer(async (req, res) => {
     try {
         const protocol = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http';
-        const urlObj = new URL(`${protocol}://${req.headers.host}${req.url}`);
+        const host = req.headers.host || 'localhost';
+
+        // Ensure request target starts with exactly one leading slash.
+        // This prevents paths like "//foo" becoming "http://host//foo".
+        let requestPath = req.url || '/';
+        requestPath = '/' + requestPath.replace(/^\/+/, '');
+        const urlObj = new URL(requestPath, `${protocol}://${host}`);
 
         if (urlObj.pathname.startsWith("/health")) {
             res.writeHead(200);

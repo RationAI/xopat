@@ -20,7 +20,84 @@ export const globalPluginWindowMethods = {
         this.context.addHandler('author-annotation-styling-toggle', (e) => this._toggleStrokeStyling(e.enable));
         this.context.addHandler('comments-control-clicked', () => this.commentsToggleWindow());
         this.context.addHandler('annotation-updated-comment', () => this._renderComments());
+        this.context.addHandler('annotation-more-clicked', (e) => {
+            if (!e?.object) return;
+            this._openAnnotationMoreMenu(e.object, e.clientX, e.clientY);
+        });
         this._toggleStrokeStyling(this.context.strokeStyling);
+    },
+
+    /**
+     * Resolve the FabricWrapper instance that owns a given annotation object,
+     * or null when none does (e.g. the object was just deleted).
+     */
+    _wrapperForAnnotation(object) {
+        if (!object || !OSDAnnotations.FabricWrapper?.instances) return null;
+        for (const wrapper of OSDAnnotations.FabricWrapper.instances()) {
+            if (wrapper?.canvas?._objects?.indexOf(object) !== -1) return wrapper;
+        }
+        return null;
+    },
+
+    /**
+     * Popover menu opened from the annotation toolbar's "..." control.
+     * Aggregates items from the same `CanvasContextMenu` providers that feed
+     * the canvas right-click menu (annotations, measurements, playground, ...)
+     * so the two surfaces stay in lock-step. "Mark as private" is filtered
+     * out here because the annotation row already exposes that toggle inline
+     * via its own control.
+     */
+    _openAnnotationMoreMenu(object, clientX, clientY) {
+        const wrapper = this._wrapperForAnnotation(object);
+        if (!wrapper) return;
+
+        // Make the active selection match the annotation the user clicked on
+        // so handlers (Copy/Cut/Delete/preset change) operate on it.
+        if (wrapper.canvas?.setActiveObject) {
+            wrapper.canvas.setActiveObject(object);
+            wrapper.canvas.renderAll?.();
+        }
+
+        const px = clientX ?? 100;
+        const py = clientY ?? 100;
+        const syntheticEvent = {
+            preventDefault: () => {},
+            pageX: px, pageY: py,
+            clientX: px, clientY: py,
+            x: px, y: py,
+        };
+
+        const ctx = {
+            viewer: wrapper.viewer,
+            event: syntheticEvent,
+            osdPosition: { x: 0, y: 0 },
+            pixelPosition: { x: 0, y: 0 },
+            active: object,
+        };
+
+        const registry = window.CanvasContextMenu;
+        const items = registry?.collect ? registry.collect(ctx) : [];
+        const filtered = items.filter((item) => {
+            const t = item?.title;
+            return t !== 'Mark as private' && t !== 'Unmark as private' && t !== 'Modify annotation:';
+        });
+        if (!filtered.length) return;
+
+        // Prefer the van.js-based `ContextMenu` (cascading flyouts for items
+        // with `children`); fall back to the legacy `window.DropDown` until
+        // the UI bundle has been rebuilt to expose the new component.
+        // The setTimeout(0) defers past the document-level click listener
+        // that `window.DropDown` installs at init: the native click on the
+        // canvas (which became this fabric onClick via OSD's mouseup → click
+        // sequence) would otherwise bubble to that listener and close the
+        // menu the moment it opened. The new ContextMenu uses
+        // FloatingManager which registers its outside-click listener in a
+        // microtask, so the deferral is harmless either way.
+        setTimeout(() => {
+            const ctxMenu = window.ContextMenu;
+            if (ctxMenu?.open) ctxMenu.open(syntheticEvent, filtered);
+            else window.DropDown?.open(syntheticEvent, filtered);
+        }, 0);
     },
 
     _initGlobalPluginWindow() {
@@ -120,7 +197,7 @@ export const globalPluginWindowMethods = {
             this._shapeChoice = new ui.ToolbarChoiceGroup({
                 headerMode: 'selectOrExpand',
                 itemID: 'cg-shapes',
-                defaultSelected: factories[0]?.id || 'none',
+                defaultSelected: factories[0]?.factoryID || 'none',
                 onChange: (factoryId) => {
                     this.switchModeActive(modes.CUSTOM.getId(), factoryId, true);
                 }
@@ -257,8 +334,6 @@ export const globalPluginWindowMethods = {
                 } else {
                     this._gModes.setSelected(`${modeId}`, false);
                 }
-
-                USER_INTERFACE.Status.show(mode.getDescription());
             };
 
             this.context.addHandler('mode-changed', modeChangeHandler);

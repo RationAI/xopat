@@ -220,7 +220,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         return newObject;
     }
 
-    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
+    updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true; // we are always transparent
         ofObject.set({ opacity: 1 });
 
@@ -228,8 +228,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             const lineFactory = this._context.getAnnotationObjectFactory('line');
             const textFactory = this._context.getAnnotationObjectFactory('text');
 
-            lineFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties);
-            textFactory.updateRendering(ofObject._objects[1], preset, visualProperties, defaultVisualProperties);
+            lineFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties, targetCanvas);
+            textFactory.updateRendering(ofObject._objects[1], preset, visualProperties, defaultVisualProperties, targetCanvas);
         }
     }
 
@@ -490,9 +490,6 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 //         return "image";
 //     }
 //
-//     fabricStructure() {
-//         return "image";
-//     }
 //
 //     getDescription(ofObject) {
 //         return `Image [${Math.round(ofObject.left)}, ${Math.round(ofObject.top)}]`;

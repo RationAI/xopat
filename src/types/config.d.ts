@@ -13,6 +13,14 @@ type XOpatClientConfig = {
     js_cookie_domain?: string | null;
     secureMode?: boolean | null;
     production?: boolean | null;
+    /**
+     * Admin-controlled IO pipeline configuration. Server-injected, NOT
+     * URL-modifiable (lives in ENV, not in `params`). Carries bindings,
+     * disabled owners/capabilities, and per-sink override slots. See
+     * `src/types/io.d.ts` for the `IOConfigBlock` shape and
+     * `src/IO_PIPELINE.md` for the full design.
+     */
+    io?: IOConfigBlock;
 };
 
 type ViewportSetup = {
@@ -47,6 +55,11 @@ type XOpatSetup = {
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    valueInspectorEnabled?: boolean | null;
+    visualizationInspectorEnabled?: boolean | null;
+    visualizationInspectorMode?: string | null;
+    visualizationInspectorRadiusPx?: number | null;
+    visualizationInspectorLensZoom?: number | null;
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
@@ -74,6 +87,7 @@ type XOpatServerProxy = {
 };
 
 type XOpatServerConfig = {
+    devMode: boolean | null | undefined;
     name: string | null;
     supportsPost: boolean;
     secure?: {

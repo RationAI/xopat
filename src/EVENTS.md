@@ -117,10 +117,21 @@ and ignores OpenSeadragon key event.
 #### `key-up` | e: [KeyboardEvent](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent) + `{focusCanvas: Viewer}`
 Fired when user releases a key. Similar as above.
 
-#### `export-data` | e: `{}`
-Submit your serialized data to the export event. Direct use is not advised. You should use the data storage instance you
-retrieve from ``initPostIO(...)`` call to set your data if you didn't do this already when this event fires.
-Note that this can be both viewer independent and viewer-contextualized export, see the docs on initPostIO.
+#### `io:refused` | e: `{ ctx: IOContext, result: IOResult }`
+Mirrored from `IO_PIPELINE` whenever any IO call (bundle export/import or per-element CRUD) is refused — either by an owner's `validate` hook, by a sink that tried and returned `{ refused: true }`, or because of a thrown error. The pipeline already shows a user-facing toast for refusals carrying `userMessage`; this event lets other modules observe and react (e.g. roll back local state). See [`IO_PIPELINE.md`](IO_PIPELINE.md).
+
+> `ctx.meta.fromUndo` / `ctx.meta.fromRedo` are reserved keys the auto-history layer sets when replaying a history entry. Subscribers that count refusals "per user action" should filter these out.
+
+#### `io:rejected-by-accepts` | e: `{ ctx: IOContext, sinkId: string }`
+A bound sink's `accepts(ctx)` returned `false` — it opted out of handling this context before attempting. Distinct from `io:refused` so observers can distinguish "sink said this isn't for me" from "sink tried and failed". Useful for diagnostics; on its own it is not necessarily an error (the admin may have intentionally bound a context-filtering sink plus a fallback in the same array). When *every* bound sink opts out and no other write happened, `io:fully-refused` follows.
+
+#### `io:fully-refused` | e: `{ ctx: IOContext, results: IOResult[] }`
+Every bound sink for one dispatch failed (refused, threw, or declined via `accepts`). The data was silently dropped. Almost always a misconfigured `ENV.client.io.bindings` — the admin bound the owner+capability to sinks that none accepted at runtime. The console warns automatically; subscribe to this event to surface a richer admin notification.
+
+#### `io:conflict` | e: `{ ctx: IOContext, sinkIds: string[] }`
+Reserved for the case when two or more registered sinks both `accepts(ctx)` for the same operation. Not yet emitted by the current implementation (mirror semantics make this expected and not a conflict).
+
+> Bundle export is driven by `IO_PIPELINE.flushBundleExport()` (called by `serializeApp` and the user-facing Export action). Plugins/modules declare bundle hooks via `this.initIO({ exportBundle, importBundle })`. See [`src/IO_PIPELINE.md`](IO_PIPELINE.md).
 
 ## Viewer-Local Events: ``VIEWER/viewer``
 The events below only extend available events in OpenSeadragon. For other input events see the OpenSeadragon documentation.

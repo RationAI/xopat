@@ -2,6 +2,8 @@
 
 The complex functionality will be described later. This plugin allows to create, edit and export annotations.
 
+> **Migrating from the legacy `annotation-before-*` event protocol?** See [`MIGRATION.md`](MIGRATION.md). Per-action veto, per-item server sync, and undo/redo all flow through xOpat's generic IO pipeline now ([`src/IO_PIPELINE.md`](../../src/IO_PIPELINE.md)).
+
 
 ### Formats
 The native format used comes from the underlying library and available features. To support multiple formats, 

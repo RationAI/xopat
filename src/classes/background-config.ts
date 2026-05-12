@@ -63,7 +63,7 @@ export class BackgroundConfig implements BackgroundItem {
         });
     }
 
-    static from(config: BackgroundItem, registerAsSource = true): BackgroundConfig {
+    static from(config: BackgroundItem, registerAsSource = true, reuseExisting = true): BackgroundConfig {
         if (!config) throw new Error('config must be defined');
 
         function fixRef(ref: any) {
@@ -84,7 +84,9 @@ export class BackgroundConfig implements BackgroundItem {
 
         config.id = BackgroundConfig.processId(config.id, config);
         const exists = _CONF_REGISTRY.has(config.id);
-        const instance = exists ? _CONF_REGISTRY.get(config.id) : new BackgroundConfig(config, _CONF_GUARD);
+        const instance = reuseExisting && exists
+            ? _CONF_REGISTRY.get(config.id)
+            : new BackgroundConfig(config, _CONF_GUARD);
 
         // If this background uses a literal DataID (StandaloneBackgroundItem),
         // push it into the global data list so it can be reused.
@@ -102,7 +104,7 @@ export class BackgroundConfig implements BackgroundItem {
             }
         }
 
-        if (!exists) _CONF_REGISTRY.set(instance.id, instance);
+        if (reuseExisting && !exists) _CONF_REGISTRY.set(instance.id, instance);
         return instance;
     }
 

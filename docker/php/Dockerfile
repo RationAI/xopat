@@ -42,11 +42,6 @@ RUN rm -f /bin/sh && ln -s /bin/bash /bin/sh \
 # VIEWER: BUILD###
 ##################
 FROM viewer-build-deps AS viewer-build
-RUN cd /tmp \
-    && git clone https://github.com/RationAI/openseadragon.git \
-    && cd openseadragon \
-    && npm ci
-
 ENV XO_REPO_ROOT=/tmp/xopat
 COPY . /tmp/xopat
 RUN cd /tmp/xopat && npm ci && npm run build
@@ -180,6 +175,5 @@ COPY --from=viewer-build /tmp/xopat/plugins/ /var/www/html/xopat/plugins
 COPY --from=viewer-build /tmp/xopat/modules/ /var/www/html/xopat/modules
 COPY --from=viewer-build /tmp/xopat/ui/ /var/www/html/xopat/ui
 COPY --from=viewer-build /tmp/xopat/env/ /var/www/html/xopat/env
-COPY --from=viewer-build /tmp/openseadragon/build /var/www/html/xopat/openseadragon/build
 
 LABEL org.opencontainers.image.source="https://github.com/rationAI/xopat"

@@ -98,7 +98,7 @@ We will use [R] for required and [O] for optional parameters.
     - [O]`customBlending` - allow to program custom blending, default `false`
     - [O]`debugMode` - run in debug mode if `true`, default `false`
     - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
-    - [O]`statusBar` - whether to show user action and system status hints, default `true`
+    - [O]`valueInspectorEnabled` - enable the hover value inspector, default `false`
     - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can also be an array of indices for multi-view mode
     - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can also be an array for multi-view mode
     - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
@@ -122,7 +122,7 @@ We will use [R] for required and [O] for optional parameters.
 
 - [O]`background` - an array of objects, each defines what images compose the **image** group
     - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
-    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional)
+    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional). When omitted, the background renders the data through an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced — the background renders only what the `shaders` array says. Tools that round-trip a session (canonical-scene.ts) materialize this implicit entry as `[{ type: "identity", … }]` when the user edits it, so the change persists.
     - [O]`id` - unique ID for the background, created automatically from data path if not defined
     - [O]`lossless` - deprecated
     - [O]`protocol` - deprecated, moved to `DataOverride`
@@ -243,6 +243,54 @@ For CORE UI, look into `../ui/` folder.``user_interface.js`` serves as definitio
 these definitions to CORE UI services.
 
 Many features are available through ``modules`` that implement additional important functionality.
+
+### Viewer Open API
+The runtime opening pipeline is class-based and lives under `src/classes/app/`. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
+
+- `APPLICATION_CONTEXT.openViewerWith(data?, background?, visualizations?, bgSpec?, vizSpec?, opts?)`
+  - Main transaction entrypoint.
+  - Can replace or merge session `data` / `background`.
+  - Can create additional viewers when multiple backgrounds are targeted.
+  - `vizSpec` arrays may contain explicit `undefined` entries to mean "no visualization for this viewer"; omitted `vizSpec` still means "keep the current selection".
+  - Rebinds navigator title, scalebar reference, measurements, visualization menu, history, and synthetic open events.
+- `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, { backgroundIndex?, visualizationIndex? }, opts?)`
+  - Use when one existing viewer should switch background and/or visualization without rebuilding unrelated viewers.
+  - Passing `visualizationIndex: null` clears the active visualization for that viewer.
+  - The method delegates to the same open pipeline and therefore keeps history/session synchronization consistent.
+- `APPLICATION_CONTEXT.replaceVisualizations(visualizations, newData?, activeVizIndex?)`
+  - Replaces the session visualization list while preserving the rest of the session.
+  - Preferred over the older `updateVisualization(...)` name.
+
+The pipeline options are ambiently typed as `ViewerOpenOptions`, and the per-viewer patch object as `ViewerSelectionPatch`, so plugins/modules can use them without importing from core files.
+
+### Canonical Scene
+
+`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state. Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, and draft persistence all go through it (or will, as Phases 2-3 land).
+
+- `serializeScene()` — captures `cfg` (data, background, visualizations, active indices) and merges per-shader runtime cache/state from every viewer's renderer back into the structural shader entries. Returns a `CanonicalScene` JSON object.
+- `serializeSceneFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
+- `deserializeScene(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed.
+- `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
+
+Devtools handle: `window.__SCENE = { serialize, serializeFromViewer, deserialize, … }`. Use it to inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
+
+**Implicit identity rule.** When `cfg.background[i].shaders` is unset, the renderer synthesizes an identity shader at `bg.id`. If a tool edits that implicit shader, the canonical-scene serializer materializes it as `[{ type: "identity", cache: {…} }]` so the change persists across reopens.
+
+### Session Restore and Lifecycle
+Session bootstrap and restore now live in `ApplicationLifecycleController`.
+
+- Startup still restores the last successful session from browser storage when no explicit hash session is provided.
+- `beginApplicationLifecycle(...)` loads required plugins, initializes layers, raises `before-app-init`, and then opens the requested viewer state.
+- Inspector registration is no longer mixed into `app.ts`; it is centralized in `ViewerInspectorController`.
+
+### Inspector Utilities
+The following global utility methods are part of the supported runtime surface and are ambiently typed:
+
+- `UTILITIES.toggleVisualizationInspector(enabled?)`
+- `UTILITIES.setVisualizationInspectorRadius(radiusPx)`
+- `UTILITIES.adjustVisualizationInspectorRadius(deltaPx)`
+- `UTILITIES.setVisualizationInspectorMode(mode)`
+- `UTILITIES.toggleValueInspector(enabled?)`
 
 ### UI
 **You should use new UI components, see [this README](../ui/README.md)**.

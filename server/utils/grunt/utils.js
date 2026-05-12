@@ -84,13 +84,19 @@ module.exports = function(grunt) {
                 const content = grunt.file.read(workspaceFile).toString().trim();
                 const packageData = parse(content);
 
-                if (!packageData["buildEntry"] && !grunt.file.isFile(`${itemDirectory}/index.workspace.js`)) {
-                    grunt.log.errorlns(`${contextName} ${item} has no buildEntry entry! package.json must define buildEntry file to compile!`);
+                const hasWJS = grunt.file.isFile(`${itemDirectory}/index.workspace.js`);
+                const hasWJSM = !hasWJS && grunt.file.isFile(`${itemDirectory}/index.workspace.mjs`);
+
+                if (!packageData["buildEntry"] && !(hasWJS || hasWJSM)) {
+                    const found = grunt.file.isFile(`${itemDirectory}/index.workspace.js`);
+                    grunt.log.error('F %s', found);
+                    grunt.log.errorlns(`${contextName} ${item} has no buildEntry entry! package.json must define buildEntry file to compile or provide ${itemDirectory}/index.workspace.(m)js file!`);
                     data = null;
                 } else {
                     data = data || {};
                     data["includes"] = data["includes"] || [];
-                    data["includes"].unshift("index.workspace.js");
+                    if (hasWJS) data["includes"].unshift("index.workspace.js");
+                    else if (hasWJSM) data["includes"].unshift("index.workspace.mjs");
 
                     data["id"] = data["id"] || packageData["name"];
                     data["name"] = data["name"] || packageData["name"];

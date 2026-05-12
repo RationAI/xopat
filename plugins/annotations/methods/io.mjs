@@ -52,10 +52,18 @@ export const ioMethods = {
         return targets[index - 1];
     },
 
-    async _resolveImportTarget(file) {
+    async _resolveImportTarget(file, hintViewerOrId = undefined) {
         const targets = this._getViewerImportTargets();
         if (!targets.length) {
             throw new Error('No open viewers available for annotation import.');
+        }
+
+        // Caller-supplied hint (e.g. the settings panel's "Into slide:" select)
+        // bypasses auto-resolution and the user prompt entirely.
+        if (hintViewerOrId !== undefined && hintViewerOrId !== null) {
+            const hintId = String(hintViewerOrId?.uniqueId ?? hintViewerOrId);
+            const match = targets.find(t => String(t.uniqueId) === hintId);
+            if (match) return match;
         }
 
         const resolveInfo = typeof UTILITIES?.resolveOpenedViewerFromExportFileName === 'function'
@@ -69,13 +77,13 @@ export const ioMethods = {
         return await this._promptImportTarget(file?.name || '', targets, resolveInfo);
     },
 
-    async _readAndImportFile(e) {
+    async _readAndImportFile(e, hintViewerOrId = undefined) {
         const file = e?.target?.files?.[0];
         if (!file) {
             return { cancelled: true };
         }
 
-        const target = await this._resolveImportTarget(file);
+        const target = await this._resolveImportTarget(file, hintViewerOrId);
         if (!target?.viewer) {
             return { cancelled: true };
         }
@@ -97,8 +105,8 @@ export const ioMethods = {
         };
     },
 
-    importFromFile(e) {
-        this._readAndImportFile(e).then((payload) => {
+    importFromFile(e, hintViewerOrId = undefined) {
+        this._readAndImportFile(e, hintViewerOrId).then((payload) => {
             if (!payload || payload.cancelled) {
                 return;
             }
@@ -118,21 +126,24 @@ export const ioMethods = {
         });
     },
 
-    async getExportData(options = null, withObjects = true, withPresets = true) {
+    async getExportData(options = null, withObjects = true, withPresets = true, fabric = null) {
         options.scopeSelected = this.exportOptions.scope === 'selected' || false;
-        return this.context.fabric.export(options, withObjects, withPresets);
+        return (fabric || this.context.fabric).export(options, withObjects, withPresets);
     },
 
-    async exportToFile(withObjects = true, withPresets = true) {
+    async exportToFile(withObjects = true, withPresets = true, viewerOrId = undefined) {
         const toFormat = this.exportOptions.format;
-        const activeViewer = this.context.viewer;
+        const fabric = (viewerOrId !== undefined && viewerOrId !== null)
+            ? this.context.getFabric(viewerOrId)
+            : this.context.fabric;
+        const activeViewer = fabric?.viewer || this.context.viewer;
         let scope = 'all';
         let selectedItems = [];
         if (withObjects) {
             scope = this.exportOptions.scope === 'selected' ? 'selected' : 'all';
             if (scope === 'selected') {
-                const selectedAnns = (this.context.fabric.getSelectedAnnotations?.() || []);
-                const layers = (this.context.fabric.getSelectedLayers?.() || []).filter(Boolean);
+                const selectedAnns = (fabric.getSelectedAnnotations?.() || []);
+                const layers = (fabric.getSelectedLayers?.() || []).filter(Boolean);
                 const layerAnns = layers.length ? layers.flatMap((l) => l.getObjects?.() || []) : [];
 
                 const seen = new Set();
@@ -169,7 +180,7 @@ export const ioMethods = {
         if (toFormat) ioArgs.format = toFormat;
         if (withObjects && scope === 'selected') ioArgs.filter = { ids: selectedItems };
 
-        return this.getExportData(ioArgs, withObjects, withPresets).then((result) => {
+        return this.getExportData(ioArgs, withObjects, withPresets, fabric).then((result) => {
             UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
         }).catch((error) => {
             if (error?.code === 'EXPORT_NO_SELECTION') {
