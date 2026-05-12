@@ -122,44 +122,23 @@ export class BaseComponent {
         this.refreshClassState();
         this.refreshPropertiesState();
 
-        // Accept true BaseComponent instances and component-like objects
-        const isComponentLike = (el) => {
-            return !!el && (el instanceof BaseComponent || (typeof el === "object" && typeof el.create === "function" && typeof el.id === "string"));
-        };
-
-        if (isComponentLike(element)) {
+        if (element instanceof BaseComponent) {
             const mount = document.getElementById(element.id);
             if (mount === null) {
-                if (element instanceof BaseComponent && Array.isArray(element._children)) {
-                    element._children.push(this);
-                }
+                element._children.push(this);
             } else {
                 mount.append(this.create());
             }
         } else {
-            const mount = this._resolveMountNode(element);
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
 
             if (!mount) {
                 console.error(`Element ${element} not found`);
-                try {
-                    van.add(element, this.create());
-                } catch (_) { /* noop: element may be invalid for van.add */ }
-            } else if (typeof mount.append === "function") {
-                mount.append(this.create());
-            } else if (mount.nodeType || mount instanceof Node) {
-                // Fallback for very old environments where append may be missing
-                const created = this.create();
-                if (mount.appendChild) mount.appendChild(created);
-                else {
-                    try { mount.innerHTML += created.outerHTML || String(created); } catch (_) {}
-                }
+                van.add(element, this.create());
             } else {
-                // Last resort: try jQuery-style append if available or log a clearer error
-                try { mount.append(this.create()); }
-                catch (e) {
-                    console.error("Failed to attach component: unsupported mount target", mount);
-                    console.error(e);
-                }
+                mount.append(this.create());
             }
         }
         return this;
@@ -175,15 +154,19 @@ export class BaseComponent {
 
         if (element instanceof BaseComponent) {
             const mount = document.getElementById(element.id);
-            if (mount === null) {
-                if (Array.isArray(element._children)) element._children.unshift(this);
+            if (document.getElementById(element.id) === null) {
+                element._children.unshift(this);
             } else {
                 mount.prepend(this.create());
             }
         } else {
-            const mount = this._resolveMountNode(element);
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
+
             if (!mount) {
                 console.error(`Element ${element} not found`);
+                van.add(element, this.create());
             } else {
                 mount.prepend(this.create());
             }
@@ -476,7 +459,11 @@ export class BaseComponent {
     _applyOptions(options, ...names) {
         for (let prop of names) {
             const option = options[prop];
-            if (option) option.call(this);
+            try {
+                if (option) option.call(this);
+            } catch (e) {
+                console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
+            }
         }
 
         this.refreshClassState();
