@@ -49,6 +49,7 @@ import { Explorer } from "./classes/components/explorer.mjs";
 import { DockableWindow } from "./classes/components/dockableWindow.mjs";
 import { StatusBar } from "./classes/components/statusBar.mjs";
 import { Modal } from "./classes/components/modal.mjs";
+import { TutorialsModal } from "./classes/components/tutorialsModal.mjs";
 import { ProgressDialog } from "./classes/components/progressDialog.mjs";
 import { TagSelect } from "./classes/components/tagSelect.mjs";
 import { ContextMenu } from "./classes/components/contextMenu.mjs";
@@ -115,7 +116,7 @@ const UI = {
     Menu, MainPanel, MultiPanelMenuTab, MultiPanelMenu, FullscreenMenu, FullscreenMenuNavTab,
     FullscreenMenuPanel, TabsMenu, ShaderLayer, ShaderSideMenu, FloatingWindow, MainLayout,
     Toast, MenuTabBanner, RightSideViewerMenu, NavigatorSideMenu, Explorer, Toolbar, ToolbarItem,
-    ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar, Modal, ProgressDialog, TagSelect,
+    ToolbarSeparator, ToolbarGroup, ToolbarChoiceGroup, ToolbarPanelButton, DockableWindow, StatusBar, Modal, TutorialsModal, ProgressDialog, TagSelect,
     ContextMenu,
 
     Services: new ServiceContainer(),

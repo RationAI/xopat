@@ -67,13 +67,19 @@ class MenuTab extends BaseComponent {
 
         let action = (item["onClick"]) ? item["onClick"] : () => {};
 
+        // Transient action buttons (no body panel — they launch a UI surface
+        // elsewhere like a fullscreen menu or a modal) must not toggle the
+        // tab's focus state, otherwise the button would stay visually pressed
+        // after the click. `transient: true` can also be set explicitly.
+        this.transient = item["transient"] === true || content === undefined;
+
         const b = new Button({
             id: this.parent.id + "-b-" + item.id,
             size: Button.SIZE.SMALL,
             extraProperties: { title: inText },
             onClick: () => {
                 action();
-                this.focus();
+                if (!this.transient) this.focus();
             },
         }, inIcon, span(inText));
 
