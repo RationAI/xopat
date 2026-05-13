@@ -26,12 +26,18 @@ To deploy xOpat, we need to configure it statically,
                 // Viewer url, so that it is accessible at domain+path url
                 "domain": "http://localhost:8000",
                 "path": "/",
-                // The default image server used. Configures an OpenSeadragon protocol using here URL of the service
-                "image_group_server": "http://localhost:8080",
-                "image_group_protocol": "`${path}/v3/slides/info?slide_id=${data}`",
-                "data_group_server": "http://localhost:8080",
-                // This endpoint needs to ask for array of data items (get me tile level 5 x3 y0 for this slide list)
-                "data_group_protocol": "`${path}/v3/files/info?paths=${data.join(\",\")}`",
+                // Named slide-protocol registry. Each entry is a backtick template
+                // resolving a scalar DataID to a tile-source URL; the server URL is
+                // embedded directly in the template. The `default_*_protocol` keys
+                // pick which entry is used by default for background / visualization
+                // slides. Protocols can also be added at runtime by plugins via
+                // `window.SLIDE_PROTOCOLS.register(...)` — e.g. the dicom plugin
+                // registers a "dicom" factory protocol that builds a DICOMWebTileSource.
+                "slide_protocols": {
+                    "wsi_service": "`http://localhost:8080/v3/slides/info?slide_id=${data}`"
+                },
+                "default_background_protocol":    "wsi_service",
+                "default_visualization_protocol": "wsi_service",
                 "headers": {},
                 "js_cookie_expire": 365,
                 "js_cookie_path": "/",

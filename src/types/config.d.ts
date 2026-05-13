@@ -1,10 +1,31 @@
 type XOpatClientConfig = {
     domain: string | null;
     path: string | null;
-    image_group_server: string;
-    image_group_protocol: string;
-    data_group_server: string;
-    data_group_protocol: string;
+    /**
+     * Named slide-protocol registry. Each entry is either a backtick-template
+     * URL string with `data` (scalar DataID) in scope — the server URL embedded
+     * in the template — or an object `{ url, proxy?, baseURL?, auth?, … }` whose
+     * extra fields are forwarded verbatim to `new HttpClient({…})`. The object
+     * form makes every request issued by this protocol's TileSource (metadata
+     * + tiles) flow through the configured HttpClient — gaining proxy routing,
+     * CSRF injection, and JWT/auth headers uniformly. Referenced by name from
+     * `BackgroundItem.protocol` / `DataOverride.protocol`. Plugins may add
+     * entries at runtime via `window.SLIDE_PROTOCOLS.register(...)`. Safe in
+     * secure mode (no eval of user-controlled strings).
+     */
+    slide_protocols?: Record<string, string | SlideProtocolEnvEntry>;
+    /** Name of the protocol used by default for background slides. */
+    default_background_protocol?: string;
+    /** Name of the protocol used by default for visualization slides. */
+    default_visualization_protocol?: string;
+    /** @deprecated use `slide_protocols` + `default_background_protocol`. Auto-synthesized into the `__legacy_bg` registry entry on load. */
+    image_group_server?: string;
+    /** @deprecated use `slide_protocols` + `default_background_protocol`. Auto-synthesized into the `__legacy_bg` registry entry on load. */
+    image_group_protocol?: string;
+    /** @deprecated use `slide_protocols` + `default_visualization_protocol`. Auto-synthesized into the `__legacy_viz` registry entry on load. */
+    data_group_server?: string;
+    /** @deprecated use `slide_protocols` + `default_visualization_protocol`. Auto-synthesized into the `__legacy_viz` registry entry on load. */
+    data_group_protocol?: string;
     osdOptions?: Partial<OpenSeadragon.Options> & Record<string, unknown>;
     js_cookie_expire?: number | null;
     js_cookie_path?: string | null;

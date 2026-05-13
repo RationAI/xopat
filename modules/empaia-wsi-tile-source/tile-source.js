@@ -287,7 +287,14 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     async downloadICCProfile() {
         const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
-        return fetch(url).then(async res => res.arrayBuffer())
+        // Route through the per-source HttpClient when the slide protocol
+        // declared one (proxy/CSRF/JWT applied automatically). Falls back to
+        // a bare fetch for protocols without a client.
+        const client = this.__xopatHttpClient;
+        const res = await (client && typeof client.fetchRaw === "function"
+            ? client.fetchRaw(url)
+            : fetch(url));
+        return res.arrayBuffer();
     }
 
     // Todo multiplex not supported for now, OSD needs to have grouping mechanism on requests

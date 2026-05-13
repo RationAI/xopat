@@ -123,12 +123,15 @@ Example for ``DeepZoom`` protocol configuration:
     "active_client": "prod",
     "client": {
       "prod": {
-        "image_group_server": "https://my.custom.viewer.url",
-        "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
-        
-        "data_group_server": "https://my.custom.viewer.url",
-        // the [0] syntax is due to legacy reasons, do not think about it much
-        "data_group_protocol": "`${path}?Deepzoom=${data[0]}.dzi`"
+        // Named slide-protocol registry. Each entry is a backtick-template URL
+        // with `data` (scalar DataID) in scope; the server URL is embedded
+        // directly in the template — no separate server map.
+        "slide_protocols": {
+          "deepzoom":     "`https://my.custom.viewer.url?Deepzoom=${data}.dzi`",
+          "deepzoom_ext": "`https://my.custom.viewer.url?Deepzoom=${data}.dzi`"
+        },
+        "default_background_protocol":    "deepzoom",
+        "default_visualization_protocol": "deepzoom_ext"
       }
     },
     "server": {
@@ -143,7 +146,20 @@ Example for ``DeepZoom`` protocol configuration:
   // plugins, modules configuration...
 }
 ````
-This will leverage build-in OpenSeadragon protocol support.
+This will leverage built-in OpenSeadragon protocol support. The protocol
+names you choose (`deepzoom`, `deepzoom_ext` above) are stable identifiers
+that the runtime resolves through `window.SLIDE_PROTOCOLS`; sessions
+referencing them via `BackgroundItem.protocol` / `DataOverride.protocol`
+are safe to load even in secure mode because the value is a name, not an
+inline JS expression.
+
+> **Migrating from the legacy shape.** The previous
+> `image_group_server` + `image_group_protocol` + `data_group_server`
+> + `data_group_protocol` fields still work — they are auto-synthesized
+> at boot into deprecated `__legacy_bg` / `__legacy_viz` registry entries
+> (with a one-shot console warning), and used as defaults if the new
+> fields are missing. Plan to remove the legacy fields once your env files
+> have been migrated to the new shape.
 
 ### Custom Authentication
 For configuring and implementing custom authentication, the viewer relies on `XOpatUser` and the `HttpClient` service, alongside a proxy setup (optional). See [Authentication and Proxy Setup](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) for detailed descriptions.
@@ -232,17 +248,31 @@ Note that you can add your custom headers, use both GET and POST and even implem
 your custom data fetching and presentation logics.
 
 Step by step for synchronous transfer implementation
-1. First, you need to configure the viewer so that it uses your protocol - 
-in the viewer configuration JSON, set up ``data_group_protocol`` to your protocol. 
-It is an one-liner expression evaluated at startup. This can be done in several ways using different data:
-    1. `string` - treated as an URL, issues the initial request for the data. It should return data that your desired protocol understands.
+1. First, you need to configure the viewer so that it uses your protocol —
+   add an entry under ``slide_protocols`` and (optionally) point
+   ``default_visualization_protocol`` at it. The template is a backtick string
+   with ``data`` (scalar DataID) in scope; the server URL is embedded in the
+   template. The template's evaluated result can be:
+    1. `string` — treated as a URL, issues the initial request for the data. The response should be parseable by your `TileSource`.
        Example:
-        >    "data_group_protocol": \`${path}?Deepzoom=${data[0]}.dzi\`
-    2. `object` - treated as custom configuration, it is up to the implementation to decide how to fetch metadata
-        and individual tiles. The advantage is that this request does not fire URL immediatelly, but it is under your control. 
-        Object properties are arbitrary. Example:
-        >    "data_group_protocol": \`{"type": "myCustomProtocol", "data": "${data[0]}"}`
+        >    "my_proto": \`https://server.example/path?Deepzoom=${data}.dzi\`
+    2. `object` (JSON-as-string, parsed by `JSON.parse` in your `supports()` hook) — treated as a custom configuration; the implementation decides how to fetch metadata and individual tiles. Useful when the request should not fire immediately. Example:
+        >    "my_proto": \`{"type": "myCustomProtocol", "data": "${data}"}\`
 2. If you are using one of existing protocols, you are done. Otherwise, you need to provide interaction logics.
+
+> **Plugin-supplied factory protocols.** When the slide cannot be expressed
+> as a simple URL — e.g. a DICOMweb store, where the `TileSource` itself
+> orchestrates `studies/series/instances` lookups — register a *factory*
+> protocol from your plugin instead of a URL template:
+> ```js
+> window.SLIDE_PROTOCOLS.register({
+>     id: "my-proto",
+>     createTileSource: (ctx) => new MyTileSource({ baseUrl: '...', id: ctx.dataID }),
+> });
+> ```
+> Then emit `{ dataID, protocol: "my-proto" }` on the `BackgroundItem`.
+> The factory entry can carry whatever closure state it needs from the
+> plugin. See `plugins/dicom/index.workspace.mjs` for a reference.
 2. To provide interaction logics, implement a ``TileSource`` interface and attach it to the `OpenSeadragon` namespace.
     - ``supports()`` - make sure when the response of `data_group_protocol` - dependent request
     - ``configure()`` - make sure the response data, given url and post-data present in the url after `#` sign (if applicable)

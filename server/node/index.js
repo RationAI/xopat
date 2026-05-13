@@ -291,6 +291,10 @@ async function responseProxy(req, res, requestUrl) {
 
     // 6. Forward the request
     try {
+        if (DEV_MODE) {
+            console.log(`Proxying ${targetPath} -> ${targetUrl}`);
+        }
+
         const fetchRes = await fetch(targetUrl, {
             method: req.method,
             headers: headers,
@@ -483,6 +487,12 @@ async function responseScheme(req, res, templateName="scheme.html") {
         },
         paramsDefaults: core.CORE?.setup || {},
         clientDefaults: {
+            // New slide-protocol registry (preferred).
+            slide_protocols: core.CORE?.client?.slide_protocols ?? null,
+            default_background_protocol: core.CORE?.client?.default_background_protocol ?? null,
+            default_visualization_protocol: core.CORE?.client?.default_visualization_protocol ?? null,
+            // Legacy fields kept for one deprecation cycle. Auto-synthesized into
+            // __legacy_bg / __legacy_viz registry entries client-side.
             image_group_server: core.CORE?.client?.image_group_server ?? null,
             image_group_protocol: core.CORE?.client?.image_group_protocol ?? null,
             data_group_server: core.CORE?.client?.data_group_server ?? null,

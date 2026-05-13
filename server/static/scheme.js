@@ -429,10 +429,21 @@
         };
 
         if (includeExtensions) {
-            backgroundSchema["x-defaultProtocol"] = payload?.clientDefaults?.image_group_protocol ?? null;
-            backgroundSchema["x-defaultServer"] = payload?.clientDefaults?.image_group_server ?? null;
-            visualizationSchema["x-defaultProtocol"] = payload?.clientDefaults?.data_group_protocol ?? null;
-            visualizationSchema["x-defaultServer"] = payload?.clientDefaults?.data_group_server ?? null;
+            const slideProtocols = payload?.clientDefaults?.slide_protocols || null;
+            const bgDefaultId = payload?.clientDefaults?.default_background_protocol || null;
+            const vizDefaultId = payload?.clientDefaults?.default_visualization_protocol || null;
+            const bgDefaultTpl = (slideProtocols && bgDefaultId) ? slideProtocols[bgDefaultId] : null;
+            const vizDefaultTpl = (slideProtocols && vizDefaultId) ? slideProtocols[vizDefaultId] : null;
+            // Prefer the new registry hint, fall back to legacy fields.
+            backgroundSchema["x-defaultProtocol"] = bgDefaultTpl ?? payload?.clientDefaults?.image_group_protocol ?? null;
+            backgroundSchema["x-defaultServer"] = bgDefaultTpl ? null : (payload?.clientDefaults?.image_group_server ?? null);
+            visualizationSchema["x-defaultProtocol"] = vizDefaultTpl ?? payload?.clientDefaults?.data_group_protocol ?? null;
+            visualizationSchema["x-defaultServer"] = vizDefaultTpl ? null : (payload?.clientDefaults?.data_group_server ?? null);
+            // Full registry exposed for tooling that wants the list of protocol names.
+            if (slideProtocols) {
+                backgroundSchema["x-slideProtocols"] = slideProtocols;
+                visualizationSchema["x-slideProtocols"] = slideProtocols;
+            }
 
             schema.properties.params["x-source"] = "src/config.json#setup";
             schema.properties.data["x-source"] = "src/types/app.d.ts#DataSpecification";

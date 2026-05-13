@@ -19,6 +19,15 @@
         (function () {
             window.console.appTrace = [];
 
+            // Benign Chromium warning: a ResizeObserver callback dirtied layout and
+            // queued another notification in the same frame. State is consistent on
+            // the next frame, so don't pop the error overlay or log it as ERROR.
+            window.isResizeObserverLoopMessage = function (msg) {
+                if (msg == null) return false;
+                const text = typeof msg === "string" ? msg : (msg.message || String(msg));
+                return text.indexOf("ResizeObserver loop") !== -1;
+            };
+
             const defaultError = console.error;
             const timestamp = () => {
                 let ts = new Date(), pad = "000", ms = ts.getMilliseconds().toString();
@@ -40,8 +49,21 @@
                 defaultWarn.apply(window.console, [...args, stack]);
             };
 
-            window.addEventListener('error', e => console.error('window error:', e.error || e.message));
-            window.addEventListener('unhandledrejection', e => console.error('unhandledrejection:', e.reason));
+            window.addEventListener('error', e => {
+                const payload = e.error || e.message;
+                if (window.isResizeObserverLoopMessage(payload)) {
+                    console.debug('ResizeObserver loop suppressed:', payload);
+                    return;
+                }
+                console.error('window error:', payload);
+            });
+            window.addEventListener('unhandledrejection', e => {
+                if (window.isResizeObserverLoopMessage(e.reason)) {
+                    console.debug('ResizeObserver loop suppressed:', e.reason);
+                    return;
+                }
+                console.error('unhandledrejection:', e.reason);
+            });
         })();
     </script>
 
@@ -73,30 +95,30 @@
 <!--    </div>-->
 <!--</div>-->
 
-<!-- System messaging -->
-<div id="system-message" class="hidden system-container">
-    <div id="system-message-warn" class="font-light text-4xl text-center text-base-100">
-        <span class="fa fa-error font-light text-3xl mr-1" style="transform: translate(0px, -5px);"></span>
-        <span data-i18n="error.title">Error</span>
+<!-- System messaging: full-viewport blocking error overlay (DaisyUI card on a dim backdrop). -->
+<div id="system-message" class="hidden fixed inset-0 flex items-center justify-center p-4 bg-base-content/45 backdrop-blur-sm" style="z-index: 999999;">
+    <div class="card bg-base-100 border border-error/40 shadow-2xl w-[min(720px,92vw)] max-h-[90vh] overflow-hidden">
+        <div class="card-body gap-3 overflow-y-auto">
+            <div id="system-message-warn" class="flex items-center justify-center gap-2 text-3xl font-light text-error">
+                <span class="fa-auto fa-triangle-exclamation"></span>
+                <span data-i18n="error.title">Error</span>
+            </div>
+            <div id="system-message-title" class="text-xl font-light text-center text-base-content"></div>
+            <div id="system-message-subtitle" class="text-base text-center text-base-content/80"></div>
+            <div class="text-xs text-center text-base-content/60" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
+            <div class="flex flex-wrap justify-center gap-2 mt-1">
+                <button id="system-message-details-btn"
+                        onclick="document.getElementById('system-message-details').classList.remove('hidden'); this.classList.add('hidden');"
+                        class="btn btn-ghost btn-sm" type="button" data-i18n="error.detailsBtn">details</button>
+                <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()"
+                        class="btn btn-primary btn-sm" type="button" data-i18n="error.dismissBtn">dismiss</button>
+            </div>
+            <div id="system-message-details" class="hidden bg-base-200 text-base-content font-mono text-xs leading-relaxed px-4 py-3 rounded-lg border border-base-300 max-h-[50vh] overflow-auto whitespace-pre-wrap break-words"></div>
+        </div>
     </div>
-    <div id="system-message-title" class="font-light text-3xl text-center text-base-100"></div>
-    <div id="system-message-subtitle" class="font-normal text-center text-base-100"></div>
-    <div class="text-sm text-center mb-4 text-base-100" data-i18n="error.doExport"> [ if you want to report a problem, please include exported file ] </div>
-    <button id="system-message-details-btn" onclick="$('#system-message-details').css('display', 'block'); $(this).css('display', 'none');" class="btn" type="button" data-i18n="error.detailsBtn">details</button>
-    <div id="system-message-details" class="px-4 py-3 mb-2 border rounded-md overflow-y-scroll text-base-100" style="display: none;max-height: 50vh;"></div>
-    <button id="system-message-dismiss-btn" onclick="USER_INTERFACE.Errors.hide()" class="btn" type="button" data-i18n="error.dismissBtn">dismiss</button>
 </div>
 
-<!--Tutorials-->
-<div id="tutorials-overlay" class="hidden" onclick="USER_INTERFACE.Tutorials.hide();"></div>
-<div id="tutorials-container" class="hidden system-container" style="z-index: 5;">
-    <div id="tutorials-title" class="font-light text-3xl text-center"></div>
-    <p id="tutorials-description" class="text-center"></p>
-    <!--<p class="text-center">You can also show tutorial section by pressing 'H' on your keyboard.</p>-->
-    <br>
-    <div id="tutorials"></div>
-    <br><br><button class="btn" onclick="USER_INTERFACE.Tutorials.hide();" data-i18n="common.Exit">Exit</button>
-</div>
+<!-- Tutorials: DOM is created dynamically by UI.TutorialsModal (src/user-interface.js) -->
 <!--<div id="fullscreen-menu" class="bg-base-100"></div>-->
 
 <!--<div id="bottom-menu" style="display: flex; position: fixed; left: 0; bottom: 0; width: 100%;">-->
@@ -108,6 +130,10 @@
     <script>
 //preventive error message, that will be discarded after the full initialization, no translation
 window.onerror = function (message, file, line, col, error) {
+    if (window.isResizeObserverLoopMessage && window.isResizeObserverLoopMessage(error || message)) {
+        console.debug('ResizeObserver loop suppressed:', message);
+        return false;
+    }
     let ErrUI = USER_INTERFACE.Errors;
     if (!ErrUI) console.error("Error UI not initialized! Attempt to show error message: ", message, " ", file, " ", line, " ", col, " ", error);
     if (ErrUI.active) return false;

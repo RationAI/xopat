@@ -60,6 +60,12 @@ $pagePayload = [
     ],
     "paramsDefaults" => $CORE["setup"] ?? [],
     "clientDefaults" => [
+        // New slide-protocol registry (preferred).
+        "slide_protocols" => $CORE["client"]["slide_protocols"] ?? null,
+        "default_background_protocol" => $CORE["client"]["default_background_protocol"] ?? null,
+        "default_visualization_protocol" => $CORE["client"]["default_visualization_protocol"] ?? null,
+        // Legacy fields kept for one deprecation cycle. Auto-synthesized into
+        // __legacy_bg / __legacy_viz registry entries client-side.
         "image_group_server" => $CORE["client"]["image_group_server"] ?? null,
         "image_group_protocol" => $CORE["client"]["image_group_protocol"] ?? null,
         "data_group_server" => $CORE["client"]["data_group_server"] ?? null,
