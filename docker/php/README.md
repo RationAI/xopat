@@ -10,9 +10,17 @@ The default image server is (due to CORS policy) proxied
 
 And works with the env configuration:
 ````json
-"image_group_server": "/wsi-server/", //the server url mapped to host machine localhost at port 8080
-"image_group_protocol": "`${path}v3/slides/${data}/info`", //the server query
+"slide_protocols": {
+    // server URL is embedded in the template; `data` (scalar DataID) is the only
+    // variable in scope. `/wsi-server/` is mapped to host-machine localhost:8080.
+    "wsi_service": "`/wsi-server/v3/slides/${data}/info`"
+},
+"default_background_protocol":    "wsi_service",
+"default_visualization_protocol": "wsi_service"
 ````
+The legacy `image_group_server` + `image_group_protocol` (and `data_group_*`)
+fields are still accepted and auto-synthesized into deprecated registry entries;
+prefer the new shape above for new deployments.
 The env configuration is read from relevant location, either the default
 `env/env.json` or location specified with the `XOPAT_ENV` variable.
 The WSI server proxy configuration can be changed in the apache configuration file. 

@@ -17,6 +17,8 @@ declare global {
     var VIEWER_MANAGER: any;
     var VIEWER: OpenSeadragon.Viewer;
     var SESSION: SessionSync;
+    /** Slide-protocol registry singleton (URL templates + plugin-registered factories). */
+    var SLIDE_PROTOCOLS: SlideProtocolRegistryLike;
     var USER_INTERFACE: any;
     var van: any;
     var UI: any;
@@ -41,6 +43,7 @@ declare global {
         VIEWER_MANAGER: any;
         VIEWER: OpenSeadragon.Viewer;
         SESSION: SessionSync;
+        SLIDE_PROTOCOLS: SlideProtocolRegistryLike;
         plugin: (id: string) => IXOpatPlugin | undefined;
         pluginMeta: (id: string, metaKey: string) => any;
         singletonModule: (id: string) => IXOpatModuleSingleton | undefined;

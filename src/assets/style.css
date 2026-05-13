@@ -400,8 +400,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
 .bg-opacity::before {content: "";width: 100%;height: 100%;position: absolute;left: 0;
     background-color: var(--color-bg-primary);opacity: 0.6;top: 0;}
 .bg-opacity.fixed-bg-opacity::before {z-index: -1;}
-.system-container { position: fixed; width: 60%; left: 18%; transform: translate(0, calc(50vh - 50%)); color: var(--color-border-inverse); z-index: 999999}
-.system-container .fa-solid, .system-container .fa-regular {color: var(--color-border-inverse);}
 .right-side-menu {z-index: 3;right: 0;}
 .inner-panel {padding: 3px 0 15px 0;position: relative;}
 .inner-panel .inner-panel-content {overflow-x: hidden;min-height: 50px;}
@@ -422,10 +420,6 @@ div.openseadragon-canvas, div.openseadragon-canvas div {box-sizing: initial !imp
     right: 14px;top: 17px;}
 .inline-arrow {vertical-align: sub !important;}
 .inline-arrow.opened {transform: rotate(90deg);}
-#tutorials {max-height: 50vh;overflow-y: auto;}
-.tutorial-item {transition: all .2s ease-in-out;border: 3px solid transparent;
-    background: rgb(34 39 46 / 22%); cursor:pointer;}
-.tutorial-item:hover {transform: scale(1.05);}
 .label-render-type:hover > select {display: inline-block !important;position: absolute;top: 0;right: 0;}
 .panel-menu input.panel-menu-input {display: none !important;}
 .panel-menu label.panel-menu-label {padding: 5px 11px 3px 11px;background: var(--color-bg-tertiary);

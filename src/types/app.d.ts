@@ -15,15 +15,18 @@ type DataSpecification = DataID | DataOverride;
 
 /**
  * A more holistic data specification, which can provide custom options for the target protocol (underlying TileSource API),
- * and override the default fetching behavior (e.g. to use a custom data source). Usage of this object is not allowed in secure mode.
+ * and override the default fetching behavior (e.g. to use a custom data source).
  * @property dataID actual data value, required - its presence is used to identify this object is DataOverride type
  * @property options passed to the data source integration logics - TileSource class
  * @property microns size of pixel in micrometers, default `undefined`,
  * @property micronsX horizontal size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
  * @property micronsY vertical size of pixel in micrometers, default `undefined`, if general value not specified must have both X,Y
- * @property protocol see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
- * @property tileSource a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized;
- *    the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads
+ * @property protocol Name of a protocol registered in `window.SLIDE_PROTOCOLS` (always safe, including secure mode).
+ *    In non-secure mode the value may alternatively be a raw backtick-template URL string (legacy compatibility,
+ *    discouraged) — rejected in secure mode with a warning.
+ * @property tileSource DEPRECATED: a pre-built tileSource object. Kept for one deprecation cycle; plugins should
+ *    register a factory protocol with `SLIDE_PROTOCOLS.register({ id, createTileSource })` and reference it via
+ *    `protocol` instead. The pre-built TileSource is not serializable and breaks URL/POST roundtripping.
  */
 interface DataOverride {
     dataID: DataID;
@@ -63,7 +66,8 @@ interface TileSourceMetadata {
 /**
  * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
  * @property shaders array of optional rendering specification
- * @property protocol deprecated, use DataOverride instead
+ * @property protocol deprecated on background object. Name of a protocol registered in `window.SLIDE_PROTOCOLS`. In non-secure mode the value may
+ *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
  * @property sessionName overrides the global params.sessionName for this background
  * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
@@ -97,7 +101,8 @@ interface StandaloneBackgroundItem extends BackgroundItem {
 
 /**
  * @property shaders array of shader specifications
- * @property protocol deprecated, use DataOverride instead
+ * @property protocol deprecated on visualization object.  Name of a protocol registered in `window.SLIDE_PROTOCOLS`. In non-secure mode the value may
+ *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
  * @property goalIndex preferred visualization index when this item is selected
  */

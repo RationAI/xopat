@@ -11,6 +11,7 @@ import { ViewerInspectorController } from "./classes/app/viewer-inspector-contro
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
 import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
+import { bootstrapSlideProtocols } from "./classes/slide-protocols";
 import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
@@ -146,6 +147,11 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // AppCache/AppCookies façades resolve through `window.IO_PIPELINE` on first
     // use, so the pipeline must exist before any `getOption()` call.
     const IO_PIPELINE = bootstrapIOPipeline(ENV, POST_DATA);
+
+    // Bootstrap the slide-protocol registry. Must precede plugin script eval
+    // (which happens later in `initXOpatLoader`) so plugins can register
+    // factory protocols (e.g. DICOMWebTileSource) in their constructors.
+    bootstrapSlideProtocols(ENV);
 
     /**
      * @namespace APPLICATION_CONTEXT

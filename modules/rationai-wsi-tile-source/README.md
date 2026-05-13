@@ -8,23 +8,32 @@ in the standalone mode, accessing WSIs by their IDs (dependent on the mapper usa
 Also supports multifile access on the API extension `/files`.
 
 ### Usage
-Configure the default viewer ENV
+Configure the default viewer ENV using the named slide-protocol registry.
+The template is a backtick expression with `data` (scalar DataID) in scope;
+the server URL is embedded directly in the template.
 ````json
-   "image_group_server": "http://localhost:8080",
-   "image_group_protocol": "{url: `$${path}/v3/files/info?paths=$${data}`, type: 'empaia-standalone'}",
-   "data_group_server": "http://localhost:8080",
-   "data_group_protocol": "{url:`$${path}/v3/files/info?paths=$${data.join(\",\")}`, type: 'empaia-standalone'}",
+   "slide_protocols": {
+       "empaia_standalone": "`{\"url\": \"http://localhost:8080/v3/files/info?paths=${data}\", \"type\": \"empaia-standalone\"}`"
+   },
+   "default_background_protocol":    "empaia_standalone",
+   "default_visualization_protocol": "empaia_standalone"
 ````
-or provide particular strings in the ``protocol`` for sessions.
+or reference the registered name from a session via `BackgroundItem.protocol` / `DataOverride.protocol`.
 
 You can also just set an URL to the WSI server, for example:
 ````json
-   "image_group_server": "http://localhost:8080",
-   "image_group_protocol": "`${path}/v3/batch/info?slides=${data}`",
-   "data_group_server": "http://localhost:8080",
-   "data_group_protocol": "`${path}/v3/batch/info?slides=${data.join(\",\")}`",
+   "slide_protocols": {
+       "wsi_batch": "`http://localhost:8080/v3/batch/info?slides=${data}`"
+   },
+   "default_background_protocol":    "wsi_batch",
+   "default_visualization_protocol": "wsi_batch"
 ````
 But this approach has its limitations.
+
+> The legacy `image_group_server` + `image_group_protocol` + `data_group_*`
+> fields are still accepted and auto-synthesized into deprecated registry
+> entries (with a one-shot console warning), but new deployments should use
+> the shape above.
 
 ### Options
 

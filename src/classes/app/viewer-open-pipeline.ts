@@ -714,16 +714,12 @@ export class ViewerOpenPipeline {
 
         const bgUrlFromEntry = (bgEntry: BackgroundConfig, dataSpec: DataSpecification | undefined = undefined) => {
             const spec: DataSpecification | undefined = dataSpec === undefined ? BackgroundConfig.dataSpecification(bgEntry) : dataSpec;
-            const isObjectSpec = spec && typeof spec === "object";
-
-            if (isObjectSpec && (spec as DataOverride).tileSource instanceof OpenSeadragon.TileSource) {
-                return (spec as DataOverride).tileSource;
-            }
-
-            const customProto = isObjectSpec && (spec as DataOverride).protocol ? (spec as DataOverride).protocol : (bgEntry.protocol ? bgEntry.protocol : null);
-            const proto = customProto && !isSecureMode ? customProto : env.client.image_group_protocol;
-            const make = new Function("path,data", "return " + proto);
-            return make(env.client.image_group_server, BackgroundConfig.dataFromSpec(spec));
+            const resolved = (window as any).SLIDE_PROTOCOLS.resolveBackground({
+                spec,
+                bgEntry,
+                isSecureMode,
+            });
+            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
 
         // Renderer-side shader-config normalization wrappers were inlined here
@@ -921,9 +917,25 @@ export class ViewerOpenPipeline {
 
         const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
             const originalSource = source.source || source;
-            const tileSource = await viewer.instantiateTileSourceClass({
-                tileSource: originalSource
-            }).then((ev: any) => ev.source).catch((ev: any) => ev.message || String(ev));
+            // Determine the per-protocol HttpClient (if any). For a URL the
+            // registry matches by baseURL prefix; for a pre-built TileSource
+            // the registry already stamped `__xopatHttpClient` at resolve
+            // time. The active client is set during instantiation so OSD's
+            // metadata fetch (via the patched makeAjaxRequest) routes
+            // through it; afterwards we stamp the resulting source so the
+            // patched downloadTileStart picks it up for every tile.
+            const SP = (window as any).SLIDE_PROTOCOLS;
+            const client = typeof originalSource === "string"
+                ? SP?.getActiveClientForUrl?.(originalSource)
+                : originalSource?.__xopatHttpClient;
+            const tileSource = await SP.withActiveClient(client, () =>
+                viewer.instantiateTileSourceClass({ tileSource: originalSource })
+                    .then((ev: any) => ev.source)
+                    .catch((ev: any) => ev.message || String(ev))
+            );
+            if (client && tileSource && typeof tileSource === "object" && !tileSource.error && !(tileSource as any).__xopatHttpClient) {
+                (tileSource as any).__xopatHttpClient = client;
+            }
 
             if (typeof tileSource === "string" || (typeof tileSource === "object" && tileSource.error) || tileSource instanceof Error) {
                 console.error(`Failed to instantiate tile source for ${kind} ${index}: ${tileSource}`);
@@ -1078,18 +1090,12 @@ export class ViewerOpenPipeline {
 
             const vizUrlFromEntries = (dataIndex: number) => {
                 const spec = cfg.data[dataIndex] as DataSpecification;
-                const isObjectSpec = spec && typeof spec === "object";
-
-                if (isObjectSpec && (spec as DataOverride).tileSource instanceof OpenSeadragon.TileSource) {
-                    return (spec as DataOverride).tileSource;
-                }
-
-                const customProto = isObjectSpec && (spec as DataOverride).protocol ? (spec as DataOverride).protocol
-                    : (activeV && activeV.protocol ? activeV.protocol : null);
-
-                const proto = (!isSecureMode && customProto) || env.client.data_group_protocol;
-                const make = new Function("path,data", "return " + proto);
-                return make(env.client.image_group_server, [BackgroundConfig.dataFromSpec(spec)]);
+                const resolved = (window as any).SLIDE_PROTOCOLS.resolveVisualization({
+                    spec,
+                    vizEntry: activeV,
+                    isSecureMode,
+                });
+                return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
             };
 
             const isSeriesLikeMeta = (meta: any = {}) =>

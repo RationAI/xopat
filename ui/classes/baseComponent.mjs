@@ -115,6 +115,18 @@ export class BaseComponent {
     }
 
     /**
+     * Resolve a mount target to a DOM Element.
+     * Accepts: string id, Element, or jQuery wrapper. Returns null if unresolvable.
+     * @private
+     */
+    _resolveMountNode(element) {
+        if (typeof element === "string") return document.getElementById(element);
+        if (!element) return null;
+        if (element.jquery && typeof element.get === "function") return element.get(0) || null;
+        return element;
+    }
+
+    /**
      * @param {*} element - The element to attach the component to
      * @return {BaseComponent} builder pattern
      */
@@ -129,18 +141,15 @@ export class BaseComponent {
             } else {
                 mount.append(this.create());
             }
-        } else {
-            const mount = typeof element === "string"
-                ? document.getElementById(element)
-                : element;
-
-            if (!mount) {
-                console.error(`Element ${element} not found`);
-                van.add(element, this.create());
-            } else {
-                mount.append(this.create());
-            }
+            return this;
         }
+
+        const mount = this._resolveMountNode(element);
+        if (!mount) {
+            console.error("BaseComponent.attachTo: mount target not found", element);
+            return this;
+        }
+        mount.append(this.create());
         return this;
     }
 
@@ -154,23 +163,20 @@ export class BaseComponent {
 
         if (element instanceof BaseComponent) {
             const mount = document.getElementById(element.id);
-            if (document.getElementById(element.id) === null) {
+            if (mount === null) {
                 element._children.unshift(this);
             } else {
                 mount.prepend(this.create());
             }
-        } else {
-            const mount = typeof element === "string"
-                ? document.getElementById(element)
-                : element;
-
-            if (!mount) {
-                console.error(`Element ${element} not found`);
-                van.add(element, this.create());
-            } else {
-                mount.prepend(this.create());
-            }
+            return this;
         }
+
+        const mount = this._resolveMountNode(element);
+        if (!mount) {
+            console.error("BaseComponent.prependedTo: mount target not found", element);
+            return this;
+        }
+        mount.prepend(this.create());
         return this;
     }
 
@@ -180,12 +186,11 @@ export class BaseComponent {
      * @returns {boolean} true if something was removed, false otherwise
      */
     removeFrom(element) {
-        let mount = element;
+        let mount;
         if (element instanceof BaseComponent) {
             mount = document.getElementById(element.id) || null;
-        }
-        if (typeof element === "string") {
-            mount = document.getElementById(element);
+        } else {
+            mount = this._resolveMountNode(element);
         }
         if (!mount) return false;
 

@@ -137,14 +137,13 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        // TODO FIXME this needs to use the method from core
         const bgUrlFromEntry = (bgEntry) => {
-            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
-                return bgEntry.tileSource;
-            }
-            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
-            const make = new Function("path,data", "return " + proto);
-            return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
+            const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
+                spec: dataRef,
+                bgEntry,
+                isSecureMode: APPLICATION_CONTEXT.secure,
+            });
+            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
 
         // todo multiple data images? how to retrieve existing configurations?
@@ -155,8 +154,16 @@ OpenSeadragon.Tools = class {
             let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
             if (!source) {
                 // todo: might not carry over all OSD properties such as ajax headers
-                source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+                const spec = bgUrlFromEntry(bgConfig);
+                const SP = window.SLIDE_PROTOCOLS;
+                const client = typeof spec === "string"
+                    ? SP?.getActiveClientForUrl?.(spec)
+                    : spec?.__xopatHttpClient;
+                source = await SP.withActiveClient(client, () =>
+                    viewer.instantiateTileSourceClass({tileSource: spec})
+                );
                 source = source.source;
+                if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
             }
             if (source.getThumbnail) {
                 // if we have a thumbnail, replace the source with single-image thumbnail
@@ -300,14 +307,13 @@ OpenSeadragon.Tools = class {
             dataRef = bgConfig.dataReference; // use the value as actual data
         }
 
-        // TODO FIXME this needs to use the method from core
         const bgUrlFromEntry = (bgEntry) => {
-            if (bgEntry.tileSource instanceof OpenSeadragon.TileSource) {
-                return bgEntry.tileSource;
-            }
-            const proto = !APPLICATION_CONTEXT.secure && bgEntry.protocol ? bgEntry.protocol : APPLICATION_CONTEXT.env.client.image_group_protocol;
-            const make = new Function("path,data", "return " + proto);
-            return make(APPLICATION_CONTEXT.env.client.image_group_server, dataRef);
+            const resolved = window.SLIDE_PROTOCOLS.resolveBackground({
+                spec: dataRef,
+                bgEntry,
+                isSecureMode: APPLICATION_CONTEXT.secure,
+            });
+            return resolved.kind === "tileSource" ? resolved.tileSource : resolved.url;
         };
 
         // todo find existing item index if bg config is loaded
@@ -315,8 +321,16 @@ OpenSeadragon.Tools = class {
         let source = idx > -1 && viewer.world.getItemAt(idx)?.source;
         if (!source) {
             // todo: might not carry over all OSD properties such as ajax headers
-            source = await viewer.instantiateTileSourceClass({tileSource: bgUrlFromEntry(bgConfig)});
+            const spec = bgUrlFromEntry(bgConfig);
+            const SP = window.SLIDE_PROTOCOLS;
+            const client = typeof spec === "string"
+                ? SP?.getActiveClientForUrl?.(spec)
+                : spec?.__xopatHttpClient;
+            source = await SP.withActiveClient(client, () =>
+                viewer.instantiateTileSourceClass({tileSource: spec})
+            );
             source = source.source;
+            if (client && source && !source.__xopatHttpClient) source.__xopatHttpClient = client;
         }
         if (source.getLabel) {
             // if we have a thumbnail, replace the source with single-image thumbnail

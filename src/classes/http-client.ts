@@ -30,39 +30,17 @@ export class HTTPError extends Error {
 // Support for legacy global access if required by your environment
 window.HTTPError = HTTPError;
 
-export interface AuthHandlerParams {
-    secret: any;
-    type: string;
-    contextId?: string;
-    url: string;
-    method: string;
-}
+import { XOpatRemoteEndpoint } from "./remote-endpoint";
+import type { RemoteEndpointOptions } from "./remote-endpoint";
 
-export type AuthHandler = (
-    params: AuthHandlerParams
-) => Promise<Record<string, string | undefined>> | Record<string, string | undefined>;
+// Re-export for backward compatibility (consumers historically imported these from http-client).
+export type { AuthHandler, AuthHandlerParams } from "./remote-endpoint";
 
-export interface HttpClientOptions {
-    /** e.g. "https://mlflow.myhost.com/api/2.0/mlflow", must be defined if proxy is not defined */
-    baseURL?: string;
-    /** Optional alias for server-side proxy (e.g. "openai"). Routes via `/proxy/{alias}`. */
-    proxy?: string;
+export interface HttpClientOptions extends RemoteEndpointOptions {
     /** @default 30000 */
     timeoutMs?: number;
     /** @default 3 */
     maxRetries?: number;
-    auth?: {
-        /** optional logical context (e.g., "mlflow", "analytics") */
-        contextId?: string;
-        /** which secret types to apply (default ["jwt"]) in order */
-        types?: string[];
-        /** map of type=>handler override for this instance */
-        handlers?: Record<string, AuthHandler>;
-        /** if true, attempts a one-shot secret refresh via user interface @default true */
-        refreshOn401?: boolean;
-        /** auth.required flag */
-        required?: boolean;
-    };
 }
 
 export interface RequestOptions {
@@ -89,119 +67,33 @@ declare interface Window {
 }
 
 /**
- * Minimal HTTP client with:
- * - pluggable auth (JWT by default) with context-aware secrets
- * - automatic auth headers via handlers
- * - JSON/query handling
- * - configurable retries for 429/5xx
- * - smart response parsing
- * - throws HTTPError for HTTP failures
+ * HTTP client built on top of `XOpatRemoteEndpoint`:
+ * - pluggable auth (JWT by default) with context-aware secrets        (← base)
+ * - automatic auth headers via handlers                                 (← base)
+ * - proxy baseURL composition + `XOpatUser`-bound secret store           (← base)
+ * - JSON/query handling                                                  (← here)
+ * - configurable retries for 429/5xx                                     (← here)
+ * - 401-triggered secret refresh                                         (← here)
+ * - smart response parsing                                               (← here)
+ * - throws `HTTPError` for HTTP failures                                 (← here)
+ *
+ * NOTE FOR FUTURE MAINTAINERS: a sibling `WebSocketClient` is planned to
+ * extend `XOpatRemoteEndpoint` directly and reuse the auth/proxy/secret
+ * plumbing factored out below. Anything specifically tied to `fetch` /
+ * `Response` / CSRF / 429-retry belongs here in `HttpClient`; transport-
+ * agnostic auth/proxy work belongs in `XOpatRemoteEndpoint`. See the plan
+ * note in `~/.claude/plans/my-dicom-plugin-snoopy-turing.md` (WebSocket-
+ * readiness for the slide-protocol transport) for the design intent.
  */
-export class HttpClient {
-    public baseURL: string;
+export class HttpClient extends XOpatRemoteEndpoint {
     public timeoutMs: number;
     public maxRetries: number;
-    private secretStore: any;
-    private usingProxy: boolean;
-    private auth: {
-        contextId?: string;
-        types: string[];
-        handlers: Record<string, AuthHandler>;
-        refreshOn401: boolean;
-        required: boolean;
-    };
 
-    private static _globalAuthHandlers: Record<string, AuthHandler> = {};
-
-    constructor({ baseURL, proxy, timeoutMs = 30000, maxRetries = 3, auth = {} }: HttpClientOptions = {}) {
-        let base = "";
-        if (proxy && typeof proxy === "string") {
-            const domain = APPLICATION_CONTEXT.url;
-            base = domain.endsWith("/")
-                ? `${domain}proxy/${proxy}`
-                : `${domain}/proxy/${proxy}`;
-        }
-
-        if (baseURL) {
-            if (base) {
-                if (baseURL.startsWith("http")) {
-                    console.warn("HttpClient: baseURL is an absolute URL, which is wrong with proxy usage!", baseURL, proxy);
-                }
-                if (!base.endsWith("/")) {
-                    base = `${base}/`;
-                }
-                base = base + baseURL.replace(/^\//, "");
-            } else {
-                base = baseURL;
-            }
-        }
-
-        if (!base) {
-            throw new Error("HttpClient: baseURL or proxy alias is required");
-        }
-
-        // Collapse accidental `//` (e.g. trailing-slash domain + leading-
-        // slash path) so server-side route matching like `pathname.
-        // startsWith("/proxy/")` doesn't silently fail. Preserves `://`.
-        this.baseURL = base.replace(/([^:])\/{2,}/g, "$1/").replace(/\/$/, "");
+    constructor(opts: HttpClientOptions = {}) {
+        const { timeoutMs = 30000, maxRetries = 3, ...endpointOpts } = opts;
+        super(endpointOpts);
         this.timeoutMs = timeoutMs;
         this.maxRetries = Math.max(0, maxRetries);
-        this.secretStore = XOpatUser.instance();
-        this.usingProxy = !!proxy;
-
-        const {
-            contextId = undefined,
-            types = ["jwt"],
-            handlers = {},
-            refreshOn401 = true,
-            required = false,
-        } = auth;
-
-        this.auth = {
-            contextId,
-            types,
-            handlers: { ...HttpClient._globalAuthHandlers, ...handlers },
-            refreshOn401,
-            required,
-        };
-    }
-
-    /** Register a global auth handler. */
-    static registerAuthHandler(type: string, handler: AuthHandler): void {
-        HttpClient._globalAuthHandlers[type] = handler;
-    }
-
-    /** Check type validity */
-    static knowsSecretType(type: string): boolean {
-        return type in HttpClient._globalAuthHandlers;
-    }
-
-    private async _authHeaders(url: string, method: string): Promise<Record<string, string>> {
-        const { types, handlers, contextId, required } = this.auth;
-        const headers: Record<string, string> = {};
-        let hasAnySecret = false;
-
-        for (const type of types || []) {
-            const handler = handlers[type];
-            if (!handler) continue;
-
-            const secret = this.secretStore.getSecret(type, contextId);
-            if (!secret) continue;
-
-            hasAnySecret = true;
-            const addition = await handler({ secret, type, contextId, url, method });
-            if (addition && typeof addition === "object") Object.assign(headers, addition);
-        }
-
-        if (!hasAnySecret && required && this.usingProxy) {
-            console.warn(
-                `HttpClient: auth.required=true for proxy request but no secrets found` +
-                (contextId ? ` for context '${contextId}'` : "") +
-                `. Request will be sent without auth headers and will likely result in 401.`
-            );
-        }
-
-        return headers;
     }
 
     private _isRetriable(status: number): boolean {
@@ -352,14 +244,104 @@ export class HttpClient {
         }
     }
 
-    private async _maybeRefreshSecrets(): Promise<boolean> {
-        const { types, contextId } = this.auth;
+    // `_maybeRefreshSecrets`, `resolveUrl`, and `isProxied` live on the
+    // `XOpatRemoteEndpoint` base — they are reused as-is by any subclass.
+
+    /**
+     * Issue a single fetch and return the raw Response. Sibling of `request()`
+     * for callers that need streaming or binary bodies (e.g. tile downloads).
+     * Applies the same auth-header + CSRF + 401-refresh + retry semantics as
+     * `request()`, but does not parse the body.
+     *
+     * The caller supplies `init.method`, `init.body`, `init.signal`, etc.
+     * Headers are merged in this order: auth handlers → CSRF (if proxied) →
+     * `init.headers` (caller-supplied wins on collisions).
+     *
+     * Throws `HTTPError` on non-retriable 4xx/5xx (after refresh + retries
+     * are exhausted). Returns `Response` only when `res.ok` is true.
+     */
+    async fetchRaw(path: string, init: RequestInit = {}): Promise<Response> {
+        const url = this.resolveUrl(path);
+        const method = (init.method || "GET").toUpperCase();
+        const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
+
+        const buildHeaders = async (): Promise<Record<string, string>> => ({
+            ...(await this._authHeaders(url, method)),
+            ...(this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
+                ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN as string }
+                : {}),
+            ...(callerHeaders || {}),
+        });
+
+        if (this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
+            console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
+        }
+
+        // If the caller didn't pass a signal, compose our own timeout.
+        const ownController = init.signal ? null : new AbortController();
+        const timeoutHandle = ownController
+            ? setTimeout(() => ownController.abort(), this.timeoutMs)
+            : null;
+        const signal = init.signal ?? ownController!.signal;
+
+        let currentHeaders = await buildHeaders();
+        let attempt = 0;
+        let refreshed = false;
+
         try {
-            for (const t of types || []) {
-                await this.secretStore.requestSecretUpdate(t, contextId);
+            while (true) {
+                try {
+                    const res = await fetch(url, {
+                        ...init,
+                        method,
+                        headers: currentHeaders,
+                        signal,
+                        ...(this.usingProxy ? { credentials: "same-origin" as RequestCredentials } : {}),
+                    });
+
+                    if (!res.ok) {
+                        const text = await res.clone().text().catch(() => "");
+
+                        if (this._tryHandleSessionExpiry(res.status, text)) {
+                            throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                        }
+
+                        if (res.status === 401 && this.auth.refreshOn401 && !refreshed) {
+                            refreshed = await this._maybeRefreshSecrets();
+                            if (refreshed) {
+                                currentHeaders = await buildHeaders();
+                                continue;
+                            }
+                        }
+
+                        if (this._isRetriable(res.status) && attempt < this.maxRetries) {
+                            attempt += 1;
+                            const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+                            await this._delay(backoff);
+                            continue;
+                        }
+
+                        throw new HTTPError(`HTTP ${method} ${url} failed: ${res.status}`, res, text);
+                    }
+
+                    return res;
+                } catch (err: any) {
+                    if (err instanceof HTTPError) throw err;
+                    if (err?.name === "AbortError") {
+                        throw new HTTPError(`HTTP ${method} ${url} aborted`);
+                    }
+                    if (attempt < this.maxRetries) {
+                        attempt += 1;
+                        const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+                        await this._delay(backoff);
+                        continue;
+                    }
+                    throw err;
+                }
             }
-            return true;
-        } catch (_) { return false; }
+        } finally {
+            if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+        }
     }
 }
 

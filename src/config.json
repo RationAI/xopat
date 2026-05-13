@@ -16,6 +16,9 @@
      * @typedef {{
      *   domain: string,
      *   path: string,
+     *   slide_protocols: Object.<string, string>,
+     *   default_background_protocol: string,
+     *   default_visualization_protocol: string,
      *   image_group_server: string,
      *   image_group_protocol: string,
      *   data_group_server: string,
@@ -28,6 +31,30 @@
      *   secureMode: ?boolean,
      *   production: ?boolean
      * }} xoClientSetup
+     *
+     * Slide protocols: each `slide_protocols[name]` is a backtick-template URL with
+     * `data` (scalar DataID) in scope. The server URL is embedded directly in the
+     * template — no separate server map. `default_background_protocol` /
+     * `default_visualization_protocol` pick the protocol used for background and
+     * visualization images respectively. `BackgroundItem.protocol` /
+     * `DataOverride.protocol` may reference any registered name — safe in secure
+     * mode (no eval of user input).
+     *
+     * Plugins can register additional protocols at runtime via
+     * `window.SLIDE_PROTOCOLS.register(...)`, including factory protocols that
+     * build a TileSource directly (see the dicom plugin).
+     *
+     * Entries may also use the object form
+     *   `"name": { "url": "<template>", proxy?, auth?, headers?, timeoutMs?, … }`
+     * to declare HttpClient options. When present, all requests from that
+     * protocol's TileSource (metadata + tiles) flow through the configured
+     * client, gaining proxy routing, CSRF, and JWT/auth headers uniformly.
+     *
+     * `image_group_*` / `data_group_*` keys are DEPRECATED legacy fields kept for
+     * backward compatibility; auto-synthesized into `__legacy_bg` / `__legacy_viz`
+     * entries on load when `slide_protocols` is missing. Note: legacy
+     * `data_group_protocol` receives `data` as an array (`data.join(",")` contract);
+     * new entries above always receive scalar.
      */
     "client": {
         "dev": {
@@ -39,21 +66,36 @@
             */
             "path": "",
             /*
-               Image Group Server for data not processed by visualizations, specifies the server and protocol
-               and the tissue file preview URL getter. Both latter are javascript one-liners resulting in a string.
-               Available are 'path' (image server URL) and 'data' (image identifier such as image path).
-               Server URL can be relative, if on the same server domain as the viewer.
+               Slide protocol registry. See xoClientSetup typedef above for the full
+               contract. Each entry resolves a DataID into a tile-source URL via a
+               backtick template with `data` (scalar) in scope; the server URL is
+               embedded directly in the template. Names referenced from
+               `BackgroundItem.protocol` / `DataOverride.protocol` are safe in
+               secure mode (no eval of user-controlled strings).
+             */
+            "slide_protocols": {
+                "iip_deepzoom":     "`/iipsrv/iipsrv.fcgi?Deepzoom=${data}.dzi`",
+                "iip_deepzoom_ext": "`/iipsrv/iipsrv.fcgi#DeepZoomExt=${data}.dzi`"
+                //"secure_wsi": {
+                //    "url":   "`/v3/slides/info?slide_id=${data}`",
+                //    "proxy": "wsi-proxy",
+                //    "auth":  { "contextId": "wsi", "types": ["jwt"], "required": true }
+                //}
+            },
+            "default_background_protocol":   "iip_deepzoom",
+            "default_visualization_protocol": "iip_deepzoom_ext",
+
+            /*
+               Legacy keys — DEPRECATED, kept for backward compatibility during the
+               registry rollout. Auto-synthesized into `__legacy_bg` / `__legacy_viz`
+               entries if `slide_protocols` is missing. Note: `data_group_protocol`
+               historically receives `data` as an array (`data.join(",")` contract);
+               new entries above always receive scalar.
              */
             "image_group_server": "/iipsrv/iipsrv.fcgi",
-            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`", //one-liner expression
-            /*
-               Data Group Server for visualized data, specifies the server and protocol as javascript one-liner
-               resulting in a string. Available are 'path' (image server URL) and 'data'
-               (string array of image identifiers such as image path).
-               Server URL can be relative, if on the same server domain as the viewer.
-             */
+            "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "data_group_server": "/iipsrv/iipsrv.fcgi",
-            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`", //one-liner expression
+            "data_group_protocol": "`${path}#DeepZoomExt=${data.join(\",\")}.dzi`",
             /* Cookie Setup */
             "js_cookie_expire": 365,
             "js_cookie_path": "/",
@@ -127,6 +169,14 @@
         "prod": {
             "domain": "https://rationai-vis.ics.muni.cz/",
             "path": null,
+            /* New-style registry; see dev block above for shape. */
+            "slide_protocols": {
+                "iip_deepzoom":     "`/iipsrv/iipsrv.fcgi?Deepzoom=${data}.dzi`",
+                "iip_deepzoom_ext": "`/iipsrv/iipsrv.fcgi#DeepZoomExt=${data}.dzi`"
+            },
+            "default_background_protocol":   "iip_deepzoom",
+            "default_visualization_protocol": "iip_deepzoom_ext",
+            /* Legacy (deprecated) — kept for backward compatibility. */
             "image_group_server": "/iipsrv/iipsrv.fcgi",
             "image_group_protocol": "`${path}?Deepzoom=${data}.dzi`",
             "data_group_server": "/iipsrv/iipsrv.fcgi",
@@ -391,6 +441,13 @@
             "app": [
               "dist/classes/user.js",
               "parse-input.js",
+              // Patches OpenSeadragon.TileSource.prototype.downloadTileStart and
+              // OpenSeadragon.makeAjaxRequest to route through xOpat's HttpClient
+              // (proxy alias + CSRF + JWT) when a TileSource carries
+              // `__xopatHttpClient` (stamped by the slide-protocol registry).
+              // Must load AFTER the OSD library and BEFORE dist/app.js so the
+              // patches are installed before any TileSource is opened.
+              "dist/tile-source.js",
               "dist/app.js",
               "user-interface.js",
               "layers.js",

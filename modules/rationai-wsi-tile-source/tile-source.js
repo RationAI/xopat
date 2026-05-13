@@ -15,17 +15,28 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             this._setDownloadHandler(options.multifetch);
         }
 
-        if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
-            const user = XOpatUser.instance();
-            // fixme: login called multiple times, go to the http client api
-            user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
-            user.addHandler('secret-updated', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = e.secret));
-            user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
-            user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
-        }
-
+        // Auth (JWT and friends) is owned by the per-source HttpClient stamped
+        // by the slide-protocol registry (`__xopatHttpClient`). No more manual
+        // `XOpatUser` listener juggling here — the client refreshes secrets on
+        // 401 via its own pipeline. Protocols without a registered HttpClient
+        // fall back to bare fetch with whatever `ajaxHeaders` OSD passes.
         this._qArgs = "";
         this._dataFormat = "rasterBlob";
+    }
+
+    /**
+     * Issue a GET (or whatever `init` says) routed through this source's
+     * per-protocol HttpClient when one was stamped by the slide-protocol
+     * registry. Falls back to a bare `fetch` for protocols that don't declare
+     * an `httpClient` block in env.json — preserves old direct-fetch behaviour
+     * for unauthenticated public image servers.
+     */
+    _fetch(url, init = undefined) {
+        const client = this.__xopatHttpClient;
+        if (client && typeof client.fetchRaw === "function") {
+            return client.fetchRaw(url, init);
+        }
+        return fetch(url, init);
     }
 
     /**
@@ -102,12 +113,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      */
     supports( data, url ) {
         if (data.url && data.type && data.type === "empaia-standalone") {
-            data.ajaxHeaders = data.ajaxHeaders || {};
-            const user = XOpatUser.instance();
-            const secret = user.getSecret();
-            if (secret) {
-                data.ajaxHeaders["Authorization"] = user.getSecret();
-            }
+            // Auth headers (if any) come from the per-source HttpClient at
+            // request time; no need to stamp Authorization on `data.ajaxHeaders` here.
             return true;
         }
 
@@ -143,12 +150,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             return data;
         }
 
-        //todo if previews have token then it is not being used to fetch thumbnails!
-
-        const user = XOpatUser.instance();
-        const secret = user.getSecret();
-        const headers = secret ? {"Authorization": user.getSecret()} : {};
-
+        // Auth is owned by the per-source HttpClient (`__xopatHttpClient`); no
+        // need to materialise an `Authorization` header here.
         if (!Array.isArray(data)) {
             if (!data) {
                 this.metadata = {error: "Invalid data: no data available for given url " + url}
@@ -171,7 +174,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 fileId: data.id,
                 tilesUrl: data.tilesUrl,
                 innerFormat: data.format,
-                ajaxHeaders: headers,
                 multifetch: false,
                 // values returned here get attached to 'this', we return this.metadata in getMetadata()
                 metadata: {
@@ -242,7 +244,6 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             fileId: data.map(image => image.id).join(','),
             innerFormat: data[0].format,
             tilesUrl: data[0].tilesUrl,
-            ajaxHeaders: headers,
             multifetch: true,
             data: represent,
             dataSet: data,
@@ -286,7 +287,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     }
 
     _getInfo(url, tilesUrl) {
-        fetch(url, {
+        this._fetch(url, {
             headers: this.ajaxHeaders || {}
         }).then(async res => {
             const text = await res.text();
@@ -350,16 +351,18 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     async getThumbnail({ targetWidth = 512 } = {}) {
         // todo multifetch - how to handle multiple thumbnails?
         targetWidth = Math.min(targetWidth, 500); //default max value
-        return fetch(`${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`)
-            .then(async res => res.blob());
+        const res = await this._fetch(
+            `${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`
+        );
+        return res.blob();
     }
 
     /**
      * @returns {Promise<ArrayBuffer>}
      */
     async downloadICCProfile() {
-        const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
-        return fetch(url).then(async res => res.arrayBuffer());
+        const res = await this._fetch(`${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`);
+        return res.arrayBuffer();
     }
 
     _setDownloadHandler(isMultiplex) {
@@ -390,7 +393,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 }
 
                 var dataStore = context.userData;
-                if (this.ajaxHeaders["Authorization"]) context.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
+                // Auth headers (if any) are injected by the patched
+                // `OpenSeadragon.makeAjaxRequest` when this source carries a
+                // `__xopatHttpClient`. Nothing to add manually.
                 const _this = this;
 
                 dataStore.request = OpenSeadragon.makeAjaxRequest({
@@ -468,34 +473,32 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         this.__configuredDownload = true;
     }
 
+    // Single-tile download path. Routes through the per-source HttpClient
+    // (proxy + CSRF + auth) when present, falls back to bare fetch otherwise.
+    // We override the prototype patch in `src/tile-source.ts` only because
+    // this source needs to pass `this._dataFormat` ("rawTiff" for multi-
+    // channel TIFF, "rasterBlob" otherwise) to `imageJob.finish` — the
+    // prototype unconditionally uses "rasterBlob".
     downloadTileStart(imageJob) {
-        let context = imageJob.userData;
-        if (this.ajaxHeaders["Authorization"]) imageJob.ajaxHeaders["Authorization"] = this.ajaxHeaders["Authorization"];
-        context.promise = this.myFetch(imageJob.src, {
+        const controller = new AbortController();
+        imageJob.userData.abortController = controller;
+        this._fetch(imageJob.src, {
             method: "GET",
-            mode: 'cors',
-            cache: 'no-cache',
-            credentials: 'same-origin',
             headers: imageJob.ajaxHeaders || {},
-            body: null
+            signal: controller.signal,
+            body: imageJob.postData || undefined,
         }).then(res => res.blob()).then(data => {
-            imageJob.finish(data, null, this._dataFormat);
+            if (controller.signal.aborted) return;
+            if (data.size === 0) imageJob.fail("Empty image response.", null);
+            else imageJob.finish(data, null, this._dataFormat);
         }).catch(e => {
-            imageJob.fail('Failed to fetch tile: ' + e, null);
+            if (controller.signal.aborted) return;
+            imageJob.fail('Failed to fetch tile: ' + (e?.message ?? e), null);
         });
     }
 
     downloadTileAbort(imageJob) {
-        imageJob.userData.promise.controller.abort();
-    }
-
-    myFetch(input, init) {
-        let controller = new AbortController();
-        let signal = controller.signal;
-        init = Object.assign({signal}, init);
-        let promise = fetch(input, init);
-        promise.controller = controller;
-        return promise;
+        imageJob.userData?.abortController?.abort();
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
