@@ -235,7 +235,8 @@
                     onZoom: null,
                     collapsed: false,
                     collapsibles: [],
-                    labelEl: null
+                    labelEl: null,
+                    labelObjectUrl: null
                 };
                 this._originalClassTarget = noUiSlider.cssClasses.target;
             }
@@ -995,6 +996,10 @@
 
                 this.magnificationContainer = null;
 
+                if (this._ui?.labelObjectUrl) {
+                    try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
+                }
+
                 // Reset UI state
                 this._ui = {
                     rotSliderEl: null,
@@ -1003,7 +1008,8 @@
                     onZoom: null,
                     collapsed: false,
                     collapsibles: [],
-                    labelEl: null
+                    labelEl: null,
+                    labelObjectUrl: null
                 };
                 this._applyCollapsed = null;
             }
@@ -1552,12 +1558,11 @@
         return van.tags.button(
             {
                 class: () => [
-                    "btn btn-xs border-none absolute px-1",
+                    "btn btn-xs border-none px-1",
                     enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
                 ].join(" "),
                 onclick: onClick,
-                title: () => (enabled.val ? "Disable sync" : "Enable sync"),
-                style: "left: -10px; top: -15px;"
+                title: () => (enabled.val ? "Disable sync" : "Enable sync")
             },
             // Use a simple Link icon or text abbreviation
             van.tags.span({ class: "text-[10px] font-bold" },
@@ -1571,6 +1576,43 @@
     }
 
     /**
+     * Render any of the documented `ImageLike` shapes returned by
+     * `TileSource.getLabel()` / `getThumbnail()` into `container`.
+     * Returns `{node, objectUrl}` (objectUrl is non-null when we created one
+     * from a Blob and must be revoked later), or null if `src` is unrenderable.
+     */
+    function renderImageLikeInto(container, src) {
+        let objectUrl = null;
+        let node = null;
+        if (typeof src === "string") {
+            node = document.createElement("img");
+            node.src = src;
+        } else if (src instanceof Blob) {
+            objectUrl = URL.createObjectURL(src);
+            node = document.createElement("img");
+            node.src = objectUrl;
+        } else if (typeof HTMLImageElement !== "undefined" && src instanceof HTMLImageElement) {
+            node = src.cloneNode(true);
+        } else if (typeof HTMLCanvasElement !== "undefined" && src instanceof HTMLCanvasElement) {
+            node = src;
+        } else if (src && src.canvas instanceof HTMLCanvasElement) {
+            node = src.canvas;
+        } else {
+            return null;
+        }
+        if (node.tagName === "IMG") {
+            node.alt = "Slide label";
+            node.loading = "lazy";
+        }
+        node.style.maxWidth = "100%";
+        node.style.maxHeight = "100%";
+        node.style.display = "block";
+        container.innerHTML = "";
+        container.appendChild(node);
+        return { node, objectUrl };
+    }
+
+    /**
      * Mount the SYNC button, reset button, collapse toggle and slide-label
      * onto the magnification panel. The caller is responsible for pushing
      * the actual collapsible columns (`rotCol`, `magCol`) onto
@@ -1579,14 +1621,34 @@
     function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
         scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
 
-        const sync = SyncToggleButton(viewer, tool);
-        magnificationContainer.appendChild(sync);
+        // Single inline strip that hangs off the top of the magnification
+        // panel. Items spread across the full width with justify-between:
+        // [▾]    [SYNC]    [✕]    [LABEL]
+        const header = document.createElement("div");
+        header.className = "absolute flex flex-row items-center justify-between gap-2";
+        header.style.left = "-10px";
+        header.style.top = "-15px";
+        header.style.right = "-10px";
+        header.style.zIndex = "3";
+        magnificationContainer.appendChild(header);
+        scalebar._ui.header = header;
 
+        // 1) Collapse / expand chevron — leftmost.
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn btn-xs border-none px-1 bg-base-content/10 hover:bg-base-content/20";
+        toggle.title = "Minimize";
+        toggle.innerHTML = '<span class="text-[10px] font-bold">▾</span>';
+        header.appendChild(toggle);
+
+        // 2) SYNC button.
+        const sync = SyncToggleButton(viewer, tool);
+        header.appendChild(sync);
+
+        // 3) Clear-sync (✕). Hidden unless a session is calibrated.
         const reset = document.createElement("button");
         reset.type = "button";
-        reset.className = "btn btn-xs btn-ghost text-error border-none absolute px-1";
-        reset.style.left = "32px";
-        reset.style.top = "-15px";
+        reset.className = "btn btn-xs text-error border-none px-1";
         reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
         reset.innerHTML = '<span class="text-[10px] font-bold leading-none">✕</span>';
         reset.style.display = "none";
@@ -1615,10 +1677,9 @@
                 updateResetVisibility();
             }
         });
-        magnificationContainer.appendChild(reset);
+        header.appendChild(reset);
 
-        // Chain into the existing __syncToolChanged hook set by SyncToggleButton
-        // so the reset button visibility stays in sync with session state.
+        // Chain into the existing __syncToolChanged hook set by SyncToggleButton.
         const prev = viewer.__syncToolChanged;
         viewer.__syncToolChanged = () => {
             prev?.();
@@ -1626,28 +1687,77 @@
         };
         updateResetVisibility();
 
-        const labelEl = document.createElement("div");
-        labelEl.className = "absolute text-[10px] font-semibold text-base-content/80 px-2 py-0.5 rounded-md bg-base-200 shadow truncate";
-        labelEl.style.left = "50%";
-        labelEl.style.top = "-15px";
-        labelEl.style.transform = "translateX(-50%)";
-        labelEl.style.maxWidth = "140px";
-        const tile = scalebar.getReferencedTiledImage?.() || viewer.world.getItemAt(0);
-        const lbl = tile?.source?.label;
-        if (typeof lbl === "string" && lbl.trim()) {
-            labelEl.textContent = lbl.trim();
-            magnificationContainer.appendChild(labelEl);
-            scalebar._ui.labelEl = labelEl;
-        }
+        // 4) Label thumbnail — pushed to the right with margin-left:auto.
+        const LABEL_BOX = { width: "56px", height: "26px" };
+        const LABEL_SCALE_HOVER = 4.5;
 
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "btn btn-xs border-none absolute px-1 bg-base-content/10 hover:bg-base-content/20";
-        toggle.style.right = "-10px";
-        toggle.style.top = "-15px";
-        toggle.title = "Minimize";
-        toggle.innerHTML = '<span class="text-[10px] font-bold">▾</span>';
-        magnificationContainer.appendChild(toggle);
+        const labelEl = document.createElement("div");
+        labelEl.className = "rounded-md bg-base-200 overflow-hidden flex items-center justify-center cursor-zoom-in";
+        labelEl.style.width = LABEL_BOX.width;
+        labelEl.style.height = LABEL_BOX.height;
+        labelEl.style.flex = "0 0 auto";
+        labelEl.style.transformOrigin = "left center";
+        labelEl.style.transition = "transform 0.18s ease";
+        labelEl.style.display = "none";
+        labelEl.title = "Slide label (hover to enlarge)";
+        header.appendChild(labelEl);
+        scalebar._ui.labelEl = labelEl;
+
+        labelEl.addEventListener("mouseenter", () => {
+            if (scalebar._ui.collapsed) return;
+            if (labelEl.style.pointerEvents === "none") return;
+            labelEl.style.transform = `scale(${LABEL_SCALE_HOVER})`;
+            labelEl.style.position = "relative";
+            labelEl.style.zIndex = "40";
+        });
+        labelEl.addEventListener("mouseleave", () => {
+            labelEl.style.transform = "";
+            labelEl.style.position = "";
+            labelEl.style.zIndex = "";
+        });
+
+        const showLabelPlaceholder = () => {
+            if (scalebar._ui?.labelEl !== labelEl) return;
+            labelEl.innerHTML = "";
+            labelEl.classList.remove("bg-base-200", "cursor-zoom-in");
+            labelEl.classList.add(
+                "border", "border-dashed", "border-base-content/30", "bg-transparent"
+            );
+            labelEl.style.cursor = "default";
+            labelEl.style.pointerEvents = "none";
+            const span = document.createElement("span");
+            span.className = "text-[9px] italic text-base-content/40 whitespace-nowrap px-1";
+            span.textContent = "no label";
+            labelEl.appendChild(span);
+            labelEl.title = "No slide label available";
+            if (!scalebar._ui.collapsed) labelEl.style.display = "";
+            scalebar.refreshHandler?.();
+        };
+
+        const tile = scalebar.getReferencedTiledImage?.() || viewer.world.getItemAt(0);
+        const getLabel = tile?.source?.getLabel;
+        if (typeof getLabel === "function") {
+            Promise.resolve(getLabel.call(tile.source)).then((res) => {
+                if (scalebar._ui?.labelEl !== labelEl) return;
+                if (!res) { showLabelPlaceholder(); return; }
+                const rendered = renderImageLikeInto(labelEl, res);
+                if (!rendered) { showLabelPlaceholder(); return; }
+                if (rendered.node && rendered.node.tagName === "IMG") {
+                    rendered.node.addEventListener("error", () => {
+                        if (rendered.objectUrl) {
+                            try { URL.revokeObjectURL(rendered.objectUrl); } catch {}
+                            scalebar._ui.labelObjectUrl = null;
+                        }
+                        showLabelPlaceholder();
+                    });
+                }
+                scalebar._ui.labelObjectUrl = rendered.objectUrl || null;
+                if (!scalebar._ui.collapsed) labelEl.style.display = "";
+                scalebar.refreshHandler?.();
+            }).catch(() => { showLabelPlaceholder(); });
+        } else {
+            showLabelPlaceholder();
+        }
 
         scalebar._ui.collapsed = !!scalebar._ui.collapsed;
 
@@ -1656,40 +1766,37 @@
             for (const el of scalebar._ui.collapsibles) {
                 if (el) el.style.display = c ? "none" : "";
             }
-            if (scalebar._ui.labelEl) {
-                scalebar._ui.labelEl.style.display = c ? "none" : "";
-            }
+            // Cancel any in-flight hover-scale on the label.
+            labelEl.style.transform = "";
+            labelEl.style.position = "";
+            labelEl.style.zIndex = "";
+            // Collapsed mode hides everything except the chevron + SYNC.
+            labelEl.style.display = c ? "none" : "";
             updateResetVisibility();
             if (c) {
-                // Collapsed: drop the panel chrome and let SYNC + chevron sit inline.
+                // The header flows as a normal child of the container so the
+                // container collapses to the header's natural height. The
+                // scalebar's refreshHandler then drops it just above the bar.
+                header.style.position = "relative";
+                header.style.left = "";
+                header.style.top = "";
+                header.style.right = "";
                 magnificationContainer.classList.remove("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
-                magnificationContainer.classList.add("items-center", "gap-1");
+                magnificationContainer.classList.add("items-center");
                 magnificationContainer.style.height = "auto";
-                magnificationContainer.style.minWidth = "";
-                magnificationContainer.style.padding = "0";
                 magnificationContainer.style.background = "transparent";
-                sync.style.position = "relative";
-                sync.style.left = "";
-                sync.style.top = "";
-                toggle.style.position = "relative";
-                toggle.style.right = "";
-                toggle.style.top = "";
                 toggle.title = "Expand";
                 toggle.firstChild.textContent = "▴";
             } else {
-                // Expanded: restore the floating-buttons-above-pill chrome.
+                // Expanded: header floats above the panel top-edge again.
+                header.style.position = "absolute";
+                header.style.left = "-10px";
+                header.style.top = "-15px";
+                header.style.right = "-10px";
                 magnificationContainer.classList.add("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
-                magnificationContainer.classList.remove("items-center", "gap-1");
+                magnificationContainer.classList.remove("items-center");
                 magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
-                magnificationContainer.style.minWidth = "";
-                magnificationContainer.style.padding = "";
                 magnificationContainer.style.background = "";
-                sync.style.position = "absolute";
-                sync.style.left = "-10px";
-                sync.style.top = "-15px";
-                toggle.style.position = "absolute";
-                toggle.style.right = "-10px";
-                toggle.style.top = "-15px";
                 toggle.title = "Minimize";
                 toggle.firstChild.textContent = "▾";
             }
