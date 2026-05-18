@@ -305,6 +305,7 @@ window.OIDCAuthClient = class OIDCAuthClient {
         const user = XOpatUser.instance();
         const returnNeedsRefresh = () => {
             this.userManager.stopSilentRenew();
+            this._silentRenewEnabled = false;
             if (this.updateXOpatUser && this.userContextId === undefined && user.isLogged) {
                 user.logout();
             }
@@ -312,7 +313,34 @@ window.OIDCAuthClient = class OIDCAuthClient {
         };
 
         oidcUser = oidcUser || await this.userManager.getUser();
-        if (oidcUser && oidcUser.access_token) {
+
+        // Cached sessions can carry a still-valid refresh_token alongside an expired
+        // access_token. Pushing the dead access_token to XOpatUser causes upstream APIs
+        // (e.g. Google Healthcare) to reject requests. Refresh silently before use —
+        // but only when (a) we're not mid-callback (init() handles those via
+        // signinRedirectCallback) and (b) we actually have a refresh_token, otherwise
+        // signinSilent falls back to iframe/top-redirect renewal which loops on
+        // `prompt=none` → interaction_required bounces.
+        const urlHasCallback = typeof window !== "undefined"
+            && new URLSearchParams(window.location.search).get('state') !== null;
+        const canRefreshSilently = oidcUser && oidcUser.access_token && oidcUser.expired
+            && !withLogout && !this._signinProgress && !urlHasCallback
+            && !!oidcUser.refresh_token;
+
+        if (canRefreshSilently) {
+            try {
+                this._signinProgress = true;
+                const refreshed = await this.userManager.signinSilent();
+                oidcUser = refreshed || await this.userManager.getUser();
+            } catch (e) {
+                console.warn("OIDC: silent refresh of expired access token failed.", e);
+                oidcUser = null;
+            } finally {
+                this._signinProgress = false;
+            }
+        }
+
+        if (oidcUser && oidcUser.access_token && !oidcUser.expired) {
             if (withLogout) {
                 const refreshTokenExpiration = await this.getRefreshTokenExpiration();
                 if (!refreshTokenExpiration || refreshTokenExpiration < Date.now() / 1000) {
@@ -339,9 +367,18 @@ window.OIDCAuthClient = class OIDCAuthClient {
             }
 
             user.setSecret(oidcUser.access_token, "jwt", this.userContextId);
+
+            // Kick off the in-session silent-renew loop once — but only when a
+            // refresh_token is available. Without one, startSilentRenew falls back
+            // to iframe/redirect renewal which loops on interaction_required.
+            if (!this._silentRenewEnabled && oidcUser.refresh_token) {
+                this._silentRenewEnabled = true;
+                this.enableEvents();
+            }
             return true;
         } else {
             this.disableEvents();
+            this._silentRenewEnabled = false;
             if (this.updateXOpatUser) USER_INTERFACE.Loading.text("");
         }
         return returnNeedsRefresh();

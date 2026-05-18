@@ -1290,6 +1290,31 @@ export class ViewerOpenPipeline {
 
             const loadKeys = toOpen.map((source, index) => deriveLoadKey(openedSpecOrder[index], source, index));
 
+            // Slide-aware IO lifecycle (per-viewer-background bundle scope):
+            // flush the just-vacated (viewer, background) before the world is
+            // cleared so owners (annotations, …) can snapshot their state
+            // keyed by the OLD slide. Only fires for content-kind changes
+            // (visualization-only / noop don't change the background id),
+            // and only when a previous bg id exists (skips fresh viewers).
+            // Per-viewer-only and global bundleScopes ignore this dispatch
+            // — opting OUT keeps state loaded across slide swaps.
+            const viewerUniqueIdBeforeReset = viewer?.uniqueId;
+            const previousBackgroundId = (window as any).UTILITIES?.currentBackgroundIdFor?.(viewer);
+            if (
+                plan.changeKind === "content" &&
+                viewerUniqueIdBeforeReset &&
+                previousBackgroundId
+            ) {
+                try {
+                    await (window as any).IO_PIPELINE?.flushBundleExport?.({
+                        viewerId: viewerUniqueIdBeforeReset,
+                        backgroundId: previousBackgroundId,
+                    });
+                } catch (e) {
+                    console.warn("IO flush for vacated slide failed:", e);
+                }
+            }
+
             if (!canSurgicallyDiff) {
                 viewerManager._resetViewer(viewerIndex);
             }
@@ -1380,15 +1405,24 @@ export class ViewerOpenPipeline {
                         return false;
                     }
 
-                    if (plan.visualizationSelectionChangedForViewer) {
-                        await viewer.drawer.overrideConfigureAll(undefined);
-                    }
-
+                    // If there are no shaders to apply, transition the drawer
+                    // back to internally-managed mode. This is the only path
+                    // that genuinely needs `overrideConfigureAll(undefined)`.
                     if (!Object.keys(renderOutput).length) {
                         await viewer.drawer.overrideConfigureAll(undefined);
                         return false;
                     }
 
+                    // `overrideConfigureAll(renderOutput)` does its own
+                    // `deleteShaders()` + recreate (flex-renderer.js ~10128),
+                    // so a preceding `overrideConfigureAll(undefined)` to
+                    // "reset on visualization change" just builds per-item
+                    // internal configs that are immediately discarded — and
+                    // trips a library bug in the external→internal transition
+                    // (the navigator drawer's `tiledImageCreated` dereferences
+                    // a parent tiledImage's already-deleted `__shaderConfig`).
+                    // Drop the redundant pre-reset; the apply call handles
+                    // the swap.
                     const attemptApply = async () => {
                         await viewer.drawer.overrideConfigureAll(renderOutput);
                         return true;
@@ -1445,6 +1479,27 @@ export class ViewerOpenPipeline {
                     stateBindings.handleSyntheticOpenEvent(viewer, successOpened, toOpen.length);
                 } else {
                     stateBindings.refreshViewerVisualizationBindings(viewer, 0);
+                }
+
+                // Slide-aware IO lifecycle (per-viewer-background bundle scope):
+                // restore the (viewer, new background) snapshot now that the
+                // world holds the new content. Mirrors the pre-reset flush
+                // above; same opt-in semantics (no-op for owners that didn't
+                // declare per-viewer-background / all). Re-resolves the bg
+                // id from the live world so it reflects the post-open state.
+                if (plan.changeKind === "content") {
+                    const nextBackgroundId = (window as any).UTILITIES?.currentBackgroundIdFor?.(viewer);
+                    const nextViewerUniqueId = viewer?.uniqueId;
+                    if (nextViewerUniqueId && nextBackgroundId) {
+                        try {
+                            await (window as any).IO_PIPELINE?.tryRestoreImport?.({
+                                viewerId: nextViewerUniqueId,
+                                backgroundId: nextBackgroundId,
+                            });
+                        } catch (e) {
+                            console.warn("IO restore for new slide failed:", e);
+                        }
+                    }
                 }
             } finally {
                 plog(`openIntoViewer TRANSACTION FINISH v=${viewerIndex}`);

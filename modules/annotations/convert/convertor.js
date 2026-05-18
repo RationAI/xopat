@@ -371,7 +371,13 @@ OSDAnnotations.Convertor.IConvertor = class {
         for (let annotation of annotations) {
             presetsIdSet.add(annotation?.presetID);
         }
-        return presets.filter(p => presetsIdSet.has(p.presetID));
+        // Guard `p` — symmetric with the `annotation?.presetID` on the line
+        // above. An undefined/null entry in `presets` would otherwise crash
+        // the entire export with "Cannot read properties of undefined
+        // (reading 'presetID')" and surface as a user-facing dialog via the
+        // IO pipeline's failure path. Filter null/undefined entries out
+        // rather than letting one bad entry kill the whole save.
+        return presets.filter(p => p && presetsIdSet.has(p.presetID));
     }
 };
 

@@ -17,14 +17,13 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         options.ready = !!options.wsi;
         super(options);
 
-        // auth propagation
+        // HttpClient owns auth (JWT injection, 401-refresh, CSRF, proxy routing).
+        // The slide-protocol registry stamps the same client on `__xopatHttpClient`
+        // for OSD's metadata-fetch path. When `options.client` is absent (e.g. a
+        // standalone construction without going through SLIDE_PROTOCOLS), the
+        // legacy bare-fetch branches below preserve today's behavior.
+        this.client = options.client || null;
         this.ajaxHeaders = this.ajaxHeaders || {};
-        const user = XOpatUser.instance();
-        const secret = user.getSecret();
-        if (secret) this.ajaxHeaders["Authorization"] = `Bearer ${secret}`;
-        user.addHandler("secret-updated", e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = `Bearer ${e.secret}`));
-        user.addHandler("secret-removed", e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
-        user.addHandler("logout", () => (this.ajaxHeaders["Authorization"] = null));
 
         this.frameOrder = options.frameOrder || null;
         this.frameOrderBySeries = options.frameOrderBySeries || null;
@@ -32,6 +31,19 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         this._hasWarnedFrameMismatch = false;
 
         this._initializeCornerstoneLoader();
+    }
+
+    /**
+     * Stable identifier scoped to this slide's DICOM identity. Used by
+     * subsystems (e.g. the ICC profile module) that need to cache per-source
+     * state. `options.url` is the DICOMweb base URL and is shared across all
+     * slides served by the same endpoint, so it cannot be used as an identity
+     * key — it produces silent collisions where slide A's cached state is
+     * served to slide B.
+     */
+    get tileSourceId() {
+        if (!this.studyUID || !this.seriesUID) return null;
+        return `dicom:${this.baseUrl}#${this.studyUID}/${this.seriesUID}`;
     }
 
     _initializeCornerstoneLoader() {
@@ -74,11 +86,15 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
     _acceptHeader(useRendered = this.useRendered, preferPng = false) {
         if (useRendered) {
-            // Google DICOMweb often requires multipart/related for rendered endpoints.
-            // Prefer JPEG (smaller) with PNG fallback, or flip with preferPng=true.
+            // The /rendered endpoint on standards-conformant DICOMweb servers
+            // (including Google Cloud Healthcare) returns a single-part image
+            // and rejects `multipart/related` with HTTP 406. Send a simple
+            // image accept header; _downloadImage handles the response as
+            // either a raw image blob or a multipart envelope, so either
+            // server contract continues to work.
             return preferPng
-                ? 'multipart/related; type="image/png", multipart/related; type="image/jpeg"'
-                : 'multipart/related; type="image/jpeg", multipart/related; type="image/png"';
+                ? 'image/png, image/jpeg;q=0.9'
+                : 'image/jpeg, image/png;q=0.9';
         }
 
         // Force the server to send the original compressed bitstream (J2K)
@@ -182,11 +198,12 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         if (!this.seriesUID || !this.studyUID) {
             throw new Error('DICOM TileSource needs seriesUID and studyUID to be set before initialization!');
         }
+        if (!this.client) {
+            throw new Error('DICOM TileSource needs an HttpClient (options.client) to initialize.');
+        }
 
-        // if not provided, fetch
         const wsiList = await DicomQuery.findWSIItems(
-            this.baseUrl,
-            XOpatUser.instance().getSecret(),
+            this.client,
             this.studyUID,
             this.seriesUID,
             {
@@ -308,6 +325,20 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         return levels[level].width / levels[0].width;
     }
 
+    // Per-level tile dimensions. DICOMweb pyramids may have different tile
+    // sizes per level (e.g. 512×512 high-res + 256×256 thumb). OSD calls these
+    // from getNumTiles(level) / getTileAtPoint(level), so overriding them is
+    // sufficient to make the grid math correct end-to-end.
+    getTileWidth(level) {
+        const L = this.wsi?.levels?.[this.maxLevel - level];
+        return L?.tileWidth || this._tileWidth || this.tileWidth || 256;
+    }
+
+    getTileHeight(level) {
+        const L = this.wsi?.levels?.[this.maxLevel - level];
+        return L?.tileHeight || this._tileHeight || this.tileHeight || 256;
+    }
+
     getTileUrl(level, x, y) {
         level = this.wsi.levels[this.maxLevel - level];
         const frame = level?.frames?.[`${x}_${y}`];
@@ -323,12 +354,29 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     async _getTile(context) {
-        const res = await fetch(context.src, {
-            headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader(this.useRendered) },
-            mode: 'cors', cache: 'no-store',
-        });
+        let res;
+        try {
+            if (this.client) {
+                res = await this.client.fetchRaw(context.src, {
+                    headers: { Accept: this._acceptHeader(this.useRendered) }
+                });
+            } else {
+                res = await fetch(context.src, {
+                    headers: { ...this.ajaxHeaders, 'Accept': this._acceptHeader(this.useRendered) },
+                    mode: 'cors', cache: 'no-store',
+                });
+                if (!res.ok) return context.fail(`Failed to fetch DICOM frame (HTTP ${res.status}).`, res);
+            }
+        } catch (e) {
+            return context.fail(`Failed to fetch DICOM frame: ${e?.message ?? e}`, null);
+        }
 
-        if (!res.ok) return context.fail("Failed to fetch DICOM frame.", res);
+        // Tile dimensions for this specific level — DICOM pyramids can have
+        // different tile sizes per level, so use the tile's own level rather
+        // than the source's top-level dimensions.
+        const level = context.tile?.level;
+        const tileW = level != null ? this.getTileWidth(level) : (this.tileWidth || 256);
+        const tileH = level != null ? this.getTileHeight(level) : (this.tileHeight || 256);
 
         // 1. Check for native browser formats (Rendered JPEG/PNG)
         const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -352,7 +400,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
         // 3. Use Cornerstone WADO Loader for J2K or Uncompressed bitstreams
         try {
-            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax);
+            const bmp = await this._decodeWithCornerstone(bytes, transferSyntax, tileW, tileH);
             return context.finish(bmp, res, "imageBitmap");
         } catch (err) {
             console.error("[DICOM] Cornerstone decoding failed", err);
@@ -361,7 +409,7 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     }
 
     // tile-source.mjs
-    async _decodeWithCornerstone(pixelData, transferSyntax) {
+    async _decodeWithCornerstone(pixelData, transferSyntax, tileWidth, tileHeight) {
         const ts = (transferSyntax || "").replace(/['"]/g, "").trim();
         let data = pixelData;
 
@@ -369,8 +417,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             data = data.subarray(8);
         }
 
-        const rows = this.tileHeight || 256;
-        const cols = this.tileWidth || 256;
+        const rows = tileHeight || this.tileHeight || 256;
+        const cols = tileWidth || this.tileWidth || 256;
 
         const pi0 = (this.photometricInterpretation || "RGB").toUpperCase();
 
@@ -522,17 +570,23 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
     /* ------------------------- Preview/Macro fetch ------------------------- */
     async _downloadWholeInstanceImage(instanceUID) {
         if (!instanceUID) throw new Error("No instance selected");
-        const url = `${this.baseUrl}/studies/${this.studyUID}/series/${this.seriesUID}/instances/${instanceUID}/rendered`;
-        return this._downloadImage(url);
+        const path = `/studies/${this.studyUID}/series/${this.seriesUID}/instances/${instanceUID}/rendered`;
+        return this._downloadImage(path);
     }
 
-    async _downloadImage(url) {
-        const res = await fetch(url, {
-            headers: { ...this.ajaxHeaders, Accept: this._acceptHeader(true, false) },
-            mode: 'cors', cache: 'no-store'
-        });
-
-        if (!res.ok) throw new Error(`Failed to download rendered image (${res.status})`);
+    async _downloadImage(pathOrUrl) {
+        let res;
+        if (this.client) {
+            res = await this.client.fetchRaw(pathOrUrl, {
+                headers: { Accept: this._acceptHeader(true, false) }
+            });
+        } else {
+            res = await fetch(pathOrUrl, {
+                headers: { ...this.ajaxHeaders, Accept: this._acceptHeader(true, false) },
+                mode: 'cors', cache: 'no-store'
+            });
+            if (!res.ok) throw new Error(`Failed to download rendered image (${res.status})`);
+        }
 
         const ct = (res.headers.get('content-type') || '').toLowerCase();
         // Many servers return a single-part image for /rendered
@@ -550,15 +604,17 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
 
     /** Download preview/overview (thumbnail) image as a Blob (PNG or JPEG). */
     async getThumbnail({ targetWidth = 512 } = {}) {
-        // 1) Use dedicated single-frame preview instance if available
-        if (this.wsi?.previewInstanceUID) {
-            return this._downloadWholeInstanceImage(this.wsi.previewInstanceUID);
+        // Always route via the OVERVIEW/THUMBNAIL instance's `/rendered`
+        // endpoint — works on GCS Healthcare and standards-conformant
+        // servers alike. The `previewInstanceUID` is populated by
+        // groupSeriesInstances when a LABEL/OVERVIEW instance exists.
+        try {
+            if (this.wsi?.previewInstanceUID) {
+                return await this._downloadWholeInstanceImage(this.wsi.previewInstanceUID);
+            }
+        } catch (e) {
+            console.debug("[DICOM] thumbnail unavailable:", e?.message ?? e);
         }
-
-        if (this.wsi?.thumbUrl) {
-            return this._downloadImage(this.wsi.thumbUrl);
-        }
-
         return null;
     }
 
@@ -576,8 +632,8 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
         if (this.useRendered) return null;
         if (this._iccProfileCache === null) return null;
         if (this._iccProfileCache instanceof ArrayBuffer) return this._iccProfileCache;
+        if (!this.client) return null; // HttpClient required for ICC bulk fetch
 
-        const base = (this.baseUrl || "").replace(/\/+$/, "");
         const studyUID = this.studyUID;
         const seriesUID = this.seriesUID;
 
@@ -594,19 +650,17 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             return null;
         }
 
-        const authToken = this.ajaxHeaders?.Authorization?.replace(/^Bearer\s+/i, "") || null;
-
         for (const instanceUID of uniq) {
-            const metaUrl =
-                `${base}/studies/${encodeURIComponent(studyUID)}` +
+            const metaPath =
+                `/studies/${encodeURIComponent(studyUID)}` +
                 `/series/${encodeURIComponent(seriesUID)}` +
                 `/instances/${encodeURIComponent(instanceUID)}/metadata`;
 
             let meta;
             try {
-                meta = await DicomQuery.wadoMetadata(metaUrl, authToken); // Accept: application/dicom+json :contentReference[oaicite:2]{index=2}
+                meta = await DicomQuery.wadoMetadata(this.client, metaPath);
             } catch (e) {
-                console.warn("[ICC] metadata fetch failed", { instanceUID, metaUrl, error: String(e?.message || e) });
+                console.warn("[ICC] metadata fetch failed", { instanceUID, metaPath, error: String(e?.message || e) });
                 continue;
             }
 
@@ -630,24 +684,22 @@ export class DICOMWebTileSource extends OpenSeadragon.TileSource {
             }
 
             if (bulk) {
-                const bulkUrl = new URL(bulk, metaUrl).toString();
-                const res = await fetch(bulkUrl, {
-                    headers: {
-                        Accept: "application/octet-stream",
-                        ...(this.ajaxHeaders || {}),
-                    },
-                    mode: "cors",
-                    cache: "no-store",
-                });
-
-                if (!res.ok) {
-                    console.warn("[ICC] bulk fetch failed", { bulkUrl, status: res.status });
+                // Resolve the BulkDataURI against the absolute metadata URL.
+                // BulkDataURI may itself be absolute, in which case fetchRaw
+                // passes it through unchanged.
+                const metaAbs = this.client.resolveUrl(metaPath);
+                const bulkUrl = new URL(bulk, metaAbs).toString();
+                try {
+                    const res = await this.client.fetchRaw(bulkUrl, {
+                        headers: { Accept: "application/octet-stream" }
+                    });
+                    const buf = await res.arrayBuffer();
+                    this._iccProfileCache = buf;
+                    return buf;
+                } catch (e) {
+                    console.warn("[ICC] bulk fetch failed", { bulkUrl, error: String(e?.message || e) });
                     continue;
                 }
-
-                const buf = await res.arrayBuffer();
-                this._iccProfileCache = buf;
-                return buf;
             }
 
             // Tag exists but has no bytes — treat as missing and stop scanning

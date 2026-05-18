@@ -384,6 +384,7 @@ interface ApplicationContext {
 interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
+    currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;

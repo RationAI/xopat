@@ -73,7 +73,7 @@ Inside the element's constructor or `pluginReady()`/`_init()`:
 
 ```ts
 await this.initIO({
-  bundleScope: "per-viewer",  // or "global" / "both"
+  bundleScope: "per-viewer",  // see scope table below
   exportBundle: async (ctx) => {
     if (!ctx.viewerId) return undefined;
     return this.serializeFor(ctx.viewerId);
@@ -90,6 +90,35 @@ await this.initIO({
 1. registers your bundle hooks with the pipeline
 2. adds any extra capabilities you pass via `options.capabilities`
 3. immediately calls `IO_PIPELINE.tryRestoreImport({ ownerUid })` so any preexisting global payload is rehydrated. Per-viewer rehydration happens automatically via `forceDataImportInitialization` whenever a viewer opens.
+
+#### `bundleScope` values
+
+| Scope                     | When `exportBundle` / `importBundle` runs                                     | `ctx.viewerId` | `ctx.backgroundId` | Lives across slide change? |
+| ------------------------- | ----------------------------------------------------------------------------- | -------------- | ------------------ | -------------------------- |
+| `global` (default)        | Once per owner.                                                               | —              | —                  | Yes                        |
+| `per-viewer`              | Once per open viewer at boot / catch-up.                                      | set            | —                  | Yes (viewer-scoped state stays loaded). |
+| `per-viewer-background`   | Once per **(open viewer, current background)** pair, plus on slide change.    | set            | set                | **No — bound to the slide.** |
+| `both`                    | `global` + `per-viewer` (legacy combo).                                       | varies         | —                  | Yes                        |
+| `all`                     | `global` + `per-viewer` + `per-viewer-background`.                            | varies         | varies             | Per-viewer-background slot is slide-bound; the others stay loaded. |
+
+**Slide-aware semantics** (`per-viewer-background` / `all`): `src/classes/app/viewer-open-pipeline.ts` invokes the pipeline as part of its slide-change choreography for any viewer whose displayed background changes:
+
+- Just before `_resetViewer(viewerIndex)` (i.e. before the world is cleared for the new content), the pipeline dispatches `flushBundleExport({ viewerId, backgroundId: previousBackgroundId })`. Slide-aware owners receive `exportBundle(ctx)` with both ids set and the **previous** slide as `ctx.backgroundId`, so they can snapshot whatever state they want keyed by the leaving slide.
+- After the new content finishes opening (post `applyRendererConfiguration`), the pipeline dispatches `tryRestoreImport({ viewerId, backgroundId: nextBackgroundId })`. Owners receive `importBundle(ctx, data)` with the **new** slide as `ctx.backgroundId` and either the stored payload or `undefined` when nothing is saved for this slide.
+
+Owners that opt OUT (everything other than `per-viewer-background` / `all`) are NOT touched on slide change — their state stays loaded for the viewer's lifetime. This is the default; declaring `per-viewer-background` is the explicit opt-in.
+
+**`ctx.key`** is composed by the pipeline so sinks that key blob storage by it get a deterministic slot:
+
+| Dispatch                              | `ctx.key`                       |
+| ------------------------------------- | ------------------------------- |
+| Global                                | `""` (empty)                    |
+| Per-viewer (no background)            | the viewer id                   |
+| Per-viewer-background                 | `"<viewerId>::<backgroundId>"`  |
+
+**`importBundle` clear-on-empty.** For slide-aware owners, restore is fired on every slide change — including when the new slide has no stored payload. Owners must treat the `undefined` payload as "this slide is empty, wipe local state for this (viewer, background)", otherwise the previous slide's state leaks. See `modules/annotations/annotations.js:_initIOPipeline` for the canonical pattern.
+
+**Default sink for slide-aware bundles.** When no admin binding is configured, slide-aware owners fall back to the built-in `session-memory` sink (in-memory Map keyed by `ctx.key`, cleared on page reload). This makes the "switch back to slide A → state returns" behaviour self-sufficient out of the box. The legacy `post-data` fallback is reserved for non-slide-aware scopes (it's a single global slot and would silently collapse every slide's payload into one if used for `per-viewer-background`).
 
 ### Per-element CRUD
 

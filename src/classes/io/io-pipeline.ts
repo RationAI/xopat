@@ -56,16 +56,35 @@ class EventBus {
     }
 }
 
+type BundleScope = "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
+
+function isViewerScoped(s: BundleScope): boolean {
+    return s === "per-viewer" || s === "both" || s === "all";
+}
+function isViewerBackgroundScoped(s: BundleScope): boolean {
+    return s === "per-viewer-background" || s === "all";
+}
+function isGlobalScoped(s: BundleScope): boolean {
+    return s === "global" || s === "both" || s === "all";
+}
+
 interface OwnerRecord {
     ownerUid: string;
     ownerId: string;
     xoType: "core" | "plugin" | "module";
     exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
     importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
-    /** `global`     — exportBundle called once per owner.
-     *  `per-viewer` — exportBundle called once per viewer (ctx.viewerId set).
-     *  `both`       — both (preserves legacy `inViewerContext: true` behaviour). */
-    bundleScope: "global" | "per-viewer" | "both";
+    /** `global`                 — exportBundle called once per owner.
+     *  `per-viewer`              — once per viewer (ctx.viewerId set).
+     *  `per-viewer-background`   — once per (viewer, current background)
+     *                              pair (ctx.viewerId + ctx.backgroundId set).
+     *                              Slide-change in any viewer fires an
+     *                              automatic flush for the previous
+     *                              (viewer, background) and a restore for
+     *                              the next one via `viewer-open-pipeline`.
+     *  `both`                    — global + per-viewer (legacy).
+     *  `all`                     — global + per-viewer + per-viewer-background. */
+    bundleScope: BundleScope;
     capabilities: Map<string, IOCapability>;
     defaultBindings: Record<string, string[]>;
     /** include.json hard-disable. */
@@ -311,7 +330,7 @@ export class IOPipeline implements IOPipelineLike {
         info: {
             ownerId: string;
             xoType: "core" | "plugin" | "module";
-            bundleScope?: "global" | "per-viewer" | "both";
+            bundleScope?: BundleScope;
         } & IOOwnerBundleHooks,
     ): IODisposer {
         const existing = this.owners.get(ownerUid);
@@ -420,6 +439,20 @@ export class IOPipeline implements IOPipelineLike {
 
         // Rule 5: built-in fallback.
         if (cap?.kind === "bundle") {
+            // Slide-aware owners need a sink that keys by ctx.key. `post-data`
+            // (the legacy bundle default) is a single global slot — using it
+            // for per-viewer-background would collapse every slide's bundle
+            // into one blob and silently overwrite on each slide change.
+            // `session-memory` keys by ctx.key (= "<viewerId>::<backgroundId>")
+            // and is registered automatically by the bootstrap layer.
+            if (isViewerBackgroundScoped(owner.bundleScope)) {
+                if (this.sinks.has("session-memory")) return ["session-memory"];
+                console.warn(
+                    `[IO] owner "${ownerId}" uses bundleScope "${owner.bundleScope}" but the ` +
+                    `"session-memory" sink is not registered; bundle export/import will be inert.`,
+                );
+                return [];
+            }
             return this.sinks.has("post-data") ? ["post-data"] : [];
         }
         if (isKv) {
@@ -472,7 +505,7 @@ export class IOPipeline implements IOPipelineLike {
 
     // ── orchestration: bundle export ───────────────────────────────────
 
-    async flushBundleExport(scope?: { ownerUid?: string; viewerId?: string }): Promise<IOResult[]> {
+    async flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
         for (const [uid, owner] of this.owners) {
@@ -484,22 +517,53 @@ export class IOPipeline implements IOPipelineLike {
                 const sinks = this.bindingsFor(uid, cap.id);
                 if (!sinks.length) continue;
 
-                if (scope?.viewerId) {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, results);
+                // Explicit (viewer, background) — used by `viewer-open-pipeline`
+                // when it flushes a vacated slide just before re-opening with new
+                // content. Only fires for owners that opted INTO slide-aware
+                // scoping; the explicit `backgroundId` is the previous slide id.
+                if (scope?.viewerId && scope.backgroundId !== undefined) {
+                    if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results);
                     continue;
                 }
 
-                if (owner.bundleScope === "global" || owner.bundleScope === "both") {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, undefined, results);
+                // Explicit viewerId only — viewer-scoped flush (legacy path).
+                if (scope?.viewerId) {
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results);
+                    continue;
                 }
-                if (owner.bundleScope === "per-viewer" || owner.bundleScope === "both") {
+
+                if (isGlobalScoped(owner.bundleScope)) {
+                    await this.runOneBundleExport(uid, owner, cap, sinks, undefined, undefined, results);
+                }
+                if (isViewerScoped(owner.bundleScope)) {
                     for (const v of viewers) {
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, results);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results);
+                    }
+                }
+                if (isViewerBackgroundScoped(owner.bundleScope)) {
+                    for (const v of viewers) {
+                        const bgId = this.resolveCurrentBackgroundId(v.viewer);
+                        if (!bgId) continue; // no current slide → nothing to key by
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results);
                     }
                 }
             }
         }
         return results;
+    }
+
+    private resolveCurrentBackgroundId(viewer: any): string | undefined {
+        const utils = (window as any).UTILITIES;
+        return utils && typeof utils.currentBackgroundIdFor === "function"
+            ? utils.currentBackgroundIdFor(viewer)
+            : undefined;
+    }
+
+    private composeBundleKey(viewerId: string | undefined, backgroundId: string | undefined): string {
+        if (viewerId && backgroundId) return `${viewerId}::${backgroundId}`;
+        if (viewerId) return viewerId;
+        return "";
     }
 
     private async runOneBundleExport(
@@ -508,6 +572,7 @@ export class IOPipeline implements IOPipelineLike {
         cap: IOCapability,
         sinks: string[],
         viewerId: string | undefined,
+        backgroundId: string | undefined,
         results: IOResult[],
     ): Promise<void> {
         const ctx: IOContext = {
@@ -516,8 +581,9 @@ export class IOPipeline implements IOPipelineLike {
             xoType: owner.xoType,
             ownerUid: uid,
             ownerId: owner.ownerId,
-            key: "",
+            key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            backgroundId,
             meta: {},
         };
         let payload: unknown = undefined;
@@ -601,7 +667,7 @@ export class IOPipeline implements IOPipelineLike {
      * and feed it to the owner's `importBundle` hook. Used at boot for
      * global state and on each viewer open for per-viewer state.
      */
-    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string } = {}): Promise<IOResult[]> {
+    async tryRestoreImport(scope: { ownerUid?: string; viewerId?: string; backgroundId?: string } = {}): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
         for (const [uid, owner] of this.owners) {
@@ -614,16 +680,32 @@ export class IOPipeline implements IOPipelineLike {
             }
             if (sinks.size === 0) continue;
 
-            // Explicit viewer scope: caller picked the dispatch granularity
-            // (e.g. forceDataImportInitialization on viewer open).
+            // Explicit (viewer, background) — slide-change restore after the
+            // new content's open settles. Skip owners that didn't opt INTO
+            // slide-aware scoping; their state lives across slide swaps.
+            if (scope.viewerId !== undefined && scope.backgroundId !== undefined) {
+                if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
+                await this.runOneRestore(uid, owner, sinks, scope.viewerId, scope.backgroundId, results);
+                continue;
+            }
+            // Explicit viewer scope only — boot-time `forceDataImportInitialization`
+            // path. Dispatches per-viewer (legacy semantics); per-viewer-background
+            // owners get their boot restore here too, with the current bg id.
             if (scope.viewerId !== undefined) {
-                await this.runOneRestore(uid, owner, sinks, scope.viewerId, results);
+                if (isViewerBackgroundScoped(owner.bundleScope)) {
+                    const v = viewers.find(x => x.uniqueId === scope.viewerId);
+                    const bgId = this.resolveCurrentBackgroundId(v?.viewer);
+                    if (bgId) await this.runOneRestore(uid, owner, sinks, scope.viewerId, bgId, results);
+                }
+                if (isViewerScoped(owner.bundleScope)) {
+                    await this.runOneRestore(uid, owner, sinks, scope.viewerId, undefined, results);
+                }
                 continue;
             }
             // GLOBAL is always safe to restore — there's no other path
             // that handles the "no viewerId" key.
-            if (owner.bundleScope === "global" || owner.bundleScope === "both") {
-                await this.runOneRestore(uid, owner, sinks, undefined, results);
+            if (isGlobalScoped(owner.bundleScope)) {
+                await this.runOneRestore(uid, owner, sinks, undefined, undefined, results);
             }
             // Per-viewer catch-up is gated on the boot pass having
             // already fired. While pending, the loader's
@@ -633,10 +715,16 @@ export class IOPipeline implements IOPipelineLike {
             // done, any newly-registered (lazy) owner uses this branch
             // to catch up. Viewers opening AFTER this point still need
             // their own viewer-create handler (out of scope here).
-            if (!this.bootRestorePending &&
-                (owner.bundleScope === "per-viewer" || owner.bundleScope === "both")) {
+            if (!this.bootRestorePending && isViewerScoped(owner.bundleScope)) {
                 for (const v of viewers) {
-                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, results);
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, undefined, results);
+                }
+            }
+            if (!this.bootRestorePending && isViewerBackgroundScoped(owner.bundleScope)) {
+                for (const v of viewers) {
+                    const bgId = this.resolveCurrentBackgroundId(v.viewer);
+                    if (!bgId) continue;
+                    await this.runOneRestore(uid, owner, sinks, v.uniqueId, bgId, results);
                 }
             }
         }
@@ -648,6 +736,7 @@ export class IOPipeline implements IOPipelineLike {
         owner: OwnerRecord,
         sinks: Set<string>,
         viewerId: string | undefined,
+        backgroundId: string | undefined,
         results: IOResult[],
     ): Promise<void> {
         const ctxBase: Omit<IOContext, "meta"> = {
@@ -656,8 +745,9 @@ export class IOPipeline implements IOPipelineLike {
             xoType: owner.xoType,
             ownerUid: uid,
             ownerId: owner.ownerId,
-            key: "",
+            key: this.composeBundleKey(viewerId, backgroundId),
             viewerId,
+            backgroundId,
         };
         const dispatchResults: IOResult[] = [];
         let attempted = 0;
@@ -684,6 +774,17 @@ export class IOPipeline implements IOPipelineLike {
                     // Non-error empty read still counts as a successful
                     // attempt — admin's binding worked, there just was
                     // nothing stored yet.
+                    //
+                    // Slide-aware owners (bundleScope: per-viewer-background
+                    // / all → ctx.backgroundId set) DO need the call even on
+                    // empty — they have local UI state (e.g. fabric overlay
+                    // for annotations) that survives the OSD world reset and
+                    // must be wiped when the new slide carries no payload.
+                    // Other scopes have no equivalent state to clear, so the
+                    // legacy skip stays.
+                    if (ctx.backgroundId !== undefined) {
+                        await owner.importBundle!(ctx, payload);
+                    }
                     succeeded++;
                     continue;
                 }

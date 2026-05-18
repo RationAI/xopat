@@ -349,10 +349,17 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
     }
 
     async getThumbnail({ targetWidth = 512 } = {}) {
-        // todo multifetch - how to handle multiple thumbnails?
         targetWidth = Math.min(targetWidth, 500); //default max value
         const res = await this._fetch(
             `${this.tilesUrl}/thumbnail/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`
+        );
+        return res.blob();
+    }
+
+    async getLabel() {
+        const targetWidth = 250;
+        const res = await this._fetch(
+            `${this.tilesUrl}/label/max_size/${targetWidth}/${targetWidth}?slide_id=${this.fileId}${this._qArgs}`
         );
         return res.blob();
     }

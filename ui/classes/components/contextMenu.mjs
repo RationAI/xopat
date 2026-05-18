@@ -116,10 +116,18 @@ export class ContextMenu extends BaseComponent {
     /* ---------------- internals ---------------- */
 
     _iconNode(icon, iconCss) {
-        if (!icon) return span({ class: "inline-block", style: "width:20px;" });
+        // Use inline-flex with centered alignment so the glyph itself —
+        // which varies in natural width between fa-trash, fa-layer-group,
+        // fa-arrows-up-down, fa-shapes, etc. — is always centered inside
+        // a 20px box. Without this, taller / wider glyphs visibly shift the
+        // adjacent label, making the padding between icon and text appear
+        // inconsistent across rows.
+        const base = "inline-flex items-center justify-center shrink-0";
+        const style = "width: 20px; height: 20px; font-size: 16px; line-height: 1;";
+        if (!icon) return span({ class: base, style });
         return span({
-            class: `fa-auto ${icon} pl-0`,
-            style: `width: 20px; font-size: 17px; ${iconCss || ""}`,
+            class: `${base} fa-auto ${icon}`,
+            style: `${style} ${iconCss || ""}`,
         });
     }
 
@@ -165,14 +173,14 @@ export class ContextMenu extends BaseComponent {
                         this._toggleFlyout(item, liEl, depth);
                     },
                 },
-                span({ class: "flex items-center" },
+                span({ class: "flex items-center gap-2 min-w-0" },
                     this._iconNode(item.icon, item.iconCss),
-                    span(item.title || "")
+                    span({ class: "whitespace-nowrap" }, item.title || "")
                 ),
                 // Use a Font Awesome chevron rather than the U+25B6 triangle:
                 // some systems render ▶ with emoji presentation (a coloured
                 // raster glyph), which clashes with the rest of the menu.
-                i({ class: "fa-auto fa-chevron-right opacity-60 ml-2", style: "font-size: 11px;" })
+                i({ class: "fa-auto fa-chevron-right opacity-60 ml-2 shrink-0", style: "font-size: 11px;" })
             );
             liEl.appendChild(anchor);
 
@@ -194,7 +202,12 @@ export class ContextMenu extends BaseComponent {
             return liEl;
         }
 
-        // Leaf clickable row
+        // Leaf clickable row — uses the same `flex items-center gap-2`
+        // layout as the parent rows so icon/text spacing is uniform between
+        // submenu entries and leaf entries. Without this, leaves render
+        // their icon+text inline (whatever the browser defaults are) while
+        // parents render them flex-aligned, producing the inconsistent
+        // "padding" the user reported.
         const selected = !!item.selected;
         const liEl = li(
             {
@@ -205,7 +218,7 @@ export class ContextMenu extends BaseComponent {
                 {
                     role: "menuitem",
                     tabindex: "0",
-                    class: `pl-1 dropdown-item pointer ${item.containerCss || ""}`.trim(),
+                    class: `pl-1 dropdown-item pointer flex items-center gap-2 ${item.containerCss || ""}`.trim(),
                     onclick: (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -215,7 +228,7 @@ export class ContextMenu extends BaseComponent {
                     },
                 },
                 this._iconNode(item.icon, item.iconCss),
-                span(item.title || "")
+                span({ class: "whitespace-nowrap" }, item.title || "")
             )
         );
         return liEl;

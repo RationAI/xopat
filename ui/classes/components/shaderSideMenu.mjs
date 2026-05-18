@@ -430,8 +430,9 @@ export class ShaderSideMenu extends BaseComponent {
         // map the mediator list to [{type, name}]
         const availableShaders = OpenSeadragon
             .FlexRenderer
-            .ShaderMediator
-            .availableShaders()
+
+            .ShaderLayerRegistry
+            .availableShaderLayers()
             .filter(s => s.type() !== "group")
             .map(s => ({type: s.type(), name: s.name()}));
 

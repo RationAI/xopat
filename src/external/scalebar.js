@@ -232,7 +232,10 @@
                     rotSliderEl: null,
                     magSliderEl: null,
                     onRotate: null,
-                    onZoom: null
+                    onZoom: null,
+                    collapsed: false,
+                    collapsibles: [],
+                    labelEl: null
                 };
                 this._originalClassTarget = noUiSlider.cssClasses.target;
             }
@@ -292,12 +295,13 @@
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "auto";
 
-                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
-                        this.magnificationContainer.appendChild(sync);
+                        this._ui.collapsibles = [];
+                        addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                         const rotCol = document.createElement("div");
                         rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        this._ui.collapsibles.push(rotCol);
 
                         const rotReadout = document.createElement("div");
                         rotReadout.className =
@@ -469,6 +473,7 @@
                         this._ui.magSliderEl = sliderContainer;
                         const magCol = document.createElement("div");
                         magCol.className = "flex flex-col items-center pb-2 pr-4";
+                        this._ui.collapsibles.push(magCol);
 
                         const magInput = document.createElement("input");
                         magInput.type = "number";
@@ -706,11 +711,12 @@
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "auto";
 
-                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
-                        this.magnificationContainer.appendChild(sync);
+                        this._ui.collapsibles = [];
+                        addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         const rotCol = document.createElement("div");
                         rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        this._ui.collapsibles.push(rotCol);
 
                         const rotReadout = document.createElement("div");
                         rotReadout.className =
@@ -824,6 +830,7 @@
                         this._ui.magSliderEl = sliderContainer;
                         const magCol = document.createElement("div");
                         magCol.className = "flex flex-col items-center pb-2 pr-4";
+                        this._ui.collapsibles.push(magCol);
 
                         const levelReadout = document.createElement("input");
                         levelReadout.type = "text";
@@ -993,8 +1000,12 @@
                     rotSliderEl: null,
                     magSliderEl: null,
                     onRotate: null,
-                    onZoom: null
+                    onZoom: null,
+                    collapsed: false,
+                    collapsibles: [],
+                    labelEl: null
                 };
+                this._applyCollapsed = null;
             }
         },
 
@@ -1559,6 +1570,140 @@
         );
     }
 
+    /**
+     * Mount the SYNC button, reset button, collapse toggle and slide-label
+     * onto the magnification panel. The caller is responsible for pushing
+     * the actual collapsible columns (`rotCol`, `magCol`) onto
+     * `scalebar._ui.collapsibles` after they are constructed.
+     */
+    function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
+        scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
+
+        const sync = SyncToggleButton(viewer, tool);
+        magnificationContainer.appendChild(sync);
+
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "btn btn-xs btn-ghost text-error border-none absolute px-1";
+        reset.style.left = "32px";
+        reset.style.top = "-15px";
+        reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
+        reset.innerHTML = '<span class="text-[10px] font-bold leading-none">✕</span>';
+        reset.style.display = "none";
+
+        const updateResetVisibility = () => {
+            const S = tool?.constructor?._session;
+            const shouldShow = !!(S && S.leaderId) && !scalebar._ui.collapsed;
+            reset.style.display = shouldShow ? "" : "none";
+        };
+
+        reset.addEventListener("click", async (e) => {
+            if (!tool) return;
+            try {
+                if (e.shiftKey) {
+                    tool.resetSession();
+                    Dialogs?.show?.("Sync session cleared", 1400, Dialogs.MSG_INFO);
+                } else {
+                    tool.resetViewer();
+                    Dialogs?.show?.("Re-calibrating this viewer", 1200, Dialogs.MSG_INFO);
+                    await tool.enable();
+                }
+            } catch (err) {
+                console.error(err);
+                Dialogs?.show?.("Reset failed", 1400, Dialogs.MSG_WARN);
+            } finally {
+                updateResetVisibility();
+            }
+        });
+        magnificationContainer.appendChild(reset);
+
+        // Chain into the existing __syncToolChanged hook set by SyncToggleButton
+        // so the reset button visibility stays in sync with session state.
+        const prev = viewer.__syncToolChanged;
+        viewer.__syncToolChanged = () => {
+            prev?.();
+            updateResetVisibility();
+        };
+        updateResetVisibility();
+
+        const labelEl = document.createElement("div");
+        labelEl.className = "absolute text-[10px] font-semibold text-base-content/80 px-2 py-0.5 rounded-md bg-base-200 shadow truncate";
+        labelEl.style.left = "50%";
+        labelEl.style.top = "-15px";
+        labelEl.style.transform = "translateX(-50%)";
+        labelEl.style.maxWidth = "140px";
+        const tile = scalebar.getReferencedTiledImage?.() || viewer.world.getItemAt(0);
+        const lbl = tile?.source?.label;
+        if (typeof lbl === "string" && lbl.trim()) {
+            labelEl.textContent = lbl.trim();
+            magnificationContainer.appendChild(labelEl);
+            scalebar._ui.labelEl = labelEl;
+        }
+
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn btn-xs border-none absolute px-1 bg-base-content/10 hover:bg-base-content/20";
+        toggle.style.right = "-10px";
+        toggle.style.top = "-15px";
+        toggle.title = "Minimize";
+        toggle.innerHTML = '<span class="text-[10px] font-bold">▾</span>';
+        magnificationContainer.appendChild(toggle);
+
+        scalebar._ui.collapsed = !!scalebar._ui.collapsed;
+
+        scalebar._applyCollapsed = () => {
+            const c = !!scalebar._ui.collapsed;
+            for (const el of scalebar._ui.collapsibles) {
+                if (el) el.style.display = c ? "none" : "";
+            }
+            if (scalebar._ui.labelEl) {
+                scalebar._ui.labelEl.style.display = c ? "none" : "";
+            }
+            updateResetVisibility();
+            if (c) {
+                // Collapsed: drop the panel chrome and let SYNC + chevron sit inline.
+                magnificationContainer.classList.remove("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
+                magnificationContainer.classList.add("items-center", "gap-1");
+                magnificationContainer.style.height = "auto";
+                magnificationContainer.style.minWidth = "";
+                magnificationContainer.style.padding = "0";
+                magnificationContainer.style.background = "transparent";
+                sync.style.position = "relative";
+                sync.style.left = "";
+                sync.style.top = "";
+                toggle.style.position = "relative";
+                toggle.style.right = "";
+                toggle.style.top = "";
+                toggle.title = "Expand";
+                toggle.firstChild.textContent = "▴";
+            } else {
+                // Expanded: restore the floating-buttons-above-pill chrome.
+                magnificationContainer.classList.add("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
+                magnificationContainer.classList.remove("items-center", "gap-1");
+                magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
+                magnificationContainer.style.minWidth = "";
+                magnificationContainer.style.padding = "";
+                magnificationContainer.style.background = "";
+                sync.style.position = "absolute";
+                sync.style.left = "-10px";
+                sync.style.top = "-15px";
+                toggle.style.position = "absolute";
+                toggle.style.right = "-10px";
+                toggle.style.top = "-15px";
+                toggle.title = "Minimize";
+                toggle.firstChild.textContent = "▾";
+            }
+            scalebar.refreshHandler?.();
+        };
+
+        toggle.addEventListener("click", () => {
+            scalebar._ui.collapsed = !scalebar._ui.collapsed;
+            scalebar._applyCollapsed();
+        });
+
+        if (scalebar._ui.collapsed) scalebar._applyCollapsed();
+    }
+
     class ViewportSyncAPI {
 
         constructor(viewer) {
@@ -1704,6 +1849,55 @@
             const S = this._getSession();
 
             this.master.tools?.unlink?.(S.context);
+            this.enabled = false;
+            this.master.__syncToolChanged?.();
+        }
+
+        /**
+         * Drop this viewer's calibration so the next `enable()` re-runs the
+         * 3-point picker against the existing leader. If this viewer IS the
+         * leader, the orphaned target transforms can no longer be resolved,
+         * so the whole session is reset instead.
+         */
+        resetViewer(viewerId = this.master.uniqueId) {
+            const S = this._getSession();
+            if (S.leaderId === viewerId) {
+                this.resetSession();
+                return;
+            }
+            delete S.transforms?.[viewerId];
+            delete S.flipParity?.[viewerId];
+            this.transforms.delete(viewerId);
+            this.points.delete(viewerId);
+
+            if (this.enabled) {
+                this.master.tools?.unlink?.(S.context);
+                this.enabled = false;
+            }
+            this.master.__syncToolChanged?.();
+        }
+
+        /**
+         * Wipe the shared sync session entirely: leader, leader points, all
+         * per-viewer transforms and flip parity. Every linked peer is unlinked
+         * and reverts to LINK state.
+         */
+        resetSession() {
+            const S = this._getSession();
+            const peers = this._getLinkedPeers();
+            for (const v of peers) {
+                v?.tools?.unlink?.(S.context);
+                const peerApi = v?.scalebar?.ViewportSyncAPI;
+                if (peerApi) {
+                    peerApi.enabled = false;
+                    peerApi.transforms.clear();
+                    peerApi.points.clear();
+                }
+                v?.__syncToolChanged?.();
+            }
+            ViewportSyncAPI._session = null;
+            this.transforms.clear();
+            this.points.clear();
             this.enabled = false;
             this.master.__syncToolChanged?.();
         }

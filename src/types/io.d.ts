@@ -85,10 +85,23 @@ interface IOContext {
     resourceName?: string;
     /** Set for read/update/delete; the item id within the resource. */
     itemId?: string;
-    /** Bundle key (legacy `exportKey`); empty string by default. */
+    /**
+     * Bundle key (legacy `exportKey`); empty string by default. For
+     * `per-viewer-background` (or `all`) bundle dispatches the pipeline
+     * composes this as `${viewerId}::${backgroundId}` so sinks that key
+     * blob storage by `ctx.key` get a deterministic slot per slide.
+     */
     key: string;
     /** Set for viewer-scoped exports/imports. */
     viewerId?: string;
+    /**
+     * Set for slide-scoped exports/imports (`bundleScope: "per-viewer-background"`
+     * or `"all"`). Resolved via `UTILITIES.currentBackgroundIdFor(viewer)`
+     * unless the caller passed an explicit `scope.backgroundId` (the
+     * slide-change "flush before reset" / "restore after open" path used
+     * by `viewer-open-pipeline`).
+     */
+    backgroundId?: string;
     /** Free-form metadata, e.g. format hints. */
     meta: Record<string, unknown>;
 }
@@ -504,7 +517,15 @@ interface IOPipelineLike {
     sinkOverrides(sinkId: string): Record<string, unknown>;
 
     // ── orchestration ───────────────────────────────────────────────────
-    flushBundleExport(scope?: { ownerUid?: string; viewerId?: string }): Promise<IOResult[]>;
+    /**
+     * Trigger bundle export for matching owners. `backgroundId`, when
+     * provided alongside `viewerId`, pins the dispatch to that single
+     * `(viewer, background)` slot — used by `viewer-open-pipeline`
+     * before resetting a viewer to a different slide. Owners whose
+     * `bundleScope` is not `per-viewer-background` (or `all`) ignore
+     * `backgroundId` and are dispatched per their own scope semantics.
+     */
+    flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
     importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
     /**
