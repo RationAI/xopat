@@ -39,7 +39,15 @@ Static configuration comes from the deployment, and must:
 
 The user-defined configuration files that are available support the following:
  - JSON with comments: being able to strip comments and parse the JSON configuration file
- - environmental variables: being able to replace ``<% ENV_VAR_NAME %>`` with relevant variable contents
+ - environmental variables: being able to replace ``<% ENV_VAR_NAME %>`` with relevant variable contents.
+   Bash-style default values are also supported:
+   - ``<% VAR:-default %>`` — use ``default`` if ``VAR`` is unset OR empty (matches bash ``${VAR:-...}``)
+   - ``<% VAR-default %>`` — use ``default`` only if ``VAR`` is unset (matches bash ``${VAR-...}``)
+   - example: ``http://localhost:<% XOPAT_NODE_PORT:-8080 %>``
+   Substitutions that land inside a JSON string literal are JSON-escaped automatically,
+   so env values containing ``"``, ``\``, or control characters cannot break JSON
+   structure or inject sibling keys. Substitutions outside string context (e.g. a numeric
+   port placeholder like ``"port": <% XOPAT_PORT:-8080 %>``) are inserted raw.
 
 The user-defined overrides must respect ``env.json`` configuration and ``XOPAT_ENV`` variable:
  - if ``XOPAT_ENV`` points to a file, load that file to parse static configuration

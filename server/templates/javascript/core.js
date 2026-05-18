@@ -173,20 +173,125 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     * Parse CORE Env
     */
 
-    const envRegex = /<%\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*%>/g;
+    // Supports bash-style default values:
+    //   <% VAR %>            — empty string if unset
+    //   <% VAR:-default %>   — default if unset OR empty (matches bash ${VAR:-...})
+    //   <% VAR-default %>    — default only if unset (matches bash ${VAR-...})
+    // The walker tracks JSON string + comment state so values substituted inside a
+    // string literal are JSON-escaped (env values containing ", \, or control chars
+    // can no longer break JSON structure or inject sibling keys).
+    const envPlaceholderRegex = /<%\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*(:?-)\s*((?:(?!%>).)*?))?\s*%>/y;
+
+    function resolveEnvPlaceholder(name, op, fallback) {
+        const val = readEnv(name);
+        const unset = val === false || val === undefined || val === null;
+        const empty = val === "";
+        let useDefault = false;
+        if (op === ":-") useDefault = unset || empty;
+        else if (op === "-") useDefault = unset;
+        if (useDefault) return fallback !== undefined ? fallback : "";
+        return unset ? "" : String(val);
+    }
+
+    function jsonEscapeStringContent(s) {
+        const j = JSON.stringify(s);
+        return j.slice(1, -1);
+    }
 
     function parseEnvConfig(data, err) {
         try {
-            let replacer = function(match, p1) {
-                let env = readEnv(p1);
-                //not specified returns false
-                //todo correct?
-                return env === false ? "" : env;
+            let out = "";
+            let i = 0;
+            let inStr = false;
+            let inLine = false;
+            let inBlock = false;
+            const len = data.length;
+
+            const tryPlaceholder = () => {
+                envPlaceholderRegex.lastIndex = i;
+                const m = envPlaceholderRegex.exec(data);
+                if (!m) return null;
+                const value = resolveEnvPlaceholder(m[1], m[2], m[3]);
+                return { value, length: m[0].length };
             };
 
-            const result = data.replace(envRegex, replacer);
+            while (i < len) {
+                const ch = data[i];
+                const next = i + 1 < len ? data[i + 1] : "";
 
-            return parse(result);
+                if (inLine) {
+                    out += ch;
+                    if (ch === "\n") inLine = false;
+                    i++;
+                    continue;
+                }
+                if (inBlock) {
+                    out += ch;
+                    if (ch === "*" && next === "/") {
+                        out += next;
+                        inBlock = false;
+                        i += 2;
+                        continue;
+                    }
+                    i++;
+                    continue;
+                }
+                if (inStr) {
+                    if (ch === "\\" && i + 1 < len) {
+                        out += ch + next;
+                        i += 2;
+                        continue;
+                    }
+                    if (ch === '"') {
+                        out += ch;
+                        inStr = false;
+                        i++;
+                        continue;
+                    }
+                    if (ch === "<" && next === "%") {
+                        const p = tryPlaceholder();
+                        if (p) {
+                            out += jsonEscapeStringContent(p.value);
+                            i += p.length;
+                            continue;
+                        }
+                    }
+                    out += ch;
+                    i++;
+                    continue;
+                }
+
+                if (ch === "/" && next === "/") {
+                    out += "//";
+                    inLine = true;
+                    i += 2;
+                    continue;
+                }
+                if (ch === "/" && next === "*") {
+                    out += "/*";
+                    inBlock = true;
+                    i += 2;
+                    continue;
+                }
+                if (ch === '"') {
+                    out += ch;
+                    inStr = true;
+                    i++;
+                    continue;
+                }
+                if (ch === "<" && next === "%") {
+                    const p = tryPlaceholder();
+                    if (p) {
+                        out += p.value;
+                        i += p.length;
+                        continue;
+                    }
+                }
+                out += ch;
+                i++;
+            }
+
+            return parse(out);
         } catch (e) {
             throw err;
         }
