@@ -382,7 +382,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             let config;
             if (VIEWER.scalebar) {
-                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+                config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
             } else {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                     || CONFIG.background[0];
