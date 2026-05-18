@@ -79,15 +79,139 @@ function array_merge_recursive_distinct(array &$array1, array &$array2)
 require_once PHP_INCLUDES . "comments.class.php";
 $CORE = (new Comment)->decode(file_get_contents(VIEWER_SOURCES_ABS_ROOT . "config.json"), true);
 
+// Supports bash-style default values:
+//   <% VAR %>            — empty string if unset
+//   <% VAR:-default %>   — default if unset OR empty (matches bash ${VAR:-...})
+//   <% VAR-default %>    — default only if unset (matches bash ${VAR-...})
+// The walker tracks JSON string + comment state so values substituted inside a
+// string literal are JSON-escaped (env values containing ", \, or control chars
+// can no longer break JSON structure or inject sibling keys).
+function resolve_env_placeholder($name, $op, $fallback) {
+    $val = getenv($name);
+    $unset = ($val === false);
+    $empty = ($val === "");
+    $useDefault = false;
+    if ($op === ":-") $useDefault = $unset || $empty;
+    else if ($op === "-") $useDefault = $unset;
+    if ($useDefault) return $fallback !== null ? $fallback : "";
+    return $unset ? "" : $val;
+}
+
+function json_escape_string_content($s) {
+    $flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE;
+    if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+        $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+    }
+    $j = json_encode((string)$s, $flags);
+    if (!is_string($j) || strlen($j) < 2) {
+        throw new RuntimeException("Cannot JSON-escape env value");
+    }
+    return substr($j, 1, -1);
+}
+
 function parse_env_config($data, $err) {
     try {
-        $read_env = function($match) {
-            $env = getenv($match[1]);
-            //not specified returns false
-            return $env === false ? "" : $env;
+        $regex = '/\G<%\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*(:?-)\s*((?:(?!%>).)*?))?\s*%>/A';
+
+        $out = '';
+        $i = 0;
+        $len = strlen($data);
+        $inStr = false;
+        $inLine = false;
+        $inBlock = false;
+
+        $tryPlaceholder = function() use ($data, $regex, &$i) {
+            $m = null;
+            if (preg_match($regex, $data, $m, 0, $i) === 1) {
+                return [
+                    'value' => resolve_env_placeholder(
+                        $m[1],
+                        $m[2] ?? null,
+                        isset($m[3]) ? $m[3] : null
+                    ),
+                    'length' => strlen($m[0]),
+                ];
+            }
+            return null;
         };
-        $result = preg_replace_callback("/<%\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*%>/", $read_env, $data);
-        return (new Comment)->decode($result, true);
+
+        while ($i < $len) {
+            $ch = $data[$i];
+            $next = ($i + 1 < $len) ? $data[$i + 1] : '';
+
+            if ($inLine) {
+                $out .= $ch;
+                if ($ch === "\n") $inLine = false;
+                $i++;
+                continue;
+            }
+            if ($inBlock) {
+                $out .= $ch;
+                if ($ch === '*' && $next === '/') {
+                    $out .= $next;
+                    $inBlock = false;
+                    $i += 2;
+                    continue;
+                }
+                $i++;
+                continue;
+            }
+            if ($inStr) {
+                if ($ch === '\\' && $i + 1 < $len) {
+                    $out .= $ch . $next;
+                    $i += 2;
+                    continue;
+                }
+                if ($ch === '"') {
+                    $out .= $ch;
+                    $inStr = false;
+                    $i++;
+                    continue;
+                }
+                if ($ch === '<' && $next === '%') {
+                    $p = $tryPlaceholder();
+                    if ($p !== null) {
+                        $out .= json_escape_string_content($p['value']);
+                        $i += $p['length'];
+                        continue;
+                    }
+                }
+                $out .= $ch;
+                $i++;
+                continue;
+            }
+
+            if ($ch === '/' && $next === '/') {
+                $out .= '//';
+                $inLine = true;
+                $i += 2;
+                continue;
+            }
+            if ($ch === '/' && $next === '*') {
+                $out .= '/*';
+                $inBlock = true;
+                $i += 2;
+                continue;
+            }
+            if ($ch === '"') {
+                $out .= $ch;
+                $inStr = true;
+                $i++;
+                continue;
+            }
+            if ($ch === '<' && $next === '%') {
+                $p = $tryPlaceholder();
+                if ($p !== null) {
+                    $out .= $p['value'];
+                    $i += $p['length'];
+                    continue;
+                }
+            }
+            $out .= $ch;
+            $i++;
+        }
+
+        return (new Comment)->decode($out, true);
     } catch (Exception $e) {
         throw new Exception($err);
     }
