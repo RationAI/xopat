@@ -2,7 +2,7 @@ addPlugin('rationai-wsi-file-browser', class extends XOpatPlugin {
     constructor(id) {
         super(id);
 
-        this.wsi_server = this.getOption('wsiService');
+        this.wsi_server = this.getStaticMeta('wsiService');
         if (!this.wsi_server) {
             console.warn('Wsi server not configured: exitting..');
             return;
