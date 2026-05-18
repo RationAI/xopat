@@ -395,6 +395,123 @@
         ctx.restore();
     }
 
+    // ── Precise geometric hit-test (narrow phase) ─────────────────────────
+    // The rbush spatial index gives us a viewport-pruned, bbox-passing
+    // candidate set in O(log n). Fabric's stock _checkTarget then runs an
+    // oriented-bounding-box test (`Canvas.containsPoint` → `_normalizePointer`
+    // → `Object.containsPoint` against oCoords). That's enough for rectangles
+    // and text, but overlapping polygons / ellipses get mis-selected whenever
+    // the click lands inside one shape's bbox yet outside its actual outline.
+    //
+    // The narrow phase below adds a pure-JS geometry test (`__preciseContains`)
+    // and WRAPS `_checkTarget` to call it AFTER fabric's bbox check passes.
+    // Crucial design point: we do NOT replace `_searchPossibleTargets` (an
+    // earlier version did, but bypassed fabric's `_normalizePointer` and
+    // therefore broke coord-space alignment → no clicks selected anything).
+    // Letting fabric's per-object loop run first means we inherit its
+    // visible/evented/group-composition/vpt handling for free; we only refine
+    // its acceptance decision on geometry.
+    //
+    // No offscreen render (fabric's `perPixelTargetFind` would do that);
+    // typical cost at one click is a few µs across tens of candidates, well
+    // under one frame even at 10k+ annotations on the canvas.
+
+    function _rayCastInPolygon(px, py, points) {
+        // Odd-even rule. Points are in object-local coords; pre-adjusted by
+        // caller for fabric's pathOffset so they match obj.points layout.
+        let inside = false;
+        const n = points.length;
+        if (n < 3) return false;
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+            const xi = points[i].x, yi = points[i].y;
+            const xj = points[j].x, yj = points[j].y;
+            const intersects = ((yi > py) !== (yj > py))
+                && (px < (xj - xi) * (py - yi) / (yj - yi || 1e-12) + xi);
+            if (intersects) inside = !inside;
+        }
+        return inside;
+    }
+
+    fabric.Canvas.prototype.__preciseContains = function (obj, pointer) {
+        if (!obj) return true;
+        // Opt-out hatch for shapes that want bbox semantics (no factory uses
+        // it today; documented for future per-factory tuning).
+        if (obj.__skipPreciseHit) return true;
+
+        // `_normalizePointer` composes: invertTransform(vpt) → invertTransform(
+        //   obj.calcTransformMatrix()). The returned point is in the object's
+        //   local coord system with origin at the object's CENTER — the same
+        //   space fabric renders into. We do NOT roll our own inverse-matrix
+        //   math here: the prior round did, and bypassing _normalizePointer
+        //   skipped the VPT inversion, which broke every hit-test under any
+        //   non-identity viewport transform.
+        let local;
+        try {
+            local = this._normalizePointer(obj, pointer);
+        } catch (e) {
+            return true; // can't normalize → defer to bbox decision fabric already made
+        }
+        const type = obj.type;
+
+        try {
+            // Polygon / polyline — odd-even ray-cast on obj.points.
+            // Rendered points sit at (p.x - pathOffset.x, p.y - pathOffset.y)
+            // in the centered local space, so equivalently we test the local
+            // pointer plus pathOffset against the raw obj.points array.
+            if ((type === 'polygon' || type === 'polyline') && Array.isArray(obj.points)) {
+                const offX = obj.pathOffset ? obj.pathOffset.x : 0;
+                const offY = obj.pathOffset ? obj.pathOffset.y : 0;
+                return _rayCastInPolygon(local.x + offX, local.y + offY, obj.points);
+            }
+            // Ellipse — closed-form, centered.
+            if (type === 'ellipse') {
+                const rx = obj.rx || 0, ry = obj.ry || 0;
+                if (rx <= 0 || ry <= 0) return true;
+                const dx = local.x / rx, dy = local.y / ry;
+                return dx * dx + dy * dy <= 1;
+            }
+            // Circle — closed-form, centered.
+            if (type === 'circle') {
+                const r = obj.radius || 0;
+                if (r <= 0) return true;
+                return local.x * local.x + local.y * local.y <= r * r;
+            }
+            // Rect — AABB centered at local (0,0).
+            if (type === 'rect') {
+                const w = (obj.width || 0) / 2, h = (obj.height || 0) / 2;
+                return Math.abs(local.x) <= w && Math.abs(local.y) <= h;
+            }
+            // Group / activeSelection — bbox already passed; keep current
+            // "group hit = group selected" behavior. (Fabric's own sub-target
+            // discovery handles inner-child selection when subTargetCheck is
+            // enabled — we don't pre-empt that.)
+            if ((type === 'group' || type === 'activeSelection') && Array.isArray(obj._objects)) {
+                return true;
+            }
+        } catch (e) {
+            // Defensive: if any geometry test trips, fall back to the bbox
+            // pass we already had. Better to select-by-bbox than to silently
+            // swallow every click on a buggy shape type.
+            console.warn('[precise hit-test] geometry test threw; falling back to bbox.', e);
+            return true;
+        }
+        // Unknown / non-geometric (text, image, path, …) — bbox was already
+        // accepted by fabric; keep that decision.
+        return true;
+    };
+
+    // Wrap `_checkTarget` to add the geometric narrow-phase AFTER fabric's
+    // bbox-based bbox/visible/evented gate. This way our code never has to
+    // touch the visible/evented/group/vpt coord-space conversions — fabric
+    // already did them — we just refine the boolean it would have returned.
+    const _origCheckTarget = fabric.Canvas.prototype._checkTarget;
+    fabric.Canvas.prototype._checkTarget = function (pointer, obj) {
+        const passedBbox = _origCheckTarget.call(this, pointer, obj);
+        if (!passedBbox) return passedBbox;
+        if (!this.__spatialIndex) return passedBbox;
+        return this.__preciseContains(obj, pointer);
+    };
+
     const _origSearchPossibleTargets = fabric.Canvas.prototype._searchPossibleTargets;
     fabric.Canvas.prototype._searchPossibleTargets = function (objects, pointer) {
         const idx = this.__spatialIndex;
@@ -403,13 +520,31 @@
         const realCandidates = idx.realCandidates(this.vptCoords, this);
 
         // refresh per-object: only the candidates that can actually be hit.
-        // ensureFresh also handles the lazy oCoords resync (F2) so fabric's
-        // containsPoint check below sees current screen-space coords.
+        // ensureFresh also handles the lazy oCoords resync (F2) so the
+        // wrapped _checkTarget above sees current screen-space coords.
         for (let i = 0; i < realCandidates.length; i++) idx.ensureFresh(realCandidates[i]);
 
+        // Hand off to fabric's original loop, which iterates in reverse
+        // z-order, calls our wrapped _checkTarget on each, and stops at the
+        // first hit. Cluster pills are render-only; clicks pass through to
+        // whatever fabric finds beneath them (or to OSD when nothing hits).
         return _origSearchPossibleTargets.call(this, realCandidates, pointer);
-        // Cluster pills are render-only; clicks pass through to whatever fabric
-        // finds beneath them (or to OSD viewport when nothing is hit).
+    };
+
+    // Precise companion to `findNextObjectUnderMouse` — drives Alt+click
+    // and double-click cycling through stacks of overlapping annotations.
+    // Pulls from the spatial index when present so cycle cost stays at
+    // O(visible) rather than O(total). Uses _checkTarget (which now embeds
+    // the precise test) so each candidate is checked the same way the
+    // single-click path checks it.
+    fabric.Canvas.prototype.findNextObjectUnderMousePrecise = function (pointer, objectToAvoid) {
+        const idx = this.__spatialIndex;
+        const pool = idx ? idx.realCandidates(this.vptCoords, this) : this._objects;
+        for (let i = pool.length - 1; i >= 0; i--) {
+            const obj = pool[i];
+            if (obj !== objectToAvoid && this._checkTarget(pointer, obj)) return obj;
+        }
+        return null;
     };
 
     fabric.Canvas.prototype._visibleObjects = function () {

@@ -652,8 +652,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {OSDAnnotations.Layer} layer it belongs to
      */
     checkLayer(ofObject) {
-        if (!this._layers.hasOwnProperty(ofObject.layerID) && ofObject.hasOwnProperty("layerID") && String(ofObject.layerID)) {
-            this._createLayer({id: ofObject.layerID, _objects: []});
+        // Guard against undefined/null/empty layerID. JS gotcha: `String(undefined)`
+        // returns the string "undefined" (truthy), so the previous
+        // `String(ofObject.layerID)` test wasn't actually rejecting "no layer"
+        // objects — it was creating a phantom layer with id=undefined for
+        // every imported annotation that lacks an explicit layerID
+        // (e.g. DICOM SR imports). That phantom layer then appeared in the UI
+        // as "Layer 1" with an undefined .id, breaking move-to-layer (its
+        // undefined id round-trips back to setAnnotationLayer as null,
+        // triggering the `oldLayerId === target` early-exit).
+        const lid = ofObject?.layerID;
+        if (lid === undefined || lid === null || String(lid) === '') return;
+        if (!this._layers.hasOwnProperty(lid)) {
+            this._createLayer({id: lid, _objects: []});
         }
     }
 
@@ -1043,6 +1054,123 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 return true;
             },
             { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
+        );
+        return changed;
+    }
+
+    /**
+     * Move an annotation to the top of its z-stack — for layered
+     * annotations, to the end of `layer._objects`; for root annotations,
+     * past the last `annotation`-typed slot in `_boardOrder`. Mirror of
+     * fabric's `bringToFront` but routed through `_boardOrder` so the
+     * board panel stays in sync. Undoable.
+     * @param {fabric.Object} annotation
+     * @returns {boolean} true if order changed
+     */
+    bringAnnotationToFront(annotation) {
+        return this._moveAnnotationToEdge(annotation, 'front');
+    }
+
+    /**
+     * Mirror of `bringAnnotationToFront` — move to the bottom of the
+     * z-stack within its layer (or root annotations). Undoable.
+     * @param {fabric.Object} annotation
+     * @returns {boolean} true if order changed
+     */
+    sendAnnotationToBack(annotation) {
+        return this._moveAnnotationToEdge(annotation, 'back');
+    }
+
+    /**
+     * Shared implementation for `bringAnnotationToFront` /
+     * `sendAnnotationToBack`. Captures the previous index for the inverse
+     * before applying, then routes the splice through the history stack so
+     * Ctrl+Z works. Reuses the same backing-array layout `moveAnnotation`
+     * targets (layer._objects or _boardOrder) — do NOT call fabric's
+     * `canvas.bringToFront` / `sendToBack` directly; those mutate
+     * `canvas._objects` only and would desync the board panel.
+     * @private
+     */
+    _moveAnnotationToEdge(annotation, edge) {
+        if (!annotation) return false;
+        const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
+        const layerId = layer ? String(layer.id) : null;
+        const notify = () => {
+            this.canvas.requestRenderAll();
+            try { this.raiseEvent('layer-objects-changed', { layerId }); } catch (e) { /* non-fatal */ }
+        };
+
+        // Pre-compute prevIdx so undo can restore the original slot. This
+        // runs once, OUTSIDE the queued history forward, because the
+        // history scheduler runs the forward asynchronously — and undo
+        // needs prevIdx pinned to the position the annotation occupied
+        // BEFORE the move, not whatever the array contains by the time
+        // an undo fires later.
+        let prevIdx = -1;
+        if (layer) {
+            prevIdx = layer._objects.findIndex(o => o.internalID === annotation.internalID);
+        } else {
+            const order = this._boardOrder;
+            const id = String(annotation.incrementId);
+            prevIdx = order.findIndex(e => e.type === 'annotation' && e.id === id);
+        }
+        if (prevIdx === -1) return false;
+
+        const moveTo = (toEdge) => {
+            if (layer) {
+                const list = layer._objects;
+                const cur = list.findIndex(o => o.internalID === annotation.internalID);
+                if (cur === -1) return false;
+                const target = toEdge === 'front' ? list.length - 1 : 0;
+                if (cur === target) return false;
+                list.splice(cur, 1);
+                list.splice(target, 0, annotation);
+                return true;
+            }
+            const order = this._boardOrder;
+            const id = String(annotation.incrementId);
+            const cur = order.findIndex(e => e.type === 'annotation' && e.id === id);
+            if (cur === -1) return false;
+            let target = -1;
+            if (toEdge === 'front') {
+                for (let i = order.length - 1; i >= 0; i--) {
+                    if (order[i].type === 'annotation') { target = i; break; }
+                }
+            } else {
+                for (let i = 0; i < order.length; i++) {
+                    if (order[i].type === 'annotation') { target = i; break; }
+                }
+            }
+            if (target === -1 || cur === target) return false;
+            const entry = order.splice(cur, 1)[0];
+            order.splice(target, 0, entry);
+            return true;
+        };
+
+        const restoreToPrev = () => {
+            if (layer) {
+                const list = layer._objects;
+                const cur = list.findIndex(o => o.internalID === annotation.internalID);
+                if (cur === -1) return;
+                list.splice(cur, 1);
+                const target = Math.max(0, Math.min(prevIdx, list.length));
+                list.splice(target, 0, annotation);
+            } else {
+                const order = this._boardOrder;
+                const id = String(annotation.incrementId);
+                const cur = order.findIndex(e => e.type === 'annotation' && e.id === id);
+                if (cur === -1) return;
+                const entry = order.splice(cur, 1)[0];
+                const target = Math.max(0, Math.min(prevIdx, order.length));
+                order.splice(target, 0, entry);
+            }
+        };
+
+        let changed = false;
+        APPLICATION_CONTEXT.history.push(
+            () => { changed = moveTo(edge); if (changed) notify(); return changed; },
+            () => { restoreToPrev(); notify(); return true; },
+            { name: edge === 'front' ? 'Bring annotation to front' : 'Send annotation to back' }
         );
         return changed;
     }
@@ -3217,6 +3345,32 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
         });
 
+        // Double-click cycles selection through stacked overlaps —
+        // dig into the annotation immediately below the currently active
+        // one at the click point. Uses the precise (geometry) hit-test so
+        // it only steps to objects that GENUINELY contain the pointer,
+        // not just objects whose bbox happens to. Repeated double-clicks
+        // drill further down; a regular click elsewhere resets the cycle.
+        this.canvas.on('mouse:dblclick', function (o) {
+            if (_this.module.disabledInteraction) return;
+            const pointer = o.pointer || _this.canvas.getPointer(o.e);
+            const active = _this.canvas.getActiveObject();
+            const next = _this.canvas.findNextObjectUnderMousePrecise?.(pointer, active);
+            if (!next || next === active) return;
+            // Route through the same path a single click takes — preserves
+            // event emission (`annotation-selection-changed`), edit-mode
+            // sync, board-panel update. We don't honor ctrl/shift here
+            // (those would convert the cycle into a multi-select gesture);
+            // the synthetic event below carries no modifier state so
+            // _objectClicked takes its plain-click branch.
+            const syntheticEvent = {
+                target: next,
+                e: { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, preventDefault: () => {}, stopPropagation: () => {} },
+                pointer: pointer,
+            };
+            _this._objectClicked(syntheticEvent, undefined);
+        });
+
         this.canvas.on('mouse:wheel', function (o) {
             if (_this.module.disabledInteraction) return;
 
@@ -3361,7 +3515,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             if (originalEvent.altKey) {
-                let nextObject = this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
+                // Cycle to the next-below annotation that GENUINELY contains
+                // the pointer (uses the same precise hit-test as the primary
+                // selection path). Falls back to the bbox-only cycle if the
+                // precise helper isn't on this prototype for any reason.
+                const findPrecise = this.canvas.findNextObjectUnderMousePrecise;
+                let nextObject = findPrecise
+                    ? findPrecise.call(this.canvas, event.pointer, clickedObject)
+                    : this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
                 if (!nextObject) return;
                 clickedObject = nextObject;
             }

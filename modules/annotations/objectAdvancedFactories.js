@@ -222,14 +222,22 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true; // we are always transparent
-        ofObject.set({ opacity: 1 });
+        // Apply opacity to the Group only. Fabric.Group multiplies its own
+        // opacity into each child's during render, so we must pass
+        // `opacity = 1` to the children — otherwise the slider value gets
+        // squared (group * child) and the ruler renders much fainter than
+        // polygons/text. The cloned `childVisuals` keeps everything else
+        // (modeOutline, stroke, etc.) intact for the child factories.
+        const opacity = (typeof visualProperties.opacity === 'number') ? visualProperties.opacity : 1;
+        ofObject.set({ opacity });
 
         if (ofObject._objects) {
             const lineFactory = this._context.getAnnotationObjectFactory('line');
             const textFactory = this._context.getAnnotationObjectFactory('text');
 
-            lineFactory.updateRendering(ofObject._objects[0], preset, visualProperties, defaultVisualProperties, targetCanvas);
-            textFactory.updateRendering(ofObject._objects[1], preset, visualProperties, defaultVisualProperties, targetCanvas);
+            const childVisuals = { ...visualProperties, opacity: 1 };
+            lineFactory.updateRendering(ofObject._objects[0], preset, childVisuals, defaultVisualProperties, targetCanvas);
+            textFactory.updateRendering(ofObject._objects[1], preset, childVisuals, defaultVisualProperties, targetCanvas);
         }
     }
 

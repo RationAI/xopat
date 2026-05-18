@@ -239,7 +239,12 @@ export const viewerMenuMethods = {
     initViewerMenu() {
         this.registerViewerMenu((viewer) => {
             const viewerId = viewer.uniqueId;
+            // viewer-reset fires with the world momentarily empty; uniqueId is
+            // documented to be transiently undefined in that window. Same bail
+            // pattern as _getViewerUI above.
+            if (!viewerId) return null;
             const state = this.getViewerContext(viewerId);
+            if (!state) return null;
             state.viewer = viewer;
             state.currentTab = state.currentTab || 'preset';
 
@@ -358,6 +363,12 @@ export const viewerMenuMethods = {
             );
 
             requestAnimationFrame(() => {
+                // The menu builder fires before the slide-open pipeline finishes
+                // wiring the new viewer. If the viewer this menu was built for
+                // has already been retired (slide-switch, viewer-reset), bail
+                // silently — a fresh menu will be rebuilt for the new viewer.
+                if (!window.VIEWER_MANAGER?.getViewer(viewerId)) return;
+
                 this._renderPresetList(viewerId);
                 this._refreshAnnotationFilterBadges(viewerId);
                 // todo race condition, accesses canvas instance, still, this update is too slow and fired too often, fix it
@@ -396,20 +407,26 @@ export const viewerMenuMethods = {
             includeMoveToLayer = true,
         } = opts;
         const wrapped = { originalEvent };
-        const actions = [];
 
         // Cascading flyouts are only rendered when `window.ContextMenu` is
-        // available (van.js component bundled into ui/index.js). Until then,
-        // emit a flat list with section header so the legacy
+        // available (van.js component bundled into ui/index.js). When it
+        // isn't, fall back to a flat list with header rows so the legacy
         // `window.DropDown` fallback still shows the items.
         const supportsFlyouts = typeof window !== 'undefined' && !!window.ContextMenu?.open;
 
+        // ── Build the building-block child arrays ───────────────────────
+        // Each block is computed up front so we can either nest them under
+        // the "Annotation" parent (modern flyout path) or flatten them with
+        // headers (legacy DropDown fallback) using the same data.
+
+        let presetItems = null;
+        let presetTitle = null;
         if (includePresetSelection) {
             const handler = active
                 ? this._clickAnnotationChangePreset.bind(this, active)
                 : this._clickPresetSelect.bind(this, true);
-            const parentTitle = active ? 'Change annotation to' : 'Select preset for left click';
-            const presetItems = [];
+            presetTitle = active ? 'Change preset' : 'Select preset for left click';
+            presetItems = [];
             this.context.presets.foreach((preset) => {
                 const category = preset.getMetaValue('category') || 'unknown';
                 const icon = preset.objectFactory.getIcon();
@@ -425,30 +442,26 @@ export const viewerMenuMethods = {
                     }
                 });
             });
-            if (presetItems.length) {
-                if (supportsFlyouts) {
-                    actions.push({ title: parentTitle, icon: 'fa-tag', children: presetItems });
-                } else {
-                    actions.push({ title: `${parentTitle}:` });
-                    actions.push(...presetItems);
-                }
-            }
+            if (!presetItems.length) presetItems = null;
         }
 
-        if (active && includeMarkAsPrivate) {
-            const props = this._getAnnotationProps(active);
-            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
-            actions.push({ title: 'Modify annotation:' });
-            actions.push({
-                title: props.private ? 'Unmark as private' : 'Mark as private',
-                icon: props.private ? 'visibility' : 'visibility_lock',
-                action: () => handlerMarkPrivate()
-            });
-        }
+        const mousePos = this._getMousePosition(wrapped);
+        const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+        const canPaste = this._canPasteAnnotation(wrapped);
+        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
+        const handlerDelete = this._deleteAnnotation.bind(this, active);
+        const cudActions = [
+            { title: 'Copy',   icon: 'fa-copy',     containerCss: !active && 'opacity-50',  action: () => active && handlerCopy() },
+            { title: 'Cut',    icon: 'fa-scissors', containerCss: !active && 'opacity-50',  action: () => active && handlerCut() },
+            { title: 'Paste',  icon: 'fa-paste',    containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() },
+            { title: 'Delete', icon: 'fa-trash',    containerCss: !active && 'opacity-50',  action: () => active && handlerDelete() },
+        ];
 
+        let layerItems = null;
         if (active && includeMoveToLayer && typeof fabric?.setAnnotationLayer === 'function') {
             const layers = fabric.getAllLayers?.() || [];
-            const layerItems = [{
+            layerItems = [{
                 title: '(no layer)',
                 icon: 'fa-layer-group',
                 action: () => fabric.setAnnotationLayer(active, null),
@@ -460,26 +473,88 @@ export const viewerMenuMethods = {
                     action: () => fabric.setAnnotationLayer(active, layer.id),
                 });
             }
-            if (supportsFlyouts) {
-                actions.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
-            } else {
-                actions.push({ title: 'Move to layer:' });
-                actions.push(...layerItems);
-            }
         }
 
-        actions.push({ title: 'Actions:' });
-        const mousePos = this._getMousePosition(wrapped);
-        const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
-        actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
-        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
-        actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
-        const canPaste = this._canPasteAnnotation(wrapped);
-        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
-        actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
-        const handlerDelete = this._deleteAnnotation.bind(this, active);
-        actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
+        let zOrderItems = null;
+        if (active
+            && typeof fabric?.bringAnnotationToFront === 'function'
+            && typeof fabric?.sendAnnotationToBack === 'function'
+            && typeof fabric?.moveAnnotation === 'function'
+        ) {
+            zOrderItems = [
+                { title: 'Bring to Front', icon: 'fa-angles-up',   action: () => fabric.bringAnnotationToFront(active) },
+                { title: 'Bring Forward',  icon: 'fa-angle-up',    action: () => fabric.moveAnnotation(active, 'up') },
+                { title: 'Send Backward',  icon: 'fa-angle-down',  action: () => fabric.moveAnnotation(active, 'down') },
+                { title: 'Send to Back',   icon: 'fa-angles-down', action: () => fabric.sendAnnotationToBack(active) },
+            ];
+        }
 
+        let privateItem = null;
+        if (active && includeMarkAsPrivate) {
+            const props = this._getAnnotationProps(active);
+            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+            privateItem = {
+                title: props.private ? 'Unmark as private' : 'Mark as private',
+                icon: props.private ? 'visibility' : 'visibility_lock',
+                action: () => handlerMarkPrivate(),
+            };
+        }
+
+        let measurementsItem = null;
+        if (active && typeof this.showMeasurementsPopover === 'function') {
+            measurementsItem = {
+                title: 'View measurements',
+                icon: 'fa-square-poll-horizontal',
+                action: () => this.showMeasurementsPopover(active),
+            };
+        }
+
+        // ── Assemble ────────────────────────────────────────────────────
+        // Modern path: one "Annotation" parent with the children in the
+        // user-specified order. Inserts an empty-title row between the
+        // preset section and the Copy/Cut/Paste/Delete group as a visual
+        // separator (no header label, just breathing room).
+        if (supportsFlyouts) {
+            const children = [];
+            if (presetItems) {
+                children.push({ title: presetTitle, icon: 'fa-tag', children: presetItems });
+                children.push({ title: '' }); // visual separator
+            }
+            children.push(...cudActions);
+            if (layerItems) {
+                children.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
+            }
+            if (zOrderItems) {
+                children.push({ title: 'Visibility order', icon: 'fa-arrows-up-down', children: zOrderItems });
+            }
+            if (privateItem) children.push(privateItem);
+            if (measurementsItem) children.push(measurementsItem);
+            return [{ title: 'Annotation', icon: 'fa-shapes', children }];
+        }
+
+        // Legacy `window.DropDown` fallback — flat list with header rows.
+        // Order matches the modern submenu so users see the same mental
+        // model regardless of which renderer is active.
+        const actions = [];
+        if (presetItems) {
+            actions.push({ title: `${presetTitle}:` });
+            actions.push(...presetItems);
+        }
+        actions.push({ title: 'Actions:' });
+        actions.push(...cudActions);
+        if (layerItems) {
+            actions.push({ title: 'Move to layer:' });
+            actions.push(...layerItems);
+        }
+        if (zOrderItems) {
+            actions.push({ title: 'Visibility order:' });
+            actions.push(...zOrderItems);
+        }
+        if (privateItem) {
+            actions.push({ title: 'Modify annotation:' });
+            actions.push(privateItem);
+        }
+        if (measurementsItem) actions.push(measurementsItem);
         return actions;
     },
 

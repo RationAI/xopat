@@ -603,7 +603,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const wrapClass = "relative overflow-hidden w-full rounded border border-base-300 bg-base-100";
         const hostClass = "flex items-center justify-center h-[120px]";
         const thumbClass = "block object-contain select-none pointer-events-none";
-        const labelClass = "hidden";
+        const labelImageClass = "block object-contain h-12 max-w-[80px] select-none pointer-events-none";
 
         const previewImage = img({
             id: `${this.windowId}-thumb-${id}`,
@@ -613,16 +613,13 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
+        const labelImgId = `${this.windowId}-label-${id}`;
+        const labelWrapId = `${this.windowId}-lbl-${id}`;
+        const labelToggleId = `${this.windowId}-lbl-tog-${id}`;
+        const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
         let thumbWrap;
         if (withImagery) {
-            const labelImage = img({
-                id: `${this.windowId}-label-${id}`,
-                class: labelClass,
-                alt: name,
-                draggable: "false",
-                src: APPLICATION_CONTEXT.url + "src/assets/image.png"
-            });
-
             thumbWrap = div(
                 {
                     class: wrapClass,
@@ -630,7 +627,6 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
                 },
                 div({ class: hostClass }, previewImage),
-                labelImage,
                 isOpen ? div({ class: "absolute right-1 top-1 z-10" },
                     span({ class: `badge badge-xs ${linked ? 'badge-primary' : 'badge-ghost'}` }, linked ? 'linked' : 'open')
                 ) : null
@@ -640,11 +636,55 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
                 if (usedViewer?.tools) {
                     this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, thumbClass);
-                    this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, labelClass);
                 }
             }
         } else {
             thumbWrap = div({ class: wrapClass + " " + hostClass });
+        }
+
+        // Label image lives in the actions row (next to sync / clear), not
+        // overlaid on the thumbnail. `transform: scale` on hover gives a
+        // larger peek without shifting layout — siblings don't move, so the
+        // cursor cannot "lose" the label and flicker.
+        const labelImage = img({
+            id: labelImgId,
+            class: "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30",
+            alt: name,
+            draggable: "false",
+            src: TRANSPARENT_PX,
+        });
+        const labelWrap = span({
+            id: labelWrapId,
+            class: "inline-flex items-center bg-base-100 border border-base-300 rounded overflow-visible",
+            style: "display: none;",
+            title: name,
+        }, labelImage);
+        const labelToggle = button({
+            id: labelToggleId,
+            class: "btn btn-ghost btn-xs btn-square",
+            style: "display: none;",
+            title: "Hide label",
+            onclick: (e) => {
+                e.stopPropagation();
+                const wrap = document.getElementById(labelWrapId);
+                const tog = document.getElementById(labelToggleId);
+                if (!wrap || !tog) return;
+                const collapsed = wrap.style.display === "none";
+                wrap.style.display = collapsed ? "" : "none";
+                tog.title = collapsed ? "Hide label" : "Show label";
+                tog.innerHTML = "";
+                tog.appendChild(new UI.FAIcon({
+                    name: collapsed ? "fa-eye" : "fa-eye-slash"
+                }).create());
+            },
+        }, new UI.FAIcon({ name: "fa-eye" }).create());
+
+        if (withImagery && bg?.id) {
+            const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
+            if (usedViewer?.tools) {
+                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId,
+                    "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30");
+            }
         }
 
         const caption = div({
@@ -688,7 +728,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
         const actionsRow = div({ class: "flex items-center justify-between gap-1 px-2 py-2" },
             splitButton,
-            div({ class: "flex items-center gap-1" }, linkToggle, closeBtn)
+            div({ class: "flex items-center gap-1" }, linkToggle, closeBtn, labelWrap, labelToggle)
         );
 
         return div({
@@ -749,6 +789,57 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     }
 
     // ---------- Utilities ----------
+
+    _loadAndRevealLabel(bg, viewer, revealEls, targetImgId, classes) {
+        const cache = this._cachedLabels;
+        const key = bg.id;
+        const toReveal = Array.isArray(revealEls) ? revealEls : [revealEls];
+
+        const apply = (node) => {
+            const current = document.getElementById(targetImgId);
+            if (!current || !(node instanceof HTMLElement)) return false;
+            const clone = node.cloneNode(true);
+            clone.id = targetImgId;
+            clone.className = classes;
+            current.replaceWith(clone);
+            return true;
+        };
+
+        const reveal = (node) => {
+            // Swap-then-reveal: only mark the elements visible after the real
+            // label has replaced the transparent placeholder. Avoids a brief
+            // frame where an empty box flickers in the row.
+            if (apply(node)) {
+                for (const el of toReveal) {
+                    if (el) el.style.display = "";
+                }
+            }
+        };
+
+        if (cache[key] instanceof HTMLElement) {
+            reveal(cache[key]);
+            return;
+        }
+
+        if (cache[key] instanceof Promise) {
+            cache[key].then((node) => { if (node) reveal(node); }).catch(() => {});
+            return;
+        }
+
+        cache[key] = viewer.tools.retrieveLabel(bg).then((node) => {
+            if (node) {
+                cache[key] = node;
+                reveal(node);
+            }
+            return node;
+        }).catch((err) => {
+            // Missing / failing labels are expected — many tile sources
+            // return undefined or throw. Keep the noise low and leave the
+            // overlay hidden.
+            console.debug("Label loading failed:", err);
+            delete cache[key];
+        });
+    }
 
     _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
         const cacheKey = bg.id;
