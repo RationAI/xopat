@@ -786,10 +786,14 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
          *   for per-viewer dispatch.
          * @param options.importBundle  hook called by the pipeline when a
          *   bundle-import is requested for this owner.
-         * @param options.bundleScope   `'global' | 'per-viewer' | 'both'`.
-         *   Defaults to `'global'`. `'both'` matches the legacy
-         *   `inViewerContext: true` behavior (one global call plus one call
-         *   per active viewer).
+         * @param options.bundleScope   `'global' | 'per-viewer' |
+         *   'per-viewer-background' | 'both' | 'all'`. Defaults to `'global'`.
+         *   `'both'` matches the legacy `inViewerContext: true` behavior (one
+         *   global call + one per active viewer). `'per-viewer-background'`
+         *   opts the owner into slide-aware lifecycle: flush-on-leave and
+         *   restore-on-enter per (viewer, background) pair, driven by
+         *   `viewer-open-pipeline` on slide change. `'all'` = global +
+         *   per-viewer + per-viewer-background. See src/IO_PIPELINE.md.
          * @param options.ignore        opt-out at runtime (equivalent to
          *   the old `ignorePostIO` option).
          */
@@ -797,7 +801,7 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             capabilities?: IOCapability[];
             exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
             importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
-            bundleScope?: "global" | "per-viewer" | "both";
+            bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
             ignore?: boolean;
         } = {}): Promise<void> {
             if (options.ignore || (typeof this.getOption === "function" && this.getOption("ignorePostIO", false))) {
@@ -872,8 +876,8 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         get io() {
             const uid = this.__uid;
             return {
-                flush: (scope?: { capabilityId?: string; viewerId?: string }) =>
-                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId }),
+                flush: (scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }) =>
+                    IO_PIPELINE.flushBundleExport({ ownerUid: uid, viewerId: scope?.viewerId, backgroundId: scope?.backgroundId }),
                 capabilities: () => IO_PIPELINE.listCapabilities(uid).map(x => x.capability),
                 isEnabled: (capabilityId?: string) => IO_PIPELINE.isEnabled(uid, capabilityId),
             };
@@ -887,7 +891,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         getViewerContext(id: UniqueViewerId) {
             const viewer = VIEWER_MANAGER.getViewer(id);
             if (!viewer) {
-                console.warn("No viewer with id " + id);
+                // During slide-switch transitions, deferred UI work (RAFs,
+                // pending re-renders) can still hold the previous viewer's
+                // uniqueId in closure after that id has been retired. Callers
+                // must already treat undefined as "skip this work", so a debug
+                // line is enough — a console.warn here was historically loud
+                // and uninformative.
+                console.debug("No viewer with id " + id);
                 return undefined;
             }
             let store = viewer[STORE_TOKEN];
@@ -1327,7 +1337,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             }
             // we use ID as this.name - it will not find itself unless registered, and registers itself with a correct ID
             const value = VIEWER_MANAGER._getSingleton(this.IID, viewerOrUniqueId);
-            return value || new this(VIEWER_MANAGER.ensureViewer(viewerOrUniqueId));
+            if (value) return value;
+            const viewer = VIEWER_MANAGER.ensureViewer(viewerOrUniqueId);
+            if (!viewer) return undefined;
+            return new this(viewer);
         }
 
         /**
@@ -1795,6 +1808,20 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             }
             console.warn("Background item has no parseable path and name is not set! This makes the slide unnameable!");
             return "undefined";
+        },
+
+        /**
+         * Return the background id currently bound to the viewer's first
+         * displayed slide. Mirrors the scalebar/world-item-0 lookup pattern
+         * used by `findViewerUniqueId` and `application-context.referencedId`.
+         * Used by the IO pipeline's per-viewer-background dispatch and by the
+         * viewer-open-pipeline slide-change flush/restore hooks.
+         */
+        currentBackgroundIdFor: function (viewer: OpenSeadragon.Viewer | undefined): string | undefined {
+            if (!viewer) return undefined;
+            const item = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
+            const bg = item?.getConfig?.("background");
+            return typeof bg?.id === "string" ? bg.id : undefined;
         },
 
         /**
@@ -2823,9 +2850,10 @@ form.submit();
             }
         }
 
-        // Valid state - nothing opened
+        // Valid state - nothing opened. Cache so subsequent reads stay stable
+        // across transient empty-world windows (e.g. _resetViewer raise).
         if (viewer.world.getItemCount() === 1 && firstItem && firstItem.source instanceof OpenSeadragon.EmptyTileSource) {
-            return '__empty__';
+            return viewer.__cachedUUID = '__empty__';
         }
 
         const path = APPLICATION_CONTEXT.config.data[firstItem?.getConfig()?.dataReference]
@@ -3190,8 +3218,11 @@ form.submit();
 
         /**
          * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
+         * Honors the documented contract that callers may pass a transient `undefined` —
+         * see `getViewerContext` for the slide-switch / RAF-deferred case.
          */
-        getViewer(uniqueId: string, _warn = true): OpenSeadragon.Viewer | undefined {
+        getViewer(uniqueId: string | undefined, _warn = true): OpenSeadragon.Viewer | undefined {
+            if (typeof uniqueId !== "string" || !uniqueId) return undefined;
             let viewer: OpenSeadragon.Viewer | undefined;
             if (uniqueId.startsWith("osd-")) {
                 viewer = this.viewers.find(v => v.id === uniqueId);
@@ -3267,11 +3298,15 @@ form.submit();
 
         /**
          * Helper method to get viewer instance from viewer-like argument.
+         * Returns undefined if a string id is given and no viewer is registered
+         * under that id (this happens during slide-switch transitions when an
+         * older viewer's id is still held in closure by a UI subsystem). Callers
+         * MUST treat undefined as "viewer is gone, skip this work".
          */
-        ensureViewer(viewerOrUniqueId: ViewerLikeItem): OpenSeadragon.Viewer {
+        ensureViewer(viewerOrUniqueId: ViewerLikeItem): OpenSeadragon.Viewer | undefined {
             if (!viewerOrUniqueId) throw new Error("No viewer or viewer id provided!");
             if (typeof viewerOrUniqueId === "string") {
-                return this.getViewer(viewerOrUniqueId)!;
+                return this.getViewer(viewerOrUniqueId);
             }
             return viewerOrUniqueId;
         }
@@ -3302,7 +3337,12 @@ form.submit();
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
                 },
-                htmlReset: () => viewer.getMenu().getShadersTab().clearLayers()
+                // Invoked from inside `FlexRenderer.destroy()` during
+                // `viewer.destroy()` — by that point `VIEWER_MANAGER.delete`
+                // has already cleared the menu slot, so `viewer.getMenu()`
+                // returns undefined. No-op cleanly instead of throwing
+                // (the surrounding try/catch only logged a warning anyway).
+                htmlReset: () => viewer.getMenu()?.getShadersTab?.()?.clearLayers?.()
             };
 
             const flexRendererClass = (window.OpenSeadragon as any).FlexRenderer;
@@ -3683,8 +3723,9 @@ form.submit();
          * @private
          */
         _getSingleton(singletonId: string, viewerOrUniqueId: ViewerLikeItem) {
-            let viewer = this.ensureViewer(viewerOrUniqueId);
-            return singletonId !== undefined ? viewer[this._singletonsKey]?.[singletonId] : undefined;
+            if (singletonId === undefined) return undefined;
+            const viewer = this.ensureViewer(viewerOrUniqueId);
+            return viewer?.[this._singletonsKey]?.[singletonId];
         }
 
         /**

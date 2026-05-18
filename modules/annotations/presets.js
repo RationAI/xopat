@@ -291,6 +291,7 @@ OSDAnnotations.PresetManager = class {
      * @returns true if exists
      */
     exists(id) {
+        if (this._unknownPreset && id === this._unknownPreset.presetID) return true;
         return this._presets.has(id);
     }
 
@@ -300,6 +301,14 @@ OSDAnnotations.PresetManager = class {
      * @returns {OSDAnnotations.Preset} preset instance
      */
     get(id = undefined) {
+        // `unknownPreset` is a lazy fallback object that lives outside the
+        // `_presets` Map. `checkAnnotation` stamps its sentinel `__unknown__`
+        // id onto imported objects when no real presets exist, and downstream
+        // `presets.get(id)` lookups must resolve it back — otherwise every
+        // render path early-returns and selection/delete appear broken.
+        if (this._unknownPreset && id === this._unknownPreset.presetID) {
+            return this._unknownPreset;
+        }
         if (!id && this._presets.size > 0) {
             if (this._presets.size > 1) {
                 return this._presets.values().next().value;

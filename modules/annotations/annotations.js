@@ -69,7 +69,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     async _initIOPipeline() {
         const formatOf = (ctx) => (ctx.meta && ctx.meta.format) || this.getExportOptions()?.format || "native";
         await this.initIO({
-            bundleScope: "per-viewer",
+            // Annotations are bound to their target slide. The pipeline keys
+            // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
+            // auto-fires flush-on-leave + restore-on-enter when the active
+            // slide in a viewer changes — so swapping slides within one viewer
+            // swaps the annotation set without leaking from the previous slide.
+            // The fabric canvas itself is still per-viewer (one wrapper per
+            // OSD viewer); only the IO state-keying axis is per-slide.
+            bundleScope: "per-viewer-background",
             exportBundle: async (ctx) => {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
@@ -77,12 +84,54 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 return fabric.export({ format: formatOf(ctx) }, true, true);
             },
             importBundle: async (ctx, data) => {
-                if (data === undefined || data === null) return;
                 if (!ctx.viewerId) return;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return;
+                // Slide-change restore semantics. The fabric canvas is a
+                // per-viewer overlay that survives OSD world resets, so when
+                // the active slide swaps we have to wipe the canvas ourselves
+                // — otherwise the previous slide's annotations stay on screen
+                // overlaid on the new slide.
+                //
+                // CRITICAL: the wipe MUST be synchronous from the pipeline's
+                // POV. `deleteAllAnnotations()` and `fabric.import(history=true)`
+                // both route through `APPLICATION_CONTEXT.history.push`, which
+                // queues forward() on a microtask Promise chain. If we don't
+                // wait for the queue to drain, the IO pipeline finishes
+                // restore, the renderer paints, and the user sees the previous
+                // slide's annotations until the queued delete fires. The
+                // history-bypassing fast path on `loadObjects(...,
+                // recordHistory=false)` calls `_loadObjects` directly — that
+                // does a synchronous `canvas.clear()` + state reset and
+                // returns a Promise we can actually await.
+                if (ctx.backgroundId) {
+                    try {
+                        await fabric.loadObjects({ objects: [] }, true, true, false);
+                    } catch (e) {
+                        console.warn("[annotations] pre-import clear failed:", e);
+                    }
+                }
+                if (data === undefined || data === null) return;
                 try {
-                    await fabric.import(data, { format: formatOf(ctx) }, true);
+                    // Payload-specific sinks (e.g. DICOM SR) wrap their content
+                    // as `{ format, meta, buffer }` so they can carry both the
+                    // wire-format hint and any decoder-side metadata (slide
+                    // pixel spacing, FrameOfReferenceUID, …). Unwrap here so
+                    // the convertor receives the raw payload + its meta.
+                    const isWrapped = typeof data === "object"
+                        && data !== null
+                        && typeof data.format === "string"
+                        && "buffer" in data;
+                    const importOptions = isWrapped
+                        ? { format: data.format, meta: data.meta }
+                        : { format: formatOf(ctx) };
+                    // Slide-aware restores aren't user actions; skip history
+                    // so the populate is synchronous too (same race that the
+                    // clear above was hitting). The legacy per-viewer path
+                    // keeps history tracking (ctx.backgroundId is unset).
+                    if (ctx.backgroundId) importOptions.history = false;
+                    const payload = isWrapped ? data.buffer : data;
+                    await fabric.import(payload, importOptions, true);
                 } catch (e) {
                     // Rethrow so the IO pipeline surfaces the failure to the
                     // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
@@ -118,10 +167,17 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             persistOutbox: true,
             persistMaxEntries: 5000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-            validate: (item) => {
+            validate: (item, ctx) => {
                 const bad = requireObject(item, "annotation");
                 if (bad) return bad;
-                if (!item.factoryID && !item.type) {
+                // Update patches are partial — they carry only the fields
+                // being changed (e.g. `{ presetID }` from
+                // changeAnnotationPreset). Only enforce shape-identity
+                // (factoryID/type) on create, where the full item is
+                // submitted. Without this guard, every update was refused
+                // for missing factoryID, and `changeAnnotationPreset` silently
+                // returned `ok: false`.
+                if (ctx?.direction === "create" && !item.factoryID && !item.type) {
                     return {
                         ok: false, refused: true,
                         reason: "missing factoryID/type",
@@ -1441,6 +1497,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         VIEWER_MANAGER.addHandler('key-down', e => this._keyDownHandler(e));
         VIEWER_MANAGER.addHandler('key-up', e => this._keyUpHandler(e));
         // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+
+        // Note: the canvas right-click menu is built by the plugin's
+        // per-viewer provider in plugins/annotations/methods/viewerMenu.mjs
+        // (which already owns Change preset / Copy/Cut/Paste/Delete /
+        // Move to layer / Private). Z-order entries live there too, calling
+        // back into the FabricWrapper methods (`bringAnnotationToFront`,
+        // `sendAnnotationToBack`, `moveAnnotation`) defined on this module.
+        // This keeps the menu single-source-of-truth in the plugin and
+        // avoids cluttering the top level with a separate "Annotation"
+        // submenu emitted from here.
     }
 
     _keyDownHandler(e) {

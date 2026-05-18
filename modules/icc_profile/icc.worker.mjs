@@ -51,15 +51,40 @@ self.addEventListener('unhandledrejection', (e) => {
     }
 })();
 
+// Profile bytes per source identity. The LittleCMS WASM module has a single
+// global profile slot — without this cache, two concurrent sources with
+// different profiles would clobber each other and tiles from the first
+// would silently get the second's correction. We re-arm the WASM slot
+// from this cache before each `processBitmap` whose `profileContextId`
+// doesn't match the one currently loaded.
+const profileCache = new Map(); // profileContextId -> ArrayBuffer
+let currentArmedProfile = null;
+
+function armWasmProfile(profileContextId) {
+    if (currentArmedProfile === profileContextId) return true;
+    const buf = profileCache.get(profileContextId);
+    if (!buf) return false;
+    const p = self.mod._malloc(buf.byteLength);
+    self.mod.HEAPU8.set(new Uint8Array(buf), p);
+    self.mod.ccall('set_icc_profile', null, ['number', 'number'], [p, buf.byteLength]);
+    self.mod._free(p);
+    currentArmedProfile = profileContextId;
+    return true;
+}
+
 self.onmessage = async (e)=> {
     if (!self.mod) return;
-    const {type, profile, image, width, height, stride, canvas, bitmap, contextId} = e.data;
+    const {type, profile, image, width, height, stride, canvas, bitmap, contextId, profileContextId} = e.data;
     if (type === 'setProfile') {
-        const p = self.mod._malloc(profile.byteLength);
-        self.mod.HEAPU8.set(new Uint8Array(profile), p);
-        self.mod.ccall('set_icc_profile', null, ['number', 'number'], [p, profile.byteLength]);
-        self.mod._free(p);
+        // Cache the bytes for later re-arm and immediately load into WASM so
+        // the current `contextId` is "ready" by the time the caller awaits.
+        profileCache.set(contextId, profile);
+        currentArmedProfile = null; // force re-load (profile may have changed)
+        armWasmProfile(contextId);
         postMessage({type: 'profileSet', contextId});
+    } else if (type === 'unsetProfile') {
+        profileCache.delete(contextId);
+        if (currentArmedProfile === contextId) currentArmedProfile = null;
     } else if (type === 'process') {
         // process raw RGB buffer
         const ptr = self.mod._malloc(image.byteLength);
@@ -69,6 +94,17 @@ self.onmessage = async (e)=> {
         self.mod._free(ptr);
         postMessage({type: 'done', image: out.buffer, contextId}, [out.buffer]);
     } else if (type === 'processBitmap' && bitmap) {
+        // Re-arm the WASM profile slot with this source's profile. Without
+        // this, the last `setProfile` call wins globally — fine for single
+        // viewport, wrong for concurrent multi-source sessions.
+        if (profileContextId && !armWasmProfile(profileContextId)) {
+            postMessage({
+                type: 'error',
+                contextId,
+                message: `ICC profile "${profileContextId}" not cached in worker`
+            });
+            return;
+        }
         // Draw into an OffscreenCanvas owned by the worker
         const off = new OffscreenCanvas(bitmap.width, bitmap.height);
         const ctx = off.getContext('2d');

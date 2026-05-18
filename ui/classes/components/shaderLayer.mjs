@@ -54,9 +54,10 @@ export class ShaderLayer extends BaseComponent {
         // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
         this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
         this.mode = (this.cfg.params?.use_mode) || "show";   // "show" | "blend" | "clip"
+        this.availableBlendModes = OpenSeadragon.FlexRenderer.SUPPORTED_BLEND_MODES || [];
         this.blendMode = this.cfg.params?.use_blend
-            || (OpenSeadragon.WebGLModule?.BLEND_MODE?.[0] ?? "mask");
-        this.availableBlendModes = OpenSeadragon.FlexRenderer.BLEND_MODE;
+            || this.availableBlendModes[0]
+            || "mask";
         // todo dirty attachment to the config, but it's the only way to persist the state for now
         //    (underscore props do not export at least)
         this.blendOpen = this.cfg._uiBlendOpen ?? false;  // advanced / blending section

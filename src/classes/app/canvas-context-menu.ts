@@ -28,12 +28,21 @@ export interface CanvasContextMenuContext {
 
 export interface CanvasContextMenuItem {
     title: string;
-    /** Optional callback. When undefined, the entry renders as a header/separator. */
+    /** Optional callback. When undefined and no `children`, the entry renders as a header/separator. */
     action?: (selected?: boolean) => void;
     selected?: boolean;
     icon?: string;
     iconCss?: string;
     containerCss?: string;
+    /**
+     * Cascading flyout entries. The runtime menu component
+     * (`ui/classes/components/contextMenu.mjs`) renders any item with a
+     * non-empty `children` array as a submenu parent — hovering / clicking
+     * opens the flyout. Use this to group related actions (e.g. annotation
+     * z-order) under a single top-level entry instead of cluttering the
+     * root menu.
+     */
+    children?: CanvasContextMenuItem[];
 }
 
 export type CanvasContextProvider = (

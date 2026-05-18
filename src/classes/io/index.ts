@@ -16,6 +16,7 @@ import { fileDownloadSink } from "./sinks/file-download";
 import { fileUploadSink } from "./sinks/file-upload";
 import { makePostDataSink } from "./sinks/post-data";
 import { makeHttpRestSink } from "./sinks/http-rest";
+import { makeSessionMemorySink } from "./sinks/session-memory";
 import { withRetry } from "./sinks/with-retry";
 import {
     makeStorageDriver,
@@ -26,7 +27,7 @@ import {
 
 export { IOPipeline, IOError, IOResourceImpl };
 export { fileUploadSink, fileDownloadSink };
-export { makePostDataSink, makeHttpRestSink, withRetry };
+export { makePostDataSink, makeHttpRestSink, makeSessionMemorySink, withRetry };
 export { makeStorageDriver, makeMemoryDriver, makeCookiesDriver, makePostDataKVDriver };
 
 /**
@@ -50,6 +51,11 @@ export function createIOPipeline(opts: IOPipelineOptions): IOPipeline {
         id: "http-rest",
         getOptions: () => pipeline.sinkOverrides("http-rest"),
     }));
+    // Default fallback for slide-aware bundle owners (bundleScope:
+    // "per-viewer-background" / "all"). post-data is a single global slot
+    // and cannot hold one bundle per (viewer, background); session-memory
+    // keys by ctx.key so slide swaps preserve per-slide payloads in-session.
+    pipeline.registerSink(makeSessionMemorySink());
 
     // ── KV drivers ─────────────────────────────────────────────────────
     // `memory` is always available; the others depend on host APIs being

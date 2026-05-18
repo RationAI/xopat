@@ -133,7 +133,7 @@ export function assembleBackgroundShaders(env: AssembleEnv, renderOutput: Record
             if (!hasExplicitRefs) {
                 const dataIndex = bgRef.dataReference as number;
                 shaderCfg.tiledImages = [env.resolveWorldIndex(dataIndex, "background", bgRef) ?? -1];
-                shaderCfg.name = shaderCfg.name || bgRef.name || BackgroundConfig.data(bgRef);
+                shaderCfg.name = shaderCfg.name || nameFromBGOrIndex(bgRef);
             } else {
                 shaderCfg.tiledImages = [];
                 shaderCfg.name = shaderCfg.name || nameFromBGOrIndex(shaderCfg.dataReferences[0]);

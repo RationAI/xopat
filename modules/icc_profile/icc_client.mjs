@@ -96,7 +96,22 @@ class ICCProfile extends window.XOpatModuleSingleton {
         await this.ready;
         this.debug = this.debug || makeDebugPanel();
 
-        VIEWER_MANAGER.addHandler("viewer-create", (e) => this.initEvents(e.viewer));
+        // Use `broadcastHandler` so the two per-viewer events are attached
+        // by `VIEWER_MANAGER.add()` at viewer-construction time (loader.ts
+        // ~3495) — i.e. BEFORE the open pipeline calls `addTiledImage` and
+        // OSD synchronously fires the first `tile-source-created`. Going
+        // through `viewer-create` (only raised inside OSD's `open` with
+        // `firstLoad=true`) loses the race for every newly-added viewer:
+        // the first tile-source event fires before the handler is attached
+        // and the ICC profile download is never kicked off.
+        //
+        // broadcastHandler is also structurally idempotent (a handler is
+        // stored at most once in its Map, attached at most once per viewer),
+        // which is why the previous per-viewer `__iccProfileEventsInited`
+        // guard is no longer needed.
+        VIEWER_MANAGER.broadcastHandler("tile-source-created", this._onTileSourceCreated);
+        VIEWER_MANAGER.broadcastHandler("tile-invalidated", this._onTileInvalidated, null, -10);
+        VIEWER_MANAGER.addHandler("viewer-reset", () => this._evictUnreferencedProfiles());
 
         this.worker.onmessage = async (e) => {
             const msg = e.data || {};
@@ -156,99 +171,131 @@ class ICCProfile extends window.XOpatModuleSingleton {
         };
     }
 
-    initEvents(viewer) {
-        viewer.addHandler("tile-source-created", async (e) => {
-            const source = e.tileSource;
-            if (!source?.downloadICCProfile) return;
+    // Registered via VIEWER_MANAGER.broadcastHandler — attached to every
+    // viewer at construction (loader.ts ~3495), BEFORE addTiledImage. Body
+    // is viewer-agnostic (operates on e.tileSource + shared module state),
+    // so a single handler reference covers every viewer in the manager.
+    _onTileSourceCreated = async (e) => {
+        const source = e.tileSource;
+        if (!source?.downloadICCProfile) return;
 
-            const contextId = source.url;
-            const ctx = this.getCtx(contextId);
+        // `source.url` is the server base URL and is shared across slides
+        // from the same DICOMweb endpoint — keying on it would apply
+        // slide A's profile to slide B. Tile sources that scope state to
+        // their own identity expose `tileSourceId`; fall back to `url` for
+        // sources that haven't adopted the convention yet.
+        const contextId = source.tileSourceId || source.url;
+        const ctx = this.getCtx(contextId);
 
-            // Prevent duplicate loading
-            if (ctx.status !== "loading" && ctx._started) return;
-            ctx._started = true;
+        // Prevent duplicate loading
+        if (ctx.status !== "loading" && ctx._started) return;
+        ctx._started = true;
 
-            // 1. Create a promise that resolves ONLY when the Worker is fully ready
-            ctx.readyPromise = new Promise((resolve, reject) => {
-                source.downloadICCProfile()
-                    .then((data) => {
-                        if (data == null) {
-                            ctx.status = "none";
-                            resolve(false); // No profile needed
-                            return;
+        // 1. Create a promise that resolves ONLY when the Worker is fully ready
+        ctx.readyPromise = new Promise((resolve, reject) => {
+            source.downloadICCProfile()
+                .then((data) => {
+                    if (data == null) {
+                        ctx.status = "none";
+                        resolve(false); // No profile needed
+                        return;
+                    }
+                    if (!(data instanceof ArrayBuffer)) {
+                        throw new Error("Invalid ICC profile data");
+                    }
+
+                    // We hijack the existing job system to wait for the worker's reply
+                    this._jobs.set(contextId, {
+                        resolve: () => {
+                            ctx.status = "ready";
+                            resolve(true); // Profile ready!
+                        },
+                        reject: (err) => {
+                            ctx.status = "error";
+                            reject(err);
                         }
-                        if (!(data instanceof ArrayBuffer)) {
-                            throw new Error("Invalid ICC profile data");
-                        }
-
-                        // We hijack the existing job system to wait for the worker's reply
-                        this._jobs.set(contextId, {
-                            resolve: () => {
-                                ctx.status = "ready";
-                                resolve(true); // Profile ready!
-                            },
-                            reject: (err) => {
-                                ctx.status = "error";
-                                reject(err);
-                            }
-                        });
-
-                        // Send to worker
-                        this.worker.postMessage({ type: "setProfile", profile: data, contextId }, [data]);
-                    })
-                    .catch((err) => {
-                        console.warn("[ICC] Failed to load profile", err);
-                        ctx.status = "error";
-                        resolve(false); // Graceful degradation
                     });
-            });
 
-            // 3. Return the promise so the event emitter waits (if it supports it)
-            return ctx.readyPromise;
+                    // Send to worker
+                    this.worker.postMessage({ type: "setProfile", profile: data, contextId }, [data]);
+                })
+                .catch((err) => {
+                    console.warn("[ICC] Failed to load profile", err);
+                    ctx.status = "error";
+                    resolve(false); // Graceful degradation
+                });
         });
 
-        viewer.addHandler(
-            "tile-invalidated",
-            async (e) => {
-                const tile = e.tile;
-                const tiledImage = e.tiledImage;
-                const source = tiledImage?.source;
-                const ctxId = source?.url || source?.id || tiledImage?.id;
+        // 3. Return the promise so the event emitter waits (if it supports it)
+        return ctx.readyPromise;
+    };
 
-                if (!ctxId) return;
+    _onTileInvalidated = async (e) => {
+        const tile = e.tile;
+        const tiledImage = e.tiledImage;
+        const source = tiledImage?.source;
+        const ctxId = source?.tileSourceId || source?.url || source?.id || tiledImage?.id;
 
-                // [FIX] Access the raw context to check for the promise
-                const ctx = this.profileState.get(ctxId);
+        if (!ctxId) return;
 
-                // 4. BLOCKING WAIT: If we are loading, pause this tile until ready
-                if (ctx && ctx.status === 'loading' && ctx.readyPromise) {
-                    await ctx.readyPromise;
-                }
+        // [FIX] Access the raw context to check for the promise
+        const ctx = this.profileState.get(ctxId);
 
-                // 5. Now check if we actually have a profile (ready)
-                if (!this.hasProfileFor(ctxId)) return;
+        // 4. BLOCKING WAIT: If we are loading, pause this tile until ready
+        if (ctx && ctx.status === 'loading' && ctx.readyPromise) {
+            await ctx.readyPromise;
+        }
 
-                const cache = tile.getCache();
-                if (!cache) return;
-                if (cache.withTileReference) cache.withTileReference(tile);
+        // 5. Now check if we actually have a profile (ready)
+        if (!this.hasProfileFor(ctxId)) return;
 
-                const bmp = await cache.getDataAs("imageBitmap");
-                if (!bmp) return;
+        const cache = tile.getCache();
+        if (!cache) return;
+        if (cache.withTileReference) cache.withTileReference(tile);
 
-                const before = this.debugMode ? await cache.getDataAs("imageBitmap") : null;
+        const bmp = await cache.getDataAs("imageBitmap");
+        if (!bmp) return;
 
-                // Since we awaited above, the worker is guaranteed ready now
-                const corrected = await this.processBitmapForContext(ctxId, bmp, before);
-                await cache.setDataAs(corrected, "imageBitmap");
-            },
-            null,
-            -10
-        );
-    }
+        const before = this.debugMode ? await cache.getDataAs("imageBitmap") : null;
+
+        // Since we awaited above, the worker is guaranteed ready now
+        const corrected = await this.processBitmapForContext(ctxId, bmp, before);
+        await cache.setDataAs(corrected, "imageBitmap");
+    };
 
     hasProfileFor(contextId) {
         const ctx = this.profileState.get(contextId);
         return ctx?.status === "ready";
+    }
+
+    /**
+     * Drop profileState entries whose tile sources are no longer mounted in
+     * any viewer's world. Called on `viewer-reset`. Without this, switching
+     * between many slides over a long session accumulates dead entries and
+     * (more importantly) lets a freshly-reopened slide skip the re-fetch path
+     * even if the backend has since published a new profile.
+     */
+    _evictUnreferencedProfiles() {
+        const live = new Set();
+        for (const viewer of (window.VIEWER_MANAGER?.viewers || [])) {
+            const items = viewer?.world?._items;
+            if (!items) continue;
+            for (const item of items) {
+                const src = item?.source;
+                const id = src?.tileSourceId || src?.url;
+                if (id) live.add(id);
+            }
+        }
+        for (const key of [...this.profileState.keys()]) {
+            if (!live.has(key)) {
+                this.profileState.delete(key);
+                // Tell the worker to free the cached profile bytes (no-op
+                // today; lands when layer-2 worker cache is added).
+                try {
+                    this.worker.postMessage({ type: "unsetProfile", contextId: key });
+                } catch (_) { /* worker may be torn down */ }
+            }
+        }
     }
 
     processBitmapForContext(profileContextId, bmp, beforeForDebug = null) {
@@ -263,8 +310,9 @@ class ICCProfile extends window.XOpatModuleSingleton {
                     type: "processBitmap",
                     bitmap: bmp,
                     contextId: requestId,
-                    // if you later support multiple profiles concurrently, you can add:
-                    // profileContextId
+                    // The worker re-arms its single WASM profile slot from
+                    // its per-source cache before applying the transform.
+                    profileContextId,
                 },
                 [bmp]
             );

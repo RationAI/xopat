@@ -126,7 +126,19 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
         capabilities?: IOCapability[];
         exportBundle?: (ctx: IOContext) => Promise<unknown> | unknown;
         importBundle?: (ctx: IOContext, data: unknown) => Promise<void> | void;
-        bundleScope?: "global" | "per-viewer" | "both";
+        /**
+         *  - `global` (default) — exportBundle/importBundle called once with no viewer key.
+         *  - `per-viewer` — called once per open viewer; ctx.viewerId set.
+         *  - `per-viewer-background` — called once per (open viewer, current background)
+         *    pair; ctx.viewerId and ctx.backgroundId set. Slide-change in any viewer
+         *    triggers an automatic flush for the previous (viewer, background) and a
+         *    restore for the new one via `viewer-open-pipeline`. Owners with other
+         *    scopes are NOT touched on slide change — they stay loaded for the
+         *    viewer's lifetime. See src/IO_PIPELINE.md.
+         *  - `both` — global + per-viewer (legacy).
+         *  - `all` — global + per-viewer + per-viewer-background.
+         */
+        bundleScope?: "global" | "per-viewer" | "per-viewer-background" | "both" | "all";
         ignore?: boolean;
     }): Promise<void>;
 
@@ -143,7 +155,7 @@ interface IXOpatElement extends OpenSeadragon.EventSource {
 
     /** IO façade for triggering exports / introspecting bindings. */
     readonly io: {
-        flush(scope?: { capabilityId?: string; viewerId?: string }): Promise<IOResult[]>;
+        flush(scope?: { capabilityId?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
         capabilities(): IOCapability[];
         isEnabled(capabilityId?: string): boolean;
     };
