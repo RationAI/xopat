@@ -10,6 +10,9 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
     }
 
     pluginReady() {
+        this._overlay = new JobResultsOverlay();
+        this._empaiaConvertor = null;
+
         const tOr = (key, fallback) => {
             const translated = $.t(key);
             return (translated && translated !== key) ? translated : fallback;
@@ -181,7 +184,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
     async _resolveCaseId() {
         const slideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId();
         if (slideId) {
-            const api = EmpationAPI.V3.get();
+            const api = singletonModule('empation-api')?.V3;
+            if (!api) return null;
             const cases = await api.cases.list();
             for (const c of cases.items) {
                 const slides = await api.cases.slides(c.id);
@@ -190,6 +194,83 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         }
 
         return this.getOption('caseId') || this.params.caseId || plugin('empaia')?.scopeAPI?.activeCaseId || null;
+    }
+
+    async _fetchAndRenderResults(finalJob, appId, viewerId) {
+        if (!this._empaiaConvertor) {
+            try {
+                const annotationsModule = OSDAnnotations.instance();
+                if (!OSDAnnotations.Convertor.CONVERTERS['empaia']) {
+                    EmpationAPI.integrateWithAnnotations(annotationsModule);
+                }
+                const ConvertorClass = OSDAnnotations.Convertor.CONVERTERS['empaia'];
+                this._empaiaConvertor = new ConvertorClass(annotationsModule, {});
+                console.log('[analyze] empaia convertor ready');
+            } catch (e) {
+                console.warn('[analyze] empaia convertor not available', e);
+                return;
+            }
+        }
+
+        try {
+            const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(appId) || null;
+            if (!ead?.io) {
+                console.warn('[analyze] no EAD io definition — cannot identify annotation outputs');
+                return;
+            }
+
+            const annotationKeys = Object.entries(ead.io)
+                .filter(([, spec]) => spec.type === 'collection' && spec.items?.reference != null)
+                .map(([key]) => key);
+
+            if (!annotationKeys.length) {
+                console.log('[analyze] no annotation output keys in EAD for job', finalJob.id);
+                return;
+            }
+            console.log('[analyze] annotation output keys:', annotationKeys);
+
+            const scope = finalJob._scope;
+            if (!scope) { console.warn('[analyze] no scope on finalJob'); return; }
+
+            const job = await scope.jobs.get(finalJob.id);
+            if (!job?.outputs) {
+                console.warn('[analyze] job has no outputs field', job);
+                return;
+            }
+            console.log('[analyze] job outputs:', job.outputs);
+
+            const allShapes = [];
+            for (const key of annotationKeys) {
+                const collectionId = job.outputs[key];
+                if (!collectionId) {
+                    console.log('[analyze] no collection ID for output key', key);
+                    continue;
+                }
+                try {
+                    const result = await scope.collections.queryItems(collectionId, {});
+                    if (!result?.items?.length) {
+                        console.log('[analyze] empty collection for key', key);
+                        continue;
+                    }
+                    console.log('[analyze] fetched', result.items.length, 'annotations for key', key);
+                    const decoded = await this._empaiaConvertor.decode({ items: result.items, presets: [] });
+                    if (decoded?.objects) allShapes.push(...decoded.objects.filter(Boolean));
+                } catch (e) {
+                    console.warn('[analyze] failed to fetch/decode annotations for key', key, e);
+                }
+            }
+
+            if (!allShapes.length) {
+                console.log('[analyze] no shapes decoded from job', finalJob.id);
+                return;
+            }
+
+            console.log('[analyze] rendering', allShapes.length, 'annotations from job', finalJob.id);
+            this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
+
+        } catch (e) {
+            console.error('[analyze] _fetchAndRenderResults failed', e);
+        }
     }
 
     _collapseDropdown(tab) {
@@ -203,20 +284,6 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
     }
 
     /**
-     * Poll obj.id until the empaia plugin assigns it asynchronously (after API POST).
-     * @param {object} obj annotation object reference from annotation-create event
-     * @param {number} timeout max wait in ms
-     * @returns {Promise<string|null>} annotation ID or null on timeout
-     */
-    async _waitForAnnotationId(obj, timeout = 5000) {
-        const start = Date.now();
-        while (!obj.id && Date.now() - start < timeout) {
-            await new Promise(r => setTimeout(r, 50));
-        }
-        return obj.id || null;
-    }
-
-    /**
      * Hide the FloatingWindow, activate rectangle drawing mode, wait for the user
      * to draw one annotation, then restore everything and return the annotation ID.
      *
@@ -226,12 +293,10 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
      * @param {FloatingWindow} fw the apps FloatingWindow to hide during drawing
      * @returns {Promise<string>} Empaia annotation ID
      */
-    async _captureAnnotation(fw) {
+    async _captureAnnotation(fw, scope) {
         const annot = singletonModule('annotations');
-        console.log('[analyze] _captureAnnotation start, annot:', annot, 'mode:', annot?.mode?.getId?.());
         if (!annot) throw new Error('Annotations module not available');
 
-        // Find rect factory by fabric structure in case its ID was registered incorrectly
         const rectFactory = annot.getAnnotationObjectFactory('rect')
             || Object.values(annot.objectFactories).find(f => f.fabricStructure?.() === 'rect');
         if (!rectFactory) throw new Error('Rectangle annotation factory not available');
@@ -243,60 +308,61 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
         annot.presets.left.objectFactory = rectFactory;
         annot.enableInteraction(true);
-        // Ensure the CUSTOM mode is registered before activating it
         annot.setModeUsed('CUSTOM');
-        // setModeById fires mode-changed which may throw in third-party handlers,
-        // but the mode is assigned before the event fires so the catch is safe to ignore
         try { annot.setModeById('custom'); } catch (_) {}
-        console.log('[analyze] mode after switch:', annot.mode?.getId?.(), 'disabledInteraction:', annot.disabledInteraction);
         if (fw._rootEl) fw._rootEl.style.display = 'none';
 
-        // Debug: monitor canvas-press to see if OSD is intercepting clicks
-        const debugPress = (e) => console.log('[analyze] canvas-press fired on VIEWER');
-        const debugRelease = (e) => console.log('[analyze] canvas-release on annot');
-        VIEWER.addHandler('canvas-press', debugPress);
-        annot.addHandler('canvas-release', debugRelease);
-
+        const fabric = annot.fabric;
         let annotObj;
         try {
-            console.log('[analyze] _captureAnnotation: waiting for annotation-create event');
             annotObj = await new Promise((resolve, reject) => {
                 const onCreate = (ev) => {
-                    console.log('[analyze] annotation-create fired, object:', ev.object);
-                    annot.removeHandler('annotation-create', onCreate);
+                    fabric.removeHandler('annotation-create', onCreate);
                     document.removeEventListener('keydown', onEscape, true);
                     resolve(ev.object);
                 };
                 const onEscape = (e) => {
                     if (e.key !== 'Escape') return;
-                    console.log('[analyze] Escape pressed, cancelling annotation capture');
-                    annot.removeHandler('annotation-create', onCreate);
+                    fabric.removeHandler('annotation-create', onCreate);
                     document.removeEventListener('keydown', onEscape, true);
                     reject(new Error('cancelled'));
                 };
-                annot.addHandler('annotation-create', onCreate);
+                fabric.addHandler('annotation-create', onCreate);
                 document.addEventListener('keydown', onEscape, true);
             });
-            console.log('[analyze] annotation-create resolved with object:', annotObj);
         } finally {
-            VIEWER.removeHandler('canvas-press', debugPress);
-            annot.removeHandler('canvas-release', debugRelease);
-            console.log('[analyze] _captureAnnotation finally block, annotObj:', annotObj);
             if (annot.presets.left) annot.presets.left.objectFactory = prevFactory;
             try { if (prevModeId !== undefined) annot.setModeById(prevModeId); } catch (_) {}
             if (!wasEnabled) annot.enableInteraction(false);
-            // Restore window on cancel/error immediately; success path restores after ID polling
             if (!annotObj && fw._rootEl) fw._rootEl.style.display = '';
         }
 
-        console.log('[analyze] waiting for annotation ID...');
         try {
-            const id = await this._waitForAnnotationId(annotObj);
-            console.log('[analyze] got annotation ID:', id);
-            if (!id) throw new Error('Annotation ID not assigned within timeout');
-            return id;
+            const tileSource = VIEWER.scalebar.getReferencedTiledImage()?.source;
+            if (!tileSource) throw new Error('No active tiled image source');
+            const slideId = tileSource.getEmpaiaId?.();
+            if (!slideId) throw new Error('Could not get slide ID from tiled image source');
+            const encoded = {
+                type: 'rectangle',
+                name: 'input_roi',
+                description: 'rect',
+                creator_type: 'scope',
+                creator_id: scope.id,
+                reference_type: 'wsi',
+                reference_id: slideId,
+                npp_created: Math.round(VIEWER.scalebar?.currentResolution?.() ?? 1),
+                upper_left: [Math.max(0, Math.round(annotObj.left)), Math.max(0, Math.round(annotObj.top))],
+                width: Math.round(annotObj.width),
+                height: Math.round(annotObj.height),
+            };
+            console.log('[analyze] posting annotation to MDS:', encoded);
+            const created = await scope.annotations.create(encoded);
+            console.log('[analyze] annotation created in MDS, serverId=', created.id);
+            return created.id;
+        } catch (e) {
+            console.error('[analyze] _captureAnnotation failed:', e);
+            throw e;
         } finally {
-            console.log('[analyze] restoring FloatingWindow after ID polling');
             if (fw._rootEl) fw._rootEl.style.display = '';
         }
     }
@@ -376,17 +442,17 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         let inputsForm = null;
         let inputsLoaded = false;
 
-        const onCapture = () => this._captureAnnotation(fw);
-
         configBtn.addEventListener('click', async () => {
             inputsSection.classList.toggle('hidden');
             if (!inputsLoaded && !inputsSection.classList.contains('hidden')) {
                 try {
-                    const api = EmpationAPI.V3.get();
+                    const api = singletonModule('empation-api')?.V3;
+                    if (!api) throw new Error('EmpationAPI V3 is not available');
                     const caseId = await this._resolveCaseId();
                     if (!caseId) throw new Error('No active case found');
                     const examination = await api.examinations.create(caseId, appId);
                     const scope = await api.getScopeFrom(examination);
+                    const onCapture = () => this._captureAnnotation(fw, scope);
                     inputsForm = await this._buildInputsForm(appId, scope, onCapture);
                     inputsSection.innerHTML = '';
                     inputsSection.appendChild(inputsForm.container);
@@ -411,11 +477,13 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         status.textContent = tOr('analyze.jobReady', 'Ready');
 
         runBtn.addEventListener('click', async () => {
+            const viewerId = String(VIEWER.id);
             try {
                 runBtn.disabled = true;
                 status.textContent = tOr('analyze.jobStarting', 'Starting...');
 
                 const inputs = inputsForm?.getInputs?.() || {};
+                const ead = inputsForm?.ead || null;
                 console.log('[analyze] Running job with inputs:', inputs);
 
                 const caseId = await this._resolveCaseId();
@@ -424,13 +492,17 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     appId,
                     caseId,
                     mode: 'STANDALONE',
-                    inputs
+                    inputs,
+                    ead
                 });
 
                 const isSuccess = res?.status === 'COMPLETED';
                 status.textContent = `${tOr('analyze.jobFinal', 'Status')}: ${res?.status || 'UNKNOWN'}`;
                 status.className = isSuccess ? 'text-xs flex-1 text-success' : 'text-xs flex-1 text-error';
                 console.log('[analyze] Job final:', res);
+                if (isSuccess) {
+                    await this._fetchAndRenderResults(res, appId, viewerId);
+                }
             } catch (err) {
                 console.error('[analyze] Failed to run app job', err);
                 status.textContent = `Error: ${err?.message || err}`;
@@ -462,7 +534,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             console.log('[analyze] requiredInputs:', requiredInputs);
             if (requiredInputs.length === 0) {
                 container.innerHTML = '<div class="text-xs opacity-50">No inputs required</div>';
-                return { container, getInputs: () => ({}) };
+                return { container, getInputs: () => ({}), ead };
             }
 
             const currentSlideId = VIEWER.scalebar?.getReferencedTiledImage()?.source?.getEmpaiaId() || '';
@@ -485,7 +557,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 return result;
             };
 
-            return { container, getInputs };
+            return { container, getInputs, ead };
         } catch (e) {
             console.error('[analyze] Failed to build inputs form', e);
             container.innerHTML = `<div class="text-xs text-error">Error: ${e.message}</div>`;
@@ -532,8 +604,8 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                     statusEl.textContent = id.slice(0, 8) + '\u2026';
                 } catch (e) {
                     btn.textContent = 'Create annotation';
-                    if (e.message !== 'cancelled') {
-                        statusEl.textContent = '\u26a0 ' + e.message;
+                    if (e?.message !== 'cancelled') {
+                        statusEl.textContent = '\u26a0 ' + (e?.message || String(e));
                     }
                 } finally {
                     btn.disabled = false;
@@ -556,13 +628,16 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             fieldEl.type = 'number';
             fieldEl.className = 'input input-xs input-bordered flex-1';
             if (input.type === 'float') fieldEl.step = 'any';
+        } else if (input.type === 'string') {
+            fieldEl = document.createElement('textarea');
+            fieldEl.className = 'textarea textarea-xs textarea-bordered flex-1 font-mono text-xs';
+            fieldEl.rows = 4;
+            fieldEl.placeholder = 'Enter text value\u2026';
         } else {
             fieldEl = document.createElement('input');
             fieldEl.type = 'text';
             fieldEl.className = 'input input-xs input-bordered flex-1';
-            if (!['string'].includes(input.type)) {
-                fieldEl.placeholder = `${input.type} ID`;
-            }
+            fieldEl.placeholder = `${input.type} ID`;
         }
 
         inputFields[input.key] = fieldEl;
