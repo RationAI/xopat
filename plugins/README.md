@@ -361,18 +361,20 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 approaches when API is available !!!
  
 First, get familiar with (sorted in importance order):
- - `window.VIEWER` 
-    - OpenSeadragon 
-      - `TileSource` API, ``EventSource`` API for managing the rendering and events (e.g. user input)
-      - `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API for viewing and navigation functionality
-        - focusing certain area, taking screenshots, opening viewer clone and more
-      - `OpenSeadragon.Scalebar` (accessible as `VIEWER.scalebar`) API for measurements
-        - `imagePixelSizeOnScreen` for **cached, optimized** way of converting between image coordinates and window coordinates  
-        - getting reference to _main_ tiled image, getting pixel size on screen,
-    - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
-    - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
  - `window.VIEWER_MANAGER`
-    - manager for viewers
+    - Manager for all OSD viewer instances. **Resolve viewers through this**, not through `window.VIEWER`:
+      - `VIEWER_MANAGER.get(...)` for a specific viewer
+      - `viewerSingletonModule(className, viewerLike)` for per-viewer module singletons
+      - `e.eventSource` inside `VIEWER_MANAGER.broadcastHandler(...)` callbacks
+    - See [`../src/MULTI_VIEWPORTS.md`](../src/MULTI_VIEWPORTS.md) — the codebase supports arbitrary multi-viewport grids, so `window.VIEWER` (the *focused* viewer) is the wrong handle whenever a plugin's domain logic could fire from another viewport.
+ - Per-viewer OpenSeadragon surface — obtained via `VIEWER_MANAGER.get(...)` / `e.eventSource`:
+    - `TileSource` API, `EventSource` API for managing rendering and user-input events
+    - `OpenSeadragon.Tools` (`viewer.tools`) for focusing areas, screenshots, viewer cloning, navigation
+    - `OpenSeadragon.Scalebar` (`viewer.scalebar`) for measurements; `imagePixelSizeOnScreen` is the **cached** image↔window coordinate conversion
+    - WebGL layers group via `viewer.bridge` for image data post-processing
+    - Per-viewer events — always check the local `EVENTS.md`
+ - `window.VIEWER`
+    - *Focused-viewer* shortcut. Safe only for transient, UI-driven actions where "the viewer the user is looking at" really is what you want; **never** for domain logic that may originate from a non-focused viewport.
  - `window.USER_INTERFACE`
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`

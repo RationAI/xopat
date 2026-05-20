@@ -1974,6 +1974,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     addHelperAnnotation(annotation) {
         annotation.excludeFromExport = true;
+        annotation.isHelperAnnotation = true;
         this.canvas.add(annotation);
     }
 
@@ -3337,6 +3338,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // });
 
         this.canvas.on('mouse:move', function (o) {
+            console.log("MOVE");
             if (_this.module.disabledInteraction) return;
             if (_this.module.cursor.isDown) {
                 _this.module.mode.handleMouseMove(o.e, screenToPixelCoords(o.e.x, o.e.y));
@@ -3387,6 +3389,35 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.canvas.on('selection:cleared', function(e) {
             if (!_this.__programmaticClear && e.deselected && e.deselected.length > 0) _this.canvas.setActiveObject(e.deselected[0]);
             _this.__programmaticClear = false;
+        });
+
+        // After fabric finishes a drag, it has already updated the target's
+        // left/top, but factories with point-based geometry (polygon,
+        // polyline) still hold the pre-drag coordinates in `.points`. Ask
+        // the factory to bring the internal geometry in line so exports and
+        // hit-tests stay consistent. `skipLeftTop=true` because fabric has
+        // already done that part.
+        this.canvas.on('object:modified', function (e) {
+            const target = e.target;
+            const action = e.transform?.action;
+            if (!target || action !== 'drag') return;
+            const original = e.transform?.original;
+            if (!original || original.left == null || original.top == null) {
+                target.setCoords();
+                return;
+            }
+            const deltaX = target.left - original.left;
+            const deltaY = target.top - original.top;
+            if (!deltaX && !deltaY) {
+                target.setCoords();
+                return;
+            }
+            const factory = target._factory?.();
+            if (factory && typeof factory.move === 'function') {
+                factory.move(target, deltaX, deltaY, true);
+            } else {
+                target.setCoords();
+            }
         });
 
         /****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
@@ -3564,6 +3595,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     highlightAnnotation(selectedObject) {
         this.removeHighlight();
+
+        // Do not highlight ein edit mode
+        if (this.isOngoingEditOf?.(selectedObject)) return;
 
         let factory = this.module.getAnnotationObjectFactory(selectedObject.factoryID);
         if (!factory) return;

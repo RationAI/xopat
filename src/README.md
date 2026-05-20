@@ -1,77 +1,66 @@
-# XOpat - OpenSeadragon-based histology data visualizer
+# XOpat — OpenSeadragon-based histology data visualizer
 
-In minimum, two components are necessary to run the viewer: a backend service, an image server able to handle image requests;
-and a front-end viewer. A crucial integration logics is described in the [integration document](../INTEGRATION.md), and
-basic startup guidelines are at https://xopat.readthedocs.io.
+xOpat is a JavaScript application. Two reference backends ship in the repo and either may serve it:
+
+- **`server/node/`** — canonical Node.js backend (see `server/node/README.md`). Started with `npm run s-node` (production) or `npm run dev` (`server/utils/node/dev-mode.js`).
+- **`server/php/`** — legacy PHP backend (entrypoint `server/php/index.php` → `server/php/init.php`).
+
+Both backends inject the same runtime configuration into the browser and provide the proxy/auth/storage endpoints the client expects. A high-level integration story lives in [`../INTEGRATION.md`](../INTEGRATION.md); operational/deployment docs at <https://xopat.readthedocs.io>.
 
 ## Configuration
-Supported configuration for the visualization itself, can be passed both in `POST` and `GET` requests.
 
-> There are at least four ways of opening the viewer:
->  - ``slides`` and `masks` query parameters, where a comma-separated list of data IDs is provided
->  - URL-encoded session after ``#`` hash in URL
->  - simplified GET arguments: ``http://localhost:9000?slides=slide,list&masks=mask,list``
->  - serialized session in GET (not recommended) ``http://localhost:9000#urlEncodedSessionJSONHere``
->  - serialized session in POST (see ``http://localhost:9000/dev_setup`` for simple interface to this method)
-> 
-> Furthermore, the viewer remembers last successfull session and 
-> stores it inside the browser memory, so that opening a viewer without
-> a valid session opens the last visited one.
-> 
-> NOTE: Plugins can override even this behavior. Check used plugin READMEs for more details.
-> 
+The viewer always boots from a single object (`XOpatRuntimeConfig`, see `src/types/app.d.ts`) carrying `params`, `data`, `background`, `visualizations`, `plugins`. The client resolves where that object comes from in this order — first hit wins (`src/parse-input.js:94–209`):
 
+1. **POST body, field `visualization`** (legacy alias `visualisation` also accepted). Canonical delivery for non-trivial sessions; the field carries either a JSON object or a JSON-encoded string. The server advertises POST support via `XOpatServerConfig.supportsPost` (`src/types/config.d.ts:113`).
+2. **URL hash `#<urlencoded-json>`** — parsed locally. If `supportsPost` is true the viewer transparently rewrites the navigation into a self-POST (hidden form at `parse-input.js:110–123`) so refreshes/shares stay POST-backed and the address bar is clean.
+3. **`?visualization=<urlencoded-json>`** query parameter — same parser as the hash path.
+4. **`?slides=id1,id2&masks=m1,m2`** shorthand — synthesizes one background per slide plus a `heatmap`-shader visualization per mask (`parse-input.js:131–174`). Convenient for quick links and CI tests.
+5. **Storage fallback** — `localStorage["xoSessionCache"]` (or `sessionStorage["xoSessionCache"]`) restores the last successful session if it is < 30 minutes old. The restored config is marked `__fromLocalStorage: true` so plugins can detect it. Every successful boot writes the current session back to both storages, so an auth-redirect round-trip never loses state.
 
-Example configuration:
+> A simple form that just POSTs a session JSON into the `visualization` field is available at **`/dev_setup`** on both backends (`server/node/index.js:438–473, 610–611`, `server/php/dev_setup.php`, template `server/templates/dev-setup.html`). Use it during development; in production the embedding application supplies POST data directly.
 
-````JSON
+Plugins may layer additional opening behavior on top of this pipeline — check the relevant plugin README.
+
+### Example session
+
+```jsonc
 {
   "params": {
+    "sessionName": "Demo case 0042",
+    "locale": "en",
+    "activeVisualizationIndex": 0
   },
   "data": [
     {
       "dataID": "path/to/tissue/scan.tif",
       "microns": 0.001,
-      "options": {
-        "customTileSrouceOption": "someValue"
-      }
+      "protocol": "dzi",
+      "options": { "format": "jpeg" }
     },
     "path/to/annotation.tif",
     "path/to/probability.tif"
   ],
   "background": [
-    {
-      "dataReference": 0,
-      "protocol": "path + \"?Deepzoom=\" + data + \".dzi\";"
-    }
+    { "dataReference": 0 }
   ],
   "visualizations": [
     {
       "name": "A visualization setup 1",
-      "protocol": "path + \"#DeepZoomExt=\" + data.join(',') + \".dzi\";",
       "shaders": {
         "shader_id_1": {
           "name": "Advanced visualization layer",
-          "type": "new_type",
+          "type": "edge",
           "fixed": false,
           "visible": 1,
-          "dataReferences": [
-            2,
-            0
-          ],
+          "dataReferences": [2, 0],
           "params": {}
         },
         "another_shader_id": {
           "name": "Probability layer",
           "type": "edge",
           "visible": 1,
-          "dataReferences": [
-            1
-          ],
-          "params": {
-            "color": "#fa0058",
-            "use_gamma": 1.0
-          }
+          "dataReferences": [1],
+          "params": { "color": "#fa0058", "use_gamma": 1.0 }
         }
       }
     }
@@ -80,211 +69,248 @@ Example configuration:
     "recorder": {}
   }
 }
-````
-**External parameters** &emsp;
-We will use [R] for required and [O] for optional parameters.
-- [R]`data` - an array OF `DataSpecification` types:
-  - [ONE OF] `DataID` type - identifiers (strings, objects...) such that image server can understand it (most often UUID4 or file paths, but might be an object if certain `TileSource` uses multiple values such as DICOM)
-  - [ONE OF] ``DataOverride``: can override data access and some metadata
-    - [R]`dataID` - `DataID` type
-    - [O]`options` - a generic map, set additional options to the target source - protocol that transfers your data, see given TileSource
-    - [O]`microns` - size of pixel in micrometers, default `undefined`,
-    - [O]`protocol` - see protocol construction in README.md in advanced details - TODO, standardize this and document here, problem with data[] vs data...
-    - [-]`tileSource` - [usable only in code]
+```
 
-- [O]`params` - an object, visualization parameters, supported:
-    - [O]`sessionName` - unique ID of the session, overridable by `background` config (below)
-    - [O]`locale` - language locale, default `en`
-    - [O]`customBlending` - allow to program custom blending, default `false`
-    - [O]`debugMode` - run in debug mode if `true`, default `false`
-    - [O]`webglDebugMode` - run debug mode on the post-processing, default `false`
-    - [O]`valueInspectorEnabled` - enable the hover value inspector, default `false`
-    - [O]`activeBackgroundIndex` - index to the background array: which one to start with, default `0`, can also be an array of indices for multi-view mode
-    - [O]`activeVisualizationIndex` - index to the visualization array: which one to start with, default `0`; note: this value is overridden by background if present, can also be an array for multi-view mode
-    - [O]`preventNavigationShortcuts` - do not bind navigation controls if `true` (note: default OSD keys still work)
-    - [O]`viewport` - where to focus on load, default `undefined`; can be a single viewport object applied to all viewers or an array of viewport objects in multi-view mode
-        - [R]`point` - center of the focus
-        - [R]`zoomLevel` - level of the zoom
-        - [O]`rotation` - rotation in degrees
-    - [O]`scaleBar` - show scale, does not show if microns not defined, default `true`,
-    - [O]`grayscale` - enforce grayscale transfer, default `false`,
-    - [O]`tileCache` - use tile caching, default `true`,
-    - [O]`permaLoadPlugins` - remember loaded plugins, default `true`,
-    - [O]`bypassCookies` - do not use cookies, default `false`, cookies are necessary for user setup memory
-    - [O]`theme` - look and feel, values `"auto"`, `"light"`, `"dark_dimmed"`, `"dark"`, default `"auto"`, 
-    - [O]`stackedBackground` - removed, not supported anymore - use shaders config map on background item to render multiple overlays within single BG item
-    - [O]`maxImageCacheCount` - cache size, how many image parts are cached for re-rendering use, default `1200`
-    - [O]`preferredFormat` - format to prefer if not specified, must be respected by the used protocol
-    - [O]`fetchAsync` - deprecated, kept only for backward compatibility
-    - [O]`bypassCache` - do not allow using cached values for the user, default `false`
-    - [O]`bypassCacheLoadTime` - at viewer initial loading, ignore cache - this can avoid pulling cached content into foreign session 
-    - [O]`background` - hex color #RGB or #RGBA to put as a background color (e.g. for fluorescence), by default transparent
+### `data` — `DataSpecification[]` (required)
 
-- [O]`background` - an array of objects, each defines what images compose the **image** group
-    - [R]`dataReference` - index to the `data` array, can be only one unlike in `shaders`, required - it is the 'image' to reference everything against
-    - [O]`shaders` - a shader configuration to use for this background, see `shaders` below (but `dataReferences` is optional). When omitted, the background renders the data through an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced — the background renders only what the `shaders` array says. Tools that round-trip a session (canonical-scene.ts) materialize this implicit entry as `[{ type: "identity", … }]` when the user edits it, so the change persists.
-    - [O]`id` - unique ID for the background, created automatically from data path if not defined
-    - [O]`lossless` - deprecated
-    - [O]`protocol` - deprecated, moved to `DataOverride`
-    - [O]`tileSource` - a tileSource object, can be provided by a plugin or a module, not available through session configuration, not serialized
-      - the object needs to be deduced from available dataReference and possibly protocol value realtime before the viewer loads using events
-    - [O]`microns` - deprecated, moved to `DataOverride`
-    - [O]`micronsX` - deprecated, moved to `DataOverride`
-    - [O]`micronsY` - deprecated, moved to `DataOverride`
-    - [O]`name` - custom tissue name shown in the UI (renders the data path if not set)
-    - [O]`sessionName` - overrides `sessionName` of global params if set
-    - [O]`goalIndex` - preferred visualization index for this background, overrides `activeVisualizationIndex`
-- [O]`visualizations` - array of objects that define visualizations (sometimes we say _visualization goals_) of the **data** group,
-it is an inherited configuration interface of the WebGL module extended by option `fixed` and `protocol`
-    - [R]`shaders` - a key-value object of data instances (keys) tied to a certain visualization style (objects), the data layer composition is defined here, 
-        - [R]`type` - type of shader to use, supported now are `color`, `edge`, `dual-color`, `identity` or `none` (used when the data should be used in different shader); can be also one of custom-defined ones 
-        - [R]`dataReferences` - indices **array** to the `data` array
-        - [O]`visible` -  `1` or `0`, `true` of `false`, whether by default the data layer is visible
-        - [O]`name` - name of the layer: displayed to the user
-        - [O]`fixed` - if `false`, user is able to change the visualization style, default `true`
-            - shaders can then reference `data` items using index to the `dataReferences` array
-            - e.g. if `shader_id_1` uses texture with index `0`, it will receive data to `"path/to/probability.tif"`
-        - [O]`params` - special parameters for defined shader type (see corresponding shader), default values are used if not set or invalid
-    - [O]`name` - visualization goal name
-    - [O]`lossless` - deprecated, kept only for backward compatibility
-    - [O]`protocol` - deprecated, moved to `DataOverride`
-- [O]`plugins` - a plugin id to object map, the object itself can contain plugin-specific configuration, see plugins themseves
+Each entry is either a bare `DataID` (string/object the image server understands — most often a UUID4 or file path; objects are used by sources like DICOM) or a `DataOverride` (`src/types/app.d.ts:31–39`):
 
-   
+- **`dataID`** (required) — the underlying `DataID`.
+- **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions`, `src/types/app.d.ts:46–49`). Standard keys: `format`.
+- **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
+- **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode.
+- **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
+
+### `params` — viewer setup (optional)
+
+Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` silently drops unknown keys** with a console warning (`src/app.ts:108–122`), so typos vanish quietly — verify names against the type.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`. |
+| `locale` | string | `"en"` | i18next locale. |
+| `theme` | `"auto" \| "light" \| "dark_dimmed" \| "dark"` | `"auto"` | DaisyUI `data-theme`. |
+| `customBlending` | bool | `false` | Allow user-programmed blending. |
+| `debugMode` | bool | `false` | Verbose runtime instrumentation. |
+| `webglDebugMode` | bool | `false` | Debug post-processing. |
+| `webGlPreferredVersion` | string | — | Select WebGL backend version. |
+| `valueInspectorEnabled` | bool | `false` | Hover value inspector. |
+| `visualizationInspectorEnabled` | bool | `false` | Pixel/lens inspector overlay. |
+| `visualizationInspectorMode` | string | — | Inspector mode (paired with `UTILITIES.setVisualizationInspectorMode`). |
+| `visualizationInspectorRadiusPx` | number | — | Inspector radius. |
+| `visualizationInspectorLensZoom` | number | — | Lens zoom factor. |
+| `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. |
+| `activeVisualizationIndex` | number \| number[] | `0` | Initial viz index; array for multi-view. Background `goalIndex` overrides per item. |
+| `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
+| `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
+| `scaleBar` | bool | `true` | Requires microns to render. |
+| `toolBar` | bool | — | Top toolbar visibility. |
+| `statusBar` | bool | — | Bottom status bar visibility. |
+| `disablePluginsUi` | bool | `false` | Hide plugin UI without unloading the plugins. |
+| `grayscale` | bool | `false` | Force grayscale transfer. |
+| `tileCache` | bool | `true` | Enable tile caching. |
+| `maxImageCacheCount` | number | `1200` | Tile cache size. |
+| `preferredFormat` | string | — | Hint to the protocol; must be honored by the TileSource. |
+| `background` | string | — | Hex `#RGB`/`#RGBA` clear color (e.g. fluorescence). Transparent if unset. |
+| `permaLoadPlugins` | bool | `true` | Remember loaded plugins across sessions. |
+| `bypassCookies` | bool | `false` | Skip cookie-backed user state. |
+| `bypassCache` | bool | `false` | Never reuse cached values. |
+| `bypassCacheLoadTime` | bool | `false` | Ignore cache at initial load only — avoids pulling cached content from a foreign session. |
+| `historySize` | number | — | Cap on the history stack (`src/classes/history.ts`). |
+| `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds. |
+| `maxMobileWidthPx` | number | — | Responsive breakpoint. |
+
+### `background` — `BackgroundItem[]`
+
+Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–90`):
+
+- **`dataReference`** (required) — index into `data`, or an inline `DataID` / `DataOverride`. *One* reference per background entry.
+- **`shaders`** (optional) — shader configuration array, same shape as visualization shaders (`dataReferences` becomes optional). When unset, the renderer synthesizes an implicit `identity` shader keyed under the background's `id`. As soon as any entry is set, the implicit identity is replaced. `canonical-scene.ts` materializes the implicit entry as `[{ type: "identity", … }]` when a tool edits it, so the change persists across reopens.
+- **`id`** — unique id; derived from the data path if unset.
+- **`name`** — tissue name shown in the UI.
+- **`sessionName`** — overrides `params.sessionName` for this background.
+- **`goalIndex`** — preferred visualization index for this background; overrides `params.activeVisualizationIndex`.
+- **`options`** — forwarded to the TileSource.
+
+> Legacy fields `lossless`, `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.
+
+### `visualizations` — `VisualizationItem[]`
+
+WebGL composition goals over the data group (`src/types/app.d.ts:109–116`):
+
+- **`shaders`** (required) — map of shader id → layer spec:
+    - **`type`** (required) — `color`, `edge`, `dual-color`, `identity`, `heatmap`, `none`, or any custom-registered shader.
+    - **`dataReferences`** (required) — index array into `data`.
+    - **`visible`** — `1`/`0` or boolean.
+    - **`name`** — UI label.
+    - **`fixed`** — if `false`, user can change the shader type; default `true`.
+    - **`params`** — shader-specific defaults; invalid entries fall back silently.
+- **`name`** — goal label.
+- **`goalIndex`** — preferred index when this item is selected.
+
+> Legacy `lossless` and `protocol` are accepted at the visualization level for back-compat — prefer `DataOverride`.
+
+### `plugins`
+
+Plugin-id → plugin-config map; consult each plugin's README.
+
 <details>
- <summary>Advanced features:</summary>
+<summary>Advanced features</summary>
 
-**Internal parameters** &emsp;
-The visualization can internally support more parameters, these are set when the application is running and then used to
-support various sharing and caching. Worth noting are
-- `order` parameter for each visualization goal, which can be an array of shader ID's - this order define the order of rendering, note that all data that is being
-rendered must be present (e.g. all data where in the data settings `visible=1` is set and which has no problems such as incorrect 
-parameter values)
-- `cache` object inside each shader definition, contains cached values from the shader usage, its properties are dependent on the
-shader type, so always check whether a desired property exists or not
-    - it is in fact equal to default values overriding
-    - it is data-type dependent, so if you enter different value or data type than expected by the shader, you will break things
-    
-_Protocol construction_ &emsp;
-To use custom protocol, pass a string that can be evaluated as a JavaScript code to a valid URL. It must be one-liner expression, which
-can use two variables: `path` and `data`. `path` contains absolute url to the default image-serving script (as set in `config.php`). Note that `vis.protocol` 
-expression receives a string **list** in the `data` parameter (array of selected images), whereas
-`background.protocol` only a single string (one image). That means a server behind `vis.protocol` url must be able to serve simultaneously multiple images. These images
-must be concatenated below each other into a single bigger image (see the `webgl` module for more details).
+**Internal parameters.** The runtime augments visualization items at runtime with fields that show up in serialized sessions:
 
-Examples:
-- URL construction using **string concatenation** (note the need of `\"` escape as it has to be valid `JSON`)
-    > "protocol": "path + \\"?Deepzoom=\\" + data + \\".dzi\\";"
+- `order` — shader-id array on a visualization goal; sets render order. All referenced data with `visible=1` must be present and valid.
+- `cache` — per-shader, shader-type-dependent value bag (equivalent to default-value overrides). Type-sensitive: writing a wrong-type value will break rendering.
 
-    is the default behaviour for `background` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=my/data.tif`, url
-`http://serv.org/iipsrv.fcgi?Deepzoom=my/data.tif.dzi` which is a DZI protocol request to IIPImage's `fcgi` script.
+**Slide protocols.** A protocol is a named entry in `ENV.client.slide_protocols` (see `src/types/config.d.ts:5–28`, registry implementation at `src/classes/slide-protocols.ts`). Each entry is either:
 
-- URL construction using **ES6 String Template**
+- a URL template string with `data` in scope (non-secure mode only — rejected in secure mode), or
+- an object `{ url, proxy?, baseURL?, auth?, … }` whose extra fields are forwarded verbatim to `new HttpClient(...)`, so every metadata + tile request the resulting TileSource issues inherits proxy routing, CSRF tokens, and JWT/auth headers uniformly.
 
-    > "protocol": "&grave;${path}#DeepZoomExt=${data.join(',')}.dzi&grave;"
+`DataOverride.protocol` (and legacy `BackgroundItem.protocol` / `VisualizationItem.protocol`) reference an entry **by name** (`"dzi"`, `"dicomweb"`, …). Defaults come from `default_background_protocol` / `default_visualization_protocol`; the legacy `image_group_*` / `data_group_*` env keys are auto-migrated into synthesized `__legacy_bg` / `__legacy_viz` entries. Plugins register protocols at runtime via `window.SLIDE_PROTOCOLS.register({ id, createTileSource })`.
 
-    is the default behaviour for `visualizations` and creates, if `path=http://serv.org/iipsrv.fcgi` and `data=[my/data.tif, other/data.tif]`,
-the `http://serv.org/iipsrv.fcgi#DeepZoomExt=my/data.tif,other/data.tif.dzi` url 
-using string template one-liner (`;` is optional). The protocol in this
-case is our custom protocol, able to handle multiple image acquisition as described above. Moreover, data behind `#` sign
-is sent to as `HTTP POST` data in the request.   
+Use this registry instead of hand-rolling URLs in `background.protocol`/`visualizations.protocol` — those evaluations are blocked in secure mode and lose proxy/auth integration.
 
 </details>
 
 ## Structure
-In each folder you will find a `README` document that describes the given component in more detail. For now, only
-this README and description of MODULES and PLUGINS system are up-to-date.
 
-### `../`
-Root folder contains 
-- basic application scripts:
-    - `index.php` - the viewer itself which you need to send JSON configuration to
-    - `config.php` - static viewer configuration (default server URLs, protocols...)
-    - `dev_setup.php` - interface for customizable visualization setup which you can open
-    - `redirect.php` - internal interface for URL to configuration translation, used with exported URLs
-    
-### `./`    
-- `.js` files together with third-party dependencies inside `./external/` folder and `.php` utility files
-- two basic styles `github.css` (bootstrap _Primer CSS_, [documentation available here](https://primer.style/css)) and `style.css` (see the style sheet for pre-defined classes with use examples)
+Each folder ships a `README` with more detail. The most up-to-date ones are this file, [`../plugins/README.md`](../plugins/README.md), and [`../modules/README.md`](../modules/README.md).
 
-### `./external/`
-Always-present third-party libraries and styles which are guaranteed to be included.
-The exception is the `monaco` editor which is also available, but only in a different window
-context via the `Dialogs` interface.
+### `../` (repo root)
 
-### `./assets/`
-Own images and styles.
+- `index.html` and the `server/` tree (Node + PHP entrypoints).
+- `package.json` — `s-node`, `s-node-test`, `dev`, `docker-node`, `docker-php`.
 
-### `../plugins/`
-The visualizer supports **plugins** - a `JavaScript` files that, if certain policy is kept, allow seamless integration 
-of functionality to the visualizer GUI. See `./plugins/README.md`. Plugins are placed in `./plugins/` folder.
+### `./` (`src/`)
 
-### `../modules/`
-The visualizer supports **modules** - a `JavaScript` libraries: it is a more dynamic version of `./external/`.
-Modules allow versatile library inclusion: plugins and other modules can declare dependency: 
-this dependency is resolved and necessary items are included (in the right order).
-See `./modules/README.md`. Modules are placed in `./modules/` folder.
+- `app.ts` — `initXOpat(...)` entrypoint; builds `APPLICATION_CONTEXT`, `VIEWER_MANAGER`, `SESSION`, `IO_PIPELINE`.
+- `loader.ts` — module/plugin loader and the global helpers `plugin(id)`, `singletonModule(id)`, `viewerSingletonModule(className, viewerLike)`.
+- `parse-input.js` — the precedence chain described in *Configuration* above.
+- `store.ts` — pluggable storage middleware (KV drivers used by the IO pipeline).
+- `tile-source.ts` — common TileSource scaffolding.
+- `classes/`
+    - `app/` — viewer-open pipeline and canonical-scene round-trip (`viewer-open-pipeline.ts`, `canonical-scene.ts`, `application-lifecycle-controller.ts`, `viewer-inspector-controller.ts`).
+    - `io/` — IO pipeline implementation (see [`IO_PIPELINE.md`](IO_PIPELINE.md)).
+    - `session/` — live-collaboration controller (see [`SESSION.md`](SESSION.md)).
+    - `scripting/` + `scripting-manager.ts` — sandboxed scripting API.
+    - `slide-protocols.ts` — `SLIDE_PROTOCOLS` registry.
+    - `http-client.ts` — `HttpClient` (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
+    - `history.ts`, `user.ts`.
+- `external/` — always-loaded third-party libraries and OSD extensions (DZI ext tile source, scalebar, autocomplete, …).
+- `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only.
+- `assets/` — `style.css`, icons, and other static assets.
+- `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).
 
-### `../openseadragon/` 
-OpenSeadragon **v6+** third-party javascript library the whole visualization builds on. `debug` contains unminified version for debugging & OSD modifications.
-These are in their own, explicit folders since this is the core functionality of the tiled, high-resolution image visualizations.
-OpenSeadragon is not included by default, but you can clone it inside this repository to use internal
-copy of the library. You can also use CDN or different location of OpenSeadragon, but it must be of a v6+.
-The OSD location is configurable through the ENV.
+OpenSeadragon (v6+) is bundled under `src/libs/openseadragon.js` and configured via `openSeadragonPrefix` / `openSeadragon` in `src/config.json`. To run a debug build, point those values at an unminified copy.
+
+### `../plugins/`, `../modules/`
+
+User-facing features and shared libraries respectively; both are dynamically loadable via the loader. See their READMEs.
 
 ## Available API
 
-Make sure you've read the [INTEGRATION](../INTEGRATION.md) document.
+Make sure you've read [`../INTEGRATION.md`](../INTEGRATION.md) first.
 
-The viewer comes with many available features. Here will be described only where to look for them, the software contains READMEs across the codebase. Some selected API is described in plugins root ``README``.
-Some OpenSeadragon extensions and custom TileSources are placed within ``external``, styles and asset related stuff in `assets`.
+### Globals
 
-For CORE UI, look into `../ui/` folder.``user_interface.js`` serves as definition of globally available UI methods, we are in process of moving
-these definitions to CORE UI services.
+Established by `src/app.ts` and `src/loader.ts`. These are the supported, ambiently-typed entrypoints:
 
-Many features are available through ``modules`` that implement additional important functionality.
+| Global | Where it's set | Purpose |
+|---|---|---|
+| `window.APPLICATION_CONTEXT` | `src/app.ts:159` | Session, config accessors, open pipeline. |
+| `window.VIEWER_MANAGER` | `src/app.ts:224` | Manager for all OSD viewer instances (single- and multi-view). |
+| `window.USER_INTERFACE` | UI layer | Core generic UI operations (notifications, menus). |
+| `window.UTILITIES` | UI / inspector controllers | System utilities (inspector toggles, serializers). |
+| `window.HttpClient` | `src/classes/http-client.ts:349` | Auth-aware HTTP client (proxy, JWT, CSRF). |
+| `window.SESSION` | `src/app.ts:230` | Live-collaboration `SessionSyncController`. |
+| `window.IO_PIPELINE` | `bootstrapIOPipeline()` in `src/app.ts:149` | Save/load pipeline; also reachable as `APPLICATION_CONTEXT.io`. |
+| `window.SLIDE_PROTOCOLS` | `src/classes/slide-protocols.ts` | Slide-protocol registry. |
+| `window.xmodules` | `src/loader.ts` | Object store of module exports. Use the helpers below — don't reach in directly. |
+| `plugin(id)` | `src/loader.ts:298` | Returns the plugin instance. |
+| `singletonModule(id)` | `src/loader.ts:313` | Returns (and lazily instantiates) the module singleton. |
+| `viewerSingletonModule(className, viewerLike)` | `src/loader.ts:330` | Returns a per-viewer `XOpatViewerSingleton`. |
+
+> `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
 
 ### Viewer Open API
+
 The runtime opening pipeline is class-based and lives under `src/classes/app/`. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
 
 - `APPLICATION_CONTEXT.openViewerWith(data?, background?, visualizations?, bgSpec?, vizSpec?, opts?)`
-  - Main transaction entrypoint.
-  - Can replace or merge session `data` / `background`.
-  - Can create additional viewers when multiple backgrounds are targeted.
-  - `vizSpec` arrays may contain explicit `undefined` entries to mean "no visualization for this viewer"; omitted `vizSpec` still means "keep the current selection".
-  - Rebinds navigator title, scalebar reference, measurements, visualization menu, history, and synthetic open events.
+    - Main transaction entrypoint.
+    - Can replace or merge session `data` / `background`.
+    - Can create additional viewers when multiple backgrounds are targeted.
+    - `vizSpec` arrays may contain explicit `undefined` entries to mean "no visualization for this viewer"; omitted `vizSpec` still means "keep the current selection".
+    - Rebinds navigator title, scalebar reference, measurements, visualization menu, history, and synthetic open events.
 - `APPLICATION_CONTEXT.updateViewerSelection(viewerIndex, { backgroundIndex?, visualizationIndex? }, opts?)`
-  - Use when one existing viewer should switch background and/or visualization without rebuilding unrelated viewers.
-  - Passing `visualizationIndex: null` clears the active visualization for that viewer.
-  - The method delegates to the same open pipeline and therefore keeps history/session synchronization consistent.
+    - Use when one existing viewer should switch background and/or visualization without rebuilding unrelated viewers.
+    - Passing `visualizationIndex: null` clears the active visualization for that viewer.
+    - Delegates to the same open pipeline, keeping history/session synchronization consistent.
 - `APPLICATION_CONTEXT.replaceVisualizations(visualizations, newData?, activeVizIndex?)`
-  - Replaces the session visualization list while preserving the rest of the session.
-  - Preferred over the older `updateVisualization(...)` name.
+    - Replaces the session visualization list while preserving the rest of the session.
+    - Preferred over the older `updateVisualization(...)` name.
 
-The pipeline options are ambiently typed as `ViewerOpenOptions`, and the per-viewer patch object as `ViewerSelectionPatch`, so plugins/modules can use them without importing from core files.
+Options are ambiently typed as `ViewerOpenOptions` and per-viewer patches as `ViewerSelectionPatch`, so plugins/modules use them without importing from core.
 
 ### Canonical Scene
 
-`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state. Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, and draft persistence all go through it (or will, as Phases 2-3 land).
+`src/classes/app/canonical-scene.ts` is the single round-trip pair for full session state. Use it whenever you need to capture *what is currently rendered* and replay it later — playground Apply, session sync's heavy-apply path, scripting export/import, and draft persistence all go through it.
 
 - `serializeScene()` — captures `cfg` (data, background, visualizations, active indices) and merges per-shader runtime cache/state from every viewer's renderer back into the structural shader entries. Returns a `CanonicalScene` JSON object.
 - `serializeSceneFromViewer(viewer, init, live?)` — single-viewer slice, used by the playground page (passes its namespace-stripped `live` so renderer ids match the structural ids).
 - `deserializeScene(scene, opts)` — calls `APPLICATION_CONTEXT.openViewerWith(...)` with the canonical cfg shape and forwards `historyMode` / `historyLabel`. The pipeline rebuilds renderers from the inlined cache — no second per-layer apply pass needed.
 - `backgroundShaderRendererIds(bg)` / `visualizationShaderRendererIds(viz)` — single source of truth for renderer-id derivation. Bg shader ids follow `bgRef.id` for index 0 and `${bgRef.id}-N` for subsequent entries (mirrors `assemble-render-output.ts:149-150`); viz shader ids are the structural map keys.
 
-Devtools handle: `window.__SCENE = { serialize, serializeFromViewer, deserialize, … }`. Use it to inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
+Devtools handle: `window.__SCENE = { serialize, serializeFromViewer, deserialize, … }`. Inspect the round-trip from the console — e.g. `await __SCENE.deserialize(__SCENE.serialize(), { historyMode: "skip" })` should be a visual no-op.
 
 **Implicit identity rule.** When `cfg.background[i].shaders` is unset, the renderer synthesizes an identity shader at `bg.id`. If a tool edits that implicit shader, the canonical-scene serializer materializes it as `[{ type: "identity", cache: {…} }]` so the change persists across reopens.
 
 ### Session Restore and Lifecycle
-Session bootstrap and restore now live in `ApplicationLifecycleController`.
 
-- Startup still restores the last successful session from browser storage when no explicit hash session is provided.
+Session bootstrap and restore live in `ApplicationLifecycleController`.
+
+- Startup restores the last successful session from browser storage when no explicit POST/hash/query session is provided (see *Configuration* above).
 - `beginApplicationLifecycle(...)` loads required plugins, initializes layers, raises `before-app-init`, and then opens the requested viewer state.
-- Inspector registration is no longer mixed into `app.ts`; it is centralized in `ViewerInspectorController`.
+- Inspector registration is centralized in `ViewerInspectorController` (no longer mixed into `app.ts`).
+
+### IO Pipeline
+
+`window.IO_PIPELINE` (also `APPLICATION_CONTEXT.io`) decouples *what* modules want to save/load from *where* it goes. Modules declare capabilities in their `include.json` (`io.capabilities`); admin config (`ENV.client.io.bindings`) binds those to concrete sinks. Plugin authors typically:
+
+- Register bundle-level hooks via `this.initIO({ bundleScope, exportBundle, importBundle })`.
+- Define per-element CRUD resources via `this.defineResource({ name, validate, serialize, deserialize })`.
+
+The pipeline queues sink dispatch per-resource, supports coalescing, and persists its outbox to IndexedDB. Bundle sinks include `file-download`, `file-upload`, `post-data`, `http-rest`. See [`IO_PIPELINE.md`](IO_PIPELINE.md) for the full design.
+
+### Session / Collaboration
+
+`window.SESSION` is a `SessionSyncController` singleton enabling real-time peer-to-peer collaboration. Plugins/modules participate by calling `window.SESSION?.registerProvider({ id, scope, snapshot, applySnapshot, subscribe, applyDelta })`. The `sessionCompatible` flag in `include.json` declares participation: `"provider"` = actively syncs, `true` = safe but non-syncing, `false` = incompatible (undeclared plugins trigger a warnings modal). Hosts provision guest URLs via `UTILITIES.serializeApp(...)` so guests load the host's exact plugin set. Read `meta.role` in post-event handlers to avoid duplicate side effects on guests. See [`SESSION.md`](SESSION.md).
+
+### HttpClient
+
+**Never use native `fetch` or `XMLHttpRequest` for upstream calls** — `HttpClient` (`src/classes/http-client.ts`) integrates with `xOpatUser` and injects JWT, CSRF, and proxy paths automatically. See [`HTTP_CLIENT.md`](HTTP_CLIENT.md).
+
+```ts
+const client = new HttpClient({
+  proxy: "cerit",           // alias defined in server proxies
+  baseURL: "/api/v1",
+  auth: { contextId: "core", types: ["jwt"], required: true },
+  timeoutMs: 30000,         // optional, default 30s
+  maxRetries: 3,            // optional, default 3
+});
+
+const response = await client.request("data", {
+  method: "POST",
+  body: { object: "goes here" },
+  expect: "json",           // "json" | "text" | "auto"
+  // query: { foo: "bar" },
+});
+```
 
 ### Inspector Utilities
-The following global utility methods are part of the supported runtime surface and are ambiently typed:
+
+Ambiently typed, part of the supported runtime surface:
 
 - `UTILITIES.toggleVisualizationInspector(enabled?)`
 - `UTILITIES.setVisualizationInspectorRadius(radiusPx)`
@@ -292,79 +318,37 @@ The following global utility methods are part of the supported runtime surface a
 - `UTILITIES.setVisualizationInspectorMode(mode)`
 - `UTILITIES.toggleValueInspector(enabled?)`
 
-### UI
-**You should use new UI components, see [this README](../ui/README.md)**.
-For UI, use the CORE UI available via global `UI` variable. It contains many UI utilities (notifications, existing menus API...).
-> We recommend re-using and extending these instead of pulling new dependencies.
-> Please, make yourself familiar with the UI components and available methods before making new features. 
+### Scripting
 
-> We recommend re-using and extending these instead of pulling new dependencies.
-> Please, make yourself familiar with the UI API before making new features. 
-> Especially, if you need some component that is likely present in DaisyUI, but
-> has no corresponding component here, create one in the ``ui/classes/elements`` folder
-> so that others can use it too.
+`src/classes/scripting-manager.ts` + `src/classes/scripting/` is a Worker-based sandbox exposing scripting namespaces (`XOpatApplicationScriptApi`, `XOpatViewerScriptApi`, `XOpatVisualizationScriptApi`) to user/plugin scripts. Use it for advanced automation and LLM integration; not required for typical plugin development.
+
+### UI
+
+**Use the new UI components** — see [`../ui/README.md`](../ui/README.md) and [`../ui/classes/README.md`](../ui/classes/README.md). Extend `BaseComponent` and rely on Van.js reactivity instead of manual jQuery DOM work. The CORE UI singletons (`AppBar`, `FloatingManager`, `FullscreenMenus`, `GlobalTooltip`, …) are listed in [`../ui/services/README.md`](../ui/services/README.md).
+
+Reuse the existing components before pulling new dependencies. If you need a DaisyUI element that isn't already wrapped, add it under `ui/classes/elements` so other plugins can reuse it.
 
 ### Localization
-Is possible through ``i18next`` library and also server-side with `i18n` class (with limited capabilities).
-To access the api, use ``$.t(...)`` method to translate. The `i18n` instance is stored in `$.i18n`.
-You can use also the (other) API of ``jquery i18next``.
-In spawned child window, the translation is available also through ``$`` symbol, but ``jquery i18next`` is not available.
 
-For plugins localization, see the plugins README.
+Driven by `i18next`. Use `$.t('translation_key')` at runtime; `$.i18n` holds the instance. Server-side `i18n` is available with limited capabilities. In spawned child windows, `$.t(...)` works but `jquery-i18next` is not bundled.
 
-### Advanced: Re-using parts of the CORE SERVER in PHP and JS
-<details>
-<summary>Reusing the Viewer Code in custom apps.</summary>
-This is an example how to include modules and plugins API with loading capabilities to a custom PHP script:
+For plugin localization specifics, see the plugins README.
 
-```php
-// load static config and core functions
-require_once "src/core.php";
-// load plugins and modules (required by plugins)
-include_once(PROJECT_SOURCES . "plugins.php");
+### Embedding the viewer in a custom server
 
-global $PLUGINS, $MODULES;
+The two reference backends are the documentation:
 
-// use require_*() to load parts of the core - prints JS script tags to attach
-// optionally add other parts of the core - .js files
-// choose some of these to load (files to load are mapped in the env file)
-//    require_libs(); // libs - jquery, i18next... /src/libs
-//    require_openseadragon(); // osd viewer
-//    require_external(); // external dependencies (some of src/external)
-//    require_core("loader"); // dynamic component loading
-//    require_core("deps"); // UI classes, shader configurator
+- **PHP** — `server/php/init.php` shows the canonical wiring. The helpers in `server/php/inc/core.php` (`require_libs`, `require_openseadragon`, `require_external`, `require_core`) and `server/php/inc/plugins.php` (`require_modules`, `require_plugins`) are still the building blocks for embedding xOpat into a PHP host. The browser-side entry is `initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)` (`src/app.ts:44`).
+- **Node** — `server/node/index.js` and [`server/node/README.md`](../server/node/README.md) cover the modern integration story: session-cookie CSRF, RPC for plugins/modules, dev-mode hot reload via `server/utils/node/dev-mode.js`.
 
-// set up here which modules/plugins are to be
-// statically loaded by setting $item["loaded"] = true;
-// and print them to the HTML:
-require_modules();
-require_plugins();
+## Further reading
 
-// if we include this
-require_core("loader");
-// we can do in javascript later
-?>
-<script>
-async function() {
-    // loader needs this data from the plugins.php
-    const runLoader = initXOpatLoader(
-        <?php echo json_encode((object)$CORE) ?>,
-        <?php echo json_encode($PLUGINS) ?>,
-        <?php echo json_encode($MODULES) ?>,
-        '<?php echo PLUGINS_FOLDER ?>',
-        '<?php echo MODULES_FOLDER ?>',
-        '<?php echo VERSION ?>',
-        // for demonstration purposes, we request awaiting loader, which makes sure all
-        // plugins finish their initialization, default is false
-        true  
-    );
-    await runLoader();
-
-    UTILITIES.loadModules(() => {
-        console.log('Loaded, yay!');
-    }, 'module', 'id', 'list', 'to', 'load', 'dynamically');
-}();
-</script>
-```
-The same works for the Node.js server, but with slightly different syntax.
-</details>
+- Lifecycle events: [`EVENTS.md`](EVENTS.md)
+- HTTP / proxies / token verifiers: [`HTTP_CLIENT.md`](HTTP_CLIENT.md)
+- IO pipeline (save/load): [`IO_PIPELINE.md`](IO_PIPELINE.md)
+- Live collaboration: [`SESSION.md`](SESSION.md)
+- Multi-viewport rules: [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md)
+- NPM-packaged modules/plugins: [`NPM_MODULES_PLUGINS.md`](NPM_MODULES_PLUGINS.md)
+- Plugin development: [`../plugins/README.md`](../plugins/README.md)
+- Module development: [`../modules/README.md`](../modules/README.md)
+- UI design system: [`../ui/README.md`](../ui/README.md), [`../ui/classes/README.md`](../ui/classes/README.md), [`../ui/services/README.md`](../ui/services/README.md)

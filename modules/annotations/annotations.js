@@ -1380,7 +1380,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype._factory = function () {
 			const factory = _this.getAnnotationObjectFactory(this.factoryID);
 			if (factory) this._factory = () => factory;
-			else if (!this.factoryID) {
+			else if (!this.factoryID && !this.isHelperAnnotation && !this.isHighlight) {
 				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
 				//maybe provide general implementation that can do nearly nothing
 			}
@@ -1394,7 +1394,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 });
 				return;
             }
+			if (this.isHelperAnnotation) return;
 			this._factory()?.onZoom(this, zoom, _realZoom);
+		}
+
+		// fabric's stock calcOCoords composes a [1/vpt[0],0,0,1/vpt[3],0,0]
+		// "inverse scale" matrix that only inverts vpt's scale correctly when
+		// vpt has no rotation. OSD's viewport rotation gives vpt non-zero
+		// off-diagonal terms, so the inverse is wrong and control positions
+		// either orbit (small angle) or blow up (near 90°). calcLineCoords
+		// sidesteps this: it transforms aCoords by the full vpt and gives us
+		// the OBB in screen coords, rotation-correct by construction.
+		const lineCoordsFallback = function (ctrl, dim, finalMatrix) {
+			return fabric.util.transformPoint({
+				x: ctrl.x * dim.x + ctrl.offsetX,
+				y: ctrl.y * dim.y + ctrl.offsetY,
+			}, finalMatrix);
+		};
+		const obbPositionHandler = (cornerKey) => function (dim, finalMatrix, fabricObject) {
+			if (!fabricObject?.canvas?.__spatialIndex) {
+				return lineCoordsFallback(this, dim, finalMatrix);
+			}
+			const c = fabricObject.calcLineCoords();
+			switch (cornerKey) {
+				case 'tl': return new fabric.Point(c.tl.x, c.tl.y);
+				case 'tr': return new fabric.Point(c.tr.x, c.tr.y);
+				case 'br': return new fabric.Point(c.br.x, c.br.y);
+				case 'bl': return new fabric.Point(c.bl.x, c.bl.y);
+				case 'mt': return new fabric.Point((c.tl.x + c.tr.x) / 2, (c.tl.y + c.tr.y) / 2);
+				case 'mr': return new fabric.Point((c.tr.x + c.br.x) / 2, (c.tr.y + c.br.y) / 2);
+				case 'mb': return new fabric.Point((c.br.x + c.bl.x) / 2, (c.br.y + c.bl.y) / 2);
+				case 'ml': return new fabric.Point((c.bl.x + c.tl.x) / 2, (c.bl.y + c.tl.y) / 2);
+				default:   return lineCoordsFallback(this, dim, finalMatrix);
+			}
+		};
+		const protoControls = fabric.Object.prototype.controls;
+		if (protoControls) {
+			for (const key of ['tl','tr','br','bl','mt','mr','mb','ml']) {
+				if (protoControls[key]) protoControls[key].positionHandler = obbPositionHandler(key);
+			}
+			if (protoControls.mtr) {
+				protoControls.mtr.positionHandler = function (dim, finalMatrix, fabricObject) {
+					if (!fabricObject?.canvas?.__spatialIndex) {
+						return lineCoordsFallback(this, dim, finalMatrix);
+					}
+					const c = fabricObject.calcLineCoords();
+					const midTopX = (c.tl.x + c.tr.x) / 2;
+					const midTopY = (c.tl.y + c.tr.y) / 2;
+					const cx = (c.tl.x + c.br.x) / 2;
+					const cy = (c.tl.y + c.br.y) / 2;
+					const dx = midTopX - cx;
+					const dy = midTopY - cy;
+					const len = Math.hypot(dx, dy) || 1;
+					return new fabric.Point(midTopX + (dx / len) * 40, midTopY + (dy / len) * 40);
+				};
+			}
 		}
 
 		const __renderStroke = fabric.Object.prototype._renderStroke;
@@ -1507,6 +1561,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // This keeps the menu single-source-of-truth in the plugin and
         // avoids cluttering the top level with a separate "Annotation"
         // submenu emitted from here.
+
+        // Note: the corner controls (tl/tr/bl/br/mt/mb/ml/mr) and rotation
+        // handle (mtr) on `fabric.Object.prototype.controls` keep fabric's
+        // default OBB-based positionHandlers. The handles follow the
+        // ROTATED bounding box of the annotation (the object's own bbox,
+        // not the screen-axis-aligned one) — which is what the user wants:
+        // handles attached to the corners of the visibly tilted shape.
+        // A previous round tried AABB anchoring, but that made the corner
+        // hit-boxes overlap the OBB body and stole click events from the
+        // drag/move gesture.
     }
 
     _keyDownHandler(e) {

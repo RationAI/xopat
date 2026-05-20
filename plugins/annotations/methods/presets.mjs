@@ -547,15 +547,18 @@ export const presetMethods = {
     },
 
     _copyAnnotation(mousePos, annotation) {
-        const bounds = annotation.getBoundingRect(true, true);
-        this._copiedPos = { x: bounds.left - mousePos.x, y: bounds.top - mousePos.y };
+        // Anchor is the offset from the click position to the annotation's
+        // own `left`/`top` (originX/Y space). Using `left`/`top` directly —
+        // not `getBoundingRect()`'s bbox-min — keeps the math compatible
+        // with originX='center' shapes like polygons, where bbox.left and
+        // obj.left differ by half the width.
+        this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = true;
     },
 
     _cutAnnotation(mousePos, annotation) {
-        const bounds = annotation.getBoundingRect(true, true);
-        this._copiedPos = { x: bounds.left - mousePos.x, y: bounds.top - mousePos.y };
+        this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = false;
         this._deleteAnnotation(annotation);
@@ -582,10 +585,12 @@ export const presetMethods = {
         const annotation = this._copiedAnnotation;
         const factory = annotation._factory();
         const copy = factory.copy(annotation);
-        const res = factory.translate(copy, { x: mousePos.x + this._copiedPos.x, y: mousePos.y + this._copiedPos.y }, true);
+        const targetLeft = mousePos.x + this._copiedPos.x;
+        const targetTop = mousePos.y + this._copiedPos.y;
+        factory.move(copy, targetLeft - copy.left, targetTop - copy.top);
         if (this._copiedIsCopy) delete copy.internalID;
-        this.context.fabric.addAnnotation(res);
-        factory.renderAllControls(res);
+        this.context.fabric.addAnnotation(copy);
+        factory.renderAllControls(copy);
     },
 
     _clickAnnotationChangePreset(annotation) {

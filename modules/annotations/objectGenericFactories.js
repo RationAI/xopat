@@ -1119,7 +1119,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            // Annotations ship with lockMovementX/Y=true (see Preset.commonAnnotationVisuals).
+            // Unlock body-drag for edit; recalculate() doesn't have to undo this
+            // because the edit-target is a doppelganger that gets discarded.
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1233,6 +1240,20 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         return newObject;
+    }
+
+    _applyMoveToGeometry(theObject, deltaX, deltaY) {
+        if (!Array.isArray(theObject.points) || (!deltaX && !deltaY)) return;
+        for (const p of theObject.points) {
+            p.x += deltaX;
+            p.y += deltaY;
+        }
+        // Recompute pathOffset / width / height from the shifted points.
+        // Without this, lineCoords / aCoords / hit-tests would lag behind
+        // the new point positions.
+        if (typeof theObject._setPositionDimensions === 'function') {
+            theObject._setPositionDimensions({});
+        }
     }
 
     getCreationRequiredMouseDragDurationMS() {
@@ -1471,6 +1492,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const _this = this,
             rightSkew = theObject.x1 > theObject.x2;
+        theObject.set({ lockMovementX: false, lockMovementY: false });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -2130,7 +2152,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
 
         const self = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;

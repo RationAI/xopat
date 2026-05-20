@@ -194,10 +194,17 @@ export const globalPluginWindowMethods = {
                 }
             }).attachTo(gModes);
 
+            // Initial selection must reflect the *active preset's* factory,
+            // not factories[0] — otherwise the toolbar lies about state on
+            // page load, and a "first click" that happens to match the lying
+            // header gets short-circuited by updatePresetWith (same-value
+            // early-out).
+            const activeFactoryID = this.context.presets.getActivePreset(true)?.objectFactory?.factoryID;
+
             this._shapeChoice = new ui.ToolbarChoiceGroup({
                 headerMode: 'selectOrExpand',
                 itemID: 'cg-shapes',
-                defaultSelected: factories[0]?.factoryID || 'none',
+                defaultSelected: activeFactoryID || factories[0]?.factoryID || 'none',
                 onChange: (factoryId) => {
                     this.switchModeActive(modes.CUSTOM.getId(), factoryId, true);
                 }
@@ -206,6 +213,16 @@ export const globalPluginWindowMethods = {
                 icon: factory.getIcon(),
                 label: `${modes.CUSTOM.getDescription()}: ${factory.title()}`
             }))).attachTo(gModes);
+
+            // Keep the toolbar in sync when the preset's factory changes from
+            // elsewhere (initial async preset selection, preset modal, etc.).
+            // fireOnChange=false avoids a recursive switchModeActive loop.
+            const syncShapeChoice = () => {
+                const f = this.context.presets.getActivePreset(true)?.objectFactory;
+                if (f?.factoryID) this._shapeChoice?.setSelected(f.factoryID, false);
+            };
+            this.context.addHandler('preset-select', syncShapeChoice);
+            this.context.addHandler('preset-update', syncShapeChoice);
 
             this._gBrush = new ui.ToolbarGroup({ id: 'g-brush', itemID: 'g-brush', selectable: true },
                 new ui.ToolbarItem({
