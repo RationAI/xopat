@@ -383,7 +383,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             let config;
             if (VIEWER.scalebar) {
                 config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            } else {
+            }
+
+            if (!config) {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                     || CONFIG.background[0];
             }
@@ -1044,9 +1046,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }).catch(e => {
                 //todo something meaningful
                 console.error(e);
-            }
-            );
-            this.openViewerWith(data, background, visualizations || []);
+            });
+            await this.openViewerWith(data, background, visualizations || []);
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1061,7 +1062,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @param background
      * @param visualizations
      */
-    APPLICATION_CONTEXT.openViewerWith = function (
+    APPLICATION_CONTEXT.openViewerWith = async function (
         data,
         background,
         visualizations = [],
@@ -1070,6 +1071,26 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
+        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
+
+        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
+
+        /**
+         * Fired before visualization is initialized and loaded.
+         * @memberOf VIEWER
+         * @event before-canvas-reload
+         */
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-canvas-reload', {
+            data, background, visualizations
+        });
+
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
+
         let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
@@ -1085,22 +1106,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 renderingWithWebGL = false;
             }
         }
-        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-
-        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-        config.data = data;
-        config.background = background;
-        config.visualizations = visualizations;
 
         if (reopenCounter > 0) {
             APPLICATION_CONTEXT.disableVisualization();
         }
-        /**
-         * Fired before visualization is initialized and loaded.
-         * @memberOf VIEWER
-         * @event before-canvas-reload
-         */
-        VIEWER.raiseEvent('before-canvas-reload');
 
         const toOpen = [];
         const opacity = Number.parseFloat($("global-opacity").val()) || 1;
