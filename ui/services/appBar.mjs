@@ -4,8 +4,8 @@ import { MainPanel } from '../classes/components/mainPanel.mjs';
 import { Dropdown } from '../classes/elements/dropdown.mjs';
 import { Button } from '../classes/elements/buttons.mjs';
 import { Menu } from '../classes/components/menu.mjs';
-import { MenuTabBanner } from '../classes/components/menuTabBanner.mjs';
 import { FAIcon } from '../classes/elements/fa-icon.mjs';
+import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 
 export class AppBar {
 
@@ -69,7 +69,6 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: { bg: "bg-transparent" }
             },
-            { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
             { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
             { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
             { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
@@ -110,32 +109,39 @@ export class AppBar {
             this.rightMenuCollapsed.setClass("display", "hidden");
         }
 
-        // Fullscreen button switch
+        // Hide-chrome button — toggles every component registered with AppBar.Chrome.
+        // Components opt in via AppBar.Chrome.register(id, vm) (or get auto-enrolled
+        // by AppBar.View.append / View.registerViewComponent). No hardcoded IDs here.
         this.button = new Button({
                 id: "fullscreen-button",
                 size: Button.SIZE.SMALL,
-                onClick: function () {
-
-                    // todo through API, remove usage of the IDs!
-                    // add components which you want to be hidden on fullscreen here:
-                    document.getElementById("top-side-left-user").classList.toggle("invisible");
-                    document.getElementById("top-side-left").classList.toggle("invisible");
-
-                    // cannot hide whole top-side, because it contains also fullscreen button
-                    document.getElementById("top-side").classList.toggle("opaque-bg");
-                    const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                    if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
-                        toolbarDivs.forEach((el) => el.classList.remove("hidden"));
-                    } else {
-                        toolbarDivs.forEach((el) => el.classList.add("hidden"));
-                    }
-
-                    this._fullscreen = !this._fullscreen;
+                onClick: () => {
+                    this.Chrome.toggle();
+                    this._fullscreen = this.Chrome.isHidden();
                 }
             },
             new FAIcon("fa-up-right-and-down-left-from-center"));
-        this._fullscreen = false; // todo option
+        this._fullscreen = false;
         this.button.attachTo($("#top-side-left-fullscreen"));
+
+        // Register the AppBar's own children as chrome-hideable. The hide button
+        // itself lives in #top-side-left-fullscreen and is intentionally excluded.
+        const makeNodeVm = (id) => {
+            const node = document.getElementById(id);
+            if (!node) return null;
+            return new VisibilityManager(`appbar-chrome::${id}`).initOnRootNode(node, true);
+        };
+        for (const id of ["top-side-left", "top-side-left-user", "top-side-badges"]) {
+            const vm = makeNodeVm(id);
+            if (vm) this.Chrome.register(`appbar-chrome::${id}`, vm);
+        }
+        // Drop the bar's frosted-glass background while hidden so the viewer is
+        // unobstructed; the bar itself stays in the DOM because it hosts the hide button.
+        this.Chrome.register("appbar-chrome::top-side-bg", {
+            is:  () =>  document.getElementById("top-side")?.classList.contains("glass") ?? false,
+            on:  () => document.getElementById("top-side")?.classList.add("glass"),
+            off: () => document.getElementById("top-side")?.classList.remove("glass"),
+        });
 
         // init submenus
         this.View.init(this.menu.getTab("view"));
@@ -157,17 +163,33 @@ export class AppBar {
     }
 
     /**
-     * Top App Bar - banner message / item
-     * @param banner
+     * Show / replace / clear a status pill in the AppBar's badge area.
+     * Multiple coexisting pills are supported by passing distinct `id`s.
+     *
+     * @param {Badge|null} banner Badge component to mount, or null to remove.
+     * @param {string} [id="banner"] Pill identifier. Repeat calls with the
+     *   same id replace the existing pill; pass null to remove it.
+     * @returns {HTMLElement|null} The mounted element (or null on removal).
      */
-    setBanner(banner) {
-        const bItem = this.rightMenu.getTab("banner");
-        if (banner) {
-            bItem.visibilityManager.on();
-            bItem.setVisuals(banner);
-        } else {
-            bItem.visibilityManager.off();
+    setBanner(banner, id = "banner") {
+        this._banners = this._banners || new Map();
+        const host = document.getElementById("top-side-badges");
+        if (!host) {
+            console.warn("AppBar.setBanner: host element #top-side-badges missing");
+            return null;
         }
+
+        const prev = this._banners.get(id);
+        if (prev?.parentNode) prev.parentNode.removeChild(prev);
+        this._banners.delete(id);
+
+        if (!banner) return null;
+
+        const el = banner.create();
+        el.dataset.bannerId = id;
+        host.appendChild(el);
+        this._banners.set(id, el);
+        return el;
     }
 
     // ── Badge API ─────────────────────────────────────────────────────────
@@ -334,10 +356,85 @@ export class AppBar {
         return this._fullscreen;
     }
 
+    /**
+     * Opt-in registry of components that should disappear when the user
+     * presses the AppBar "hide chrome" button (the one that looks like a
+     * fullscreen expand). It is **not** related to the browser fullscreen
+     * API or to `UI.Services.FullscreenMenus`.
+     *
+     * Reuses the existing {@link VisibilityManager} pattern: components
+     * register a manager (or any duck with `is()` + `on()/off()` or
+     * `is()/set(bool)`). On hide, the snapshot of each `is()` is captured
+     * and `off()` is called directly — `vm.set(false)` is intentionally
+     * avoided so that `AppCache` is not polluted with the transient state.
+     * On show, only the entries that were visible before are turned back
+     * on, preserving any pre-hide user choices.
+     *
+     * Anything already going through `AppBar.View.append()` or
+     * `AppBar.View.registerViewComponent()` is auto-registered.
+     *
+     * @example
+     *   USER_INTERFACE.AppBar.Chrome.register("my-panel", myVm);
+     *   USER_INTERFACE.AppBar.Chrome.unregister("my-panel");
+     *   USER_INTERFACE.AppBar.Chrome.toggle();
+     */
+    Chrome = {
+        _entries: new Map(),
+        _hidden: false,
+
+        /**
+         * @param {string} id Unique key; re-registering the same id replaces the entry.
+         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void }} vm
+         */
+        register(id, vm) {
+            if (!id || !vm) return;
+            this._entries.set(id, { vm, snapshot: undefined });
+            if (this._hidden) {
+                const entry = this._entries.get(id);
+                entry.snapshot = !!vm.is?.();
+                this._off(vm);
+            }
+        },
+
+        unregister(id) {
+            this._entries.delete(id);
+        },
+
+        isHidden() { return this._hidden; },
+
+        hide() {
+            if (this._hidden) return;
+            for (const entry of this._entries.values()) {
+                entry.snapshot = !!entry.vm.is?.();
+                this._off(entry.vm);
+            }
+            this._hidden = true;
+        },
+
+        show() {
+            if (!this._hidden) return;
+            for (const entry of this._entries.values()) {
+                if (entry.snapshot) this._on(entry.vm);
+                entry.snapshot = undefined;
+            }
+            this._hidden = false;
+        },
+
+        toggle() { this._hidden ? this.show() : this.hide(); },
+
+        _off(vm) {
+            if (typeof vm.off === "function") vm.off();
+            else if (typeof vm.set === "function") vm.set(false);
+        },
+        _on(vm) {
+            if (typeof vm.on === "function") vm.on();
+            else if (typeof vm.set === "function") vm.set(true);
+        },
+    }
+
     rightMenuSideCollapsed = {
         init(subMenu) {
             this.subMenu = subMenu;
-            this.subMenu.addItem({ id: "banner", icon: "fa-warning", label: "Banner", body: undefined, class: MenuTabBanner })
             this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
@@ -507,6 +604,7 @@ export class AppBar {
                 visibilityManager
             };
             this._visualMenuNeedsRefresh = true;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${ownerPluginId}`, visibilityManager);
         },
 
         setSelected: function (ownerPluginId, selected) {
@@ -557,6 +655,7 @@ export class AppBar {
 
             childList.sort((a, b) => (a.title || a.label || a.id).localeCompare(b.title || b.label || b.id));
             this._visualMenuNeedsRefresh = true;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}`, tab.visibilityManager);
         },
 
         _findEntry(ownerPluginId) {

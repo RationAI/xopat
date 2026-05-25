@@ -54,6 +54,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         I18NCONFIG = savedState.I18NCONFIG;
     }
 
+    // `__ORIGIN__` marker → `window.location.origin`. Required for deployments
+    // where the deploy script cannot predict which alias will actually serve
+    // the iframe (canonical case: Colab's `serve_kernel_port_as_iframe` picks
+    // a different alias than `google.colab.kernel.proxyPort(...)` returns).
+    // The `/proxy/...` route emits no CORS headers, so the effective `domain`
+    // must match the iframe origin or every proxy fetch fails the preflight.
+    if (ENV?.client?.domain === "__ORIGIN__") {
+        ENV.client.domain = window.location.origin;
+    }
+
     //Setup language and parse config if function provided
     function localizeDom() {
         jqueryI18next.init(i18next, $, {

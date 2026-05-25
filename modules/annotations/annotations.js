@@ -1553,14 +1553,9 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
 
         // Note: the canvas right-click menu is built by the plugin's
-        // per-viewer provider in plugins/annotations/methods/viewerMenu.mjs
-        // (which already owns Change preset / Copy/Cut/Paste/Delete /
-        // Move to layer / Private). Z-order entries live there too, calling
-        // back into the FabricWrapper methods (`bringAnnotationToFront`,
-        // `sendAnnotationToBack`, `moveAnnotation`) defined on this module.
-        // This keeps the menu single-source-of-truth in the plugin and
-        // avoids cluttering the top level with a separate "Annotation"
-        // submenu emitted from here.
+        // per-viewer provider in plugins/annotations/methods/viewerMenu.mjs.
+        // The "Send to back" entry there calls fabric.Canvas#sendToBack
+        // directly — purely visual, no module-level z-order API.
 
         // Note: the corner controls (tl/tr/bl/br/mt/mb/ml/mr) and rotation
         // handle (mtr) on `fabric.Object.prototype.controls` keep fabric's

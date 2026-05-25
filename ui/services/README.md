@@ -11,6 +11,8 @@ used by other plugins, modules, and parts of the viewer to add and control diffe
   Manages the top navigation bar. It exposes APIs to add custom actions, submenus, and buttons. 
   It hosts core viewer controls like View, Edit, and Plugins menus. Plugins often use `AppBar.Edit` or `AppBar.View` to insert their controls into the main application.
 
+  `AppBar.Chrome` is an opt-in registry that backs the "hide UI" button in the top-right. Components register a `VisibilityManager` (or any `{ is, on, off }` / `{ is, set }` duck) with `AppBar.Chrome.register(id, vm)`; everything already routed through `AppBar.View.append()` or `AppBar.View.registerViewComponent()` is auto-enrolled. The button calls `AppBar.Chrome.toggle()`, which snapshots each registered `vm.is()` and calls `vm.off()` directly (bypassing `VisibilityManager.set()` so the user's persisted visibility choices in `AppCache` are not overwritten); the next press restores only the entries that were visible before. Not related to `FullscreenMenus` below.
+
 - **`MobileBottomBar`**
   A separate navigation bar service used exclusively on narrow/mobile viewports to provide touch-friendly counterparts to the AppBar items.
 

@@ -258,8 +258,8 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
 
 type ViewerOpenOptions = {
     deriveOverlayFromBackgroundGoals?: boolean;
-    dataMode?: "replace" | "merge";
-    backgroundMode?: "replace" | "merge";
+    dataMode?: "replace" | "merge" | "merge-exact";
+    backgroundMode?: "replace" | "merge" | "merge-exact";
     historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
     fromHistory?: boolean;
     preserveHistoryOnBackgroundChange?: boolean;

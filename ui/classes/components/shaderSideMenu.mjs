@@ -5,7 +5,8 @@ import {ShaderLayer} from "./shaderLayer.mjs";
 import {draggable} from "../mixins/utils.mjs";
 
 const { div, span, select, option, br, ul, li, a } = van.tags;
-
+// Shaders to disable. These are either not configurable via UI or not meant to be used.
+const disabledShaders = ["group", "interaction-debug", "time-series"];
 /**
  * ShaderSideMenu (DaisyUI)
  * Props:
@@ -433,7 +434,7 @@ export class ShaderSideMenu extends BaseComponent {
 
             .ShaderLayerRegistry
             .availableShaderLayers()
-            .filter(s => s.type() !== "group")
+            .filter(s => !disabledShaders.includes(s.type()))
             .map(s => ({type: s.type(), name: s.name()}));
 
         // map filters if you want editable rows (optional)

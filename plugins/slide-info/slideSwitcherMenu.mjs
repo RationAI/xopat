@@ -298,14 +298,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _buildViewerPayload(entries) {
         const normalized = this._dedupeEntries(entries);
-        const data = Array.isArray(APPLICATION_CONTEXT.config.data)
-            ? APPLICATION_CONTEXT.config.data.map(entry => this._cloneValue(entry))
-            : [];
-        const background = Array.isArray(APPLICATION_CONTEXT.config.background)
-            ? APPLICATION_CONTEXT.config.background.map(entry =>
-                typeof entry?.toJSON === "function" ? entry.toJSON() : this._cloneValue(entry)
-            )
-            : [];
+        const data = [];
+        const background = [];
         const bgSpec = [];
 
         normalized.forEach((entry) => {
@@ -315,21 +309,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const raw = typeof conf.toJSON === "function" ? conf.toJSON() : this._cloneValue(conf);
             const dataEntry = this._resolveDataEntry(conf);
             const dataIndex = this._ensureDataEntry(data, dataEntry);
-            const bgCopy = { ...raw, dataReference: dataIndex };
-
-            let backgroundIndex = background.findIndex(existing => existing?.id && bgCopy?.id && existing.id === bgCopy.id);
-            if (backgroundIndex < 0) {
-                backgroundIndex = background.findIndex(existing => APPLICATION_CONTEXT.sameBackground(existing, bgCopy));
-            }
-
-            if (backgroundIndex >= 0) {
-                background[backgroundIndex] = bgCopy;
-            } else {
-                background.push(bgCopy);
-                backgroundIndex = background.length - 1;
-            }
-
-            bgSpec.push(backgroundIndex);
+            background.push({ ...raw, dataReference: dataIndex });
+            bgSpec.push(background.length - 1);
         });
 
         return {
@@ -343,6 +324,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     async _openEntries(entries, activeViewerIndex = 0) {
         const payload = this._buildViewerPayload(entries);
 
+        // `merge-exact` treats the payload as the COMPLETE intended open-set:
+        // existing data/background entries with no counterpart in the payload
+        // get dropped. Plain `merge` (additive) would silently keep removed
+        // slides alive in config.background, which breaks closes when more
+        // than one slide was open.
         await APPLICATION_CONTEXT.openViewerWith(
             payload.background.length ? payload.data : null,
             payload.background.length ? payload.background : null,
@@ -351,8 +337,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             payload.background.length ? undefined : null,
             {
                 deriveOverlayFromBackgroundGoals: true,
-                dataMode: "merge",
-                backgroundMode: "merge",
+                dataMode: "merge-exact",
+                backgroundMode: "merge-exact",
             },
         );
 

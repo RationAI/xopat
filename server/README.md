@@ -72,6 +72,73 @@ Scanning existing modules and plugins folder and parsing the available items:
  - override this plugins default configuration with relevant values from the global 
 static configuration available (the environment-based config) 
 
+#### Plugin selection mode
+
+Servers honor the deployment-level field ``CORE.client.pluginSelectionMode``
+(default ``"all"``) when building the page-level ``PLUGINS`` map shipped to
+the client. The same three modes are implemented identically by every
+server backend, so the emitted ``PLUGINS`` keys must agree byte-for-byte
+between PHP and Node under the same ENV.
+
+ - ``"all"`` *(default, current behavior)* — every discovered plugin
+   without ``enabled: false`` is shipped to the client.
+ - ``"whitelist"`` — inverse default. A plugin is shipped only if the
+   deployment ENV sets ``plugins.<id>.enabled = true``. A plugin's own
+   ``enabled: true`` in include.json does NOT whitelist it. ``enabled:
+   false`` in include.json is still an absolute opt-out. Plugins filtered
+   out by the whitelist are dropped *silently* — they don't exist as far
+   as the client is concerned (no manifest, no UI entry, not dynamically
+   loadable). The intended use is per-deployment access control where
+   leaking plugin identifiers is undesirable.
+ - ``"available"`` — like ``"all"``, plus a per-element config-gate
+   driven by a single optional ``requiredConfig: string[]`` array on each
+   plugin's *or* module's ``include.json``. Each path is resolved against
+   TWO deployment-controlled sources; a path is satisfied when EITHER
+   source carries a non-``undefined``/non-``null``/non-empty value:
+     1. **Deployment ENV block** — ``ENV.plugins[id]`` /
+        ``ENV.modules[id]``, supplied via env.json's top-level
+        ``plugins``/``modules`` arrays. The natural home for non-secret
+        values (URLs, aliases, flags).
+     2. **Server-secure block** — ``CORE.server.secure.plugins[id]`` /
+        ``CORE.server.secure.modules[id]``, supplied via env.json's
+        ``core.server.secure``. Never shipped to the browser. The natural
+        home for secret-adjacent values (API key bindings, proxy aliases
+        referencing a secret).
+   The plugin author declares *what* keys are needed; the deployment
+   admin decides *where* each value lives. Booleans ``false`` and the
+   number ``0`` count as configured. **Include.json defaults are NOT
+   consulted** — a plugin that ships
+   ``serviceUrl: "http://localhost:8042"`` in its own include.json AND
+   declares ``requiredConfig: ["serviceUrl"]`` is still dropped on
+   deployments that don't supply ``serviceUrl`` in either bucket. The
+   include.json default is treated purely as documentation / dev
+   convenience for the (default) ``"all"`` mode. Elements that don't
+   declare ``requiredConfig`` are always considered configured (so this
+   mode degrades to ``"all"`` for them). The gate applies to modules as
+   well — dropping a required module surfaces as a plugin-level
+   missing-dep error via the existing dependency check, which is the
+   desired UX when the module's upstream isn't available.
+
+Capture of the deployment-ENV ``enabled`` value for ``"whitelist"``
+happens *before* the per-plugin ENV merge, so a plugin's own
+``enabled: true`` cannot masquerade as a whitelist opt-in. ``permaLoad``
+is honored after mode filtering — plugins dropped by the mode cannot
+permaLoad. Plugins that fail to even parse their ``include.json`` are
+still surfaced as error records in every mode (server-side
+misconfiguration is an admin-visible concern).
+
+The ``"whitelist"`` mode only filters plugins. Modules are dependencies
+pulled in by plugins, so they are not user-facing items to whitelist;
+they behave as in ``"all"`` mode. The ``"available"`` config-gate, in
+contrast, applies to both modules and plugins.
+
+Implementation note: the server preserves a pre-strip backup of the
+secure block for its own use during plugin filtering (PHP
+``$GLOBALS['CORE_SECURE']`` set in ``core.php``; Node ``core.CORE_SECURE``
+set in ``core.js``). The browser-bound CORE still has
+``server.secure`` deleted before emission — the backup is server-only and
+must never be ``JSON.stringify``'d into the page payload.
+
 It should also reason about what items should be loaded at the beginning (e.g. load the `annotations` plugin
 if the viewer is going to be used with annotations, etc. Server should parse correctly the
 configuration input and act relevantly on errors, providing translated interface where possible.

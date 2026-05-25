@@ -42,6 +42,12 @@ type XOpatClientConfig = {
      * `src/IO_PIPELINE.md` for the full design.
      */
     io?: IOConfigBlock;
+    /**
+     * Server-side plugin selection mode. Controls which plugins the server
+     * ships to the client in the page-level `PLUGINS` map. See
+     * `XOpatPluginSelectionMode` for semantics. Defaults to `"all"`.
+     */
+    pluginSelectionMode?: XOpatPluginSelectionMode;
 };
 
 type ViewportSetup = {
@@ -111,10 +117,45 @@ type XOpatServerConfig = {
     devMode: boolean | null | undefined;
     name: string | null;
     supportsPost: boolean;
+    /**
+     * Server-side-only configuration. Always stripped from the CORE object
+     * shipped to the browser (the server keeps a pre-strip copy for its
+     * own use — see `core.CORE_SECURE` in `core.js` and PHP's
+     * `$GLOBALS['CORE_SECURE']`). The `plugins[id]` / `modules[id]` slots
+     * are the second source consulted by element-level `requiredConfig`
+     * declarations in "available" plugin-selection mode (see
+     * `XOpatPluginSelectionMode`) — they're the natural home for
+     * secret-adjacent per-element configuration that should never leak to
+     * the client.
+     */
     secure?: {
         proxies?: Record<string, XOpatServerProxy>;
+        plugins?: Record<string, Record<string, unknown>>;
+        modules?: Record<string, Record<string, unknown>>;
     };
 };
+
+/**
+ * Server-side plugin selection mode. Read by the server when building the
+ * plugin manifest shipped to the client.
+ *  - "all":       every plugin without `enabled: false` is shipped (default).
+ *  - "whitelist": only plugins for which the deployment ENV sets
+ *                 `plugins[id].enabled = true` are shipped. A plugin's own
+ *                 `enabled: true` in include.json is NOT enough. No
+ *                 server-secure-side fallback for this opt-in.
+ *  - "available": same as "all", but each plugin / module may declare a
+ *                 single `requiredConfig: string[]` array of dot-paths in
+ *                 its include.json. The gate resolves each path against
+ *                 the deployment ENV block (`ENV.plugins[id]` /
+ *                 `ENV.modules[id]`) AND the server-secure block
+ *                 (`CORE.server.secure.plugins[id]` / `...modules[id]`);
+ *                 a path is satisfied when EITHER source carries a
+ *                 non-undefined/non-null/non-empty value. Include.json
+ *                 defaults are NOT consulted. The plugin author declares
+ *                 *what* is needed; the deployment admin decides *where*
+ *                 each value lives based on sensitivity.
+ */
+type XOpatPluginSelectionMode = "all" | "whitelist" | "available";
 
 type XOpatCoreConfig = {
     name: string;
@@ -149,6 +190,28 @@ type XOpatElementItem = {
     modules?: string[];
     /** Module IDs to require for a module */
     requires?: string[];
+    /**
+     * Dot-paths within this element's `<id>` namespace that MUST be
+     * configured by the deployment for the element to be shipped to the
+     * client under "available" plugin-selection mode. Each path is resolved
+     * against TWO deployment-controlled sources (in order); a path is
+     * satisfied when it resolves to a non-`undefined`/non-`null`/non-empty
+     * value in EITHER source:
+     *   1. Deployment ENV block — `ENV.plugins[id]` (plugins) /
+     *      `ENV.modules[id]` (modules). Set via env.json's top-level
+     *      `plugins`/`modules` arrays.
+     *   2. Server-secure block — `CORE.server.secure.plugins[id]` /
+     *      `CORE.server.secure.modules[id]`. Set via env.json's
+     *      `core.server.secure.plugins`/`modules` and never shipped to the
+     *      client. The natural home for secret-adjacent values (API key
+     *      bindings, proxy aliases referencing a secret).
+     * Include.json defaults are NOT consulted — only deployment
+     * configuration satisfies the gate. Booleans `false` and the number `0`
+     * count as configured. Ignored in other selection modes. The plugin
+     * author declares *what* is needed; the admin chooses *where* per
+     * deployment based on sensitivity.
+     */
+    requiredConfig?: string[];
     [key: string]: any;
 }
 

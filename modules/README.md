@@ -39,6 +39,10 @@ Moreover, it is advised to use ENV setup (see `/env/README.md`) to override nece
 - `requires` array of id's of required modules (libraries)
 - `enabled` is an option to allow or disallow the module to be loaded into the system, default `true`
 - `permaLoad` always loads the module within the system if set to `true`, default `false`
+- `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the module's `<id>` namespace that must be configured by the deployment for the module to be shipped under the server-side `"available"` selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty value:
+    1. `ENV.modules[<id>]` — env.json's top-level `modules` array.
+    2. `CORE.server.secure.modules[<id>]` — env.json's `core.server.secure.modules`. Never shipped to the browser.
+  Same configured/missing semantics as the plugin field (booleans `false` and the number `0` count). **Include.json defaults are NOT consulted** — only what the deployment explicitly sets in either bucket satisfies the gate. The `"whitelist"` mode does NOT apply to modules (modules are infrastructure pulled in by plugins; dropping a required module surfaces as a plugin-level missing-dep error). See `plugins/README.md` and `server/README.md` for the full reference.
 
 ## Plain Modules
 Any code can be a module. You can clone a npm package and export as xopat module (there is a task for it).

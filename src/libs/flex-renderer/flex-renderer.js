@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-05-17
-//! Git commit: --ee64ed2-dirty
+//! Built on 2026-05-21
+//! Git commit: --a315d3c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -12684,6 +12684,23 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
      */
 
     /**
+     * Host-supplied HTTP transport used by FlexDrawer-owned workers (MVT, GeoJSON).
+     *
+     * The adapter is a fetch-compatible shim: when supplied, every network request
+     * the library would otherwise issue with `fetch(url)` is routed through it.
+     * Implementations must support method, headers, body, signal, Range headers,
+     * and binary responses (.arrayBuffer / .blob / .body).
+     *
+     * Adapters are resolved in this order:
+     *   1. explicit `httpAdapter` constructor option on the tile source,
+     *   2. drawer-level `httpAdapter` captured into `FlexDrawer._defaultHttpAdapter`,
+     *   3. null — the library falls back to native `fetch`.
+     *
+     * @typedef {object} HttpAdapter
+     * @property {(url: string, init?: RequestInit) => Promise<Response>} fetch
+     */
+
+    /**
      * @property {Number} idGenerator unique ID getter
      *
      * @class OpenSeadragon.FlexDrawer
@@ -12709,6 +12726,13 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             // We have 'undefined' extra format for blank tiles
             this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
+
+            // Capture the host-supplied HttpAdapter as a process-wide fallback so tile sources
+            // instantiated outside the drawer (OSD-managed paths) can still pick it up.
+            // Explicit per-tile-source `httpAdapter` options take precedence.
+            if (this.options.httpAdapter) {
+                FlexDrawer._defaultHttpAdapter = this.options.httpAdapter;
+            }
 
             this._suspendRenderingDepth = 0;
             this._pendingRebuildRequest = null;
@@ -12773,6 +12797,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 copyShaderConfig: false,
                 handleNavigator: true,
                 shaderSourceResolver: null,
+                httpAdapter: null,
                 sharedContextKey: null,
                 interaction: false,
                 // hex bg color, by default transparent
@@ -15522,6 +15547,168 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
     $.FlexDrawer = FlexDrawer;
 
 }( OpenSeadragon ));
+
+/**
+ * Main-thread half of the FlexDrawer HTTP bridge.
+ *
+ * Exposes `OpenSeadragon.FlexDrawer.installHttpBridge(worker, adapter)`.
+ *
+ * Call once per worker, immediately after Worker construction and BEFORE any
+ * application-level postMessage that the worker might respond to. The returned
+ * handle exposes `{ dispose() }`; call it when the worker is being terminated
+ * so any in-flight requests are aborted and the listener is removed.
+ *
+ * The installer:
+ *   - listens for `http:request` / `http:cancel` messages from the worker
+ *     (via `addEventListener` so it never collides with the tile source's
+ *     primary `onmessage` handler);
+ *   - delegates each `http:request` to `adapter.fetch(url, init)` with a fresh
+ *     `AbortController` so worker-side cancellations propagate downstream;
+ *   - replies with `{ type: 'http:response', id, status, ok, headers, body }`
+ *     transferring the response `ArrayBuffer` zero-copy;
+ *   - on rejection replies with `{ type: 'http:error', id, message, name }`
+ *     preserving the original error name (so `AbortError` round-trips);
+ *   - immediately posts `{ type: 'http:bridge-on' }` so the worker shim flips
+ *     into bridged mode before the tile source posts its `config` message.
+ */
+(function ($) {
+    function installHttpBridge(worker, adapter) {
+        if (!worker || !adapter || typeof adapter.fetch !== 'function') {
+            throw new TypeError('installHttpBridge: requires a Worker and an HttpAdapter');
+        }
+
+        const inflight = new Map(); // id -> AbortController
+        let disposed = false;
+
+        const onMessage = (event) => {
+            const msg = event && event.data;
+            if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+                return;
+            }
+
+            if (msg.type === 'http:request') {
+                handleRequest(msg);
+            } else if (msg.type === 'http:cancel') {
+                const ac = inflight.get(msg.id);
+                if (ac) {
+                    inflight.delete(msg.id);
+                    try {
+                        ac.abort();
+                    } catch (_) {
+                        // ignore
+                    }
+                }
+            }
+        };
+
+        worker.addEventListener('message', onMessage);
+
+        // Flip the worker into bridged mode as the first thing on the wire.
+        try {
+            worker.postMessage({ type: 'http:bridge-on' });
+        } catch (err) {
+            worker.removeEventListener('message', onMessage);
+            throw err;
+        }
+
+        async function handleRequest(msg) {
+            if (disposed) {
+                return;
+            }
+
+            const id = msg.id;
+            const ac = new AbortController();
+            inflight.set(id, ac);
+
+            const init = Object.assign({}, msg.init || {}, { signal: ac.signal });
+
+            try {
+                const resp = await adapter.fetch(msg.url, init);
+                const body = await resp.arrayBuffer();
+                const headers = flattenHeaders(resp.headers);
+
+                if (disposed) {
+                    return;
+                }
+
+                try {
+                    worker.postMessage(
+                        {
+                            type: 'http:response',
+                            id: id,
+                            status: resp.status,
+                            ok: resp.ok,
+                            headers: headers,
+                            body: body
+                        },
+                        body ? [body] : []
+                    );
+                } catch (err) {
+                    // postMessage failure (worker terminated, transfer error, …) — report locally.
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('flex-renderer http bridge: postMessage failed', err);
+                    }
+                }
+            } catch (err) {
+                if (disposed) {
+                    return;
+                }
+                const name = (err && err.name) || 'Error';
+                const message = (err && err.message) || String(err);
+                try {
+                    worker.postMessage({ type: 'http:error', id: id, name: name, message: message });
+                } catch (_) { /* ignore */ }
+            } finally {
+                inflight.delete(id);
+            }
+        }
+
+        function dispose() {
+            if (disposed) {
+                return;
+            }
+            disposed = true;
+            try {
+                worker.removeEventListener('message', onMessage);
+            } catch (_) {
+                // ignore
+            }
+            for (const ac of inflight.values()) {
+                try {
+                    ac.abort();
+                } catch (_) {
+                    // ignore
+                }
+            }
+            inflight.clear();
+        }
+
+        return { dispose: dispose };
+    }
+
+    function flattenHeaders(headers) {
+        const out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function') {
+            headers.forEach((value, key) => {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (const key of Object.keys(headers)) {
+                out[key.toLowerCase()] = String(headers[key]);
+            }
+        }
+        return out;
+    }
+
+    if ($ && $.FlexDrawer) {
+        $.FlexDrawer.installHttpBridge = installHttpBridge;
+    }
+})(typeof OpenSeadragon !== 'undefined' ? OpenSeadragon : null);
 
 (function($) {
 
@@ -20114,7 +20301,8 @@ $.MVTTileSource = class extends $.TileSource {
                     height,
                     extent = 4096,
                     style,
-                    useNativeLines = false
+                    useNativeLines = false,
+                    httpAdapter = null
                 }) {
         super({ width, height, tileSize, minLevel, maxLevel });
         this.template = template;
@@ -20123,8 +20311,16 @@ $.MVTTileSource = class extends $.TileSource {
         this.style = style || defaultStyle();
         this.useNativeLines = useNativeLines === true;
 
+        // Resolve adapter: explicit option wins, fall back to the drawer-level default.
+        this._httpAdapter = httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null;
+
         this._worker = makeWorker();
         this._pending = new Map(); // key -> {resolve,reject}
+
+        // Install the HTTP bridge before any postMessage that may trigger fetches.
+        this._httpBridge = (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function')
+            ? $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter)
+            : null;
 
         // Wire worker responses
         this._worker.onmessage = (e) => {
@@ -20847,6 +21043,8 @@ function resolveTileTemplate(template, dataUrl) {
      * @property {GeoJSONStyleOptions} [style] - Optional style descriptor.
      * @property {boolean} [useNativeLines=false] - Whether LineString geometries are processed into gl.LINES primitives of stroke-triangle meshes.
      * @property {GeoJSONAggregationOptions} [aggregation] - Optional per-tile aggregation settings.
+     * @property {HttpAdapter} [httpAdapter] - Optional host-supplied HTTP transport used by the GeoJSON worker.
+     *     When omitted, the drawer-level adapter (if any) is used; otherwise native `fetch` is used.
      */
 
     const GEOJSON_ROOT_TYPES = new Set([
@@ -20934,6 +21132,24 @@ function resolveTileTemplate(template, dataUrl) {
             this.aggregation = normalized.aggregation;
 
             /**
+             * Optional HttpAdapter routing the worker's outbound fetches.
+             *
+             * Explicit option wins; otherwise the drawer-level default is used.
+             *
+             * @private
+             * @type {?HttpAdapter}
+             */
+            this._httpAdapter = normalized.httpAdapter;
+
+            /**
+             * Handle returned by FlexDrawer.installHttpBridge when an adapter is wired.
+             *
+             * @private
+             * @type {?{dispose: function(): void}}
+             */
+            this._httpBridge = null;
+
+            /**
              * Pending tile jobs keyed by tile id.
              *
              * @private
@@ -20971,6 +21187,13 @@ function resolveTileTemplate(template, dataUrl) {
             this._workerError = null;
 
             this._worker = this._createWorker();
+
+            // Install the HTTP bridge before the worker's config postMessage so the bridge is
+            // already on when the worker performs its initial GeoJSON fetch.
+            if (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function') {
+                this._httpBridge = $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter);
+            }
+
             this._configureWorker();
         }
 
@@ -20998,7 +21221,8 @@ function resolveTileTemplate(template, dataUrl) {
                 maxLevel: options.maxLevel,
                 style: normalizeStyleOptions(options.style),
                 useNativeLines: options.useNativeLines === true,
-                aggregation: normalizeAggregationOptions(options.aggregation)
+                aggregation: normalizeAggregationOptions(options.aggregation),
+                httpAdapter: options.httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null
             };
 
             if (typeof normalized.url !== 'string' || !normalized.url.trim()) {
@@ -21249,6 +21473,11 @@ function resolveTileTemplate(template, dataUrl) {
          */
         destroy() {
             this._pending.clear();
+
+            if (this._httpBridge) {
+                this._httpBridge.dispose();
+                this._httpBridge = null;
+            }
 
             if (this._worker) {
                 this._worker.terminate();
@@ -24630,8 +24859,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-05-17
-//! Git commit: --ee64ed2-dirty
+//! Built on 2026-05-21
+//! Git commit: --a315d3c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -24639,6 +24868,248 @@ function resolveTileTemplate(template, dataUrl) {
   root.OpenSeadragon = root.OpenSeadragon || {};
   // Full inlined worker source (libs + core)
   root.OpenSeadragon.__MVT_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=void 0;const SHIFT_LEFT_32=(1<<16)*(1<<16);const SHIFT_RIGHT_32=1/SHIFT_LEFT_32;const TEXT_DECODER_MIN_LENGTH=12;const utf8TextDecoder=typeof TextDecoder==="undefined"?null:new TextDecoder("utf-8");const PBF_VARINT=0;const PBF_FIXED64=1;const PBF_BYTES=2;const PBF_FIXED32=5;class Pbf{constructor(buf=new Uint8Array(16)){this.buf=ArrayBuffer.isView(buf)?buf:new Uint8Array(buf);this.dataView=new DataView(this.buf.buffer);this.pos=0;this.type=0;this.length=this.buf.length}readFields(readField,result,end=this.length){while(this.pos<end){const val=this.readVarint(),tag=val>>3,startPos=this.pos;this.type=val&7;readField(tag,result,this);if(this.pos===startPos)this.skip(val)}return result}readMessage(readField,result){return this.readFields(readField,result,this.readVarint()+this.pos)}readFixed32(){const val=this.dataView.getUint32(this.pos,true);this.pos+=4;return val}readSFixed32(){const val=this.dataView.getInt32(this.pos,true);this.pos+=4;return val}readFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getUint32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readSFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getInt32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readFloat(){const val=this.dataView.getFloat32(this.pos,true);this.pos+=4;return val}readDouble(){const val=this.dataView.getFloat64(this.pos,true);this.pos+=8;return val}readVarint(isSigned){const buf=this.buf;let val,b;b=buf[this.pos++];val=b&127;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<7;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<14;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<21;if(b<128)return val;b=buf[this.pos];val|=(b&15)<<28;return readVarintRemainder(val,isSigned,this)}readVarint64(){return this.readVarint(true)}readSVarint(){const num=this.readVarint();return num%2===1?(num+1)/-2:num/2}readBoolean(){return Boolean(this.readVarint())}readString(){const end=this.readVarint()+this.pos;const pos=this.pos;this.pos=end;if(end-pos>=TEXT_DECODER_MIN_LENGTH&&utf8TextDecoder){return utf8TextDecoder.decode(this.buf.subarray(pos,end))}return readUtf8(this.buf,pos,end)}readBytes(){const end=this.readVarint()+this.pos,buffer=this.buf.subarray(this.pos,end);this.pos=end;return buffer}readPackedVarint(arr=[],isSigned){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readVarint(isSigned));return arr}readPackedSVarint(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSVarint());return arr}readPackedBoolean(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readBoolean());return arr}readPackedFloat(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFloat());return arr}readPackedDouble(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readDouble());return arr}readPackedFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed32());return arr}readPackedSFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed32());return arr}readPackedFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed64());return arr}readPackedSFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed64());return arr}readPackedEnd(){return this.type===PBF_BYTES?this.readVarint()+this.pos:this.pos+1}skip(val){const type=val&7;if(type===PBF_VARINT)while(this.buf[this.pos++]>127){}else if(type===PBF_BYTES)this.pos=this.readVarint()+this.pos;else if(type===PBF_FIXED32)this.pos+=4;else if(type===PBF_FIXED64)this.pos+=8;else throw new Error(\`Unimplemented type: \${type}\`)}writeTag(tag,type){this.writeVarint(tag<<3|type)}realloc(min){let length=this.length||16;while(length<this.pos+min)length*=2;if(length!==this.length){const buf=new Uint8Array(length);buf.set(this.buf);this.buf=buf;this.dataView=new DataView(buf.buffer);this.length=length}}finish(){this.length=this.pos;this.pos=0;return this.buf.subarray(0,this.length)}writeFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeSFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeSFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeVarint(val){val=+val||0;if(val>268435455||val<0){writeBigVarint(val,this);return}this.realloc(4);this.buf[this.pos++]=val&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=val>>>7&127}writeSVarint(val){this.writeVarint(val<0?-val*2-1:val*2)}writeBoolean(val){this.writeVarint(+val)}writeString(str){str=String(str);this.realloc(str.length*4);this.pos++;const startPos=this.pos;this.pos=writeUtf8(this.buf,str,this.pos);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeFloat(val){this.realloc(4);this.dataView.setFloat32(this.pos,val,true);this.pos+=4}writeDouble(val){this.realloc(8);this.dataView.setFloat64(this.pos,val,true);this.pos+=8}writeBytes(buffer){const len=buffer.length;this.writeVarint(len);this.realloc(len);for(let i=0;i<len;i++)this.buf[this.pos++]=buffer[i]}writeRawMessage(fn,obj){this.pos++;const startPos=this.pos;fn(obj,this);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeMessage(tag,fn,obj){this.writeTag(tag,PBF_BYTES);this.writeRawMessage(fn,obj)}writePackedVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedVarint,arr)}writePackedSVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSVarint,arr)}writePackedBoolean(tag,arr){if(arr.length)this.writeMessage(tag,writePackedBoolean,arr)}writePackedFloat(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFloat,arr)}writePackedDouble(tag,arr){if(arr.length)this.writeMessage(tag,writePackedDouble,arr)}writePackedFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed32,arr)}writePackedSFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed32,arr)}writePackedFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed64,arr)}writePackedSFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed64,arr)}writeBytesField(tag,buffer){this.writeTag(tag,PBF_BYTES);this.writeBytes(buffer)}writeFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFixed32(val)}writeSFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeSFixed32(val)}writeFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeFixed64(val)}writeSFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeSFixed64(val)}writeVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeVarint(val)}writeSVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeSVarint(val)}writeStringField(tag,str){this.writeTag(tag,PBF_BYTES);this.writeString(str)}writeFloatField(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFloat(val)}writeDoubleField(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeDouble(val)}writeBooleanField(tag,val){this.writeVarintField(tag,+val)}}exports.default=Pbf;function readVarintRemainder(l,s,p){const buf=p.buf;let h,b;b=buf[p.pos++];h=(b&112)>>4;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<3;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<10;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<17;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<24;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&1)<<31;if(b<128)return toNum(l,h,s);throw new Error("Expected varint not more than 10 bytes")}function toNum(low,high,isSigned){return isSigned?high*4294967296+(low>>>0):(high>>>0)*4294967296+(low>>>0)}function writeBigVarint(val,pbf){let low,high;if(val>=0){low=val%4294967296|0;high=val/4294967296|0}else{low=~(-val%4294967296);high=~(-val/4294967296);if(low^4294967295){low=low+1|0}else{low=0;high=high+1|0}}if(val>=0x10000000000000000||val<-0x10000000000000000){throw new Error("Given varint doesn't fit into 10 bytes")}pbf.realloc(10);writeBigVarintLow(low,high,pbf);writeBigVarintHigh(high,pbf)}function writeBigVarintLow(low,high,pbf){pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos]=low&127}function writeBigVarintHigh(high,pbf){const lsb=(high&7)<<4;pbf.buf[pbf.pos++]|=lsb|((high>>>=3)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127}function makeRoomForExtraLength(startPos,len,pbf){const extraLen=len<=16383?1:len<=2097151?2:len<=268435455?3:Math.floor(Math.log(len)/(Math.LN2*7));pbf.realloc(extraLen);for(let i=pbf.pos-1;i>=startPos;i--)pbf.buf[i+extraLen]=pbf.buf[i]}function writePackedVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeVarint(arr[i])}function writePackedSVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSVarint(arr[i])}function writePackedFloat(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFloat(arr[i])}function writePackedDouble(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeDouble(arr[i])}function writePackedBoolean(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeBoolean(arr[i])}function writePackedFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed32(arr[i])}function writePackedSFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed32(arr[i])}function writePackedFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed64(arr[i])}function writePackedSFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed64(arr[i])}function readUtf8(buf,pos,end){let str="";let i=pos;while(i<end){const b0=buf[i];let c=null;let bytesPerSequence=b0>239?4:b0>223?3:b0>191?2:1;if(i+bytesPerSequence>end)break;let b1,b2,b3;if(bytesPerSequence===1){if(b0<128){c=b0}}else if(bytesPerSequence===2){b1=buf[i+1];if((b1&192)===128){c=(b0&31)<<6|b1&63;if(c<=127){c=null}}}else if(bytesPerSequence===3){b1=buf[i+1];b2=buf[i+2];if((b1&192)===128&&(b2&192)===128){c=(b0&15)<<12|(b1&63)<<6|b2&63;if(c<=2047||c>=55296&&c<=57343){c=null}}}else if(bytesPerSequence===4){b1=buf[i+1];b2=buf[i+2];b3=buf[i+3];if((b1&192)===128&&(b2&192)===128&&(b3&192)===128){c=(b0&15)<<18|(b1&63)<<12|(b2&63)<<6|b3&63;if(c<=65535||c>=1114112){c=null}}}if(c===null){c=65533;bytesPerSequence=1}else if(c>65535){c-=65536;str+=String.fromCharCode(c>>>10&1023|55296);c=56320|c&1023}str+=String.fromCharCode(c);i+=bytesPerSequence}return str}function writeUtf8(buf,str,pos){for(let i=0,c,lead;i<str.length;i++){c=str.charCodeAt(i);if(c>55295&&c<57344){if(lead){if(c<56320){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=c;continue}else{c=lead-55296<<10|c-56320|65536;lead=null}}else{if(c>56319||i+1===str.length){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189}else{lead=c}continue}}else if(lead){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=null}if(c<128){buf[pos++]=c}else{if(c<2048){buf[pos++]=c>>6|192}else{if(c<65536){buf[pos++]=c>>12|224}else{buf[pos++]=c>>18|240;buf[pos++]=c>>12&63|128}buf[pos++]=c>>6&63|128}buf[pos++]=c&63|128}}return pos}},{}],2:[function(require,module,exports){"use strict";var _pbf=_interopRequireDefault(require("pbf"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.Pbf=_pbf.default},{pbf:1}]},{},[2]);
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _vectorTile=require("@mapbox/vector-tile");self.vectorTile={VectorTile:_vectorTile.VectorTile}},{"@mapbox/vector-tile":3}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=Point;function Point(x,y){this.x=x;this.y=y}Point.prototype={clone(){return new Point(this.x,this.y)},add(p){return this.clone()._add(p)},sub(p){return this.clone()._sub(p)},multByPoint(p){return this.clone()._multByPoint(p)},divByPoint(p){return this.clone()._divByPoint(p)},mult(k){return this.clone()._mult(k)},div(k){return this.clone()._div(k)},rotate(a){return this.clone()._rotate(a)},rotateAround(a,p){return this.clone()._rotateAround(a,p)},matMult(m){return this.clone()._matMult(m)},unit(){return this.clone()._unit()},perp(){return this.clone()._perp()},round(){return this.clone()._round()},mag(){return Math.sqrt(this.x*this.x+this.y*this.y)},equals(other){return this.x===other.x&&this.y===other.y},dist(p){return Math.sqrt(this.distSqr(p))},distSqr(p){const dx=p.x-this.x,dy=p.y-this.y;return dx*dx+dy*dy},angle(){return Math.atan2(this.y,this.x)},angleTo(b){return Math.atan2(this.y-b.y,this.x-b.x)},angleWith(b){return this.angleWithSep(b.x,b.y)},angleWithSep(x,y){return Math.atan2(this.x*y-this.y*x,this.x*x+this.y*y)},_matMult(m){const x=m[0]*this.x+m[1]*this.y,y=m[2]*this.x+m[3]*this.y;this.x=x;this.y=y;return this},_add(p){this.x+=p.x;this.y+=p.y;return this},_sub(p){this.x-=p.x;this.y-=p.y;return this},_mult(k){this.x*=k;this.y*=k;return this},_div(k){this.x/=k;this.y/=k;return this},_multByPoint(p){this.x*=p.x;this.y*=p.y;return this},_divByPoint(p){this.x/=p.x;this.y/=p.y;return this},_unit(){this._div(this.mag());return this},_perp(){const y=this.y;this.y=this.x;this.x=-y;return this},_rotate(angle){const cos=Math.cos(angle),sin=Math.sin(angle),x=cos*this.x-sin*this.y,y=sin*this.x+cos*this.y;this.x=x;this.y=y;return this},_rotateAround(angle,p){const cos=Math.cos(angle),sin=Math.sin(angle),x=p.x+cos*(this.x-p.x)-sin*(this.y-p.y),y=p.y+sin*(this.x-p.x)+cos*(this.y-p.y);this.x=x;this.y=y;return this},_round(){this.x=Math.round(this.x);this.y=Math.round(this.y);return this},constructor:Point};Point.convert=function(p){if(p instanceof Point){return p}if(Array.isArray(p)){return new Point(+p[0],+p[1])}if(p.x!==undefined&&p.y!==undefined){return new Point(+p.x,+p.y)}throw new Error("Expected [x, y] or {x, y} point format")}},{}],3:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.VectorTileLayer=exports.VectorTileFeature=exports.VectorTile=void 0;exports.classifyRings=classifyRings;var _pointGeometry=_interopRequireDefault(require("@mapbox/point-geometry"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}class VectorTileFeature{constructor(pbf,end,extent,keys,values){this.properties={};this.extent=extent;this.type=0;this.id=undefined;this._pbf=pbf;this._geometry=-1;this._keys=keys;this._values=values;pbf.readFields(readFeature,this,end)}loadGeometry(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;const lines=[];let line;let cmd=1;let length=0;let x=0;let y=0;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(cmd===1){if(line)lines.push(line);line=[]}if(line)line.push(new _pointGeometry.default(x,y))}else if(cmd===7){if(line){line.push(line[0].clone())}}else{throw new Error(\`unknown command \${cmd}\`)}}if(line)lines.push(line);return lines}bbox(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;let cmd=1,length=0,x=0,y=0,x1=Infinity,x2=-Infinity,y1=Infinity,y2=-Infinity;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(x<x1)x1=x;if(x>x2)x2=x;if(y<y1)y1=y;if(y>y2)y2=y}else if(cmd!==7){throw new Error(\`unknown command \${cmd}\`)}}return[x1,y1,x2,y2]}toGeoJSON(x,y,z){const size=this.extent*Math.pow(2,z),x0=this.extent*x,y0=this.extent*y,vtCoords=this.loadGeometry();function projectPoint(p){return[(p.x+x0)*360/size-180,360/Math.PI*Math.atan(Math.exp((1-(p.y+y0)*2/size)*Math.PI))-90]}function projectLine(line){return line.map(projectPoint)}let geometry;if(this.type===1){const points=[];for(const line of vtCoords){points.push(line[0])}const coordinates=projectLine(points);geometry=points.length===1?{type:"Point",coordinates:coordinates[0]}:{type:"MultiPoint",coordinates:coordinates}}else if(this.type===2){const coordinates=vtCoords.map(projectLine);geometry=coordinates.length===1?{type:"LineString",coordinates:coordinates[0]}:{type:"MultiLineString",coordinates:coordinates}}else if(this.type===3){const polygons=classifyRings(vtCoords);const coordinates=[];for(const polygon of polygons){coordinates.push(polygon.map(projectLine))}geometry=coordinates.length===1?{type:"Polygon",coordinates:coordinates[0]}:{type:"MultiPolygon",coordinates:coordinates}}else{throw new Error("unknown feature type")}const result={type:"Feature",geometry:geometry,properties:this.properties};if(this.id!=null){result.id=this.id}return result}}exports.VectorTileFeature=VectorTileFeature;VectorTileFeature.types=["Unknown","Point","LineString","Polygon"];function readFeature(tag,feature,pbf){if(tag===1)feature.id=pbf.readVarint();else if(tag===2)readTag(pbf,feature);else if(tag===3)feature.type=pbf.readVarint();else if(tag===4)feature._geometry=pbf.pos}function readTag(pbf,feature){const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const key=feature._keys[pbf.readVarint()];const value=feature._values[pbf.readVarint()];feature.properties[key]=value}}function classifyRings(rings){const len=rings.length;if(len<=1)return[rings];const polygons=[];let polygon,ccw;for(let i=0;i<len;i++){const area=signedArea(rings[i]);if(area===0)continue;if(ccw===undefined)ccw=area<0;if(ccw===area<0){if(polygon)polygons.push(polygon);polygon=[rings[i]]}else if(polygon){polygon.push(rings[i])}}if(polygon)polygons.push(polygon);return polygons}function signedArea(ring){let sum=0;for(let i=0,len=ring.length,j=len-1,p1,p2;i<len;j=i++){p1=ring[i];p2=ring[j];sum+=(p2.x-p1.x)*(p1.y+p2.y)}return sum}class VectorTileLayer{constructor(pbf,end){this.version=1;this.name="";this.extent=4096;this.length=0;this._pbf=pbf;this._keys=[];this._values=[];this._features=[];pbf.readFields(readLayer,this,end);this.length=this._features.length}feature(i){if(i<0||i>=this._features.length)throw new Error("feature index out of bounds");this._pbf.pos=this._features[i];const end=this._pbf.readVarint()+this._pbf.pos;return new VectorTileFeature(this._pbf,end,this.extent,this._keys,this._values)}}exports.VectorTileLayer=VectorTileLayer;function readLayer(tag,layer,pbf){if(tag===15)layer.version=pbf.readVarint();else if(tag===1)layer.name=pbf.readString();else if(tag===5)layer.extent=pbf.readVarint();else if(tag===2)layer._features.push(pbf.pos);else if(tag===3)layer._keys.push(pbf.readString());else if(tag===4)layer._values.push(readValueMessage(pbf))}function readValueMessage(pbf){let value=null;const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const tag=pbf.readVarint()>>3;value=tag===1?pbf.readString():tag===2?pbf.readFloat():tag===3?pbf.readDouble():tag===4?pbf.readVarint64():tag===5?pbf.readVarint():tag===6?pbf.readSVarint():tag===7?pbf.readBoolean():null}if(value==null){throw new Error("unknown feature value")}return value}class VectorTile{constructor(pbf,end){this.layers=pbf.readFields(readTile,{},end)}}exports.VectorTile=VectorTile;function readTile(tag,layers,pbf){if(tag===3){const layer=new VectorTileLayer(pbf,pbf.readVarint()+pbf.pos);if(layer.length)layers[layer.name]=layer}}},{"@mapbox/point-geometry":2}]},{},[1]);
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
@@ -24672,7 +25143,7 @@ self.onmessage = async (e) => {
             if (!self.Pbf || !self.vectorTile || !self.earcut) {
                 throw new Error('Missing libs');
             }
-            const resp = await fetch(url);
+            const resp = self.__hasHttpBridge ? await self.requestFetch(url) : await fetch(url);
 
             if (!resp.ok) {
                 throw new Error('HTTP ' + resp.status);
@@ -25008,8 +25479,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-17
-//! Git commit: --ee64ed2-dirty
+//! Built on 2026-05-21
+//! Git commit: --a315d3c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25017,6 +25488,248 @@ function strokePoly(points, width, join, cap, miterLimit){
   root.OpenSeadragon = root.OpenSeadragon || {};
   // Full inlined worker source (libs + core)
   root.OpenSeadragon.__FABRIC_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
 // fabric-geom.worker.js  (single-rectangular-tile, unit-normalized)
 /* global self */
@@ -25475,8 +26188,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-17
-//! Git commit: --ee64ed2-dirty
+//! Built on 2026-05-21
+//! Git commit: --a315d3c-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25484,6 +26197,248 @@ function computeAABB(f) {
   root.OpenSeadragon = root.OpenSeadragon || {};
   // Full inlined worker source
   root.OpenSeadragon.__GEOJSON_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
 /**
  * GeoJSON worker for GeoJSONTileSource.
@@ -25620,7 +26575,7 @@ async function fetchGeoJSON(url) {
         throw new Error('GeoJSON worker: url is required.');
     }
 
-    const response = await fetch(url);
+    const response = self.__hasHttpBridge ? await self.requestFetch(url) : await fetch(url);
     if (!response.ok) {
         throw new Error(\`GeoJSON worker: failed to fetch \${url}: \${response.status}\`);
     }

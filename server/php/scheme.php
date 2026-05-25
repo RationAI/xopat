@@ -18,7 +18,8 @@ function normalize_scheme_plugin_records(array $plugins): array
     $manifestKeys = array_flip([
         'id', 'name', 'author', 'version', 'description', 'icon',
         'includes', 'modules', 'requires', 'permaLoad', 'enabled',
-        'loaded', 'error', 'directory', 'path', 'styleSheet'
+        'loaded', 'error', 'directory', 'path', 'styleSheet',
+        'requiredConfig'
     ]);
 
     foreach ($plugins as $id => $plugin) {
@@ -30,7 +31,7 @@ function normalize_scheme_plugin_records(array $plugins): array
         foreach ([
             'id', 'name', 'author', 'version', 'description', 'icon',
             'modules', 'requires', 'permaLoad', 'enabled', 'loaded',
-            'directory'
+            'directory', 'requiredConfig'
         ] as $key) {
             if (array_key_exists($key, $plugin)) {
                 $meta[$key] = $plugin[$key];

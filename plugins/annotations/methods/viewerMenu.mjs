@@ -476,17 +476,20 @@ export const viewerMenuMethods = {
         }
 
         let zOrderItems = null;
-        if (active
-            && typeof fabric?.bringAnnotationToFront === 'function'
-            && typeof fabric?.sendAnnotationToBack === 'function'
-            && typeof fabric?.moveAnnotation === 'function'
-        ) {
-            zOrderItems = [
-                { title: 'Bring to Front', icon: 'fa-angles-up',   action: () => fabric.bringAnnotationToFront(active) },
-                { title: 'Bring Forward',  icon: 'fa-angle-up',    action: () => fabric.moveAnnotation(active, 'up') },
-                { title: 'Send Backward',  icon: 'fa-angle-down',  action: () => fabric.moveAnnotation(active, 'down') },
-                { title: 'Send to Back',   icon: 'fa-angles-down', action: () => fabric.sendAnnotationToBack(active) },
-            ];
+        if (active && typeof fabric?.canvas?.sendToBack === 'function') {
+            zOrderItems = [{
+                title: 'Send to back',
+                icon: 'fa-angles-down',
+                action: () => {
+                    // Fabric draws the active object on top regardless of
+                    // its canvas._objects position (default
+                    // preserveObjectStacking=false), so drop the selection
+                    // for the new order to take effect immediately.
+                    fabric.canvas.discardActiveObject();
+                    fabric.canvas.sendToBack(active);
+                    fabric.canvas.requestRenderAll();
+                },
+            }];
         }
 
         let privateItem = null;
@@ -524,9 +527,7 @@ export const viewerMenuMethods = {
             if (layerItems) {
                 children.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
             }
-            if (zOrderItems) {
-                children.push({ title: 'Visibility order', icon: 'fa-arrows-up-down', children: zOrderItems });
-            }
+            if (zOrderItems) children.push(...zOrderItems);
             if (privateItem) children.push(privateItem);
             if (measurementsItem) children.push(measurementsItem);
             return [{ title: 'Annotation', icon: 'fa-shapes', children }];
@@ -546,10 +547,7 @@ export const viewerMenuMethods = {
             actions.push({ title: 'Move to layer:' });
             actions.push(...layerItems);
         }
-        if (zOrderItems) {
-            actions.push({ title: 'Visibility order:' });
-            actions.push(...zOrderItems);
-        }
+        if (zOrderItems) actions.push(...zOrderItems);
         if (privateItem) {
             actions.push({ title: 'Modify annotation:' });
             actions.push(privateItem);

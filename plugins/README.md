@@ -39,6 +39,10 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
   - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
+  - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the plugin's `<id>` namespace that must be configured by the deployment for the plugin to be shipped under the `"available"` server-side plugin-selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty-string value:
+      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` array.
+      2. **Server-secure block** — `CORE.server.secure.plugins[<id>]`, supplied via env.json's `core.server.secure.plugins`. Never shipped to the browser. The natural home for secret-adjacent values (API key bindings, proxy aliases referencing a secret).
+    Booleans `false` and the number `0` count as configured. **Include.json defaults are NOT consulted** — even if a plugin's own include.json sets `serviceUrl: "http://localhost:8042"` as a default, that does not satisfy the gate. Only what the deployment explicitly sets in either bucket counts. This makes include.json defaults safe for dev convenience under `"all"` mode without accidentally satisfying production-availability checks. The plugin author declares *what* keys must exist; the deployment admin decides *where* each value lives based on sensitivity. Ignored under selection modes `"all"` and `"whitelist"`. See `server/README.md` for the mode reference.
 
 ##### Built-in options
   - `ignorePostIO` - see below the default IO lifecycle
