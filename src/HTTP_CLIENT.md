@@ -92,8 +92,11 @@ Available options:
 - `secretStore` (optional)  
   Object with `getSecret(type, contextId)` and `setSecret(...)`. Defaults to `XOpatUser.instance()`.
 
-- `timeout` (number, optional)  
-  Request timeout in milliseconds (if implemented in your environment).
+- `timeoutMs` (number, optional, default `30000`)
+  Per-request timeout in milliseconds. Implemented via `AbortController` in `HttpClient.request`.
+
+- `maxRetries` (number, optional, default `3`)
+  Number of automatic retries on `429` and `5xx` responses. Set to `0` to disable retries.
 
 ---
 
@@ -114,8 +117,8 @@ Where:
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", // default "GET"
   headers: { ... },      // extra headers
   body: any,             // will be JSON.stringify’d if object
-  query: { ... },        // optional query string object
-  responseType: "json" | "text" | "arraybuffer", // default "json"
+  query: { ... },        // optional query string object — appended via URLSearchParams; arrays become repeated keys
+  expect: "json" | "text" | "auto", // default "auto" — drives response parsing
   }
 
 Example:

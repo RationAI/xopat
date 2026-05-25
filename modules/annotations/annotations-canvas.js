@@ -997,283 +997,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Move an annotation up or down by one position. For layered annotations
-     * the swap happens within the layer's `_objects`. For root annotations
-     * the swap happens within `_boardOrder` among other annotation entries.
-     * Single undoable history entry.
-     * @param {fabric.Object} annotation
-     * @param {'up'|'down'} direction
-     * @returns {boolean} true if order changed
-     */
-    moveAnnotation(annotation, direction) {
-        if (!annotation) return false;
-        const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
-        const layerId = layer ? String(layer.id) : null;
-        const notify = () => {
-            this.canvas.requestRenderAll();
-            try { this.raiseEvent('layer-objects-changed', { layerId }); } catch (e) { /* non-fatal */ }
-        };
-        const swap = () => {
-            if (layer) return layer.swapAnnotation(annotation, direction);
-            // root annotation: swap in _boardOrder among annotation entries
-            const order = this._boardOrder;
-            const id = String(annotation.incrementId);
-            const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
-            if (idx === -1) return false;
-            const step = direction === 'up' ? -1 : 1;
-            // find next neighbor that is also an annotation entry (skip layers)
-            let target = idx + step;
-            while (target >= 0 && target < order.length && order[target].type !== 'annotation') {
-                target += step;
-            }
-            if (target < 0 || target >= order.length) return false;
-            [order[idx], order[target]] = [order[target], order[idx]];
-            return true;
-        };
-        const reverseDir = direction === 'up' ? 'down' : 'up';
-        let changed = false;
-        APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(); if (changed) notify(); return changed; },
-            () => {
-                // undo: swap the other direction
-                if (layer) layer.swapAnnotation(annotation, reverseDir);
-                else {
-                    const order = this._boardOrder;
-                    const id = String(annotation.incrementId);
-                    const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
-                    if (idx !== -1) {
-                        const step = reverseDir === 'up' ? -1 : 1;
-                        let target = idx + step;
-                        while (target >= 0 && target < order.length && order[target].type !== 'annotation') target += step;
-                        if (target >= 0 && target < order.length) {
-                            [order[idx], order[target]] = [order[target], order[idx]];
-                        }
-                    }
-                }
-                notify();
-                return true;
-            },
-            { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
-        );
-        return changed;
-    }
-
-    /**
-     * Move an annotation to the top of its z-stack — for layered
-     * annotations, to the end of `layer._objects`; for root annotations,
-     * past the last `annotation`-typed slot in `_boardOrder`. Mirror of
-     * fabric's `bringToFront` but routed through `_boardOrder` so the
-     * board panel stays in sync. Undoable.
-     * @param {fabric.Object} annotation
-     * @returns {boolean} true if order changed
-     */
-    bringAnnotationToFront(annotation) {
-        return this._moveAnnotationToEdge(annotation, 'front');
-    }
-
-    /**
-     * Mirror of `bringAnnotationToFront` — move to the bottom of the
-     * z-stack within its layer (or root annotations). Undoable.
-     * @param {fabric.Object} annotation
-     * @returns {boolean} true if order changed
-     */
-    sendAnnotationToBack(annotation) {
-        return this._moveAnnotationToEdge(annotation, 'back');
-    }
-
-    /**
-     * Shared implementation for `bringAnnotationToFront` /
-     * `sendAnnotationToBack`. Captures the previous index for the inverse
-     * before applying, then routes the splice through the history stack so
-     * Ctrl+Z works. Reuses the same backing-array layout `moveAnnotation`
-     * targets (layer._objects or _boardOrder) — do NOT call fabric's
-     * `canvas.bringToFront` / `sendToBack` directly; those mutate
-     * `canvas._objects` only and would desync the board panel.
-     * @private
-     */
-    _moveAnnotationToEdge(annotation, edge) {
-        if (!annotation) return false;
-        const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
-        const layerId = layer ? String(layer.id) : null;
-        const notify = () => {
-            this.canvas.requestRenderAll();
-            try { this.raiseEvent('layer-objects-changed', { layerId }); } catch (e) { /* non-fatal */ }
-        };
-
-        // Pre-compute prevIdx so undo can restore the original slot. This
-        // runs once, OUTSIDE the queued history forward, because the
-        // history scheduler runs the forward asynchronously — and undo
-        // needs prevIdx pinned to the position the annotation occupied
-        // BEFORE the move, not whatever the array contains by the time
-        // an undo fires later.
-        let prevIdx = -1;
-        if (layer) {
-            prevIdx = layer._objects.findIndex(o => o.internalID === annotation.internalID);
-        } else {
-            const order = this._boardOrder;
-            const id = String(annotation.incrementId);
-            prevIdx = order.findIndex(e => e.type === 'annotation' && e.id === id);
-        }
-        if (prevIdx === -1) return false;
-
-        const moveTo = (toEdge) => {
-            if (layer) {
-                const list = layer._objects;
-                const cur = list.findIndex(o => o.internalID === annotation.internalID);
-                if (cur === -1) return false;
-                const target = toEdge === 'front' ? list.length - 1 : 0;
-                if (cur === target) return false;
-                list.splice(cur, 1);
-                list.splice(target, 0, annotation);
-                return true;
-            }
-            const order = this._boardOrder;
-            const id = String(annotation.incrementId);
-            const cur = order.findIndex(e => e.type === 'annotation' && e.id === id);
-            if (cur === -1) return false;
-            let target = -1;
-            if (toEdge === 'front') {
-                for (let i = order.length - 1; i >= 0; i--) {
-                    if (order[i].type === 'annotation') { target = i; break; }
-                }
-            } else {
-                for (let i = 0; i < order.length; i++) {
-                    if (order[i].type === 'annotation') { target = i; break; }
-                }
-            }
-            if (target === -1 || cur === target) return false;
-            const entry = order.splice(cur, 1)[0];
-            order.splice(target, 0, entry);
-            return true;
-        };
-
-        const restoreToPrev = () => {
-            if (layer) {
-                const list = layer._objects;
-                const cur = list.findIndex(o => o.internalID === annotation.internalID);
-                if (cur === -1) return;
-                list.splice(cur, 1);
-                const target = Math.max(0, Math.min(prevIdx, list.length));
-                list.splice(target, 0, annotation);
-            } else {
-                const order = this._boardOrder;
-                const id = String(annotation.incrementId);
-                const cur = order.findIndex(e => e.type === 'annotation' && e.id === id);
-                if (cur === -1) return;
-                const entry = order.splice(cur, 1)[0];
-                const target = Math.max(0, Math.min(prevIdx, order.length));
-                order.splice(target, 0, entry);
-            }
-        };
-
-        let changed = false;
-        APPLICATION_CONTEXT.history.push(
-            () => { changed = moveTo(edge); if (changed) notify(); return changed; },
-            () => { restoreToPrev(); notify(); return true; },
-            { name: edge === 'front' ? 'Bring annotation to front' : 'Send annotation to back' }
-        );
-        return changed;
-    }
-
-    /**
-     * Move a contiguous group of annotations up or down by one position as a
-     * unit. The block is shifted by taking the non-member annotation entry
-     * immediately past the block in the chosen direction and re-inserting it
-     * on the opposite side — equivalent to "the predecessor row jumps over
-     * the entire block". Cost is O(N) over the backing array regardless of
-     * block size.
-     *
-     * Members must all share the same level (root or one specific layer).
-     * Layer entries in `_boardOrder` are treated as transparent (skipped),
-     * matching the per-annotation `moveAnnotation` behaviour.
-     *
-     * @param {fabric.Object[]} annotations the block to move
-     * @param {'up'|'down'} direction
-     * @returns {boolean} true if order changed
-     */
-    moveAnnotationBlock(annotations, direction) {
-        if (!Array.isArray(annotations) || annotations.length === 0) return false;
-        if (annotations.length === 1) return this.moveAnnotation(annotations[0], direction);
-
-        const layer = annotations[0].layerID
-            ? this.getLayer(String(annotations[0].layerID))
-            : null;
-
-        // For layered blocks the backing array is the layer's _objects
-        // (homogeneous: all fabric objects). For root blocks it's _boardOrder
-        // (mixed annotation+layer entries), where layer entries are skipped.
-        const isLayered = !!layer;
-        const memberIds = new Set(annotations.map(a => String(a.incrementId)));
-
-        const findBoundaries = () => {
-            const arr = isLayered ? layer._objects : this._boardOrder;
-            let lo = -1, hi = -1;
-            for (let i = 0; i < arr.length; i++) {
-                const entry = arr[i];
-                const id = isLayered
-                    ? String(entry.incrementId)
-                    : (entry.type === 'annotation' ? String(entry.id) : null);
-                if (id !== null && memberIds.has(id)) {
-                    if (lo === -1) lo = i;
-                    hi = i;
-                }
-            }
-            return { arr, lo, hi };
-        };
-
-        const isAnnotationEntry = (entry) => isLayered || entry?.type === 'annotation';
-        const isMemberEntry = (entry) => {
-            const id = isLayered
-                ? String(entry?.incrementId)
-                : (entry?.type === 'annotation' ? String(entry?.id) : null);
-            return id !== null && memberIds.has(id);
-        };
-
-        const swap = (dir) => {
-            const { arr, lo, hi } = findBoundaries();
-            if (lo === -1) return false;
-
-            if (dir === 'up') {
-                // Predecessor: nearest non-member annotation entry before lo,
-                // skipping layer entries (root only).
-                let pi = lo - 1;
-                while (pi >= 0 && (!isAnnotationEntry(arr[pi]) || isMemberEntry(arr[pi]))) pi--;
-                if (pi < 0) return false;
-                const [predecessor] = arr.splice(pi, 1);
-                // Removing at pi (< hi) shifts hi down by 1. We want to land
-                // the predecessor immediately after the block, i.e. at the
-                // original hi index (which is the new hi+1).
-                arr.splice(hi, 0, predecessor);
-                return true;
-            } else {
-                // Successor: nearest non-member annotation entry after hi.
-                let pj = hi + 1;
-                while (pj < arr.length && (!isAnnotationEntry(arr[pj]) || isMemberEntry(arr[pj]))) pj++;
-                if (pj >= arr.length) return false;
-                const [successor] = arr.splice(pj, 1);
-                // Removing at pj (> hi) does not shift lo. Insert at lo so the
-                // successor lands immediately before the block.
-                arr.splice(lo, 0, successor);
-                return true;
-            }
-        };
-
-        const reverseDir = direction === 'up' ? 'down' : 'up';
-        const notifyLayerId = isLayered ? String(layer.id) : null;
-        const notify = () => {
-            this.canvas.requestRenderAll();
-            try { this.raiseEvent('layer-objects-changed', { layerId: notifyLayerId }); } catch (e) { /* non-fatal */ }
-        };
-        let changed = false;
-        APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(direction); if (changed) notify(); return changed; },
-            () => { swap(reverseDir); notify(); return true; },
-            { name: direction === 'up' ? 'Move group up' : 'Move group down' }
-        );
-        return changed;
-    }
-
-    /**
      * Move a layer up or down in board order (only swaps with neighboring
      * layer entries, skipping any annotation entries in between).
      * @param {OSDAnnotations.Layer} layer
@@ -1658,9 +1381,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
         targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
 
+        // Clone each annot so the inverse can re-add a fresh, structurally
+        // independent copy of the pre-delete state — insulating undo from
+        // any later mutation/reuse of the deleted reference (e.g. paste
+        // pipeline calling factory.copy on it).
+        const restoreClones = targetAnnots.map(annot => {
+            const f = annot._factory?.();
+            return f && typeof f.copy === 'function' ? f.copy(annot) : annot;
+        });
+
         APPLICATION_CONTEXT.history.push(
             () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
-            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise)),
+            () => restoreClones.forEach(clone => this._addAnnotation(clone, _raise)),
             { name: 'Delete annotation' }
         )
 
@@ -1974,6 +1706,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     addHelperAnnotation(annotation) {
         annotation.excludeFromExport = true;
+        annotation.isHelperAnnotation = true;
         this.canvas.add(annotation);
     }
 
@@ -2608,9 +2341,13 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     deleteAnnotation(annotation, _raise=true) {
         if (!annotation) return false;
+        // Clone so the inverse restores a structurally independent snapshot
+        // — see deleteObject for the rationale.
+        const f = annotation._factory?.();
+        const restoreClone = f && typeof f.copy === 'function' ? f.copy(annotation) : annotation;
         const result = this.module.annotationResource.delete(annotation.incrementId, {
             apply:        () => { this._deleteAnnotation(annotation, _raise); },
-            inverseApply: () => { this._addAnnotation(annotation, _raise); },
+            inverseApply: () => { this._addAnnotation(restoreClone, _raise); },
             meta: { kind: 'delete', object: annotation, viewerId: this.viewer?.uniqueId },
             rollbackOnAsyncRefuse: true,
         });
@@ -3389,6 +3126,65 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             _this.__programmaticClear = false;
         });
 
+        // After fabric finishes a drag we follow the same clone-based pattern
+        // as edit-mode commit: revert `target` to its pre-drag state, build a
+        // clone that represents the post-drag state, and route through
+        // `replaceAnnotation(target, clone, false)`. That records one history
+        // entry via `annotationResource.update`; the inverse swaps `target`
+        // (pre-drag, untouched) back in. Doppelganger drags inside an edit
+        // session are excluded — the surrounding endSelectionEdit owns history.
+        this.canvas.on('object:modified', function (e) {
+            const target = e.target;
+            const action = e.transform?.action;
+            if (!target || action !== 'drag') return;
+
+            const original = e.transform?.original;
+            if (!original || original.left == null || original.top == null) {
+                target.setCoords();
+                return;
+            }
+            const deltaX = target.left - original.left;
+            const deltaY = target.top - original.top;
+            if (!deltaX && !deltaY) { target.setCoords(); return; }
+
+            const factory = target._factory?.();
+
+            // Doppelganger drag: sync internal points so the edit-target's
+            // geometry stays consistent for the upcoming recalculate; do
+            // NOT push history here — the edit-session commit handles it.
+            if (target._isDoppelganger) {
+                if (factory && typeof factory.move === 'function') {
+                    factory.move(target, deltaX, deltaY, true);
+                } else {
+                    target.setCoords();
+                }
+                return;
+            }
+
+            if (!factory || typeof factory.copy !== 'function' || typeof factory.move !== 'function') {
+                // Best-effort sync without history if the factory can't clone.
+                if (factory && typeof factory.move === 'function') {
+                    factory.move(target, deltaX, deltaY, true);
+                } else {
+                    target.setCoords();
+                }
+                return;
+            }
+
+            // Put `target` back to its pre-drag left/top so it can act as the
+            // "old version" inside the history entry. Fabric only mutated
+            // left/top during the drag — for point-based shapes `.points`
+            // were untouched, so a left/top revert is enough.
+            target.set({ left: original.left, top: original.top });
+            target.setCoords();
+
+            // Build the post-drag annotation as an independent clone.
+            const clone = factory.copy(target);
+            factory.move(clone, deltaX, deltaY);
+
+            _this.replaceAnnotation(target, clone, false);
+        });
+
         /****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
 
         // todo: somehow get rid of this dirty call
@@ -3564,6 +3360,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     highlightAnnotation(selectedObject) {
         this.removeHighlight();
+
+        // Do not highlight ein edit mode
+        if (this.isOngoingEditOf?.(selectedObject)) return;
 
         let factory = this.module.getAnnotationObjectFactory(selectedObject.factoryID);
         if (!factory) return;

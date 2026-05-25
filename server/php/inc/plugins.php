@@ -8,8 +8,12 @@ if (!PHP_INCLUDES) throw new Exception("Plugins must be loaded with active core!
 require_once PHP_INCLUDES . "modules.php";
 use Ahc\Json\Comment;
 
-global $i18n, $PLUGINS, $MODULES;
+global $i18n, $PLUGINS, $MODULES, $CORE;
 $PLUGINS = array();
+
+// Helpers (xopat_required_config_*, xopat_resolve_plugin_selection_mode) are
+// defined in modules.php, which is required above.
+$PLUGIN_SELECTION_MODE = xopat_resolve_plugin_selection_mode();
 
 foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
     $dir_path = ABS_PLUGINS . "$dir/";
@@ -91,14 +95,37 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     }
                 }
 
+                // Pre-merge captures: deployment-ENV plugin block AND
+                // preserved server-secure plugin block. Include.json defaults
+                // must NOT count toward `requiredConfig`, so we resolve gate
+                // paths against these pre-merge structures (never against the
+                // merged $data). The secure block is read from the
+                // pre-strip backup in $GLOBALS['CORE_SECURE'] (set by
+                // core.php) — $CORE['server']['secure'] is already gone by
+                // this point.
+                $envBlock = [];
+                $secBlock = [];
+                $envEnabledOptIn = false;
                 try {
                     global $ENV, $PLUGINS;
                     if (is_array($ENV)) {
                         if (!isset($ENV["plugins"]) || !is_array($ENV["plugins"])) $ENV["plugins"] = [];
                         $ENV_PLUG = $ENV["plugins"];
 
-                        if (isset($ENV_PLUG[$data["id"]])) {
-                            $data = array_merge_recursive_distinct($data, $ENV_PLUG[$data["id"]]);
+                        if (isset($ENV_PLUG[$data["id"]]) && is_array($ENV_PLUG[$data["id"]])) {
+                            $envBlock = $ENV_PLUG[$data["id"]];
+                            // Capture deployment-ENV opt-in BEFORE the merge clobbers the
+                            // origin of `enabled`. Only used by "whitelist" mode.
+                            if (array_key_exists("enabled", $envBlock)
+                                && $envBlock["enabled"] === true) {
+                                $envEnabledOptIn = true;
+                            }
+                            $data = array_merge_recursive_distinct($data, $envBlock);
+                        }
+
+                        if (isset($GLOBALS['CORE_SECURE']['plugins'][$data["id"]])
+                            && is_array($GLOBALS['CORE_SECURE']['plugins'][$data["id"]])) {
+                            $secBlock = $GLOBALS['CORE_SECURE']['plugins'][$data["id"]];
                         }
 
                         if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
@@ -111,7 +138,32 @@ foreach (array_diff(scandir(ABS_PLUGINS), array('..', '.')) as $_=>$dir) {
                     trigger_error($e, E_USER_WARNING);
                 }
 
-                if (!isset($data["enabled"]) || $data["enabled"] != false) {
+                $shouldInclude = false;
+                switch ($PLUGIN_SELECTION_MODE) {
+                    case "whitelist":
+                        // Inverse default: nothing ships unless deployment ENV opted in.
+                        // No secure-side fallback for the opt-in flag (deliberate —
+                        // see plan §3c).
+                        $shouldInclude = $envEnabledOptIn
+                            && (!isset($data["enabled"]) || $data["enabled"] != false);
+                        break;
+                    case "available":
+                        // Unified `requiredConfig` gate: each path must resolve
+                        // in EITHER the ENV block OR the server-secure block.
+                        $shouldInclude = (!isset($data["enabled"]) || $data["enabled"] != false)
+                            && xopat_required_config_satisfied(
+                                $data["requiredConfig"] ?? null,
+                                $envBlock,
+                                $secBlock
+                            );
+                        break;
+                    case "all":
+                    default:
+                        $shouldInclude = !isset($data["enabled"]) || $data["enabled"] != false;
+                        break;
+                }
+
+                if ($shouldInclude) {
                     $PLUGINS[$data["id"]] = $data;
                 }
             }

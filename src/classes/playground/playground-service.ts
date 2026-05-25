@@ -176,9 +176,15 @@ function tryRegisterCanvasContextProvider() {
         "playground",
         ({ viewer }: any) => ([
             {
-                icon: "fa-flask",
-                title: tr("playground.openHere", "Open Visualization Playground"),
-                action: () => openPlayground({ source: { kind: "viewer", viewer } }),
+                title: tr("playground.viewerSubmenu", "Viewer"),
+                icon: "fa-display",
+                children: [
+                    {
+                        icon: "fa-flask",
+                        title: tr("playground.openHere", "Open Visualization Playground"),
+                        action: () => openPlayground({ source: { kind: "viewer", viewer } }),
+                    },
+                ],
             },
         ]),
         10,

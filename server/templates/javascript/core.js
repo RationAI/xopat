@@ -353,7 +353,13 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
     }
 
     if (secure) {
-        // Security: server configuration secret
+        // Server-only backup of the secure block, preserved past the strip
+        // so server-side filtering (plugins.js / modules.js) can read it.
+        // MUST NEVER end up in any structure that is JSON.stringify'd into
+        // the browser-bound page payload — mirror of PHP's $GLOBALS['CORE_SECURE'].
+        core.CORE_SECURE = CORE.server.secure;
+        // Security: strip server configuration secret from the CORE that
+        // gets shipped to the client.
         delete CORE.server.secure;
     }
 

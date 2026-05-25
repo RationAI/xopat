@@ -2,7 +2,7 @@ import type { XOpatCoreConfig, XOpatElementRecord } from "./types/config";
 import { XOpatStorage } from "./store";
 import type { OpenEvent, ViewerEventMap } from "openseadragon";
 
-import { HTTPError } from "./classes/http-client";
+import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
@@ -3342,7 +3342,8 @@ form.submit();
                 // has already cleared the menu slot, so `viewer.getMenu()`
                 // returns undefined. No-op cleanly instead of throwing
                 // (the surrounding try/catch only logged a warning anyway).
-                htmlReset: () => viewer.getMenu()?.getShadersTab?.()?.clearLayers?.()
+                htmlReset: () => viewer.getMenu()?.getShadersTab?.()?.clearLayers?.(),
+                httpAdapter: createHttpClientAdapter(),
             };
 
             const flexRendererClass = (window.OpenSeadragon as any).FlexRenderer;
@@ -3435,6 +3436,20 @@ form.submit();
             if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
                 viewer.scalebar.setActive(false);
             }
+
+            // Opt the scalebar into AppBar.Chrome so the hide-UI button toggles it
+            // alongside the rest of the chrome. Per-viewer id keeps multi-viewport
+            // snapshot/restore correct. Live `_active` read avoids touching the
+            // AppCache-backed VisibilityManager state used by the Settings checkbox.
+            const scalebarChromeKey = `scalebar::${(viewer as any).uniqueId ?? index}`;
+            (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(scalebarChromeKey, {
+                is:  () => !!(viewer as any).scalebar?._active,
+                on:  () => (viewer as any).scalebar?.setActive(true),
+                off: () => (viewer as any).scalebar?.setActive(false),
+            });
+            viewer.addOnceHandler?.("destroy", () => {
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
+            });
 
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);

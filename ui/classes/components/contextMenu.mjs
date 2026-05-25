@@ -79,18 +79,24 @@ export class ContextMenu extends BaseComponent {
         queueMicrotask(() => {
             if (!this._open) return;
             const fm = (typeof UI !== "undefined") ? UI.Services?.FloatingManager : null;
-            if (fm?.register) {
-                this._fmToken = fm.register({
-                    el: this._rootEl,
-                    owner: this,
-                    onEscape: () => this.close(),
-                    onOutsideClick: (e) => {
-                        if (this._activeFlyouts.some(f => f.el?.contains(e?.target))) return;
-                        this.close();
-                    },
-                });
-                fm.bringToFront?.(this._fmToken);
+            if (!fm?.register) return;
+            // If a prior openAt's microtask already registered a token for the
+            // current _rootEl, drop it before re-registering. Prevents
+            // FloatingManager from accumulating stale entries on rapid reopens.
+            if (this._fmToken && fm.unregister) {
+                try { fm.unregister(this._fmToken); } catch { /* noop */ }
+                this._fmToken = null;
             }
+            this._fmToken = fm.register({
+                el: this._rootEl,
+                owner: this,
+                onEscape: () => this.close(),
+                onOutsideClick: (e) => {
+                    if (this._activeFlyouts.some(f => f.el?.contains(e?.target))) return;
+                    this.close();
+                },
+            });
+            fm.bringToFront?.(this._fmToken);
         });
     }
 
@@ -190,7 +196,11 @@ export class ContextMenu extends BaseComponent {
             liEl.addEventListener("mouseenter", () => {
                 const existing = this._activeFlyouts.find(f => f.parentLi === liEl);
                 if (existing) {
-                    existing.cancelHide();
+                    // Mirror cancelHideChain in _openFlyout: cancel this
+                    // flyout's hide AND any ancestor flyouts' pending hides.
+                    for (const f of this._activeFlyouts) {
+                        if (f.level <= existing.level) f.cancelHide?.();
+                    }
                 } else {
                     this._openFlyout(item, liEl, depth);
                 }
@@ -285,14 +295,24 @@ export class ContextMenu extends BaseComponent {
         entry.cancelHide = () => {
             if (entry.hideTimer) { clearTimeout(entry.hideTimer); entry.hideTimer = null; }
         };
+        // Cancel this flyout's pending hide AND every ancestor flyout's pending
+        // hide. Flyouts are appended to document.body as siblings, so moving the
+        // cursor parent → child fires the parent flyout's mouseleave before the
+        // child's mouseenter; without ancestor cancellation the parent's 180ms
+        // timer would tear down the whole subtree.
+        const cancelHideChain = () => {
+            for (const f of this._activeFlyouts) {
+                if (f.level <= entry.level) f.cancelHide?.();
+            }
+        };
         entry.scheduleHide = () => {
             entry.cancelHide();
             entry.hideTimer = setTimeout(() => {
                 entry.hideTimer = null;
-                this._closeFlyoutsFrom(depth + 1);
+                this._closeFlyoutsFrom(entry.level);
             }, 180);
         };
-        flyoutEl.addEventListener("mouseenter", entry.cancelHide);
+        flyoutEl.addEventListener("mouseenter", cancelHideChain);
         flyoutEl.addEventListener("mouseleave", entry.scheduleHide);
 
         this._activeFlyouts.push(entry);
@@ -307,21 +327,22 @@ export class ContextMenu extends BaseComponent {
         }
     }
 
+    _destroyFlyout(entry) {
+        entry.cancelHide?.();
+        if (entry.el?.parentNode) entry.el.parentNode.removeChild(entry.el);
+    }
+
     _closeFlyoutsFrom(level) {
         for (let i = this._activeFlyouts.length - 1; i >= 0; i--) {
             const f = this._activeFlyouts[i];
             if (f.level < level) continue;
-            f.cancelHide?.();
-            if (f.el?.parentNode) f.el.parentNode.removeChild(f.el);
+            this._destroyFlyout(f);
             this._activeFlyouts.splice(i, 1);
         }
     }
 
     _closeAllFlyouts() {
-        for (const f of this._activeFlyouts) {
-            f.cancelHide?.();
-            if (f.el?.parentNode) f.el.parentNode.removeChild(f.el);
-        }
+        for (const f of this._activeFlyouts) this._destroyFlyout(f);
         this._activeFlyouts = [];
     }
 }

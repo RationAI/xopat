@@ -105,6 +105,35 @@
             "secureMode": false,
             /* Production mode (serve minified files if available) */
             "production": false,
+            /*
+             * Server-side plugin selection mode. Controls which plugins
+             * (and modules) the server ships to the client.
+             *   "all"       - every plugin without `enabled: false` is shipped
+             *                 (default, current behavior).
+             *   "whitelist" - only plugins explicitly opted in via the
+             *                 deployment ENV (`plugins.<id>.enabled = true`)
+             *                 are shipped. A plugin's own include.json
+             *                 `enabled: true` does NOT whitelist it. Modules
+             *                 are dependencies pulled in by plugins and are
+             *                 not whitelisted independently.
+             *   "available" - like "all", plus each plugin / module may
+             *                 declare a single `requiredConfig: ["dot.path", ...]`
+             *                 array in include.json. Each path is resolved
+             *                 against TWO deployment-controlled sources:
+             *                   1. ENV.plugins[id] / ENV.modules[id]
+             *                      (env.json top-level `plugins`/`modules`)
+             *                   2. server.secure.plugins[id] / server.secure.modules[id]
+             *                      (env.json `core.server.secure`, never
+             *                      shipped to the client — the natural home
+             *                      for secret-adjacent values).
+             *                 A path is satisfied if EITHER source carries
+             *                 a non-undefined/null/empty value. Include.json
+             *                 defaults are NOT consulted. The plugin author
+             *                 declares *what* is needed; the admin decides
+             *                 *where* each value lives based on sensitivity.
+             *                 Missing-path elements are silently dropped.
+             */
+            "pluginSelectionMode": "all",
             /* OpenSeadragon.Options to pass, some values are overridden as necessary. */
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
@@ -188,6 +217,8 @@
             "js_cookie_domain": null,
             "secureMode": true,
             "production": true,
+            /* See "pluginSelectionMode" in the "dev" block above for the full reference. */
+            "pluginSelectionMode": "all",
             "osdOptions": {
               "crossOriginPolicy": "Anonymous"
             }
@@ -365,6 +396,15 @@
             },
             // Server side configurations for your elements are available here, these are not dynamically changeable,
             // never exposed to client. Check README of your plugin or module to see the syntax.
+            //
+            // These blocks are also the **second source** consulted by an
+            // element's `requiredConfig` declaration in include.json when
+            // `client.<env>.pluginSelectionMode` is "available": a path like
+            // `server.secure.<plugins|modules>.<id>.foo.bar` carries equal
+            // weight to the public `<plugins|modules>.<id>.foo.bar` block.
+            // The plugin author lists *what* keys must be configured; this
+            // is the right home for whichever of those keys are sensitive
+            // (API key bindings, proxy aliases referencing a secret, etc.).
             "modules": {
                 ////custom values here
                 //"my-module-id": {

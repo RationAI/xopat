@@ -39,6 +39,10 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
   - `permaLoad` is an option to include the plugin permanently without asking; such plugin is not shown in Plugins Menu and is always present
   - `enabled` is an option to allow or disallow the plugin in the system, default `true`
   - `hidden` is an option to hide plugin from the user-available selection
+  - `requiredConfig` is an array of dot-paths (e.g. `["serviceUrl", "proxyAlias"]`) within the plugin's `<id>` namespace that must be configured by the deployment for the plugin to be shipped under the `"available"` server-side plugin-selection mode. Each path is resolved against TWO deployment-controlled sources; a path is satisfied if EITHER source carries a non-`undefined`/non-`null`/non-empty-string value:
+      1. **Deployment ENV block** — `ENV.plugins[<id>]`, supplied via env.json's top-level `plugins` array.
+      2. **Server-secure block** — `CORE.server.secure.plugins[<id>]`, supplied via env.json's `core.server.secure.plugins`. Never shipped to the browser. The natural home for secret-adjacent values (API key bindings, proxy aliases referencing a secret).
+    Booleans `false` and the number `0` count as configured. **Include.json defaults are NOT consulted** — even if a plugin's own include.json sets `serviceUrl: "http://localhost:8042"` as a default, that does not satisfy the gate. Only what the deployment explicitly sets in either bucket counts. This makes include.json defaults safe for dev convenience under `"all"` mode without accidentally satisfying production-availability checks. The plugin author declares *what* keys must exist; the deployment admin decides *where* each value lives based on sensitivity. Ignored under selection modes `"all"` and `"whitelist"`. See `server/README.md` for the mode reference.
 
 ##### Built-in options
   - `ignorePostIO` - see below the default IO lifecycle
@@ -361,18 +365,20 @@ Override ``getLocaleFile`` function to describe module-relative path to the loca
 approaches when API is available !!!
  
 First, get familiar with (sorted in importance order):
- - `window.VIEWER` 
-    - OpenSeadragon 
-      - `TileSource` API, ``EventSource`` API for managing the rendering and events (e.g. user input)
-      - `OpenSeadragon.Tools` (accessible as `VIEWER.tools`) API for viewing and navigation functionality
-        - focusing certain area, taking screenshots, opening viewer clone and more
-      - `OpenSeadragon.Scalebar` (accessible as `VIEWER.scalebar`) API for measurements
-        - `imagePixelSizeOnScreen` for **cached, optimized** way of converting between image coordinates and window coordinates  
-        - getting reference to _main_ tiled image, getting pixel size on screen,
-    - WebGL module API of the layers group (accessible through `VIEWER.bridge`) for image data post-processing
-    - events invoked on the VIEWER (always check `EVENTS.md` in appropriate folder)
  - `window.VIEWER_MANAGER`
-    - manager for viewers
+    - Manager for all OSD viewer instances. **Resolve viewers through this**, not through `window.VIEWER`:
+      - `VIEWER_MANAGER.get(...)` for a specific viewer
+      - `viewerSingletonModule(className, viewerLike)` for per-viewer module singletons
+      - `e.eventSource` inside `VIEWER_MANAGER.broadcastHandler(...)` callbacks
+    - See [`../src/MULTI_VIEWPORTS.md`](../src/MULTI_VIEWPORTS.md) — the codebase supports arbitrary multi-viewport grids, so `window.VIEWER` (the *focused* viewer) is the wrong handle whenever a plugin's domain logic could fire from another viewport.
+ - Per-viewer OpenSeadragon surface — obtained via `VIEWER_MANAGER.get(...)` / `e.eventSource`:
+    - `TileSource` API, `EventSource` API for managing rendering and user-input events
+    - `OpenSeadragon.Tools` (`viewer.tools`) for focusing areas, screenshots, viewer cloning, navigation
+    - `OpenSeadragon.Scalebar` (`viewer.scalebar`) for measurements; `imagePixelSizeOnScreen` is the **cached** image↔window coordinate conversion
+    - WebGL layers group via `viewer.bridge` for image data post-processing
+    - Per-viewer events — always check the local `EVENTS.md`
+ - `window.VIEWER`
+    - *Focused-viewer* shortcut. Safe only for transient, UI-driven actions where "the viewer the user is looking at" really is what you want; **never** for domain logic that may originate from a non-focused viewport.
  - `window.USER_INTERFACE`
     - API for dealing with application UI - menus, tutorials, inserting custom HTML to DOM...
  - `window.UTILITIES`

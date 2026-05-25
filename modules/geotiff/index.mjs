@@ -6,4 +6,5 @@
 import {enableGeoTIFFTileSource} from "./dist/geotiff-tilesource.lite.mjs";
 enableGeoTIFFTileSource(OpenSeadragon, {
     workerUrl: "modules/geotiff/dist/assets/tiff.worker-BPpoNmhb.js",
+    httpAdapter: window.HttpClient?.createAdapter?.(),
 });

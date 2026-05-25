@@ -1078,16 +1078,22 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters) {
+        // Deep-clone the point objects so the returned annotation has
+        // structurally independent geometry. Sharing point references
+        // with the source lets _applyMoveToGeometry (called from drag,
+        // factory.move, and edit recalculate) mutate the source too,
+        // which breaks undo across edit-mode drag, cut/paste and
+        // copy/paste.
         if (parameters && Array.isArray(parameters)) {
             // array kept for backwards compatibility
             parameters = {
-                points: parameters,
+                points: parameters.map(p => ({ x: p.x, y: p.y })),
                 left: ofObject.left,
                 top: ofObject.top,
             }
         } else if (!parameters) {
             parameters = {
-                points: [...ofObject.points],
+                points: ofObject.points.map(p => ({ x: p.x, y: p.y })),
                 left: ofObject.left,
                 top: ofObject.top,
             }
@@ -1115,11 +1121,20 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     edit(theObject) {
-        this._origPoints = [...theObject.points];
+        // Deep-clone so the pre-edit snapshot is immune to in-place
+        // mutations through _applyMoveToGeometry (factory.move).
+        this._origPoints = theObject.points.map(p => ({ x: p.x, y: p.y }));
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            // Annotations ship with lockMovementX/Y=true (see Preset.commonAnnotationVisuals).
+            // Unlock body-drag for edit; recalculate() doesn't have to undo this
+            // because the edit-target is a doppelganger that gets discarded.
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1188,9 +1203,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         let newObject = undefined;
 
-        if (theObject.points.length !== this._origPoints.length ||
-            !theObject.points.every((value, index) => value === this._origPoints[index])
-        ) {
+        // Value-compare each point. Identity compare was load-bearing
+        // on the (now-fixed) shared-reference shape: when points were
+        // shared with the original via shallow copy, identity matched
+        // even after the user dragged vertices, hiding the edit.
+        const changed = theObject.points.length !== this._origPoints.length ||
+            theObject.points.some((p, i) =>
+                p.x !== this._origPoints[i].x || p.y !== this._origPoints[i].y);
+        if (changed) {
             newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
 
@@ -1233,6 +1253,20 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         return newObject;
+    }
+
+    _applyMoveToGeometry(theObject, deltaX, deltaY) {
+        if (!Array.isArray(theObject.points) || (!deltaX && !deltaY)) return;
+        for (const p of theObject.points) {
+            p.x += deltaX;
+            p.y += deltaY;
+        }
+        // Recompute pathOffset / width / height from the shifted points.
+        // Without this, lineCoords / aCoords / hit-tests would lag behind
+        // the new point positions.
+        if (typeof theObject._setPositionDimensions === 'function') {
+            theObject._setPositionDimensions({});
+        }
     }
 
     getCreationRequiredMouseDragDurationMS() {
@@ -1471,6 +1505,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const _this = this,
             rightSkew = theObject.x1 > theObject.x2;
+        theObject.set({ lockMovementX: false, lockMovementY: false });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -2028,10 +2063,15 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
      * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters=undefined) {
+        // Deep-clone the ring-of-rings-of-points so the returned
+        // annotation has structurally independent geometry — matches
+        // the deep clone already used in Multipolygon.edit's
+        // _origPoints snapshot.
+        const deepCloneRings = (rings) => rings.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
         if (parameters && Array.isArray(parameters)) {
             // array kept for backwards compatibility
             parameters = {
-                points: parameters,
+                points: deepCloneRings(parameters),
                 left: ofObject.left,
                 top: ofObject.top,
             }
@@ -2039,7 +2079,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
             parameters = {
                 left: ofObject.left,
                 top: ofObject.top,
-                points: [...ofObject.points],
+                points: deepCloneRings(ofObject.points),
             };
         }
         const props = this.copyProperties(ofObject);
@@ -2130,7 +2170,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
 
         const self = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;

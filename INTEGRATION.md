@@ -1,465 +1,295 @@
-# xOpat Integration Within Your System
+# Integrating xOpat Into Your System
 
-The docker image pretty much shows all basics necessary to set up the viewer.
-Here we discuss further possibilities and customizations.
+This page is the front door for integrators who want to **host the viewer**,
+**point it at slides**, **feed it sessions**, and **drive or read it back**
+from a host system. Each section is a short narrative plus an outbound link
+to the doc that owns the deep dive.
 
+If you are authoring a plugin or a module, jump to
+[`plugins/README.md`](plugins/README.md) and
+[`modules/README.md`](modules/README.md) instead — those are the right
+entry points for that work.
 
-## Cloning & Building
+---
 
-The viewer can be used AS-IS. Its configuration can be done through ``env/env.json`` file. Certain
-things must be set up correctly (depends on the server the viewer runs on). The viewer (as well as OpenSeadragon)
-use ``grunt`` command line tool. It can be installed as `npm install -g grunt-cli`.
+## 1. Pick a host
 
-To build the configuration file example, run
+xOpat is a static front-end bundle that needs a host to serve it and (for
+non-trivial sessions) accept a POST body. Three options ship:
 
-> ``npm install && grunt env``
+| Host    | When to use                                                                     | Entry point                                                                       |
+| ------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Node    | Default. Plugin/module RPC, hot reload, generic proxy, multi-worker cluster.    | [`server/node/README.md`](server/node/README.md), [`docker/node/`](docker/node/)  |
+| PHP     | Drop-in for existing PHP infrastructure. No RPC; needs an Apache reverse proxy. | [`docker/php/README.md`](docker/php/README.md), [`server/php/init.php`](server/php/init.php) |
+| Static  | Embedded demos, kiosk, anywhere no server can run. No plugin/module dynamism, no POST.   | `grunt static` / `npm run s-static`                                               |
 
-##### OpenSeadragon
+Fastest start:
 
-The viewer builds on OpenSeadragon - a _proxy_ repository can be found here: https://github.com/RationAI/openseadragon.git.
-You can use the original repository - here you just have guaranteed compatibility.
+```bash
+# clone, install, build once
+npm install
 
-In order to install the library you have to clone it and generate the source code:
+# Node host on http://localhost:9001 (port mapped from container 9000)
+npm run docker-node
+# or, without docker:
+npm run s-node
+# or, for hot-reload during development:
+npm run dev
+```
 
-> ``cd xopat && git clone https://github.com/RationAI/openseadragon.git``
->
-> building requires grunt and npm
->
-> ``cd openseadragon && npm install && grunt build``
->
-> you should see `build/` folder. For more info on building see [the guide](https://github.com/RationAI/openseadragon/blob/master/CONTRIBUTING.md).
+Server architecture, RPC, runtime safety and cluster mode live in
+[`server/README.md`](server/README.md) and
+[`server/node/README.md`](server/node/README.md).
 
-Optionally, you can get the OpenSeadragon code from somewhere (**v 6.0.0+**) and place it under
-a custom folder - just update the path to the library.
+---
 
+## 2. Configure the environment
 
+The viewer reads its configuration from `env/env.json` (or from the path /
+inline JSON in `XOPAT_ENV`). Defaults live in
+[`src/config.json`](src/config.json) and are **deep-merged** with
+`env.json`'s `core.*` at boot, so an env file only needs to carry overrides
+— not the full surface.
 
-## Plugins&Modules API
-Each plugin can perform custom tasks that might depend on some service. After you manage to successfully run
-the viewer and some plugin feature does not work properly, please check the generated ENV example files. There might be
-configurations you need to adjust. Base configuration come from ``include.json`` files from
-within the modules and plugins, so you can check there for more details.
+Generate a fully commented example env file:
 
+```bash
+npm install && npm run env   # runs `grunt env`
+```
 
-## Setting up the viewer: client server
-After you succesfully set up correct conbfiguration values (see `env/README.md`),
-the viewer is now running and listening for requests with JSON configurations
-(details in `src/README.md`). There is a small issue: although the viewer can
-request images from any server (the php configuration only sets up defaults),
-the browser might not _accept_ responses from such servers (see CORS policy).
-This issue does not occur if the image server is hosted on the same server as 
-the viewer.
+Field-by-field reference (slide-protocols, server proxies, plugin/module
+selection mode, allowed `setup` keys) is in
+[`env/README.md`](env/README.md). Authentication and proxy fields are
+covered in [`src/AUTHORIZATION_AND_PROXY_AND_USERS.md`](src/AUTHORIZATION_AND_PROXY_AND_USERS.md)
+and [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md).
 
-#### HTTPS Urls
-To access images from servers using HTTPS, your server needs to have SSL enabled.
-This might be natural on production servers, but localhost playgrounds such as
-WampServer needs to set up things explicitly (self-signed certificate etc).
-There are plenty of examples on the internet.
+---
 
-#### CORS policy violation with foreign servers
-In case you fetch data from servers that are not hosted on the same
-server as the viewer, you need to overcome this issue. You can try
-to set up correct header values for both client and server to mutually
-accept each other. The most stable and versatile solution that requires
-only client-side server modification is to set-up a reverse proxy to 
-trick browsers into thinking they access local server.
+## 3. Point the viewer at slides
 
-To solve this issue, your viewer server needs to set up a reverse proxy.
-Setting up a reverse proxy to HTTP target is easier, the example for Apache
-sets up `/iipsrv.fcgi` URL as a proxy to a distant image server to avoid CORS
-violation (config php file will use `/iipsrv.fcgi` image server URL(s)):
+Slides are not addressed by URL in the session JSON. The session carries a
+**`data` array of scalar DataIDs**, and a **slide-protocol registry**
+(declared in env) decides how each DataID is resolved into a tile-source
+URL or factory.
 
-````apacheconf
-<VirtualHost *:8080>
-    ServerName localhost
-    ProxyPreserveHost On
+Minimal env snippet — one named protocol, one default, optional server-side
+proxy alias so the browser sees a same-origin URL:
 
-    # Reverse Proxy To Deal With CORS
-    #Server image is build under name 'server', mapping host to docker ports 9000 -> 9000
-    #Here, under the same docker composite, we are within docker -> use [name]:[port] to access
-    ProxyPass /iipsrv.fcgi http://server.url
-    ProxyPassReverse /iipsrv.fcgi http://server.url
-</VirtualHost>
-````
-For HTTPS:
-````apacheconf
-<VirtualHost *:443>
-    #Hints: for HTTPS external server, you probably need to avoid CORS policy violation using reverse proxy
-    #as well SSL set up:
-    #enable apache proxy_module, proxy_http_module
-    #set up your cerificate, key and update httpd-ssl.conf
-    #set upt the proxy:
-
-    SSLEngine On
-    SSLProxyEngine On
-    ProxyRequests Off
-    SSLProxyVerify none
-    SSLProxyCheckPeerCN off
-    SSLProxyCheckPeerName off
-    SSLProxyCheckPeerExpire off
-
-    ProxyPass /iipsrv.fcgi https://server.url
-    ProxyPassReverse /iipsrv.fcgi https://server.url
-</VirtualHost>
-````
-
-## The Image Server
-The first step in using the viewer is to set up an image server. 
-We provide a [WSI-Service](https://github.com/RationAI/wsi-service)
-implementation that can be used easily, however, any server can be configured:
-
- - OpenSeadragon supports many protocols out of box - check the [documentation](https://openseadragon.github.io/)
- - We support additionally several services (EMPAIA-like image API, DICOM-web or WSI-Service).
- - You can add support for your own protocols similar to existing modules that add support described before.
-
-Setting up an image server is out of scope of this document (check OpenSeadragon documentation), still, there
-are requirements and gotchas you can do on the viewer to adjust for image
-server needs.
-
-Example for ``DeepZoom`` protocol configuration:
-````json
+```jsonc
 {
   "core": {
-    "active_client": "prod",
     "client": {
-      "prod": {
-        // Named slide-protocol registry. Each entry is a backtick-template URL
-        // with `data` (scalar DataID) in scope; the server URL is embedded
-        // directly in the template — no separate server map.
+      "localhost": {
+        "domain": "http://localhost:9001",
         "slide_protocols": {
-          "deepzoom":     "`https://my.custom.viewer.url?Deepzoom=${data}.dzi`",
-          "deepzoom_ext": "`https://my.custom.viewer.url?Deepzoom=${data}.dzi`"
+          "wsi_service": {
+            "url": "`/v3/slides/info?slide_id=${data}`",
+            "proxy": "image-server"
+          }
         },
-        "default_background_protocol":    "deepzoom",
-        "default_visualization_protocol": "deepzoom_ext"
+        "default_background_protocol":    "wsi_service",
+        "default_visualization_protocol": "wsi_service"
       }
     },
     "server": {
       "secure": {
-        // possibly secure data that will never reach the client logics
+        "proxies": {
+          "image-server": { "baseUrl": "http://localhost:8080" }
+        }
       }
-    },
-    "setup": {
-      // other viewer configuration
     }
   }
-  // plugins, modules configuration...
 }
-````
-This will leverage built-in OpenSeadragon protocol support. The protocol
-names you choose (`deepzoom`, `deepzoom_ext` above) are stable identifiers
-that the runtime resolves through `window.SLIDE_PROTOCOLS`; sessions
-referencing them via `BackgroundItem.protocol` / `DataOverride.protocol`
-are safe to load even in secure mode because the value is a name, not an
-inline JS expression.
+```
 
-> **Migrating from the legacy shape.** The previous
-> `image_group_server` + `image_group_protocol` + `data_group_server`
-> + `data_group_protocol` fields still work — they are auto-synthesized
-> at boot into deprecated `__legacy_bg` / `__legacy_viz` registry entries
-> (with a one-shot console warning), and used as defaults if the new
-> fields are missing. Plan to remove the legacy fields once your env files
-> have been migrated to the new shape.
+The template is a backtick string with `data` (the scalar DataID) in scope;
+the resolved value is either a `string` (treated as a URL — OpenSeadragon's
+`TileSource.supports()` chain picks the right source) or a custom
+JSON-parseable object that one of your registered protocols consumes.
 
-### Custom Authentication
-For configuring and implementing custom authentication, the viewer relies on `XOpatUser` and the `HttpClient` service, alongside a proxy setup (optional). See [Authentication and Proxy Setup](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) for detailed descriptions.
+For tile sources that cannot be expressed as a URL — DICOMweb, anything
+that orchestrates `studies/series/instances` lookups internally — register
+a **factory** entry from a plugin instead:
 
-### Security Considerations
-The viewer can turn on ``secure`` mode, which will disable all
-non-secure features in the viewer, like respecting dynamic `protocol` overrides.
-Unless in secure environment, the viewer should be run with ``secure`` mode on.
+```js
+window.SLIDE_PROTOCOLS.register({
+    id: "my-proto",
+    createTileSource: (ctx) => new MyTileSource({ baseUrl: "…", id: ctx.dataID }),
+});
+```
 
-Moreover, all configurations are visible on the client side, so it might be problematic.
-This can be solved by using a proxy that will hide the configuration from the client.
-For more details, see the [client documentation](./src/HTTP_CLIENT.md).
+Then your session items use `"protocol": "my-proto"`. See
+[`plugins/dicom/`](plugins/dicom/) for a worked example.
 
-> As of now, there is no support for ``server-side`` logics execution.
-> You can either use the generic proxy, or implement an independent service
-> you connect the viewer to. In such cases, you should keep a session
-> alive that checks that only your own module/plugin can access the service.
+The legacy `image_group_server` / `image_group_protocol` /
+`data_group_server` / `data_group_protocol` shape is still recognized and
+auto-synthesized into `__legacy_bg` / `__legacy_viz` entries at boot
+(`src/classes/slide-protocols.ts:313-352`) with a one-shot deprecation
+warning. Migrate to `slide_protocols` when convenient — the legacy shim
+is scheduled for removal.
 
-### Custom Image Protocols
-You do not have to use our protocol and image server, 
-use any other protocol that can either handle tile fetching transfer through ``Images``
-or even (better option but harder to implement) handle image arrays and correctly parse its metadata.
-See the [documentation of OpenSeadragon](https://openseadragon.github.io/examples/tilesource-custom-advanced/) on how to add new, custom protocols.
-It is also possible to add script that injects code to and modifies existing tile sources.
+---
 
-> Note that instead of inline configuration, you have to create a new protocol class and register it
-so that auto-detection routine recognizes the protocol (`supports()` returns `true`); and modify
-the default protocols (through parameters or ENV) to conform to the protocol configuration phase. 
+## 4. Build a session
 
-A great example on implementing the protocol interface are existing implementations in the OpenSeadragon library.
+A session is a JSON object with up to five meaningful top-level keys:
 
-### Extending TiledImage
+| Key              | Meaning                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `params`         | Viewer settings (theme, viewport, `backgroundColor`, `activeBackgroundIndex`, …). Allowlist = the `setup` block in `src/config.json`. |
+| `data`           | Flat list of DataIDs referenced by index from `background` and `visualizations`.                                                  |
+| `background`     | Base-layer slides. Each entry references `data[i]` via `dataReference` and optionally carries `microns`, `goalIndex`, `name`, `protocol`. |
+| `visualizations` | Optional shader stacks rendered on top of the background.                                                                        |
+| `plugins`        | Per-plugin runtime config (optional; consumed by individual plugins).                                                            |
 
-OpenSeadragon's ``TiledImage`` API is somewhat generic, but here we are dealing with digital pathology. Therefore,
-the API is extended and supports the following methods to integrate the full pathology workflow:
+Minimum viable session — one slide, default protocol, no visualization:
 
-````js
-/**
- * Set source options.
- * @param {SlideSourceOptions} options
- */    
-setSourceOptions(options) {
-    // do somethig with the options received, these options come
-    // from the outside and can be useful to furher configure the session
-    // give users control over the transfer capabilities!
+```json
+{
+  "data": ["my-slide-id"],
+  "background": [{ "dataReference": 0, "name": "My slide" }]
 }
+```
 
-/**
- * Retrieve slide metadata. Can be arbitrary key-value list, even nested.
- * Some properties, hovewer, have a special meagning. These are documented in the 
- * return function. The values are then displayed in the viewer UI for the particular image.
- * @return {TileSourceMetadata|undefined}
- */
-getMetadata() {
-    return undefined;
-}
+A complete example with multiple backgrounds and two visualization goals
+lives at
+[`docs/example_sessions/background-and-visualization.json`](docs/example_sessions/background-and-visualization.json).
+The full per-field reference for `params`, `data`, `background`, and
+`visualizations` is in [`src/README.md`](src/README.md); more working
+sessions to copy from are under [`docs/example_sessions/`](docs/example_sessions/).
 
-/**
- * Retrieve slide thumbnail. This can simplify the
- * slide preview generation, instead of trying to re-construct it from the lowest-resolution level.
- * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
- */
-async getThumbnail() {
-    return undefined;
-}
+---
 
-/**
- * Retrieve slide label.
- * @return {Promise<string|HTMLImageElement|CanvasRenderingContext2D|HTMLCanvasElement|Blob|undefined>}
- */
-async getLabel() {
-    return undefined;
-}
-````
+## 5. Hand the session to the viewer
 
+The viewer resolves the session at boot from the first source that matches
+([`src/parse-input.js:94-209`](src/parse-input.js)):
 
-### Custom Synchronous And Asynchronous Protocols
-We prefer for the visualization data to come in synchronous requests due to scalability.
-It is a fact that most image servers do not support queries for multiple images at once;
-therefore it is possible to create custom protocols that implement desired approach.
-The best example is the ``ExtendedDZI`` protocol implementation that supports
-both synchronous and asynchronous transfer, which you can relate to when implementing the below.
+1. **POST body** field `visualization` (or alias `visualisation`). Node
+   host only — PHP can POST too, but static cannot.
+2. **URL hash** `#<urlencoded-json>`. Auto-rewrites to a self-POST when
+   the host supports POST, otherwise parsed locally.
+3. **Query string** `?visualization=<urlencoded-json>`. Subject to browser
+   URL length limits; prefer POST for non-trivial payloads.
+4. **Shorthand query** `?slides=a,b&masks=m1,m2`. Synthesizes one
+   background per slide and a heatmap visualization per mask. Good for
+   "just show these images" links from external systems.
+5. **Storage fallback**: `localStorage["xoSessionCache"]` (or
+   `sessionStorage`) with a 30-minute TTL — used to recover state after
+   an auth redirect. Restored sessions are tagged `__fromLocalStorage`.
 
-Request/response posibilities of OpenSeadragon are documented in the library itself.
-Note that you can add your custom headers, use both GET and POST and even implement
-your custom data fetching and presentation logics.
+Examples:
 
-Step by step for synchronous transfer implementation
-1. First, you need to configure the viewer so that it uses your protocol —
-   add an entry under ``slide_protocols`` and (optionally) point
-   ``default_visualization_protocol`` at it. The template is a backtick string
-   with ``data`` (scalar DataID) in scope; the server URL is embedded in the
-   template. The template's evaluated result can be:
-    1. `string` — treated as a URL, issues the initial request for the data. The response should be parseable by your `TileSource`.
-       Example:
-        >    "my_proto": \`https://server.example/path?Deepzoom=${data}.dzi\`
-    2. `object` (JSON-as-string, parsed by `JSON.parse` in your `supports()` hook) — treated as a custom configuration; the implementation decides how to fetch metadata and individual tiles. Useful when the request should not fire immediately. Example:
-        >    "my_proto": \`{"type": "myCustomProtocol", "data": "${data}"}\`
-2. If you are using one of existing protocols, you are done. Otherwise, you need to provide interaction logics.
+```bash
+# POST a session JSON to the Node host
+curl -X POST http://localhost:9001/ \
+     -F "visualization=$(cat my-session.json)"
+```
 
-> **Plugin-supplied factory protocols.** When the slide cannot be expressed
-> as a simple URL — e.g. a DICOMweb store, where the `TileSource` itself
-> orchestrates `studies/series/instances` lookups — register a *factory*
-> protocol from your plugin instead of a URL template:
-> ```js
-> window.SLIDE_PROTOCOLS.register({
->     id: "my-proto",
->     createTileSource: (ctx) => new MyTileSource({ baseUrl: '...', id: ctx.dataID }),
-> });
-> ```
-> Then emit `{ dataID, protocol: "my-proto" }` on the `BackgroundItem`.
-> The factory entry can carry whatever closure state it needs from the
-> plugin. See `plugins/dicom/index.workspace.mjs` for a reference.
-2. To provide interaction logics, implement a ``TileSource`` interface and attach it to the `OpenSeadragon` namespace.
-    - ``supports()`` - make sure when the response of `data_group_protocol` - dependent request
-    - ``configure()`` - make sure the response data, given url and post-data present in the url after `#` sign (if applicable)
-   is correctly parsed to provide the ``TileSource`` with necessary metadata. All the metadata required
-   is present in the ``TileSource`` class, in short you need to read the `tileSize`, `maxLevel`, `witdh`, `height` of the data,
-   which you have to decide for yourself how to aggregate (e.g. ``maxLevel = min(maxLevel1, ...)``).
-   - **API Extension** ``getMetadata()`` - implement method to access image metadata for each image source in the array independently - 
-   this methods can be omitted, but if present the viewer adjusts layer UI with error warning on all layers that use the data for which
-   the metadata contains ``error`` key (with a message).
-3. Implement a ``TileSource`` interface that uses the metadata available from stage 2 to fetch multiple tiles.
-Build a request, send query and read all image tiles from the server response. See  [Advanced Data API model documentation](https://openseadragon.github.io/examples/advanced-data-model/).  
-   - You must respect the tile order and provide
-a black tile in case some tile is missing. Tiles must have the same ``tileSize``. 
-   - You do not have to care about cache-related API of ``TileSource``, this is handled by the rendering routine. But:
-   - The renderer can work by default with vertically-concatenated tiles in a single image or image arrays.  If you finish job with different data type, custom rendering methods can be added to the WebGL data loader - see the module docs.
+```text
+https://viewer.example.com/?slides=case-42-he,case-42-ihc&masks=tumor
+```
 
-<details>
-<summary>Exemplary Implementation</summary>
-Note this approach does not explicitly verify the image array meta compatibility. `this` refers
-to the tile source instance, as if we called this in some method that injects the 
+---
 
-````js
-OpenSeadragon.MyCustomTileSource = class extends OpenSeadragon.TileSource {
+## 6. Drive the viewer from a host page
 
-    constructor(options) {
-        super(options);
-        // Example support for authentication within tileSource
-        // FIXME: use HTTP client instead
-        if (this.ajaxHeaders && this.ajaxHeaders["Authorization"]) {
-            const user = XOpatUser.instance();
-            user.addHandler('login', e => this.ajaxHeaders["Authorization"] = null);
-            user.addHandler('secret-updated', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = e.secret));
-            user.addHandler('secret-removed', e => e.type === "jwt" && (this.ajaxHeaders["Authorization"] = null));
-            user.addHandler('logout', e => this.ajaxHeaders["Authorization"] = null);
-        }
-    }
+The browser-side entry point is
+`initXOpat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG?)`
+([`src/app.ts:44`](src/app.ts)). The host server renders this call into a
+template with the right arguments; see
+[`server/node/index.js:401`](server/node/index.js) (Node) and
+[`server/php/init.php:100`](server/php/init.php) (PHP) for the canonical
+wiring.
 
+For most integrations, "drive from a host page" means:
 
-    /**
-     * Determine if the data and/or url imply the image service is supported by
-     * this tile source.
-     * @param {(Object|Array<Object>)} data
-     * @param {String} url
-     */
-    supports( data, url ) {
-        if (data.data && data.type && data.type === "myCustomProtocol") {
-            data.ajaxHeaders = data.ajaxHeaders || {};
-            const user = XOpatUser.instance();
-            const secret = user.getSecret();
-            if (secret) {
-                data.ajaxHeaders["Authorization"] = user.getSecret();
-            }
-            return true;
-        }
-        return false;
-    }
+- **Server-rendered embed.** Mount the bundle via the SSR template the
+  Node/PHP host already provides, then POST the session JSON to it.
+- **iframe embed.** Use a standard `<iframe src="…">` pointing at the host
+  with the session encoded in the URL hash, or POST a form into the iframe.
+  Core ships **no** postMessage handshake; plugins are free to add their
+  own.
 
-    /**
-     * Configure is called once we agree to handle certain data. Since we have not used a string,
-     * it is simply given the object we created. Pass it further, we will fetch the info ourselves.
-     * @param {(Object|XMLDocument)} data - the raw configuration
-     * @param {String} url - the url the data was retrieved from if any.
-     * @param {String} postData - data for the post request or null
-     * @return {Object} options - A dictionary of keyword arguments sufficient
-     *      to configure this tile sources constructor.
-     */
-    configure( data, url, postData ) {
-        if (data.type === "myCustomProtocol" && data.url) {
-            // data.url is set, which will trigger getImageInfo() and call configure second time with real data
-            return data;
-        }
-        throw new Error("Invalid configuration: supports should've returned false!");
-    }
+For the dev-mode runner and cluster topology, see
+[`server/node/README.md`](server/node/README.md).
 
-    /**
-     * Not needed to define if we use string to initialize a tile source. But here, we have a custom 
-     * object and thus need to somehow define logics of how to handle the data.
-     * @param url
-     */
-    getImageInfo(url) {
-        fetch(url, {
-            headers: this.ajaxHeaders || {}
-        }).then(async res => {
-            const text = await res.text();
-            const json = JSON.parse(text);
-            if (res.status !== 200) {
-                throw new HTTPError("Empaia standalone failed to fetch image info!", json, res.error);
-            }
-            return json;
-        }).then(imageInfo => {
-            const data = this.configure(imageInfo, url, null);
-            // necessary TileSource props that wont get set manually
-            data.dimensions  = new OpenSeadragon.Point( data.width, data.height );
-            data.aspectRatio = data.width / data.height;
-            data.ready = true;
-            OpenSeadragon.extend(this, data);
-            this.raiseEvent('ready', {tileSource: this});
-        }).catch(e => {
-            this.raiseEvent( 'open-failed', {
-                message: e,
-                source: url,
-                postData: null
-            });
-        });
-    }
+---
 
-    getMetadata() {
-        return this.metadata;
-    }
+## 7. Read the session back out
 
-    /**
-     * @param {Number} level
-     * @param {Number} x
-     * @param {Number} y
-     * @return {string}
-     */
-    getTileUrl( level, x, y ) {
-        // todo: define your way of getting a tile url. example:
-        return `localhost:8080/${level}/${x}_${y}.png`;
-    }
-};
-````
+The current viewer state serializes back to a JSON string via:
 
-</details>
+```js
+const json = UTILITIES.serializeAppConfig(/* withCookies */ false,
+                                          /* staticPreview */ false);
+```
 
-### Implemented, Out-of-box working Image Data Providers
-As discussed, the _data group_ is fetched as a single image array request
-for each tile in the visualization, no matter how many data items are rendered. Our IIPServer modification supports Extended Deep Zoom protocol described below.
-The image server can be found at https://github.com/RationAI/iipsrv.
+(See `serializeAppConfig` in [`src/loader.ts`](src/loader.ts) for the
+implementation.) The output uses the **same top-level keys as the input
+contract** — `params` (with live viewport merged), `data`, `background`,
+`visualizations`, `plugins` — so a round-trip `serialize → POST → reopen`
+reproduces the viewer state.
 
-#### Extended DZI - the request
-We modified DZI protocol to support this feature - the client
-side implementation is available in ``src/external/dziexttilesource``.
+For persistence beyond a copy/paste — file download, REST sink, browser
+storage — go through the IO pipeline; see
+[`src/IO_PIPELINE.md`](src/IO_PIPELINE.md) for the capability/admin/sink
+model and the bundled file-download / file-upload / http-rest / cookies /
+localStorage drivers.
 
-The protocol works pretty much as DZI, the only exceptions in the configuration (GET/POST) phase are
- - the GET/POST parameter name is ``DeepZoomExt``
-   - this arguments accepts a comma-separated list of file paths
-   - i.e. ``DeepZoomExt=[file list].dzi``
+---
 
-> All files are required to share *ASPECT RATIO* and *TILE SIZE*, the viewer detects incompatible metadata.
- 
-The actual data is requested as **POST** request to the server (as before) with
- `DeepZoomExt=comma.tif,separated.tif,file.tif,list.tif_files/0/1_2.png`
-The pattern is therefore:
-`DeepZoomExt=[file list]_files/[level]/[x]_[y].[format]`. 
+## 8. Live collaboration
 
-#### Extended DZI - the response
-The configuration response should
-- have root element is expected to be ``<ImageArray>`` tag
-    - ``rationai.fi.muni.cz/deepzoom/images`` as its `xmlns` property or `namespaceURI`
-- the children nodes are individual Image nodes as in DZI
-    - we expect ``Format`` presence - `jpg`, `png` or `zip`
-- optionally, root element can be ``<Error>`` with `<Message>` child
-- for all missing files in the request
-  - the image node should have width and height set to 0 (or negative)
-  - if all images are missing, no subsequent requests are sent
+Multiple users on the same session ride
+`window.SESSION` (WebRTC peer-to-peer; cursor / viewport / visualization
+sync ships by default). Modules opt in by registering a
+`SessionSyncProvider` and declaring `"sessionCompatible"` in their
+`include.json`. Full lifecycle, snapshot/delta contract and echo-suppression
+rules are in [`src/SESSION.md`](src/SESSION.md).
 
-Expected response from the server is a vertically-concatenated
-tiles image in the requested order; or a zip file (based on `format`). 
-Missing tiles should be replaced with a black (zero) image (with required bandwidth)
-or an empty entry in case of zip files.
-The concatenated image must have the same bandwidth as the highest bands count
-across all tiles.
+---
 
-The protocol does not assume server ability to derive inconsistent levels, 
-it is programmed so that the deepest _common_ level is fetched only.
+## 9. Extending OpenSeadragon for digital pathology
 
+The viewer extends OpenSeadragon's `TileSource` with four optional hooks
+used by the UI when present
+([`src/tile-source.ts:32-67`](src/tile-source.ts) is the source of truth):
 
-### Custom Data Pipeline
-In order to be able to render custom data types you must define how the data is 
-[stored within the system](https://openseadragon.github.io/examples/advanced-data-model/)
-as well as how to load it to the GPU, unless you call ``finish`` with either vertically concatenated image or an image array.
-Note that canvas objects are accepted too.
+- `getMetadata()` — arbitrary key/value bag surfaced in the slide-info
+  panels; an `error` key flags failed layers.
+- `setSourceOptions(options)` — accept caller-supplied options at runtime.
+- `getThumbnail()` / `getLabel()` — return promise-of-`ImageLike` to avoid
+  reconstructing previews from the lowest resolution level.
 
-#### Custom Data GPU Loading (WebGL)
-The WebGL module responsible for interactive visualizations supports
-different contexts for different versions of WebGL. In order to
-support all versions, you have to correctly define how your data
-is loaded as a texture to the GPU.
+Each hook has a no-op default on the prototype, so your custom
+`TileSource` only overrides what it actually supports.
 
-This is done by implementing target _convertors_ or ensuring the viewer has support for
-your data type (support for custom data-to-texture loaders is planned).
+---
 
-Doing so will enable you to use ANY (raster) data in the viewer, e.g.,
-reading from a zip file.
+## 10. Where to go next
 
-> Support for vector data is on the TODO list. You can use the annotations module or fabric.js module to
-> add vector data atop the canvas for now.
+| Topic                              | Doc                                                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Allowed `params`, session JSON shape, URL precedence | [`src/README.md`](src/README.md)                                          |
+| Env file fields & slide-protocols registry | [`env/README.md`](env/README.md)                                                          |
+| Authentication, users, secrets, 401 refresh    | [`src/AUTHORIZATION_AND_PROXY_AND_USERS.md`](src/AUTHORIZATION_AND_PROXY_AND_USERS.md) |
+| `HttpClient`, proxies, CSRF, JWT injection     | [`src/HTTP_CLIENT.md`](src/HTTP_CLIENT.md)                                             |
+| Lifecycle events                               | [`src/EVENTS.md`](src/EVENTS.md)                                                       |
+| Multi-viewport pitfalls (`window.VIEWER` warning) | [`src/MULTI_VIEWPORTS.md`](src/MULTI_VIEWPORTS.md)                                  |
+| Plugins / modules — authoring, lifecycle, `include.json` | [`plugins/README.md`](plugins/README.md), [`modules/README.md`](modules/README.md) |
+| NPM-built modules & bundling pipeline | [`src/NPM_MODULES_PLUGINS.md`](src/NPM_MODULES_PLUGINS.md)                                  |
+| IO / persistence pipeline             | [`src/IO_PIPELINE.md`](src/IO_PIPELINE.md)                                                  |
+| UI components, services, theming      | [`ui/README.md`](ui/README.md), [`ui/classes/README.md`](ui/classes/README.md)              |
+| WSI service & docker compose          | [`docker/wsi-service/`](docker/wsi-service/), [`docker/node/`](docker/node/), [`docker/php/`](docker/php/) |
 
-##### For other viewer-related API details, check src/README.md
+---
+
+> **Removed on purpose.** Older revisions of this file included a
+> hand-written `OpenSeadragon.TileSource` walkthrough and an
+> ExtendedDZI / IIPServer protocol description. Those are protocol-author
+> material, not integration material; the OpenSeadragon documentation
+> ([`tilesource-custom-advanced`](https://openseadragon.github.io/examples/tilesource-custom-advanced/))
+> covers the generic API, and [`plugins/dicom/`](plugins/dicom/) plus
+> [`src/external/dziexttilesource.js`](src/external/dziexttilesource.js) are
+> the worked in-repo examples.

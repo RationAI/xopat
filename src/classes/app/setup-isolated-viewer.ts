@@ -14,6 +14,7 @@
  */
 
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
+import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
     /** Container element where the OSD canvas will be mounted. Must be in the DOM and have nonzero size. */
@@ -85,6 +86,7 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         // host & navigator drawer init order is bullet-proof, or once the upstream
         // null-guard lands.
         handleNavigator: false,
+        httpAdapter: createHttpClientAdapter(),
     };
 
     const renderingCapability = flexRendererClass && typeof flexRendererClass.ensureRuntimeSupport === "function"

@@ -245,8 +245,13 @@
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
+                    // z-[1] establishes a local stacking context so the
+                    // scalebar (and anything elevated inside it) cannot rise
+                    // above sibling viewer chrome like `.right-side-menu`
+                    // (z-index: 3).
                     this.scalebarContainer.classList.add(
                         "absolute",
+                        "z-[1]",
                         "m-0",
                         "pointer-events-none",
                         "select-none",
@@ -279,8 +284,15 @@
 
                         this.magnificationContainer = document.createElement("div");
                         this.magnificationContainer.id = this.id + "-magnification";
+                        // z-[1] both ranks the panel below sibling viewer
+                        // chrome (`.right-side-menu` is z-index: 3) and
+                        // establishes a stacking context that traps the
+                        // sync-header's `z-index: 3` and the slide-label's
+                        // hover `z-index: 40` so they cannot leak out into
+                        // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
                             "absolute",
+                            "z-[1]",
                             "m-0",
                             "text-base-content",
                             "flex",
@@ -696,8 +708,15 @@
 
                         this.magnificationContainer = document.createElement("div");
                         this.magnificationContainer.id = this.id + "-magnification";
+                        // z-[1] both ranks the panel below sibling viewer
+                        // chrome (`.right-side-menu` is z-index: 3) and
+                        // establishes a stacking context that traps the
+                        // sync-header's `z-index: 3` and the slide-label's
+                        // hover `z-index: 40` so they cannot leak out into
+                        // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
                             "absolute",
+                            "z-[1]",
                             "m-0",
                             "text-base-content",
                             "flex",

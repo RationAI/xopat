@@ -4,7 +4,7 @@ import { ViewerSelectionState } from "./viewer-selection-state";
 export class ViewerStateBindingController {
     constructor(private readonly appContext: ApplicationContext) {}
 
-    handleSyntheticOpenEvent(viewer: OpenSeadragon.Viewer, successLoadedItemCount: number, totalItemCount: number) {
+    handleSyntheticOpenEvent(viewer: OpenSeadragon.Viewer) {
         const world = viewer.world;
         if (world.getItemCount() < 1) {
             viewer.addTiledImage({
@@ -13,19 +13,19 @@ export class ViewerStateBindingController {
                 replace: false,
                 success: (event: any) => {
                     event.item.getConfig = (_type: string | undefined) => undefined;
-                    viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t("error.invalidDataHtml") : undefined);
+                    // Late-fire guard: if a real slide load (or another reset)
+                    // completed between addTiledImage scheduling and this
+                    // callback resolving, the world either no longer contains
+                    // this EmptyTileSource or contains real content alongside
+                    // it. Toggling the demo overlay or raising a synthetic
+                    // open here would shadow the real open that already ran.
+                    const onlyItem = viewer.world.getItemAt(0);
+                    if (viewer.world.getItemCount() !== 1 || onlyItem !== event.item) return;
                     this.finishSyntheticEventWithValidData(viewer, 0);
                 }
             });
             return;
         }
-
-        if (successLoadedItemCount === 0) {
-            viewer.toggleDemoPage(true, totalItemCount > 0 ? $.t("error.invalidDataHtml") : undefined);
-        } else {
-            viewer.toggleDemoPage(false);
-        }
-
         this.finishSyntheticEventWithValidData(viewer, 0);
     }
 

@@ -346,11 +346,18 @@ class Dropdown extends BaseSelectableComponent {
             node.setAttribute("aria-current", isTarget ? "true" : "false");
 
             // 2. Toggle Background Highlight (ONLY if NOT check style)
+            // _renderItem bakes the initial selection in with `!`-prefixed
+            // Tailwind variants (e.g. `!bg-primary/100`). Toggling only the
+            // non-prefixed variant here would leave the original selection
+            // stuck purple. Mirror the variant set used by setItemSelected.
             if (!isCheckStyle) {
                 node.classList.toggle("bg-primary/100", isTarget);
+                node.classList.toggle("!bg-primary/100", isTarget);
                 node.classList.toggle("text-primary-content", isTarget);
                 node.classList.toggle("hover:bg-primary/200", isTarget);
+                node.classList.toggle("!hover:bg-primary/200", isTarget);
                 node.classList.toggle("focus:bg-primary/200", isTarget);
+                node.classList.toggle("!focus:bg-primary/200", isTarget);
             }
 
             // 3. Toggle Checkmark Visibility (ONLY if check style)

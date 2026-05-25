@@ -167,7 +167,8 @@ function normalizeSchemePluginRecords(plugins) {
     const manifestKeys = new Set([
         'id', 'name', 'author', 'version', 'description', 'icon',
         'includes', 'modules', 'requires', 'permaLoad', 'enabled',
-        'loaded', 'error', 'directory', 'path', 'styleSheet'
+        'loaded', 'error', 'directory', 'path', 'styleSheet',
+        'requiredConfig'
     ]);
 
     for (const [id, plugin] of Object.entries(plugins || {})) {
@@ -179,7 +180,7 @@ function normalizeSchemePluginRecords(plugins) {
         for (const key of [
             'id', 'name', 'author', 'version', 'description', 'icon',
             'modules', 'requires', 'permaLoad', 'enabled', 'loaded',
-            'directory'
+            'directory', 'requiredConfig'
         ]) {
             if (Object.prototype.hasOwnProperty.call(plugin, key)) {
                 meta[key] = plugin[key];

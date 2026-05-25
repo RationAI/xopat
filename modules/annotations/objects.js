@@ -533,9 +533,11 @@ OSDAnnotations.AnnotationObjectFactory = class {
         };
 
         const control = new fabric.Control({
-            // Anchor top-center of the bbox; offsetY lifts the pill above
-            // the annotation. sizeX/sizeY are updated each render to match
-            // the actual pill so the entire visual area is clickable.
+            // Anchor via custom positionHandler using calcLineCoords() —
+            // rotation-correct under OSD-driven vpt rotation (fabric's
+            // default calcOCoords math is broken when vpt has off-diagonal
+            // terms). See annotations.js::_init for the same trick on the
+            // stock corner/edge handles.
             x: 0,
             y: -0.5,
             offsetX: 0,
@@ -546,6 +548,23 @@ OSDAnnotations.AnnotationObjectFactory = class {
             touchSizeX: 140,
             touchSizeY: HEIGHT + 8,
             enabled: true,
+            positionHandler: function (dim, finalMatrix, fabricObject) {
+                if (!fabricObject?.canvas?.__spatialIndex) {
+                    return fabric.util.transformPoint({
+                        x: this.x * dim.x + this.offsetX,
+                        y: this.y * dim.y + this.offsetY,
+                    }, finalMatrix);
+                }
+                const c = fabricObject.calcLineCoords();
+                const midTopX = (c.tl.x + c.tr.x) / 2;
+                const midTopY = (c.tl.y + c.tr.y) / 2;
+                const cx = (c.tl.x + c.br.x) / 2;
+                const cy = (c.tl.y + c.br.y) / 2;
+                const dx = midTopX - cx;
+                const dy = midTopY - cy;
+                const len = Math.hypot(dx, dy) || 1;
+                return new fabric.Point(midTopX + (dx / len) * 22, midTopY + (dy / len) * 22);
+            },
             render: (ctx, left, top, _styleOverride, fabricObject) => {
                 const slots = slotsFor(fabricObject);
                 if (!slots.length) {
@@ -577,10 +596,15 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 }
                 const bubbleWidth = totalContentW + PAD_X * 2 + SLOT_GAP * (slots.length - 1);
 
+                // Pill icons/text must stay screen-axis-aligned for
+                // readability, even though the anchor follows the rotated
+                // OBB. fabric's _renderControls already wraps render() in
+                // ctx.rotate(obj.angle); when OSD drives rotation,
+                // obj.angle stays 0 so we don't need (and don't want) any
+                // extra rotation here.
                 ctx.save();
                 ctx.globalAlpha *= pillAlpha;
                 ctx.translate(left, top);
-                ctx.rotate(fabric.util.degreesToRadians(fabricObject.angle || 0));
 
                 const x = -bubbleWidth / 2;
                 const y = -HEIGHT / 2;
@@ -645,7 +669,7 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 control._zones = zones;
                 control._lastLeft = left;
                 control._lastTop = top;
-                control._lastAngle = fabricObject.angle || 0;
+                control._lastAngle = 0;
                 // Match the hit region to the actual pill so clicks land on
                 // any icon, not just a 34px square in the middle. Fabric uses
                 // sizeX/sizeY for control hit-testing in _findTargetCorner.
@@ -688,13 +712,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
                 sy = p.y;
             }
 
-            // Undo translate+rotate from render() to get pill-local x.
-            const dx = sx - control._lastLeft;
-            const dy = sy - control._lastTop;
-            const rad = -fabric.util.degreesToRadians(control._lastAngle || 0);
-            const cos = Math.cos(rad);
-            const sin = Math.sin(rad);
-            const localX = dx * cos - dy * sin;
+            // Pill content is rendered screen-axis-aligned (no rotation in
+            // render()), so the click's pill-local x is just the screen-
+            // space horizontal offset from the recorded center.
+            const localX = sx - control._lastLeft;
 
             const slot = zones.find(z => localX >= z.x0 && localX <= z.x1);
             if (slot && typeof slot.onClick === 'function') {
@@ -891,6 +912,56 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
+     * Translate the annotation IN PLACE by the given delta.
+     *
+     * Unlike `translate`, this does not create a copy / replace through the
+     * IO pipeline — it directly mutates the live object. Used for:
+     *  - paste at a target position (the caller computes deltaX/deltaY)
+     *  - drag-end sync (fabric already updated left/top; this brings the
+     *    object's internal geometry — e.g. polygon `.points` — in line so
+     *    exports and hit-tests stay consistent)
+     *
+     * Subclasses with point-based geometry (polygon, polyline, ruler) must
+     * override `_applyMoveToGeometry` to translate their internal points.
+     *
+     * @param {fabric.Object} theObject
+     * @param {number} deltaX image-space x delta
+     * @param {number} deltaY image-space y delta
+     * @param {boolean} [skipLeftTop=false] when true, fabric already moved
+     *   left/top (e.g. drag); we only need to bring the internal geometry
+     *   in sync.
+     */
+    move(theObject, deltaX, deltaY, skipLeftTop=false) {
+        if (!deltaX && !deltaY) {
+            theObject.setCoords();
+            return theObject;
+        }
+        if (!skipLeftTop) {
+            theObject.set({
+                left: theObject.left + deltaX,
+                top: theObject.top + deltaY,
+            });
+        }
+        this._applyMoveToGeometry(theObject, deltaX, deltaY);
+        theObject.setCoords();
+        return theObject;
+    }
+
+    /**
+     * Hook for subclasses to translate point-based geometry by the same
+     * delta `move` applied to left/top. Base implementation is a no-op —
+     * intrinsic-shape factories (ellipse, rect, text) need nothing because
+     * their geometry is fully derived from left/top + their size params.
+     *
+     * @param {fabric.Object} theObject
+     * @param {number} deltaX
+     * @param {number} deltaY
+     */
+    _applyMoveToGeometry(theObject, deltaX, deltaY) {
+        // base no-op
+    }
+
+    /**
      * Compute the area of the object in pixels (image dimension) squared
      * @param {fabric.Object} theObject recalculate the object that has been modified
      * @return {Number|undefined} undefined if area not measure-able
@@ -1066,34 +1137,38 @@ OSDAnnotations.AnnotationObjectFactory = class {
      * @param {fabric.canvas} targetCanvas
      */
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
-        //todo possible issue if someone sets manually single object prop
-        // (e.g. show borders) and then system triggers update (open history window)
+        // Only apply the visual props this method actually computes (stroke,
+        // fill, strokeWidth, opacity). Setting the full `commonAnnotationVisuals`
+        // spread back onto the object would clobber per-instance interaction
+        // state every time selection changes — `lockMovementX/Y: true` from
+        // the defaults silently re-locks edit-mode targets, breaking drag.
+        if (typeof ofObject.color !== 'string') return;
 
-        if (typeof ofObject.color === 'string') {
-            const props = visualProperties;
+        const color = preset.color;
+        const stroke = visualProperties.stroke || defaultVisualProperties.stroke;
+        const modeOutline = visualProperties.modeOutline !== undefined ? visualProperties.modeOutline : defaultVisualProperties.modeOutline;
 
-            const color = preset.color;
-            const stroke = visualProperties.stroke || defaultVisualProperties.stroke;
-            // todo consider respecting object property here? or implement by locking (see todo above)
-            const modeOutline = visualProperties.modeOutline !== undefined ? visualProperties.modeOutline : defaultVisualProperties.modeOutline;
-            if (modeOutline) {
-                props.stroke = color;
-                props.fill = "";
-            } else {
-                props.stroke = stroke;
-                props.fill = color;
-            }
-
-            if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
-                // Use the target viewer canvas when updating multiview annotations.
-                const canvas = targetCanvas || this._context.fabric.canvas;
-                props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
-            } else {
-                // Shared props object carries over the value
-                delete props.strokeWidth;
-            }
-            ofObject.set(props);
+        const props = {};
+        if (modeOutline) {
+            props.stroke = color;
+            props.fill = "";
+        } else {
+            props.stroke = stroke;
+            props.fill = color;
         }
+
+        if (visualProperties.originalStrokeWidth && visualProperties.originalStrokeWidth !== ofObject.strokeWidth) {
+            const canvas = targetCanvas || this._context.fabric.canvas;
+            props.strokeWidth = visualProperties.originalStrokeWidth / canvas.computeGraphicZoom(canvas.getZoom());
+        }
+
+        // Apply opacity from the global visuals — drives the opacity slider
+        // in the annotations panel (setCommonVisualProp('opacity', …)).
+        if (visualProperties.opacity !== undefined) {
+            props.opacity = visualProperties.opacity;
+        }
+
+        ofObject.set(props);
     }
 
     /**

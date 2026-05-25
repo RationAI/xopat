@@ -7,8 +7,8 @@ import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assem
 
 export interface OpenViewerWithOptions {
     deriveOverlayFromBackgroundGoals?: boolean;
-    dataMode?: "replace" | "merge";
-    backgroundMode?: "replace" | "merge";
+    dataMode?: "replace" | "merge" | "merge-exact";
+    backgroundMode?: "replace" | "merge" | "merge-exact";
     historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
     fromHistory?: boolean;
     preserveHistoryOnBackgroundChange?: boolean;
@@ -181,7 +181,10 @@ export class ViewerOpenPipeline {
             }
         };
 
-        const normalizeCollectionMode = (value: any): "replace" | "merge" => value === "merge" ? "merge" : "replace";
+        const normalizeCollectionMode = (value: any): "replace" | "merge" | "merge-exact" =>
+            value === "merge" ? "merge"
+                : value === "merge-exact" ? "merge-exact"
+                    : "replace";
         const cloneForMerge = <T>(value: T): T => cloneRuntimeState(value);
         const sameMergedDataEntry = (a: any, b: any) => safeStringify(a) === safeStringify(b);
         const remapSelectionByIndexMap = (
@@ -245,8 +248,35 @@ export class ViewerOpenPipeline {
         };
         const mergeDataCollection = (
             baseData: DataID[],
-            incomingData: DataID[]
-        ): { data: DataID[]; indexMap: Map<number, number>; } => {
+            incomingData: DataID[],
+            exact = false
+        ): { data: DataID[]; indexMap: Map<number, number>; baseToNew?: Map<number, number>; } => {
+            // "exact" mode treats incomingData as the complete intended set:
+            // existing entries that have no identity match in incoming are
+            // dropped. Identity-matching incoming entries reuse the existing
+            // slot's data so cross-references stay stable. Returns an
+            // additional `baseToNew` map so callers can remap any preserved
+            // references (existing visualizations / backgrounds keyed by base
+            // data index) through the new data layout.
+            if (exact) {
+                const base = Array.isArray(baseData) ? baseData : [];
+                const incoming = Array.isArray(incomingData) ? incomingData : [];
+                const data: DataID[] = [];
+                const indexMap = new Map<number, number>();
+                const baseToNew = new Map<number, number>();
+                incoming.forEach((entry: any, index: number) => {
+                    const existingIndex = base.findIndex((candidate: any) => sameMergedDataEntry(candidate, entry));
+                    if (existingIndex >= 0) {
+                        data.push(cloneForMerge(base[existingIndex]));
+                        baseToNew.set(existingIndex, data.length - 1);
+                    } else {
+                        data.push(cloneForMerge(entry));
+                    }
+                    indexMap.set(index, data.length - 1);
+                });
+                return { data, indexMap, baseToNew };
+            }
+
             const mergedData = cloneForMerge(Array.isArray(baseData) ? baseData : []);
             const indexMap = new Map<number, number>();
 
@@ -265,22 +295,46 @@ export class ViewerOpenPipeline {
         };
         const mergeBackgroundCollection = (
             baseBackground: Array<BackgroundItem | BackgroundConfig>,
-            incomingBackground: Array<BackgroundItem | BackgroundConfig>
+            incomingBackground: Array<BackgroundItem | BackgroundConfig>,
+            exact = false
         ): { background: Array<BackgroundItem | BackgroundConfig>; indexMap: Map<number, number>; } => {
+            const findExistingIndex = (
+                pool: Array<BackgroundItem | BackgroundConfig>,
+                clonedEntry: any
+            ): number => {
+                let idx = pool.findIndex((candidate: any) =>
+                    candidate?.id && clonedEntry?.id && candidate.id === clonedEntry.id
+                );
+                if (idx < 0) {
+                    idx = pool.findIndex((candidate: any) =>
+                        appContext.sameBackground(candidate, clonedEntry)
+                    );
+                }
+                return idx;
+            };
+
+            // "exact" mode rebuilds the list to exactly mirror incoming: any
+            // base entries without a counterpart in incoming are dropped,
+            // matched entries reuse the freshly-cloned incoming payload.
+            if (exact) {
+                const base = Array.isArray(baseBackground) ? baseBackground : [];
+                const incoming = Array.isArray(incomingBackground) ? incomingBackground : [];
+                const background: Array<BackgroundItem | BackgroundConfig> = [];
+                const indexMap = new Map<number, number>();
+                incoming.forEach((entry: any, index: number) => {
+                    const clonedEntry = cloneForMerge(entry);
+                    background.push(clonedEntry);
+                    indexMap.set(index, background.length - 1);
+                });
+                return { background, indexMap };
+            }
+
             const mergedBackground = cloneForMerge(Array.isArray(baseBackground) ? baseBackground : []);
             const indexMap = new Map<number, number>();
 
             (Array.isArray(incomingBackground) ? incomingBackground : []).forEach((entry: any, index: number) => {
                 const clonedEntry = cloneForMerge(entry);
-                let mergedIndex = mergedBackground.findIndex((candidate: any) =>
-                    candidate?.id && clonedEntry?.id && candidate.id === clonedEntry.id
-                );
-
-                if (mergedIndex < 0) {
-                    mergedIndex = mergedBackground.findIndex((candidate: any) =>
-                        appContext.sameBackground(candidate, clonedEntry)
-                    );
-                }
+                let mergedIndex = findExistingIndex(mergedBackground, clonedEntry);
 
                 if (mergedIndex >= 0) {
                     mergedBackground[mergedIndex] = clonedEntry;
@@ -515,15 +569,25 @@ export class ViewerOpenPipeline {
         let normalizedData = data === null ? [] : cloneForMerge(data);
         let effectiveBgSpec = bgSpec;
 
-        if (data !== null && dataMode === "merge" && Array.isArray(normalizedData)) {
-            const mergedData = mergeDataCollection(existingData, normalizedData);
+        if (data !== null && (dataMode === "merge" || dataMode === "merge-exact") && Array.isArray(normalizedData)) {
+            const mergedData = mergeDataCollection(existingData, normalizedData, dataMode === "merge-exact");
             remapBackgroundDataReferences(normalizedBackground as Array<BackgroundItem | BackgroundConfig>, mergedData.indexMap);
             remapVisualizationDataReferences(normalizedVisualizations as VisualizationItem[], mergedData.indexMap);
+            // merge-exact may have shifted indices of preserved entries: any
+            // existing visualizations / backgrounds we keep beyond this point
+            // still reference data by BASE index, so remap them through the
+            // base→new map. Entries pointing to dropped data become a numeric
+            // index outside `mergedData.data.length` — validators downstream
+            // (validateVisualizationCollection) will surface those as errors.
+            if (mergedData.baseToNew) {
+                remapBackgroundDataReferences(existingBackground as Array<BackgroundItem | BackgroundConfig>, mergedData.baseToNew);
+                remapVisualizationDataReferences(existingVisualizations as VisualizationItem[], mergedData.baseToNew);
+            }
             normalizedData = mergedData.data;
         }
 
-        if (background !== null && backgroundMode === "merge" && Array.isArray(normalizedBackground)) {
-            const mergedBackground = mergeBackgroundCollection(existingBackground, normalizedBackground);
+        if (background !== null && (backgroundMode === "merge" || backgroundMode === "merge-exact") && Array.isArray(normalizedBackground)) {
+            const mergedBackground = mergeBackgroundCollection(existingBackground, normalizedBackground, backgroundMode === "merge-exact");
             normalizedBackground = mergedBackground.background as any;
             effectiveBgSpec = remapSelectionByIndexMap(bgSpec, mergedBackground.indexMap);
         }
@@ -573,6 +637,18 @@ export class ViewerOpenPipeline {
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
         let activeViz = appContext.getOption("activeVisualizationIndex", undefined, true, true);
+
+        // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
+        // a prior `setOption(..., undefined)` deleted the cache+params entry
+        // (see parse-input / parseBackgroundAndGoal close path). When the
+        // background array is genuinely empty we must NOT let that default
+        // resurrect an index — the selection was just cleared on purpose.
+        if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
+            activeBg = undefined;
+        }
+        if (!Array.isArray(activeViz) && Number.isInteger(activeViz) && vis.length === 0) {
+            activeViz = undefined;
+        }
 
         const bgSpecWasUnset = activeBg === undefined;
         const vizSpecWasUnset = activeViz === undefined;
@@ -644,7 +720,8 @@ export class ViewerOpenPipeline {
         await Dialogs.awaitHidden();
 
         const hasCommittedHistory = !!history.hasAnyStackHistory();
-        if (!opts.fromHistory && backgroundChanged && historyMode === "reset-history" && hasCommittedHistory) {
+        const closingToEmpty = selectedBackgroundsAfter.length === 0;
+        if (!opts.fromHistory && backgroundChanged && historyMode === "reset-history" && hasCommittedHistory && !closingToEmpty) {
             const boundaryEvent = {
                 previousSnapshot,
                 nextSnapshot,
@@ -879,7 +956,7 @@ export class ViewerOpenPipeline {
                 }
                 if (Array.isArray(activeBg)) {
                     activeBg[viewerIndex] = backgroundIndex;
-                } else if (Number.isInteger(backgroundIndex)) {
+                } else if (Number.isInteger(backgroundIndex) && config.background[backgroundIndex as number]) {
                     activeBg = [backgroundIndex];
                 }
 
@@ -888,7 +965,7 @@ export class ViewerOpenPipeline {
                 }
                 if (Array.isArray(activeViz)) {
                     activeViz[viewerIndex] = visualizationIndex;
-                } else if (Number.isInteger(visualizationIndex)) {
+                } else if (Number.isInteger(visualizationIndex) && config.visualizations[visualizationIndex as number]) {
                     activeViz = [visualizationIndex];
                 }
 
@@ -1001,6 +1078,14 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
+        // captureLoadSnapshotFromConfig reads activeBackgroundIndex /
+        // activeVisualizationIndex via getOption, which falls back to
+        // defaultParams.* (= 0) after a deliberate clear. Override with the
+        // locally-normalized selections so downstream consumers (per-viewer
+        // changeKind, state-binding controller, session sync) see the actual
+        // cleared state instead of a phantom [0] against empty arrays.
+        (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
+        (effectiveSnapshot as any).activeVisualizationIndex = normalizeHistorySelection(activeViz);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
             const previousNatureFingerprint = buildViewerNatureFingerprint(previousSnapshot, viewerIndex);
@@ -1315,31 +1400,34 @@ export class ViewerOpenPipeline {
                 }
             }
 
-            if (!canSurgicallyDiff) {
-                viewerManager._resetViewer(viewerIndex);
-            }
-
-            const ctx = {
-                bgIndexForItem: (i: number) => entry.bgIndices[0],
-                vizIndexForItem: (i: number) => visIndexForThis,
-                dataForItem: (i: number) => openedSpecOrder[i],
-                loadKeyForItem: (i: number) => loadKeys[i],
-            };
-
-            plog(`openIntoViewer PLAN v=${viewerIndex}`, {
-                toOpen: toOpen.length,
-                firstVizIndex,
-                renderOutputIds: Object.keys(renderOutput),
-                canSurgicallyDiff,
-                viewerSupportsFlexRendering,
-            });
-
+            // Suspend rendering BEFORE _resetViewer so any flex rebuilds
+            // scheduled by remove-item events fire under _isRenderingSuspended()
+            // and defer cleanly instead of running against a half-torn-down world.
             const renderTransaction = beginViewerRenderTransaction(viewer);
             plog(`openIntoViewer TRANSACTION BEGAN v=${viewerIndex}`);
 
             let successOpened = 0;
             const retainedItems = new Set<any>();
             try {
+                if (!canSurgicallyDiff) {
+                    viewerManager._resetViewer(viewerIndex);
+                }
+
+                const ctx = {
+                    bgIndexForItem: (i: number) => entry.bgIndices[0],
+                    vizIndexForItem: (i: number) => visIndexForThis,
+                    dataForItem: (i: number) => openedSpecOrder[i],
+                    loadKeyForItem: (i: number) => loadKeys[i],
+                };
+
+                plog(`openIntoViewer PLAN v=${viewerIndex}`, {
+                    toOpen: toOpen.length,
+                    firstVizIndex,
+                    renderOutputIds: Object.keys(renderOutput),
+                    canSurgicallyDiff,
+                    viewerSupportsFlexRendering,
+                });
+
                 plog(`openIntoViewer TILE LOOP START v=${viewerIndex}`);
                 for (let i = 0; i < toOpen.length; i++) {
                     const kind = i < firstVizIndex ? "background" : "visualization";
@@ -1476,9 +1564,15 @@ export class ViewerOpenPipeline {
                 }
 
                 if (!canSurgicallyDiff || viewer.world.getItemCount() < 1) {
-                    stateBindings.handleSyntheticOpenEvent(viewer, successOpened, toOpen.length);
+                    stateBindings.handleSyntheticOpenEvent(viewer);
                 } else {
                     stateBindings.refreshViewerVisualizationBindings(viewer, 0);
+                }
+
+                if (successOpened === 0) {
+                    viewer.toggleDemoPage(true, toOpen.length > 0 ? $.t("error.invalidDataHtml") : undefined);
+                } else {
+                    viewer.toggleDemoPage(false);
                 }
 
                 // Slide-aware IO lifecycle (per-viewer-background bundle scope):
@@ -1504,6 +1598,12 @@ export class ViewerOpenPipeline {
             } finally {
                 plog(`openIntoViewer TRANSACTION FINISH v=${viewerIndex}`);
                 renderTransaction.finish();
+                // After resume, drive an explicit paint so the canvas reflects
+                // the post-open state — particularly the close-to-empty case
+                // where flex's pending rebuild would otherwise leave the
+                // previous slide's tiles in the GPU texture cache until some
+                // other event (mouse move, zoom) nudges OSD to repaint.
+                try { viewer.forceRedraw?.(); } catch (_) {}
                 plog(`openIntoViewer EXIT v=${viewerIndex}`);
             }
         };
