@@ -259,51 +259,62 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     initCreate(x, y, isLeftClick) {
-        let opts = this._presets.getAnnotationOptions(isLeftClick);
-        let parts = this._createParts([x, y, x, y], opts);
-        this._updateText(parts[0], parts[1]);
-        this._current = parts;
-        this._context.fabric.addHelperAnnotation(this._current[0]);
-        this._context.fabric.addHelperAnnotation(this._current[1]);
-        this._current[1].bringToFront?.();
+        this._opts = this._presets.getAnnotationOptions(isLeftClick);
+        this._origin = { x, y };
+        const group = this._buildHelperGroup(x, y, x, y, this._opts);
+        this._context.fabric.addHelperAnnotation(group);
+        this._current = group;
     }
 
     updateCreate(x, y) {
         if (!this._current) return;
-        let line = this._current[0],
-            text = this._current[1];
-        line.set({ x2: x, y2: y });
-        this._updateText(line, text);
+        const oldGroup = this._current;
+        const newGroup = this._buildHelperGroup(this._origin.x, this._origin.y, x, y, this._opts);
+        this._context.fabric.deleteHelperAnnotation(oldGroup);
+        this._context.fabric.addHelperAnnotation(newGroup);
+        this._current = newGroup;
     }
 
     discardCreate() {
         if (this._current) {
-            this._context.fabric.deleteHelperAnnotation(this._current[0]);
-            this._context.fabric.deleteHelperAnnotation(this._current[1]);
+            this._context.fabric.deleteHelperAnnotation(this._current);
             this._current = undefined;
         }
     }
 
     finishDirect() {
-        let obj = this.getCurrentObject();
-        if (!obj) return true;
-        this._context.fabric.deleteHelperAnnotation(obj[0]);
-        this._context.fabric.deleteHelperAnnotation(obj[1]);
+        const group = this.getCurrentObject();
+        if (!group) return true;
 
-        const line = obj[0],
-            text = obj[1],
-            pid = line.presetID;
-
+        const line = group._objects?.[0];
+        if (!line) { this.discardCreate(); return true; }
         if (Math.abs(line.x1 - line.x2) < 0.1 && Math.abs(line.y1 - line.y2) < 0.1) {
+            this.discardCreate();
             return true;
         }
 
-        const props = { ...this._presets.getCommonProperties()};
-        obj = this._createWrap(obj, props);
-        obj.presetID = pid;
-        this._context.fabric.addAnnotation(obj);
+        const pid = line.presetID;
+        this._context.fabric.deleteHelperAnnotation(group);
+
+        const props = { ...this._presets.getCommonProperties() };
+        this._configureWrapper(group, group._objects[0], group._objects[1], props);
+        group.presetID = pid;
+
+        this._context.fabric.addAnnotation(group);
         this._current = undefined;
         return true;
+    }
+
+    _buildHelperGroup(x1, y1, x2, y2, opts) {
+        const parts = this._createParts([x1, y1, x2, y2], opts);
+        const group = this._createWrap(parts, opts);
+        group.set({
+            hasBorders: false,
+            hasControls: false,
+            selectable: false,
+            evented: false,
+        });
+        return group;
     }
 
     finishIndirect() {

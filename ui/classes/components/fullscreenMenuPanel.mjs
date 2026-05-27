@@ -35,7 +35,6 @@ export class FullscreenMenuPanel extends MainPanel {
                 ...(normalizedOptions.extraClasses || {}),
                 display: "flex",
                 height: "h-full",
-                gap: "gap-4",
                 overflow: "overflow-hidden",
             }
         });

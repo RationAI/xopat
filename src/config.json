@@ -232,9 +232,17 @@
      *   customBlending: ?boolean,
      *   debugMode: ?boolean,
      *   webglDebugMode: ?boolean,
-     *   scaleBar: ?boolean,
-     *   toolBar: ?boolean,
-     *   statusBar: ?boolean,
+     *   scaleBar: ?boolean,         // deprecated alias of ui.scaleBar
+     *   toolBar: ?boolean,          // deprecated alias of ui.toolBar
+     *   statusBar: ?boolean,        // deprecated alias of ui.statusBar
+     *   ui: ?{
+     *     scaleBar:  ?boolean,
+     *     toolBar:   ?boolean,
+     *     statusBar: ?boolean,
+     *     mainMenu:  ?boolean,
+     *     navigator: ?boolean,
+     *     appBar:    ?boolean,
+     *   },
      *   viewport: ?Object,
      *   activeBackgroundIndex: ?number,
      *   activeVisualizationIndex: ?number,
@@ -249,6 +257,7 @@
      *   bypassCookies: ?boolean,
      *   bypassCacheLoadTime: ?boolean,
      *   disablePluginsUi: ?boolean,
+     *   disablePluginsAutoload: ?boolean,
      *   valueInspectorEnabled: ?boolean,
      *   visualizationInspectorEnabled: ?boolean,
      *   visualizationInspectorMode: ?string,
@@ -264,9 +273,24 @@
         "customBlending": false,
         "debugMode": false,
         "webglDebugMode": false,
+        /* Deprecated flat aliases; new code should write to `ui.*` below. Kept for back-compat. */
         "scaleBar": true,
         "toolBar": true,
         "statusBar": true,
+        /*
+          Initial visible state of UI components. `false` boots the component
+          collapsed but the user can still toggle it back via settings or the
+          hide-UI button. See `XOpatUiSetup` in `src/types/config.d.ts` for
+          the full contract.
+         */
+        "ui": {
+            "scaleBar":  true,
+            "toolBar":   true,
+            "statusBar": true,
+            "mainMenu":  true,
+            "navigator": true,
+            "appBar":    true
+        },
         // default background color, a hex RGB or RGBA
         "backgroundColor": null,
         // todo consider moving multiple params to the viewer-dependent configuration
@@ -294,6 +318,9 @@
         "preferredFormat": "zip",
         // Do not render plugin selection in GUI, but they can still be active
         "disablePluginsUi": false,
+        // If true, the _plugins cookie restore is skipped this session.
+        // permaLoad plugins and session-declared plugins still load.
+        "disablePluginsAutoload": false,
         "valueInspectorEnabled": false,
         "visualizationInspectorEnabled": false,
         "visualizationInspectorMode": "reveal-inside",

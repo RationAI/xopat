@@ -11,7 +11,16 @@ export const globalPluginWindowMethods = {
         this._initAnnotationsToolbar();
 
         const menuContainer = div({ id: 'annotations-shared-settings-container' });
-        USER_INTERFACE.AppBar.Plugins.setMenu(this.id, 'annotations-shared', this.t('annotations.export.menuTitle'), menuContainer);
+        // `chrome: "plain"` — body renders its own `fs.card`s; skip the outer
+        // rounded card so we don't double-border.
+        USER_INTERFACE.AppBar.Plugins.setMenu(
+            this.id,
+            'annotations-shared',
+            this.t('annotations.export.menuTitle'),
+            menuContainer,
+            'fa-fw',
+            { chrome: 'plain' }
+        );
         van.add(menuContainer, createAnnotationSettingsMenu(this));
 
         this.updateSelectedFormat(this.exportOptions.format);

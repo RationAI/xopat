@@ -37,6 +37,13 @@ OpenSeadragon.EmptyTileSource = class EmptyTileSource extends OpenSeadragon.Tile
         return {error: 'No data available. The layer is empty.'};
     }
 
+    getDisplayMetadata() {
+        return [{
+            title: "Empty layer",
+            description: "This layer is a placeholder. No image data is attached to it."
+        }];
+    }
+
     setColor(color) {
         this.color = color;
     }

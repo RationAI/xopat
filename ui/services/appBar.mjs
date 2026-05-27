@@ -147,6 +147,12 @@ export class AppBar {
         this.View.init(this.menu.getTab("view"));
         this.Edit.init(this.menu.getTab("edit"));
         this.Plugins.init(this.menu.getTab("plugins"));
+
+        // `disablePluginsUi` also hides the top-bar plugins tab. Plugins
+        // remain loaded; they just have no entry point in the chrome.
+        if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+            this.menu.getTab("plugins")?.setClass?.("display", "hidden");
+        }
     }
 
     /**
@@ -596,6 +602,10 @@ export class AppBar {
             if (!visibilityManager) {
                 throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
             }
+            // Honor `disablePluginsUi`: skip plugin view panels.
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
 
             this.otherWindows[ownerPluginId] = {
                 id: ownerPluginId,
@@ -946,6 +956,13 @@ export class AppBar {
     Plugins = {
         init(subMenu) {
             this.subMenu = subMenu;
+            // `disablePluginsUi` hides every plugin-driven entry: skip seeding
+            // the plugin-manager link and the per-plugin section. setMenu()
+            // below also short-circuits, so individual plugins can't add items
+            // either.
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
             this.subMenu.addItem({
                 id: 'plugins',
                 icon: "fa-puzzle-piece",
@@ -958,7 +975,10 @@ export class AppBar {
         },
 
         // should add submenus to plugin menu
-        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
+        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
 
             if (!this.subMenu.getItem(ownerPluginId)) {
                 this.subMenu.addItem({
@@ -971,7 +991,7 @@ export class AppBar {
                 });
             }
 
-            UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon);
+            UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon, opts);
         },
         openSubmenu(atPluginId, atSubId = undefined, toggle = true) {
             return UI.Services.FullscreenMenus.openSubmenu(atPluginId, atSubId);

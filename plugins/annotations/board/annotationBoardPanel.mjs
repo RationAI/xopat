@@ -256,26 +256,14 @@ export class AnnotationBoardPanel {
             const focus = this._getFocusBBox(obj, factory);
             this._clickBoardElement(focus, id, e);
         });
+        // Right-click handling on board rows is intentionally absent — all
+        // annotation actions (incl. grouping) live in the canvas right-click
+        // menu so there is a single mental model. Native browser menu on the
+        // list is suppressed for cleanliness.
         this.layerLogsEl.addEventListener('contextmenu', (e) => {
-            const groupRow = e.target.closest('[data-type="annotation-group"]');
-            if (groupRow) {
-                const key = String(groupRow.dataset.id || '');
-                const group = this._findGroupRow(key);
-                const anchor = group?.members?.[0];
-                if (anchor) {
-                    e.preventDefault();
-                    this._openGroupContextMenu(e, anchor);
-                }
-                return;
+            if (e.target.closest('[data-type="annotation"], [data-type="annotation-group"]')) {
+                e.preventDefault();
             }
-            const annRow = e.target.closest('[data-type="annotation"]');
-            if (!annRow) return;
-            const id = Number(annRow.dataset.id);
-            if (!Number.isFinite(id)) return;
-            const obj = this.fabric?.findObjectOnCanvasByIncrementId?.(id);
-            if (!obj) return;
-            e.preventDefault();
-            this._openGroupContextMenu(e, obj);
         });
         this._delegatedClickInstalled = true;
     }
@@ -760,130 +748,6 @@ export class AnnotationBoardPanel {
         const onDocClick = (ev) => {
             if (!menu.contains(ev.target)) {
                 menu.remove();
-                document.removeEventListener('mousedown', onDocClick, true);
-            }
-        };
-        requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
-    }
-
-    /**
-     * Cascading right-click menu: pick a criterion (factory / preset / author /
-     * meta.category) → pick a destination ("(new collapsed layer)" or an
-     * existing layer) → wrapper.groupSiblingsByCriterion runs the bulk move.
-     */
-    _openGroupContextMenu(pointerEvent, object) {
-        const fabric = this.fabric;
-        if (!fabric || !object) return;
-
-        document.body.querySelector('[data-role="board-group-menu"]')?.remove();
-
-        const menu = document.createElement('div');
-        menu.dataset.role = 'board-group-menu';
-        menu.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-        menu.style.minWidth = '220px';
-
-        const dismiss = () => menu.remove();
-
-        const valueOf = (criterion) => {
-            switch (criterion) {
-                case 'factory':  return object.factoryID;
-                case 'preset':   return object.presetID;
-                case 'author':   return object.author ?? object.sessionID;
-                case 'category': return object.meta?.category;
-                default:         return undefined;
-            }
-        };
-
-        const criteria = [
-            { id: 'factory',  label: 'Group same shape type' },
-            { id: 'preset',   label: 'Group same preset' },
-            { id: 'author',   label: 'Group same author' },
-            { id: 'category', label: 'Group same category text' },
-        ];
-
-        const layers = (fabric.getAllLayers?.() || [])
-            .filter(l => String(l.id) !== String(object.layerID ?? ''));
-
-        for (const c of criteria) {
-            const value = valueOf(c.id);
-            const item = document.createElement('button');
-            item.className = 'btn btn-ghost btn-xs justify-between w-full';
-            const left = document.createElement('span');
-            left.textContent = c.label;
-            const right = document.createElement('span');
-            right.className = 'text-[10px] opacity-60 ml-2 truncate';
-            right.textContent = value === undefined || value === null || value === ''
-                ? '—' : String(value);
-            item.append(left, right);
-
-            if (value === undefined || value === null || value === '') {
-                item.disabled = true;
-                menu.appendChild(item);
-                continue;
-            }
-
-            item.onclick = (e) => {
-                e.stopPropagation();
-                this._openGroupTargetMenu(item, object, c.id, layers, dismiss);
-            };
-            menu.appendChild(item);
-        }
-
-        document.body.appendChild(menu);
-        const x = pointerEvent.clientX || 0;
-        const y = pointerEvent.clientY || 0;
-        menu.style.top = `${y + window.scrollY}px`;
-        menu.style.left = `${x + window.scrollX}px`;
-
-        const onDocClick = (ev) => {
-            if (!menu.contains(ev.target)) {
-                dismiss();
-                document.removeEventListener('mousedown', onDocClick, true);
-            }
-        };
-        requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
-    }
-
-    /** Second-stage menu after the user picked a criterion. */
-    _openGroupTargetMenu(anchorBtn, object, criterion, layers, dismissParent) {
-        const fabric = this.fabric;
-        document.body.querySelector('[data-role="board-group-target-menu"]')?.remove();
-
-        const sub = document.createElement('div');
-        sub.dataset.role = 'board-group-target-menu';
-        sub.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-        sub.style.minWidth = '180px';
-
-        const apply = (target) => {
-            const result = fabric.groupSiblingsByCriterion?.(object, criterion, target);
-            if (result && result.targetLayerId) {
-                this._collapsedLayers.add(String(result.targetLayerId));
-            }
-            dismissParent?.();
-            sub.remove();
-        };
-
-        const addItem = (label, target) => {
-            const item = document.createElement('button');
-            item.className = 'btn btn-ghost btn-xs justify-start w-full';
-            item.textContent = label;
-            item.onclick = (e) => { e.stopPropagation(); apply(target); };
-            sub.appendChild(item);
-        };
-
-        addItem('(new collapsed layer)', { kind: 'new' });
-        for (const l of layers) {
-            addItem(l.name || `Layer ${l.id}`, { kind: 'layer', layerId: l.id });
-        }
-
-        document.body.appendChild(sub);
-        const rect = anchorBtn.getBoundingClientRect();
-        sub.style.top = `${rect.top + window.scrollY}px`;
-        sub.style.left = `${rect.right + window.scrollX + 4}px`;
-
-        const onDocClick = (ev) => {
-            if (!sub.contains(ev.target)) {
-                sub.remove();
                 document.removeEventListener('mousedown', onDocClick, true);
             }
         };

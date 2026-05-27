@@ -1,4 +1,4 @@
-const { div, button, input, span, h3, h4, label, select, option, section, header, i } = globalThis.van.tags;
+const { div, button, input, span, label, select, option } = globalThis.van.tags;
 
 const textarea = globalThis.van.tags("textarea").textarea;
 const p = globalThis.van.tags("p").p;
@@ -244,27 +244,14 @@ export const createAnnotationSettingsMenu = (plugin) => {
         );
     };
 
-    // Section divider with a small uppercase tag and an icon.
-    const sectionLabel = (icon, text) =>
-        div({ class: "flex items-center gap-2 mt-3 mb-1" },
-            i({ class: `fa-solid ${icon} text-xs opacity-50` }),
-            span({ class: "text-[11px] font-bold uppercase tracking-wider opacity-60" }, text),
-            div({ class: "flex-1 h-px bg-base-300" })
-        );
+    const fs = window.USER_INTERFACE?.FullscreenMenu;
 
-    const root = div({ class: "p-3 flex flex-col h-full overflow-y-auto text-sm" },
-        // --- Header (compact, no per-slide subtitle) ---
-        header({ class: "flex items-center gap-2 mb-2" },
-            i({ class: "fa-solid fa-file-export opacity-70" }),
-            h3({ class: "text-base font-bold" }, plugin.t('annotations.export.menuTitle'))
-        ),
-
+    return fs.layout(
+        plugin.t('annotations.export.menuTitle'),
         // --- File format (shared by Download and Upload) ---
-        // Single-row dropdown — much tighter than the previous 2x2 chip grid
-        // and scales gracefully if more formats are added.
-        fieldRow(plugin.t('annotations.export.formatSection'),
+        fs.card(plugin.t('annotations.export.formatSection'),
             select({
-                    class: "select select-bordered select-xs flex-1 min-w-0",
+                    class: "select select-bordered select-xs w-full",
                     onchange: (e) => {
                         selectedFormat.val = e.target.value;
                         plugin.updateSelectedFormat(e.target.value);
@@ -278,95 +265,96 @@ export const createAnnotationSettingsMenu = (plugin) => {
                         title: conv?.description || ''
                     }, format);
                 })
-            )
+            ),
+            // Format-specific options (only when the convertor exposes any).
+            () => {
+                const convertor = getConvertor();
+                const opts = renderConvertorOptions(convertor);
+                if (!opts.length) return div({ class: "hidden" });
+                return div({ class: "bg-base-200/60 p-2 mt-1 rounded text-xs space-y-2" }, ...opts);
+            }
         ),
-        // Format-specific options (only render when the convertor exposes any).
-        () => {
-            const convertor = getConvertor();
-            const opts = renderConvertorOptions(convertor);
-            if (!opts.length) return div({ class: "hidden" });
-            return div({ class: "bg-base-200/60 p-2 mt-1 rounded text-xs space-y-2" }, ...opts);
-        },
 
         // --- Download ---
-        sectionLabel("fa-download", plugin.t('annotations.export.exportSection')),
-        // Scope (All / Selected) — only when the convertor handles annotation objects.
-        () => {
-            if (!getConvertor().exportsObjects) return null;
-            return fieldRow(plugin.t('annotations.export.scopeLabel'),
-                div({ class: "join flex-1" },
-                    ['all', 'selected'].map(s => button({
-                        class: () => `join-item btn btn-xs flex-1 ${selectedScope.val === s ? 'btn-active' : ''}`,
-                        onclick: () => {
-                            selectedScope.val = s;
-                            plugin.setExportScope(s);
-                        }
-                    }, plugin.t(`annotations.export.scopeOptions.${s}`)))
-                )
-            );
-        },
-        renderViewerField(plugin.t('annotations.export.fromSlide'), exportViewerId),
-        div({ class: "grid grid-cols-2 gap-2 mt-2" },
-            button({
-                class: () => `btn btn-primary btn-sm ${getConvertor().exportsObjects ? '' : 'btn-disabled'}`,
-                onclick: () => plugin.exportToFile(true, true, resolveActionViewerId(exportViewerId))
-            }, plugin.t('annotations.export.downloadAnnotations')),
-            button({
-                class: () => `btn btn-outline btn-sm ${getConvertor().exportsPresets ? '' : 'btn-disabled'}`,
-                onclick: () => plugin.exportToFile(false, true, resolveActionViewerId(exportViewerId))
-            }, plugin.t('annotations.export.downloadPresets'))
+        fs.card(plugin.t('annotations.export.exportSection'),
+            // Scope (All / Selected) — only when the convertor handles annotation objects.
+            () => {
+                if (!getConvertor().exportsObjects) return null;
+                return fieldRow(plugin.t('annotations.export.scopeLabel'),
+                    div({ class: "join flex-1" },
+                        ['all', 'selected'].map(s => button({
+                            class: () => `join-item btn btn-xs flex-1 ${selectedScope.val === s ? 'btn-active' : ''}`,
+                            onclick: () => {
+                                selectedScope.val = s;
+                                plugin.setExportScope(s);
+                            }
+                        }, plugin.t(`annotations.export.scopeOptions.${s}`)))
+                    )
+                );
+            },
+            renderViewerField(plugin.t('annotations.export.fromSlide'), exportViewerId),
+            div({ class: "grid grid-cols-2 gap-2 mt-2" },
+                button({
+                    class: () => `btn btn-primary btn-sm ${getConvertor().exportsObjects ? '' : 'btn-disabled'}`,
+                    onclick: () => plugin.exportToFile(true, true, resolveActionViewerId(exportViewerId))
+                }, plugin.t('annotations.export.downloadAnnotations')),
+                button({
+                    class: () => `btn btn-outline btn-sm ${getConvertor().exportsPresets ? '' : 'btn-disabled'}`,
+                    onclick: () => plugin.exportToFile(false, true, resolveActionViewerId(exportViewerId))
+                }, plugin.t('annotations.export.downloadPresets'))
+            )
         ),
 
         // --- Upload ---
-        sectionLabel("fa-upload", plugin.t('annotations.export.importSection')),
-        renderViewerField(plugin.t('annotations.export.intoSlide'), importViewerId),
-        label({ class: "flex items-center gap-2 cursor-pointer text-xs opacity-80 mt-1" },
-            input({
-                type: "checkbox", class: "checkbox checkbox-xs checkbox-primary",
-                checked: importReplace,
-                onchange: (e) => {
-                    importReplace.val = e.target.checked;
-                    plugin.setOption('importReplace', e.target.checked);
-                }
-            }),
-            span(plugin.t('annotations.export.replaceOnImport'))
-        ),
-        div({ class: "mt-2" },
-            button({
-                class: "btn btn-primary btn-sm w-full",
-                onclick: (e) => e.target.nextElementSibling.click()
-            }, plugin.t('annotations.export.chooseFileButton')),
-            input({
-                type: 'file', class: "hidden",
-                onchange: (e) => {
-                    plugin.importFromFile(e, resolveActionViewerId(importViewerId));
-                    e.target.value = '';
-                }
-            })
+        fs.card(plugin.t('annotations.export.importSection'),
+            renderViewerField(plugin.t('annotations.export.intoSlide'), importViewerId),
+            label({ class: "flex items-center gap-2 cursor-pointer text-xs opacity-80 mt-1" },
+                input({
+                    type: "checkbox", class: "checkbox checkbox-xs checkbox-primary",
+                    checked: importReplace,
+                    onchange: (e) => {
+                        importReplace.val = e.target.checked;
+                        plugin.setOption('importReplace', e.target.checked);
+                    }
+                }),
+                span(plugin.t('annotations.export.replaceOnImport'))
+            ),
+            div({ class: "mt-2" },
+                button({
+                    class: "btn btn-primary btn-sm w-full",
+                    onclick: (e) => e.target.nextElementSibling.click()
+                }, plugin.t('annotations.export.chooseFileButton')),
+                input({
+                    type: 'file', class: "hidden",
+                    onchange: (e) => {
+                        plugin.importFromFile(e, resolveActionViewerId(importViewerId));
+                        e.target.value = '';
+                    }
+                })
+            )
         ),
 
         // --- Comments (separate concern: not file IO) ---
-        sectionLabel("fa-comment", plugin.t('annotations.comments.title')),
-        label({ class: "flex items-center justify-between cursor-pointer text-sm" },
-            span(plugin.t('annotations.comments.enable')),
-            input({
-                type: "checkbox", class: "toggle toggle-primary toggle-sm",
-                checked: plugin._commentsEnabled,
-                onchange: (e) => plugin.enableComments(e.target.checked)
-            })
-        ),
-        fieldRow(plugin.t('annotations.comments.rememberState'),
-            select({
-                    class: "select select-bordered select-xs flex-1 min-w-0",
-                    onchange: (e) => plugin.switchCommentsClosedMethod(e.target.value)
-                },
-                ['none', 'global', 'individual'].map(m => option({
-                    value: m,
-                    selected: plugin._commentsClosedMethod === m
-                }, plugin.t(`annotations.comments.rememberOptions.${m}`)))
+        fs.card(plugin.t('annotations.comments.title'),
+            label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+                span(plugin.t('annotations.comments.enable')),
+                input({
+                    type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                    checked: plugin._commentsEnabled,
+                    onchange: (e) => plugin.enableComments(e.target.checked)
+                })
+            ),
+            fieldRow(plugin.t('annotations.comments.rememberState'),
+                select({
+                        class: "select select-bordered select-xs flex-1 min-w-0",
+                        onchange: (e) => plugin.switchCommentsClosedMethod(e.target.value)
+                    },
+                    ['none', 'global', 'individual'].map(m => option({
+                        value: m,
+                        selected: plugin._commentsClosedMethod === m
+                    }, plugin.t(`annotations.comments.rememberOptions.${m}`)))
+                )
             )
         )
     );
-
-    return root;
 };

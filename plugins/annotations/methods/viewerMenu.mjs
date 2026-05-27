@@ -512,6 +512,84 @@ export const viewerMenuMethods = {
             };
         }
 
+        // Group — "From selection (N)" plus criterion-based grouping that
+        // used to live on the board panel's right-click menu. Both paths
+        // funnel into layer-based grouping (annotations move into a layer;
+        // there is no fabric.Group annotation here).
+        let groupParent = null;
+        let groupItemsFlat = null;
+        if (typeof fabric?.groupAnnotationsIntoLayer === 'function') {
+            const selection = fabric.getSelectionSnapshot?.() || [];
+            const selectionCount = selection.length;
+            const fromSelectionEnabled = selectionCount >= 2;
+
+            const layersFor = (excludeLayerId) => {
+                const all = fabric.getAllLayers?.() || [];
+                return excludeLayerId
+                    ? all.filter(l => String(l.id) !== String(excludeLayerId))
+                    : all;
+            };
+
+            const targetChildren = (apply, excludeLayerId) => {
+                const items = [{
+                    title: '(new collapsed layer)',
+                    icon: 'fa-layer-group',
+                    action: () => apply({ kind: 'new' }),
+                }];
+                for (const l of layersFor(excludeLayerId)) {
+                    items.push({
+                        title: l.name || `Layer ${l.id}`,
+                        icon: 'fa-layer-group',
+                        action: () => apply({ kind: 'layer', layerId: l.id }),
+                    });
+                }
+                return items;
+            };
+
+            const groupItems = [];
+            groupItems.push({
+                title: `From selection (${selectionCount})`,
+                icon: 'fa-object-group',
+                containerCss: !fromSelectionEnabled && 'opacity-50',
+                children: fromSelectionEnabled
+                    ? targetChildren(t => fabric.groupAnnotationsIntoLayer(selection, t))
+                    : undefined,
+                action: fromSelectionEnabled ? undefined : () => {},
+            });
+
+            if (active && typeof fabric?.groupSiblingsByCriterion === 'function') {
+                groupItems.push({ title: '' }); // separator
+                const categoryRaw = active.meta?.category;
+                const categoryValue = (categoryRaw && typeof categoryRaw === 'object')
+                    ? categoryRaw.value : categoryRaw;
+                const criteria = [
+                    { id: 'factory',  label: 'Same shape type',   value: active.factoryID },
+                    { id: 'preset',   label: 'Same preset',       value: active.presetID },
+                    { id: 'author',   label: 'Same author',       value: active.author ?? active.sessionID },
+                    { id: 'category', label: 'Same category text', value: categoryValue },
+                ];
+                const excludeId = active.layerID ?? '';
+                for (const c of criteria) {
+                    const hasValue = c.value !== undefined && c.value !== null && c.value !== '';
+                    groupItems.push({
+                        title: c.label,
+                        icon: 'fa-object-group',
+                        containerCss: !hasValue && 'opacity-50',
+                        children: hasValue
+                            ? targetChildren(t => fabric.groupSiblingsByCriterion(active, c.id, t), excludeId)
+                            : undefined,
+                        action: hasValue ? undefined : () => {},
+                    });
+                }
+            }
+
+            if (groupItems.length) {
+                groupParent = { title: 'Group', icon: 'fa-object-group', children: groupItems };
+                // For the legacy flat path, drop separator placeholders.
+                groupItemsFlat = groupItems.filter(it => it.title !== '');
+            }
+        }
+
         // ── Assemble ────────────────────────────────────────────────────
         // Modern path: one "Annotation" parent with the children in the
         // user-specified order. Inserts an empty-title row between the
@@ -527,6 +605,7 @@ export const viewerMenuMethods = {
             if (layerItems) {
                 children.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
             }
+            if (groupParent) children.push(groupParent);
             if (zOrderItems) children.push(...zOrderItems);
             if (privateItem) children.push(privateItem);
             if (measurementsItem) children.push(measurementsItem);
@@ -546,6 +625,10 @@ export const viewerMenuMethods = {
         if (layerItems) {
             actions.push({ title: 'Move to layer:' });
             actions.push(...layerItems);
+        }
+        if (groupItemsFlat) {
+            actions.push({ title: 'Group:' });
+            actions.push(...groupItemsFlat);
         }
         if (zOrderItems) actions.push(...zOrderItems);
         if (privateItem) {

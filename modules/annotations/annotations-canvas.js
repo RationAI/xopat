@@ -1220,13 +1220,45 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // The source must always be in the resulting group — otherwise
         // "Group same X" on annotation Y would leave Y outside the group.
         if (!matching.includes(annotation)) matching = [annotation, ...matching];
-        if (matching.length === 0) return { moved: 0, targetLayerId: null };
+
+        const effectiveTarget = target.kind === 'new'
+            ? { ...target, name: target.name || this._defaultLayerNameForCriterion(criterion, sourceKey) }
+            : target;
+
+        return this._moveAnnotationsIntoLayer(
+            matching,
+            effectiveTarget,
+            'Group annotations by ' + criterion
+        );
+    }
+
+    /**
+     * Group an explicit list of annotations (typically the current selection)
+     * into a single layer — same semantics as `groupSiblingsByCriterion` but
+     * the membership is caller-supplied instead of criterion-derived.
+     *
+     * @param {fabric.Object[]} annotations annotations to move into the target layer
+     * @param {{kind:'new', name?:string}|{kind:'layer', layerId:string}} target
+     * @return {{moved:number, targetLayerId:string}|null}
+     */
+    groupAnnotationsIntoLayer(annotations, target) {
+        return this._moveAnnotationsIntoLayer(
+            Array.isArray(annotations) ? annotations.slice() : [],
+            target,
+            'Group selected annotations'
+        );
+    }
+
+    _moveAnnotationsIntoLayer(matching, target, opName) {
+        if (!Array.isArray(matching) || matching.length === 0 || !target) {
+            return { moved: 0, targetLayerId: null };
+        }
 
         // Resolve / create the target layer.
         let targetLayerId;
         if (target.kind === 'new') {
-            const layerName = this._defaultLayerNameForCriterion(criterion, sourceKey);
             const newId = String(Date.now()) + '-grp';
+            const layerName = target.name || 'Group';
             // Hint the panel to collapse this layer on creation.
             this.collapsedLayerHints.add(newId);
             this._createLayer({ id: newId, name: layerName, visible: true, _objects: [] });
@@ -1235,15 +1267,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             targetLayerId = String(target.layerId);
             if (!this.getLayer(targetLayerId)) return null;
         }
-        if (sourceLayerId === targetLayerId) {
-            // Already in destination — nothing to do.
-            return { moved: 0, targetLayerId };
-        }
+
+        // Skip annotations already in the destination — undo would otherwise
+        // have to no-op them and the history step would be misleading.
+        const toMove = matching.filter(a => a && String(a.layerID ?? '') !== targetLayerId);
+        if (toMove.length === 0) return { moved: 0, targetLayerId };
 
         // Snapshot original state for undo. Capture old indices so undo can
         // restore them; oldBoardIndex is only meaningful for items currently
         // at root.
-        const snapshot = matching.map(obj => ({
+        const snapshot = toMove.map(obj => ({
             obj,
             oldLayerId: obj.layerID ? String(obj.layerID) : null,
             oldBoardIndex: !obj.layerID
@@ -1306,10 +1339,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         APPLICATION_CONTEXT.history.push(
             () => { moveTo(this.getLayer(targetLayerId)); return true; },
             () => { restore(); return true; },
-            { name: 'Group annotations by ' + criterion }
+            { name: opName }
         );
 
-        return { moved: matching.length, targetLayerId };
+        return { moved: toMove.length, targetLayerId };
     }
 
     /** Used by groupSiblingsByCriterion to name a freshly-created layer.

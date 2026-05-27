@@ -1760,7 +1760,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "share-nodes";
+        return "fa-share-nodes";
     }
 
     fabricStructure() {

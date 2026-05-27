@@ -3433,7 +3433,7 @@ form.submit();
                 barThickness: 2,
                 destroy: false
             });
-            if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
+            if (!APPLICATION_CONTEXT.getUiOption("scaleBar")) {
                 viewer.scalebar.setActive(false);
             }
 
@@ -3450,6 +3450,24 @@ form.submit();
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
             });
+
+            // OSD navigator: opt into AppBar.Chrome and honor `params.ui.navigator`
+            // at boot. Per-viewer id keeps multi-viewport snapshot/restore correct.
+            const navigatorEl = (viewer as any).navigator?.element as HTMLElement | undefined;
+            if (navigatorEl) {
+                if (!APPLICATION_CONTEXT.getUiOption("navigator")) {
+                    navigatorEl.style.display = "none";
+                }
+                const navigatorChromeKey = `navigator::${(viewer as any).uniqueId ?? index}`;
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(navigatorChromeKey, {
+                    is:  () => navigatorEl.style.display !== "none",
+                    on:  () => { navigatorEl.style.display = ""; },
+                    off: () => { navigatorEl.style.display = "none"; },
+                });
+                viewer.addOnceHandler?.("destroy", () => {
+                    (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(navigatorChromeKey);
+                });
+            }
 
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);

@@ -86,6 +86,9 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     constructor(options) {
         super(options);
+        // Initialize so getMetadata() / getDisplayMetadata() always return a
+        // usable shape even if `configure()` bailed out before assigning it.
+        if (!this.metadata) this.metadata = {};
     }
 
     /**
@@ -246,6 +249,30 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
 
     getMetadata() {
         return this.metadata;
+    }
+
+    getDisplayMetadata() {
+        const m = this.metadata || {};
+        if (m.error) return [{ title: "Slide unavailable", description: String(m.error) }];
+
+        const fields = [];
+        if (this.width != null && this.height != null) {
+            fields.push({ label: "Dimensions", value: `${this.width} × ${this.height} px` });
+        }
+        const tw = this._tileWidth ?? this.tileSize;
+        const th = this._tileHeight ?? this.tileSize;
+        if (tw != null) {
+            fields.push({ label: "Tile size", value: th != null && th !== tw ? `${tw} × ${th} px` : `${tw} px` });
+        }
+        if (Number.isFinite(this.maxLevel)) {
+            fields.push({ label: "Pyramid levels", value: this.maxLevel + 1 });
+        }
+        if (Number.isFinite(m.micronsX) && Number.isFinite(m.micronsY)) {
+            fields.push({ label: "Pixel size", value: `${Number(m.micronsX).toFixed(3)} × ${Number(m.micronsY).toFixed(3)} µm` });
+        }
+        if (this.fileId) fields.push({ label: "Slide ID", value: String(this.fileId) });
+        if (this.innerFormat) fields.push({ label: "Format", value: String(this.innerFormat) });
+        return fields.length ? [{ title: "Empaia slide", fields }] : [];
     }
 
     /**

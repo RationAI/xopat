@@ -11,9 +11,14 @@ declare const APPLICATION_CONTEXT: {
 type TileSourceMetadata = Record<string, unknown>;
 type SlideSourceOptions = Record<string, unknown>;
 
+type TileSourceDisplayField = { label: string; value: string | number | boolean | null };
+type TileSourceDisplaySection = { title?: string; description?: string; fields?: TileSourceDisplayField[] };
+type TileSourceDisplayMetadata = TileSourceDisplaySection[];
+
 
 type OpenSeadragonTileSourceWithExtensions = OpenSeadragon.TileSource & {
     getMetadata(): TileSourceMetadata | undefined;
+    getDisplayMetadata(): TileSourceDisplayMetadata;
     setSourceOptions(options: SlideSourceOptions): void;
     getThumbnail(): Promise<ImageLike | undefined>;
     getLabel(): Promise<ImageLike | undefined>;
@@ -39,6 +44,56 @@ const tileSourcePrototype = window.OpenSeadragon.TileSource.prototype as OpenSea
  * @function getMetadata
  */
 tileSourcePrototype.getMetadata = function (): TileSourceMetadata { return {}; };
+
+/**
+ * Extension of OpenSeadragon: User-facing display metadata for the Slide Information panel.
+ * Returns an ordered list of card-shaped sections. Each `value` must be a primitive — no
+ * nested objects, no functions, no internal handler queues. Return [] when there is
+ * nothing user-relevant to show; the panel falls back to its own "no metadata" notice.
+ *
+ * The default reads safe scalars off the TileSource itself (dimensions, tile size, pyramid
+ * depth) and folds in pixel size / error from `getMetadata()` when present. Subclasses
+ * should override to add domain-specific fields (slide id, channels, …).
+ *
+ * @memberOf OpenSeadragon.TileSource
+ * @function getDisplayMetadata
+ */
+tileSourcePrototype.getDisplayMetadata = function (this: OpenSeadragonTileSourceWithExtensions): TileSourceDisplayMetadata {
+    const self = this as any;
+    const fields: TileSourceDisplayField[] = [];
+
+    if (self.width != null && self.height != null) {
+        fields.push({ label: "Dimensions", value: `${self.width} × ${self.height} px` });
+    }
+    const tw = self._tileWidth ?? self.tileSize;
+    const th = self._tileHeight ?? self.tileSize;
+    if (tw != null) {
+        fields.push({ label: "Tile size", value: th != null && th !== tw ? `${tw} × ${th} px` : `${tw} px` });
+    }
+    if (Number.isFinite(self.maxLevel)) {
+        fields.push({ label: "Pyramid levels", value: (self.maxLevel as number) + 1 });
+    }
+
+    let meta: TileSourceMetadata | undefined;
+    try { meta = this.getMetadata?.(); } catch { meta = undefined; }
+    const m = meta as any;
+
+    if (m?.micronsX != null || m?.micronsY != null) {
+        const x = m.micronsX ?? m.microns;
+        const y = m.micronsY ?? m.microns;
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+            fields.push({ label: "Pixel size", value: `${Number(x).toFixed(3)} × ${Number(y).toFixed(3)} µm` });
+        }
+    } else if (Number.isFinite(m?.microns)) {
+        fields.push({ label: "Pixel size", value: `${Number(m.microns).toFixed(3)} µm` });
+    }
+
+    if (m?.error) {
+        return [{ title: "Slide unavailable", description: String(m.error) }];
+    }
+
+    return fields.length ? [{ title: "Slide", fields }] : [];
+};
 
 /**
  * Set source options.
