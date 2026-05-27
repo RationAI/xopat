@@ -607,7 +607,7 @@ void finalize(vec4 deferred) {
     } else {
         final_color = vec4(final_color.rgb/final_color.a, final_color.a);
     }
-}
+}    
 
 vec4 blend_equation(in vec4 foreground, in vec4 background) {
 ${this.glslBlendCode}

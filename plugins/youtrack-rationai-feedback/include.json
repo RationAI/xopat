@@ -1,0 +1,18 @@
+{
+    "id": "youtrack-feedback",
+    "name": "Feedback Form for xOpat",
+    "description": "Provide direct feedback about xOpat to the development team",
+
+    // The domains provided here belong to the dev team: safe use.
+    "includes" : [
+        "feedback-form.js",
+        {
+            "src": "https://youtrack.rationai.cloud.e-infra.cz/static/simplified/form/form-entry.js?auto=false"
+        }
+    ],
+    "version": "1.0.0",
+    "modules": [],
+    "permaLoad": false,
+    "backendURL": "https://youtrack.rationai.cloud.e-infra.cz",
+    "formUUID": "148274db-391a-400f-9f75-84e9db674d7a"
+}
