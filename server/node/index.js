@@ -305,7 +305,7 @@ server.listen(constants.SERVER.PORT, constants.SERVER.HOST, () => {
     const port = constants.SERVER.PORT;
     const scheme = port === 443 ? "https" : "http";
     const host = constants.SERVER.HOST === "0.0.0.0" ? "localhost" : constants.SERVER.HOST;
-    const URL = ["80", "443"].includes(port) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+    const URL = ["80", "443"].includes(String(port)) ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
     console.log(`The server is listening on ${URL} ...`);
     console.log(`  To manually create and run a session, open ${URL}/dev_setup`);
     console.log(`  To open using GET, provide ${URL}?slides=slide,list&masks=mask,list`);

@@ -123,7 +123,7 @@ OSDAnnotations.Convertor = class {
             (...exportedProps) =>
                 context.toObject(
                     exportAll,
-                    !context._exportPrivateAnnotations && ((o) => !o.private),
+                    context._exportPrivateAnnotations ? undefined : ((o) => !o.private),
                     ...exportedProps
                 ).objects,
             () => context.presets.toObject()
@@ -254,12 +254,11 @@ OSDAnnotations.Convertor.IConvertor = class {
     }
 
     /**
-     * Describe what filename has the exported file
-     * @param {OSDAnnotations} context
-     * @return {string}
+     * File suffix to allow
+     * @returns {string}
      */
-    static getFileName(context) {
-        return 'annotations_' + UTILITIES.todayISO("_") + '.txt';
+    static getSuffix() {
+        return '.txt';
     }
 
     /**

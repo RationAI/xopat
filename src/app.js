@@ -997,8 +997,33 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @returns {Promise<void>}
      */
     APPLICATION_CONTEXT.beginApplicationLifecycle = async function (data,
-        background,
-        visualizations = undefined) {
+                                                                    background,
+                                                                    visualizations=undefined) {
+        // patch: v3 can store arrays
+        function normalizeIndexOption(key) {
+            const value = APPLICATION_CONTEXT.getOption(key);
+        
+            if (typeof value !== 'string' || !value.trim().startsWith('[')) {
+                return;
+            }
+        
+            try {
+                const parsed = JSON.parse(value);
+        
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    APPLICATION_CONTEXT.setOption(key, parsed[0]);
+                } else {
+                    APPLICATION_CONTEXT.setOption(key, 0);
+                }
+            } catch (e) {
+                console.warn(`Failed to normalize ${key}:`, e);
+                APPLICATION_CONTEXT.setOption(key, 0);
+            }
+        }
+        
+        normalizeIndexOption('activeBackgroundIndex');
+        normalizeIndexOption('activeVisualizationIndex');
+        
         try {
             initXopatLayers();
 

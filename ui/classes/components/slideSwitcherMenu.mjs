@@ -232,7 +232,7 @@ export class SlideSwitcherMenu extends BaseComponent {
         };
 
         //todo correct VIEWER ref
-        VIEWER.raiseEventAwaiting('get-preview-url', eventArgs).then(() => {
+        VIEWER.tools.raiseAwaitEvent(VIEWER, 'get-preview-url', eventArgs).then(() => {
             let blobUrl;
             if (!eventArgs.imagePreview) {
                 const previewUrlmaker = new Function("path,data", "return " +
