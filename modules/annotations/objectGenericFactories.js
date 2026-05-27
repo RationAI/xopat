@@ -724,6 +724,11 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
         return `Point [${Math.round(ofObject.top)}, ${Math.round(ofObject.left)}]`;
     }
 
+    selected(theObject) {
+        this.renderAllControls(theObject);
+        theObject.setControlsVisibility({ private: true });
+    }
+
     /**
      * todo necessary? we use ellipse
      * @param {object} parameters
@@ -1285,6 +1290,11 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return this._current;
     }
 
+    selected(theObject) {
+        this.renderAllControls(theObject);
+        theObject.setControlsVisibility({ private: true });
+    }
+
     /**
      * @param {Array} parameters array of objects with {x, y} properties (points)
      * @param {Object} options see parent class
@@ -1312,6 +1322,12 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     exportsGeometry() {
         return ["x1", "x2", "y1", "y2"];
+    }
+
+    exports() {
+        // Force left/top into serialized output; fabric.Line strips them as defaults
+        // when they equal 0 (common with center-origin lines), losing the position on re-import.
+        return ["left", "top"];
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
@@ -1520,16 +1536,23 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
      * @return {Array} array of items returned by the converter - points
      */
     toPointArray(obj, converter, digits=undefined, quality=1) {
+        // fabric.Line stores x1..y2 centered around the bbox center (calcLinePoints output);
+        // compose with left/top + width/2/height/2 to get absolute canvas coords.
+        const width = Number.isFinite(obj.width) ? obj.width : Math.abs((obj.x2 || 0) - (obj.x1 || 0));
+        const height = Number.isFinite(obj.height) ? obj.height : Math.abs((obj.y2 || 0) - (obj.y1 || 0));
+        const cx = (obj.left || 0) + width / 2;
+        const cy = (obj.top || 0) + height / 2;
+        let x1 = cx + (obj.x1 || 0);
+        let y1 = cy + (obj.y1 || 0);
+        let x2 = cx + (obj.x2 || 0);
+        let y2 = cy + (obj.y2 || 0);
         if (digits !== undefined) {
-            return [
-                converter(parseFloat(Number(obj.x1).toFixed(digits)), parseFloat(Number(obj.y1).toFixed(digits))),
-                converter(parseFloat(Number(obj.x2).toFixed(digits)), parseFloat(Number(obj.y2).toFixed(digits))),
-            ];
+            x1 = parseFloat(Number(x1).toFixed(digits));
+            y1 = parseFloat(Number(y1).toFixed(digits));
+            x2 = parseFloat(Number(x2).toFixed(digits));
+            y2 = parseFloat(Number(y2).toFixed(digits));
         }
-        return [
-            converter(obj.x1, obj.y1),
-            converter(obj.x2, obj.y2),
-        ];
+        return [converter(x1, y1), converter(x2, y2)];
     }
 
     fromPointArray(points, deconvertor) {

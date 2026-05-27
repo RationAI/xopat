@@ -2200,6 +2200,8 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 				}
 				self.checkLayer(obj);
 				self.checkAnnotation(obj);
+				const factory = self.getAnnotationObjectFactory(obj.factoryID);
+				factory?.configure?.(obj, obj);
 				obj.on('selected', self._objectClicked.bind(self));
 				obj.on('deselected', self._objectDeselected.bind(self));
 				_this.insertAt(obj, insertion++);
