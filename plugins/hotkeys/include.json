@@ -4,8 +4,7 @@
     "description": "Custom & Buildin Hotkeys extension",
     "author": "Jiří Horák",
     "includes" : [
-        "hotkeys.js",
-        "temp.js"
+        "hotkeys.js"
     ],
     "version": "1.0.0",
     "permaLoad": false
