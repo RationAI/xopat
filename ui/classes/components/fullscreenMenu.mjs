@@ -88,7 +88,7 @@ class FullscreenMenu extends BaseComponent{
         const overlay = document.getElementById("overlay");
 
         if (overlay.classList.contains("hidden")) {
-            document.getElementById("overlay").classList.toggle("hidden");
+            overlay.classList.remove("hidden");
         }
 
         if (!(id in this.tabs)) { throw new Error("Tab with id " + id + " does not exist"); }
