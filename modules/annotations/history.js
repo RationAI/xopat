@@ -771,7 +771,7 @@ ${editIcon}
                 canvas.remove(toRemove);
                 try {
                     const wasSelected = this._context.canvas.getActiveObject() === toRemove;
-                    if (wasSelected) this.raiseEvent('annotation-deselected', {object: toRemove});
+                    if (wasSelected) this._context.raiseEvent('annotation-deselected', {object: toRemove});
                 } catch (e) {
                     console.warn('History swapping annotation - exception on deselection.', e);
                 }
