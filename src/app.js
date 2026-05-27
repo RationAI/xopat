@@ -1120,6 +1120,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
                 _allowRecursionReload = false;
+                clearTimeout(loadTooLongTimeout);
                 UTILITIES.loadModules(() => APPLICATION_CONTEXT.openViewerWith(data, background, visualizations), "webgl");
                 return;
             }
