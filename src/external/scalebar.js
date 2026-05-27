@@ -136,11 +136,11 @@
             var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
-            this.scalebarContainer.style.left = location.x + "px";
+            this.scalebarContainer.style.left = (location.x + 5) + "px";
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
             if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = location.x + 20 + "px";
+                this.magnificationContainer.style.left = (location.x + 10) + "px";
                 const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
                 this.magnificationContainer.style.top = (location.y - h - 12) + "px";
             }
