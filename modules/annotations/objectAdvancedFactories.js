@@ -228,6 +228,19 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
         visualProperties.modeOutline = true; // we are always transparent
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties);
+        // super wrote stroke/strokeWidth onto the wrap (good for serialization metadata), but
+        // the wrap is a fabric.Group and never paints — only the inner line does. Mirror the
+        // rendering-relevant props onto the line so border-slider / color updates are visible
+        // on already-placed rulers. Then clear the wrap's strokeWidth: any non-zero value
+        // inflates the selection rectangle via _getTransformedDimensions.
+        const line = ofObject._objects && ofObject._objects[0];
+        if (line) {
+            line.set({
+                stroke: ofObject.stroke,
+                strokeWidth: ofObject.strokeWidth,
+            });
+        }
+        ofObject.strokeWidth = 0;
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
@@ -296,6 +309,7 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         // Helper line was created from the active preset and carries its color;
         // forward it so the group is serialized with color and the inner line keeps a stroke after import.
         if (line.color) props.color = line.color;
+
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
         this._context.addAnnotation(obj);
@@ -345,16 +359,25 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = inner ? inner[0] : null;
         if (!line) return [];
 
-        // Inner line's x1..y2 are centered around the group's bbox center;
-        // compose with the group's left/top + half-extents to get absolute canvas coords.
-        const width = Number.isFinite(obj.width) ? obj.width : 0;
-        const height = Number.isFinite(obj.height) ? obj.height : 0;
-        const cx = (obj.left || 0) + width / 2;
-        const cy = (obj.top || 0) + height / 2;
-        let x1 = cx + (line.x1 || 0);
-        let y1 = cy + (line.y1 || 0);
-        let x2 = cx + (line.x2 || 0);
-        let y2 = cy + (line.y2 || 0);
+        // fabric.Line stores x1/y1/x2/y2 as ABSOLUTE coords from construction time — they
+        // become stale once the group is moved. Reconstruct the current endpoints from the
+        // line's live bbox (left/top/width/height, kept up-to-date by fabric) plus the
+        // ORIGINAL direction signs (x1<=x2, y1<=y2) which survive serialization.
+        const groupW = Number.isFinite(obj.width) ? obj.width : 0;
+        const groupH = Number.isFinite(obj.height) ? obj.height : 0;
+        const groupCx = (obj.left || 0) + groupW / 2;
+        const groupCy = (obj.top || 0) + groupH / 2;
+        const lineW = line.width || 0;
+        const lineH = line.height || 0;
+        // line.left/top after grouping are offsets from the group center to the line's bbox top-left.
+        const lineBboxLeft = groupCx + (line.left || 0);
+        const lineBboxTop = groupCy + (line.top || 0);
+        const xAscending = (line.x1 || 0) <= (line.x2 || 0);
+        const yAscending = (line.y1 || 0) <= (line.y2 || 0);
+        let x1 = lineBboxLeft + (xAscending ? 0 : lineW);
+        let y1 = lineBboxTop + (yAscending ? 0 : lineH);
+        let x2 = lineBboxLeft + (xAscending ? lineW : 0);
+        let y2 = lineBboxTop + (yAscending ? lineH : 0);
 
         if (digits !== undefined) {
             x1 = parseFloat(Number(x1).toFixed(digits));
@@ -429,6 +452,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             presetID: options.presetID,
             measure: text.text,
             hasControls: true,
+            // fabric.Group never paints its own path (children do), but a non-zero
+            // strokeWidth here still inflates the selection rectangle via
+            // _getTransformedDimensions (which adds strokeWidth to width/height).
+            // Zero it so the selection rectangle hugs the line; the inner line keeps its own stroke.
+            strokeWidth: 0,
         });
     }
 
@@ -442,15 +470,46 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     _createWrap(parts, options) {
         const line = parts[0];
+        const text = parts[1];
+
+        // Capture the children's GEOMETRIC bbox (no stroke padding) before grouping.
+        // fabric.Group._calcBounds uses each child's getBoundingRect, which adds the line's
+        // strokeWidth to the group bbox — making the selection rectangle sit ~half-stroke
+        // outside the visible line. We want it flush with the rendered line endpoints.
+        const lineL = line.left, lineT = line.top, lineW = line.width, lineH = line.height;
+        const textW = (text.width || 0) * (text.scaleX || 1);
+        const textH = (text.height || 0) * (text.scaleY || 1);
+        const geomLeft = Math.min(lineL, text.left);
+        const geomTop = Math.min(lineT, text.top);
+        const geomRight = Math.max(lineL + lineW, text.left + textW);
+        const geomBottom = Math.max(lineT + lineH, text.top + textH);
+        const geomWidth = geomRight - geomLeft;
+        const geomHeight = geomBottom - geomTop;
+
         const wrap = new fabric.Group(parts, {
             originX: 'left',
             originY: 'top',
-            left: line.left,
-            top: line.top,
-            width: line.width,
-            height: line.height,
         });
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
+
+        // Replace fabric's stroke-inclusive bbox with the geometric one. Children are
+        // currently positioned relative to the old (stroke-inflated) center; shift each
+        // by (oldCenter - newCenter) so they keep their canvas render position.
+        const oldCx = wrap.left + wrap.width / 2;
+        const oldCy = wrap.top + wrap.height / 2;
+        const newCx = geomLeft + geomWidth / 2;
+        const newCy = geomTop + geomHeight / 2;
+        const deltaX = oldCx - newCx;
+        const deltaY = oldCy - newCy;
+        for (const child of wrap._objects) {
+            child.left += deltaX;
+            child.top += deltaY;
+        }
+        wrap.left = geomLeft;
+        wrap.top = geomTop;
+        wrap.width = geomWidth;
+        wrap.height = geomHeight;
+
         wrap.setCoords();
         return wrap;
     }
