@@ -123,7 +123,7 @@ OSDAnnotations.Convertor = class {
             (...exportedProps) =>
                 context.toObject(
                     exportAll,
-                    !context._exportPrivateAnnotations && ((o) => !o.private),
+                    context._exportPrivateAnnotations ? undefined : ((o) => !o.private),
                     ...exportedProps
                 ).objects,
             () => context.presets.toObject()
