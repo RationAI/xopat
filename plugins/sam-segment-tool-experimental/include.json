@@ -1,0 +1,10 @@
+{
+  "id": "sam-segment-tool-experimental",
+  "name": "Annotations: Segment Anything",
+  "author": "Mia",
+  "version": "1.0.0",
+  "description": "This plugin allows you to run Segment Anything mask inference in browser. You need to load the Annotations plugin as well.",
+  "includes": [
+    "samSegmentationGUI.js"  ],
+  "modules": ["annotations", "sam-segmentation-experimental"]
+}

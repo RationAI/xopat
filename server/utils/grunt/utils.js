@@ -4,21 +4,29 @@ const path = require("path");
 module.exports = function(grunt) {
     grunt.utils = grunt.utils || {};
 
-    let root;
-    try {
-        // Execute Git command to find the repository root
-        root = exec('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
-    } catch (error) {
-        throw new Error('Unable to find the Git repository root. Make sure you are in a Git repository.');
+    let root = grunt.option && grunt.option('root');
+    if (!root) root = process.env.XO_REPO_ROOT;
+
+    if (!root) {
+        try {
+            grunt.log.writeln('Detecting repository root using git: this might fail if using e.g. a docker - you might want to set XO_REPO_ROOT to the root of the repository manually...');
+            root = exec('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+        } catch (error) {
+            root = process.cwd();
+            if (grunt && grunt.log && grunt.log.writeln) {
+                grunt.log.writeln('Warning: Not a Git repository. Using "' + root + '" as project root.');
+            }
+        }
     }
 
     /**
      * Get absolute path from relative wrt repository root
      * @param relativePath
+     * @param {boolean} escape
      * @return {string}
      */
-    grunt.util.getPath = function (relativePath) {
-        return path.resolve(root, relativePath);
+    grunt.util.getPath = function (relativePath, escape=false) {
+        return escape ? `"${path.resolve(root, relativePath)}"` : path.resolve(root, relativePath);
     };
 
     /**
@@ -29,7 +37,7 @@ module.exports = function(grunt) {
      * @return {string}
      */
     grunt.util.execAtPath = function (binPath, cmd, options=undefined) {
-        return exec(`${grunt.util.getPath(binPath)} ${cmd}`, options);
+        return exec(`${grunt.util.getPath(binPath, true)} ${cmd}`, options);
     };
 
     /**
@@ -73,4 +81,16 @@ module.exports = function(grunt) {
         }
         return initialValue;
     }
+
+    grunt.util.reduceUI = function (accumulator, initialValue, parseMeta=true, log=false) {
+        const item = "ui/index.mjs";
+        if (grunt.file.isFile(item)) {
+            if (log) grunt.log.write(`UI found: ${item}`);
+            initialValue = accumulator(initialValue, item, "ui");
+            if (log) grunt.log.write("\n");
+        } else {
+            if (log) grunt.log.write(`UI invalid: missing ${item}\n`);
+        }
+        return initialValue;
+    };
 };

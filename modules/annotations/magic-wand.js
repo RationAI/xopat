@@ -85,6 +85,11 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         w = w || Math.round(VIEWER.drawer.canvas.width);
         h = h || Math.round(VIEWER.drawer.canvas.height);
 
+        // patch: sometimes for some reason the tiled image was not available
+        if (VIEWER.world.getItemCount() >= this.tiledImageIndex) {
+            this.tiledImageIndex = VIEWER.world.getItemCount() - 1;
+        }
+
         //TODO single line works with OSD 5.0+
         //this.drawer.draw([VIEWER.world.getItemAt(this.tiledImageIndex)]);
         this.drawer.clear();

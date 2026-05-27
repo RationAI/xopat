@@ -49,7 +49,21 @@
  * @param I18NCONFIG
  * @private
  */
-function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG={}) {
+function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOLDER, VERSION, I18NCONFIG = {}) {
+    /**
+     * Escape a plain-text string for safe embedding inside HTML markup.
+     * Prevents XSS when server-supplied values (e.g. slide names) are
+     * interpolated into template-literal HTML strings.
+     * @param {string} str
+     * @returns {string} HTML-escaped string
+     */
+    function htmlEscape(str) {
+        return (str == null ? '' : String(str)).replace(
+            /[&<>"']/g,
+            c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c])
+        );
+    }
+
     const savedState = checkLocalState();
     if (savedState) {
         PLUGINS = savedState.PLUGINS;
@@ -136,6 +150,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 }
                 setItem(key, value) {
                     Cookies.set(key, value);
+                    if (!Cookies.get(key)) {
+                        console.warn("Cookie value too big to store!", key);
+                    }
                 }
                 removeItem(key) {
                     Cookies.remove(key);
@@ -229,8 +246,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @memberOf APPLICATION_CONTEXT
          */
         AppCache: {
-            get() {console.warn("AppCache used before initialization.")},
-            set() {console.warn("AppCache used before initialization.")},
+            get() { console.warn("AppCache used before initialization.") },
+            set() { console.warn("AppCache used before initialization.") },
         },
         /**
          * Global Application Cookies.
@@ -238,8 +255,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @memberOf APPLICATION_CONTEXT
          */
         AppCookies: {
-            get() {console.warn("AppCookies used before initialization.")},
-            set() {console.warn("AppCookies used before initialization.")},
+            get() { console.warn("AppCookies used before initialization.") },
+            set() { console.warn("AppCookies used before initialization.") },
         },
         /**
          * Get sessionName value (fallback refereceId) from the configuration.
@@ -284,7 +301,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param cache
          * @return {string|*}
          */
-        getOption(name, defaultValue=undefined, cache=true) {
+        getOption(name, defaultValue = undefined, cache = true) {
             if (cache && this.AppCache) {
                 let cached = this.AppCache.get(name);
                 if (cached !== null && cached !== undefined) {
@@ -305,7 +322,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          * @param value
          * @param cache
          */
-        setOption(name, value, cache=true) {
+        setOption(name, value, cache = true) {
             if (cache && this.AppCache) this.AppCache.set(name, value);
             if (value === "false") value = false;
             else if (value === "true") value = true;
@@ -344,7 +361,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
          *   field, an attempt to return only filename from the file ID.
          * @return {string}
          */
-        referencedName(stripSuffix=false) {
+        referencedName(stripSuffix = false) {
             if (CONFIG.background.length < 0) {
                 return undefined;
             }
@@ -365,8 +382,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             }
             let config;
             if (VIEWER.scalebar) {
-                VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
-            } else {
+                config = VIEWER.scalebar.getReferencedTiledImage()?.getBackgroundConfig();
+            }
+
+            if (!config) {
                 config = CONFIG.background[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                     || CONFIG.background[0];
             }
@@ -418,7 +437,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         animationTime: 0,
         showNavigationControl: false,
         navigatorId: "panel-navigator",
-        loadTilesWithAjax : true,
+        loadTilesWithAjax: true,
         drawer: "canvas",
         ajaxHeaders: headers,
         splitHashDataForPost: true,
@@ -447,7 +466,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      */
     VIEWER.addHandler('warn-user', e => {
         if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
+        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_WARN, false);
     }, -Infinity);
     /**
      * Event to fire if you want to avoid explicit error handling,
@@ -464,10 +483,10 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      */
     VIEWER.addHandler('error-user', e => {
         if (e.preventDefault || !e.message) return;
-        Dialogs.show(e.message, Math.max(Math.min(50*e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
+        Dialogs.show(e.message, Math.max(Math.min(50 * e.message.length, 15000), 5000), Dialogs.MSG_ERR, false);
     }, -Infinity);
     VIEWER.addHandler('plugin-failed', e => Dialogs.show(e.message, 6000, Dialogs.MSG_ERR));
-    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', {plugin: PLUGINS[e.id].name}), 2500, Dialogs.MSG_INFO));
+    VIEWER.addHandler('plugin-loaded', e => Dialogs.show($.t('messages.pluginLoadedNamed', { plugin: PLUGINS[e.id].name }), 2500, Dialogs.MSG_INFO));
 
     let notified = false;
     //todo error? VIEWER.addHandler('tile-load-failed', e => console.log("load filaed", e));
@@ -521,7 +540,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             const name = imageData.name || UTILITIES.fileNameFromPath(
                 APPLICATION_CONTEXT.config.data[imageData.dataReference]
             );
-            title.find('#tissue-title-content').html(name);
+            title.find('#tissue-title-content').text(name);
             title.attr('title', name);
             USER_INTERFACE.toggleDemoPage(false);
         } else if (tiledImage?.source instanceof OpenSeadragon.EmptyTileSource) {
@@ -531,7 +550,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 APPLICATION_CONTEXT.config.data[APPLICATION_CONTEXT.getOption('activeBackgroundIndex')]
                 || 'unknown'
             );
-            title.addClass('error-container').find('#tissue-title-content').html($.t('main.navigator.faultyTissue', {slide: name}));
+            title.addClass('error-container').find('#tissue-title-content').text($.t('main.navigator.faultyTissue', { slide: name }));
             USER_INTERFACE.toggleDemoPage(true);
         } else {
             USER_INTERFACE.toggleDemoPage(false);
@@ -585,7 +604,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 const dev = Math.abs(magMicrons - values[index]);
                 if (dev < best && dev < values[index]) {
                     best = dev;
-                    mag = values[index+1]
+                    mag = values[index + 1]
                 }
                 index += 2;
             }
@@ -614,7 +633,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * Change background image if not in stacked mode
      * @param bgIndex
      */
-    window.UTILITIES.swapBackgroundImages = function(bgIndex) {
+    window.UTILITIES.swapBackgroundImages = function (bgIndex) {
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             console.error("UTILITIES::swapBackgroundImages not supported in stackedBackground mode!");
             return;
@@ -639,7 +658,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             index: 0,
             opacity: 1,
             replace: true,
-            success: function(e) {
+            success: function (e) {
                 preventedSwap = false;
                 APPLICATION_CONTEXT.setOption('activeBackgroundIndex', bgIndex);
                 e.item.getBackgroundConfig = () => APPLICATION_CONTEXT.config.background[bgIndex];
@@ -668,7 +687,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 container.children[activeBackground].classList.remove('selected');
                 container.children[bgIndex].classList.add('selected');
             },
-            error: function(e) {
+            error: function (e) {
                 preventedSwap = false;
                 console.error("Swap Images Failure", e);
                 let container = document.getElementById('tissue-preview-container');
@@ -694,9 +713,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 imageNode = $("#image-layer-options");
             //image-layer-options can be missing --> populate menu only if exists
             if (imageNode) {
-                for (let idx = confBackground.length - 1; idx >= 0; idx-- ) {
+                for (let idx = confBackground.length - 1; idx >= 0; idx--) {
                     const image = confBackground[idx],
-                        worldItem =  VIEWER.world.getItemAt(i),
+                        worldItem = VIEWER.world.getItemAt(i),
                         configGetter = worldItem?.getBackgroundConfig,
                         referencedImage = configGetter && configGetter();
 
@@ -714,14 +733,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" checked class="form-control"
     onchange="VIEWER.world.getItemAt(${i}).setOpacity(this.checked ? 1 : 0);" style="margin: 5px;">
     <span class="pr-1" style="color: var(--color-text-tertiary)">${$.t('common.Image')}</span>
-    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+    ${htmlEscape(image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference]))} <input type="range" class="flex-1 px-2" min="0"
     max="1" value="${worldItem.getOpacity()}" step="0.1" onchange="VIEWER.world.getItemAt(${i}).setOpacity(Number.parseFloat(this.value));" style="width: 100%;"></div>`);
                         i++;
                     } else {
                         imageOpts.push(`
     <div class="h5 pl-3 py-1 position-relative d-flex"><input type="checkbox" disabled class="form-control" style="margin: 5px;">
     <span class="pr-1" style="color: var(--color-text-danger)">${$.t('common.Faulty')}</span>
-    ${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])} <input type="range" class="flex-1 px-2" min="0"
+    ${htmlEscape(image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference]))} <input type="range" class="flex-1 px-2" min="0"
     max="1" value="0" step="0.1" style="width: 100%;" disabled></div>`);
                     }
                 }
@@ -740,7 +759,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             if (largestWidth === -1) {
                 VIEWER.addTiledImage({
-                    tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                    tileSource: new OpenSeadragon.EmptyTileSource({ height: 20000, width: 20000, tileSize: 512 }),
                     index: 0,
                     opacity: $("#global-opacity input").val(),
                     replace: false,
@@ -762,7 +781,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         const activeIndex = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', 0, false);
         if (confBackground.length > 1) {
             let html = "";
-            for (let idx = 0; idx < confBackground.length; idx++ ) {
+            for (let idx = 0; idx < confBackground.length; idx++) {
                 const image = confBackground[idx],
                     imagePath = confData[image.dataReference];
 
@@ -776,7 +795,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 };
 
                 //todo potentially buggy - someone might override preview when `protocolPreview` would do otherwise
-                VIEWER.tools.raiseAwaitEvent(VIEWER,'get-preview-url', eventArgs).then(() => {
+                VIEWER.tools.raiseAwaitEvent(VIEWER, 'get-preview-url', eventArgs).then(() => {
                     let blobUrl;
                     if (!eventArgs.imagePreview) {
                         const previewUrlmaker = new Function("path,data", "return " +
@@ -795,7 +814,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                                 context = child.getContext("2d");
                             child.width = img.height;
                             child.height = img.width;
-                            context.setTransform(0,-1, 1,0, 0, child.width/2);
+                            context.setTransform(0, -1, 1, 0, 0, child.width / 2);
                             context.drawImage(img, 0, 0);
                         }
                         child.style.width = '180px';
@@ -813,7 +832,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     <div id="tissue-preview-item-${idx}" onclick="UTILITIES.swapBackgroundImages(${idx});"
     class="${activeIndex == idx ? 'selected' : ''} pointer position-relative mx-2 my-2 color-bg-canvas overflow-hidden" 
     style="width: 180px; height: 90px; border-bottom: 1px solid var(--color-bg-backdrop); border-radius: 21px;">
-    <span class="tissue-label">${image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference])}</span>
+    <span class="tissue-label">${htmlEscape(image.name ? image.name : UTILITIES.fileNameFromPath(confData[image.dataReference]))}</span>
 </div>`;
             }
 
@@ -826,14 +845,14 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             $("#global-tissue-visibility").css("display", "initial");
 
             const image = confBackground[activeIndex],
-                worldItem =  VIEWER.world.getItemAt(0),
+                worldItem = VIEWER.world.getItemAt(0),
                 configGetter = worldItem?.getBackgroundConfig,
                 referencedImage = configGetter && configGetter();
 
             if (image != referencedImage) {
                 const dimensions = worldItem?.getContentSize();
                 VIEWER.addTiledImage({
-                    tileSource : new OpenSeadragon.EmptyTileSource({
+                    tileSource: new OpenSeadragon.EmptyTileSource({
                         height: dimensions?.y || 20000,
                         width: dimensions?.x || 20000,
                         tileSize: 512 //can be arbitrary, 512 works well...
@@ -861,7 +880,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         } else {
             // We can leave it here, it shows default white image..
             VIEWER.addTiledImage({
-                tileSource : new OpenSeadragon.EmptyTileSource({height: 20000, width: 20000, tileSize: 512}),
+                tileSource: new OpenSeadragon.EmptyTileSource({ height: 20000, width: 20000, tileSize: 512 }),
                 index: 0,
                 opacity: $("#global-opacity input").val(),
                 replace: false,
@@ -895,7 +914,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 seaGL.initAfterOpen();
             } else {
                 //todo action page reload
-                Dialogs.show($.t('messages.visualizationDisabled', {name: activeVis.name}), 20000, Dialogs.MSG_ERR);
+                Dialogs.show($.t('messages.visualizationDisabled', { name: activeVis.name }), 20000, Dialogs.MSG_ERR);
 
                 $("#panel-shaders").css('display', 'none');
 
@@ -908,7 +927,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
     let loadTooLongTimeout = null;
     //fired when all TiledImages are on their respective places
-    function handleSyntheticEventFinish(opts={}) {
+    function handleSyntheticEventFinish(opts = {}) {
 
         if (reopenCounter === 0) {
 
@@ -916,7 +935,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             let focus = APPLICATION_CONTEXT.getOption("viewport");
             if (focus && focus.hasOwnProperty("point") && focus.hasOwnProperty("zoomLevel")) {
-                window.VIEWER.viewport.panTo({x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y)}, true);
+                window.VIEWER.viewport.panTo({ x: Number.parseFloat(focus.point.x), y: Number.parseFloat(focus.point.y) }, true);
                 window.VIEWER.viewport.zoomTo(Number.parseFloat(focus.zoomLevel), null, true);
             }
 
@@ -931,7 +950,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             try {
                 if (window.opener && window.opener.VIEWER) {
-                    VIEWER.tools.link( window.opener.VIEWER);
+                    VIEWER.tools.link(window.opener.VIEWER);
                 }
             } catch (e) {
                 //pass opener access can throw exception - not available to us
@@ -942,7 +961,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             if (!USER_INTERFACE.Errors.active && firstTimeVisit) {
                 setTimeout(() => {
                     USER_INTERFACE.Tutorials.show($.t('messages.pluginsWelcome'),
-                        $.t('messages.pluginsWelcomeDescription', {tutorial: $.t('tutorials.basic.title')})
+                        $.t('messages.pluginsWelcomeDescription', { tutorial: $.t('tutorials.basic.title') })
                     );
                 }, 2000);
             }
@@ -1047,15 +1066,13 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
              * @memberOf VIEWER
              * @event before-first-open
              */
-            await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-first-open', {
+            await VIEWER.tools.raiseAwaitEvent(VIEWER, 'before-first-open', {
                 data, background, visualizations, fromLocalStorage: !!CONFIG.__fromLocalStorage
-            }).catch(e =>
-                {
-                    //todo something meaningful
-                    console.error(e);
-                }
-            );
-            this.openViewerWith(data, background, visualizations || []);
+            }).catch(e => {
+                //todo something meaningful
+                console.error(e);
+            });
+            await this.openViewerWith(data, background, visualizations || []);
         } catch (e) {
             USER_INTERFACE.Loading.show(false);
             USER_INTERFACE.Errors.show($.t('error.unknown'), `${$.t('error.reachUs')} <br><code>${e}</code>`, true);
@@ -1070,15 +1087,35 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
      * @param background
      * @param visualizations
      */
-    APPLICATION_CONTEXT.openViewerWith = function (
+    APPLICATION_CONTEXT.openViewerWith = async function (
         data,
         background,
-        visualizations=[],
+        visualizations = [],
     ) {
         USER_INTERFACE.Loading.show(true);
         VIEWER.close();
 
         const isSecureMode = APPLICATION_CONTEXT.secure;
+        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
+
+        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
+
+        /**
+         * Fired before visualization is initialized and loaded.
+         * @memberOf VIEWER
+         * @event before-canvas-reload
+         */
+        await VIEWER.tools.raiseAwaitEvent(VIEWER,'before-canvas-reload', {
+            data, background, visualizations
+        });
+
+        config.data = data;
+        config.background = background;
+        config.visualizations = visualizations;
+
         let renderingWithWebGL = visualizations?.length > 0;
         if (renderingWithWebGL) {
             if (_allowRecursionReload && !window.WebGLModule) {
@@ -1094,22 +1131,9 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                 renderingWithWebGL = false;
             }
         }
-        loadTooLongTimeout = setTimeout(() => Dialogs.show($.t('error.slide.pending'), 15000, Dialogs.MSG_WARN), 8000);
-
-        const config = APPLICATION_CONTEXT._dangerouslyAccessConfig();
-        config.data = data;
-        config.background = background;
-        config.visualizations = visualizations;
 
         if (reopenCounter > 0) {
             APPLICATION_CONTEXT.disableVisualization();
-        } else {
-            /**
-             * Fired before visualization is initialized and loaded.
-             * @memberOf VIEWER
-             * @event before-canvas-reload
-             */
-            VIEWER.raiseEvent('before-canvas-reload');
         }
 
         const toOpen = [];
@@ -1126,18 +1150,18 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
                  * @property {string} url used to create the item
                  * @property {number} index TiledImage index
                  */
-                VIEWER.raiseEvent('tiled-image-created', {item, url, index});
+                VIEWER.raiseEvent('tiled-image-created', { item, url, index });
             }
             if (openedSources <= 0) handleSyntheticOpenEvent();
         };
-        let imageOpenerCreator = (success, userArg=undefined) => {
+        let imageOpenerCreator = (success, userArg = undefined) => {
             return (toOpenLastBgIndex, source, toOpenIndex) => {
                 openedSources++;
                 window.VIEWER.addTiledImage({
                     tileSource: source,
                     opacity: opacity,
                     success: (event) => {
-                        success({userArg, toOpenLastBgIndex, toOpenIndex, event});
+                        success({ userArg, toOpenLastBgIndex, toOpenIndex, event });
                         handleFinishOpenImageEvent(event.item, source, toOpenIndex);
                     },
                     error: () => {
@@ -1150,7 +1174,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
         let imageOpener; //has to set-up correct getBackgroundConfig function
         if (APPLICATION_CONTEXT.getOption("stackedBackground")) {
             //reverse order: last opened IMAGE is the first visible
-            for (let i = background.length-1; i >= 0; i--) {
+            for (let i = background.length - 1; i >= 0; i--) {
                 const bg = background[i];
                 if (isSecureMode) delete bg.protocol;
                 const urlmaker = new Function("path,data", "return " + (bg.protocol || APPLICATION_CONTEXT.env.client.image_group_protocol));
@@ -1193,7 +1217,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             let lastValidBgIndex = toOpen.length - numOfVisLayersAtTheEnd - 1;
             for (; i <= lastValidBgIndex; i++) imageOpener(lastValidBgIndex, toOpen[i], i);
 
-            const visOpener = imageOpenerCreator(()=>{});
+            const visOpener = imageOpenerCreator(() => { });
             for (; i < toOpen.length; i++) visOpener(toOpen.length - 1, toOpen[i], i);
         }
 
@@ -1227,7 +1251,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
 
             VIEWER.bridge.loadShaders(
                 activeVisIndex,
-                function() {
+                function () {
                     VIEWER.bridge.createUrlMaker(VIEWER.bridge.visualization(), isSecureMode);
                     //const async = APPLICATION_CONTEXT.getOption("fetchAsync");
                     let data = VIEWER.bridge.dataImageSources();
@@ -1242,8 +1266,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     // Initialize middleware before we run scripts initialization
-    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({id: ""});
-    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({id: ""});
+    APPLICATION_CONTEXT.AppCache = new XOpatStorage.Cache({ id: "" });
+    APPLICATION_CONTEXT.AppCookies = new XOpatStorage.Cookies({ id: "" });
 
     initXopatScripts();
     function checkLocalState() {
@@ -1260,7 +1284,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     }
 
     // Refresh Page & Storage state are defined here since we have reference to the incoming config
-    window.UTILITIES.storePageState = function(includedPluginsList=undefined) {
+    window.UTILITIES.storePageState = function (includedPluginsList = undefined) {
         try {
             // Add plugin definition to CONFIG, which is part of POST_DATA entry. Do not change anything if not requested.
             if (includedPluginsList) {
@@ -1280,8 +1304,8 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
             POST_DATA.visualization = CONFIG;
 
             // Clean up instance references before serialization
-            const plugins = {...PLUGINS};
-            const modules = {...MODULES};
+            const plugins = { ...PLUGINS };
+            const modules = { ...MODULES };
             for (let id in plugins) {
                 delete plugins[id].instance;
             }
@@ -1302,7 +1326,7 @@ function initXopat(PLUGINS, MODULES, ENV, POST_DATA, PLUGINS_FOLDER, MODULES_FOL
     function safeStringify(obj) {
         const seenData = new WeakMap();
 
-        return JSON.stringify(obj, function(key, value) {
+        return JSON.stringify(obj, function (key, value) {
             if (key.startsWith("_") || ["eventSource"].includes(key)) {
                 return undefined;
             }

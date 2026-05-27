@@ -219,6 +219,14 @@ OpenSeadragon.EmpaiaStandaloneV3TileSource = class extends OpenSeadragon.TileSou
         return `${tiles}/tile/level/${level}/tile/${x}/${y}?${query_name}=${this.fileId}`
     }
 
+    /**
+     * @returns {Promise<ArrayBuffer>}
+     */
+    async downloadICCProfile() {
+        const url = `${this.tilesUrl}/icc_profile?slide_id=${this.fileId}`;
+        return fetch(url).then(async res => res.arrayBuffer())
+    }
+
     _setDownloadHandler(isMultiplex) {
 
         let blackImage = (context, resolve, reject) => {

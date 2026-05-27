@@ -69,24 +69,24 @@ window.WebGLModule = class {
         /////////////////////////////////////////////////////////////////////////////////
         this.uniqueId = "";
 
-        this.ready = function() { };
+        this.ready = function () { };
         this.htmlControlsId = null;
         this.webGlPreferredVersion = "2.0";
-        this.htmlShaderPartHeader = function(title, html, dataId, isVisible, layer, isControllable = true) {
+        this.htmlShaderPartHeader = function (title, html, dataId, isVisible, layer, isControllable = true) {
             return `<div class="configurable-border"><div class="shader-part-name">${title}</div>${html}</div>`;
         };
-        this.resetCallback = function() { };
+        this.resetCallback = function () { };
         //called once a visualization is compiled and linked (might not happen)
-        this.visualizationReady = function(i, visualization) { };
+        this.visualizationReady = function (i, visualization) { };
         //called once a visualization is switched to (including first run)
-        this.visualizationInUse = function(visualization) { };
-        this.visualizationChanged = function(oldVis, newVis) { };
+        this.visualizationInUse = function (visualization) { };
+        this.visualizationChanged = function (oldVis, newVis) { };
         //called when exception (usually some missing function) occurs
-        this.onError = function(error) {
+        this.onError = function (error) {
             console.warn("An error has occurred:", error.error, error.desc);
         };
         //called when key functionality fails
-        this.onFatalError = function(error) {
+        this.onFatalError = function (error) {
             console.error(error["error"], error["desc"]);
         };
 
@@ -133,17 +133,17 @@ window.WebGLModule = class {
             //WebGLModule.GlContextFactory.init(this,  "1.0");
             WebGLModule.GlContextFactory.init(this, this.webGlPreferredVersion, "2.0", "1.0");
         } catch (e) {
-            this.onFatalError({error: "Unable to initialize the visualization.", desc: e});
+            this.onFatalError({ error: "Unable to initialize the visualization.", desc: e });
             console.error(e);
             return;
         }
         console.log(`WebGL ${this.webGLImplementation.getVersion()} Rendering module (ID ${this.uniqueId || '<main>'})`);
 
-        this.gl_loaded = function(gl, program, vis) {
+        this.gl_loaded = function (gl, program, vis) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glLoaded(program, gl));
         };
 
-        this.gl_drawing = function(gl, program, vis, bounds) {
+        this.gl_drawing = function (gl, program, vis, bounds) {
             WebGLModule.eachValidVisibleVisualizationLayer(vis, layer => layer._renderContext.glDrawing(program, bounds, gl));
         };
     }
@@ -194,7 +194,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     addVisualization(...visualizations) {
-          if (this._prepared) {
+        if (this._prepared) {
             console.error("New visualization cannot be introduced after the visualizer was prepared.");
             return false;
         }
@@ -252,7 +252,7 @@ window.WebGLModule = class {
      * @instance
      * @memberOf WebGLModule
      */
-    rebuildVisualization(order=undefined) {
+    rebuildVisualization(order = undefined) {
         let vis = this._visualizations[this._program];
 
         if (order) {
@@ -270,7 +270,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     visualization(index) {
-        return this._visualizations[Math.min(index, this._visualizations.length-1)];
+        return this._visualizations[Math.min(index, this._visualizations.length - 1)];
     }
 
     /**
@@ -339,7 +339,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     processImage(data, tileDimension, zoom, pixelSize) {
-        let result = this.webGLImplementation.toCanvas(this._programs[this._program],  this._visualizations[this._program],
+        let result = this.webGLImplementation.toCanvas(this._programs[this._program], this._visualizations[this._program],
             data, tileDimension, zoom, pixelSize);
 
         if (this.debug) this._renderDebugIO(data, result);
@@ -366,7 +366,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     static eachValidVisualizationLayer(vis, callback,
-                                       onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {
+        onFail = (layer, e) => { layer.error = e.message; console.error(e); }) {
         let shaders = vis.shaders;
         let noError = true;
         for (let key in shaders) {
@@ -393,7 +393,7 @@ window.WebGLModule = class {
      * @memberOf WebGLModule
      */
     static eachValidVisibleVisualizationLayer(vis, callback,
-                                              onFail = (layer, e) => {layer.error = e.message; console.error(e);}) {
+        onFail = (layer, e) => { layer.error = e.message; console.error(e); }) {
         let shaders = vis.shaders;
         let noError = true;
         for (let key in shaders) {
@@ -444,7 +444,7 @@ window.WebGLModule = class {
      * @param width initialization width
      * @param height initialization height
      */
-    prepareAndInit(dataSources=[], width=1, height=1) {
+    prepareAndInit(dataSources = [], width = 1, height = 1) {
         let _this = this;
         this.prepare(dataSources, () => {
             _this.init(width, height);
@@ -463,7 +463,7 @@ window.WebGLModule = class {
      * @param {number} visIndex index of the initial visualization
      * @param {function} onPrepared callback to execute after succesfull preparing.
      */
-    prepare(dataSources, onPrepared, visIndex=0) {
+    prepare(dataSources, onPrepared, visIndex = 0) {
         if (this._prepared) {
             console.error("Already prepared!");
             return;
@@ -471,8 +471,10 @@ window.WebGLModule = class {
 
         if (this._visualizations.length < 1) {
             console.error("No visualization specified!");
-            this.onFatalError({error: "No visualization specified!",
-                desc: "::prepare() called with no visualization set."});
+            this.onFatalError({
+                error: "No visualization specified!",
+                desc: "::prepare() called with no visualization set."
+            });
             return;
         }
         this._origDataSources = dataSources || [];
@@ -493,7 +495,7 @@ window.WebGLModule = class {
      * @param {int} width width of the first tile going to be drawn
      * @param {int} height height of the first tile going to be drawn
      */
-    init(width=1, height=1) {
+    init(width = 1, height = 1) {
         if (!this._prepared) {
             console.error("The viaGL was not yet prepared. Call prepare() before init()!");
             return;
@@ -549,7 +551,7 @@ window.WebGLModule = class {
      * @param _reset
      * @private
      */
-    _forceSwitchShader(i, _reset=true) {
+    _forceSwitchShader(i, _reset = true) {
         if (isNaN(i) || i === null || i === undefined) i = this._program;
 
         if (i >= this._visualizations.length) {
@@ -622,11 +624,15 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
 
         let container = document.getElementById(`test-${this.uniqueId}-webgl`);
         if (!container) {
+            const debugDiv = document.createElement('div');
+            debugDiv.id = `test-${this.uniqueId}-webgl`;
+            debugDiv.innerHTML = this._getDebugInfoPanel(); // static content only – no user data
             if (!this.htmlControlsId) {
-                document.body.innerHTML += `<div id="test-${this.uniqueId}-webgl" style="position:absolute; top:0; right:0; width: 250px">${this._getDebugInfoPanel()}</div>`;
+                debugDiv.style.cssText = 'position:absolute; top:0; right:0; width: 250px';
+                document.body.appendChild(debugDiv);
             } else {
-                //safe as we do this before handlers are attached
-                document.getElementById(this.htmlControlsId).parentElement.innerHTML += `<div id="test-${this.uniqueId}-webgl" style="width: 100%;">${this._getDebugInfoPanel()}</div>`;
+                debugDiv.style.cssText = 'width: 100%;';
+                document.getElementById(this.htmlControlsId).parentElement.appendChild(debugDiv);
             }
         }
     }
@@ -746,7 +752,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             invalidate: this.resetCallback,
             interactive: this.supportsHtmlControls(),
             rebuild: this.rebuildVisualization.bind(this, undefined),
-            refetch: function() {
+            refetch: function () {
                 _this._updateRequiredDataSources(visualization);
                 //vis not change, but underlying data
                 _this.visualizationChanged(visualization, visualization);
@@ -772,12 +778,12 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
         usedIds = [...usedIds].sort();
         this._dataSources = [];
 
-        while (usedIds[usedIds.length-1] >= this._origDataSources.length) {
+        while (usedIds[usedIds.length - 1] >= this._origDataSources.length) {
             //make sure values are set if user did not provide
             this._origDataSources.push("__generated_do_not_use__");
         }
 
-        const usedIdsMax = usedIds[usedIds.length-1] || 0;
+        const usedIdsMax = usedIds[usedIds.length - 1] || 0;
         this._dataSourceMapping = new Array(Math.max(this._origDataSources.length, usedIdsMax)).fill(-1);
 
         for (let id of usedIds) {
@@ -791,7 +797,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
 
     _processVisualization(vis, idx) {
         let gl = this.gl,
-            err = function(message, description) {
+            err = function (message, description) {
                 vis.error = message;
                 vis.desc = description;
             };
@@ -849,7 +855,7 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
     }
 
     static compileShader(gl, program, VS, FS, onError, isDebugMode) {
-        function ok (kind, status, value, sh) {
+        function ok(kind, status, value, sh) {
             if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
                 console.error((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
                 return false;
@@ -875,15 +881,15 @@ Output:<br><div style="border: 1px solid;display: inline-block; overflow: auto;"
             !useShader(gl, program, FS, 'FRAGMENT_SHADER')) {
             onError("Unable to use this visualization.",
                 "Compilation of shader failed. For more information, see logs in the console.");
-            console.warn("VERTEX SHADER\n", numberLines( VS ));
-            console.warn("FRAGMENT SHADER\n", numberLines( FS ));
+            console.warn("VERTEX SHADER\n", numberLines(VS));
+            console.warn("FRAGMENT SHADER\n", numberLines(FS));
         } else {
             gl.linkProgram(program);
             if (!ok('Program', 'LINK', program)) {
                 onError("Unable to use this visualization.",
                     "Linking of shader failed. For more information, see logs in the console.");
             } else if (isDebugMode) {
-                console.info("FRAGMENT SHADER\n", numberLines( FS ));
+                console.info("FRAGMENT SHADER\n", numberLines(FS));
             }
         }
     }
@@ -894,17 +900,17 @@ WebGLModule.Rasterizer = class {
     constructor() {
         this.canvas = document.createElement("canvas");
         WebGLModule.GlContextFactory._makerInit(this.canvas, {
-            glContext: function(canvas) {
+            glContext: function (canvas) {
                 return canvas.getContext('experimental-webgl', { premultipliedAlpha: false, alpha: true })
                     || canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
             },
-            webGLImplementation: function(wrapper, glContext) {
+            webGLImplementation: function (wrapper, glContext) {
                 return new WebGLModule.RasterizerContext(wrapper, glContext);
             }
         }, this);
         this._program = this.gl.createProgram();
         WebGLModule.compileShader(this.gl, this._program,
-            this.webGLImplementation.vs(), this.webGLImplementation.fs(), (err, desc) => {}, true);
+            this.webGLImplementation.vs(), this.webGLImplementation.fs(), (err, desc) => { }, true);
         this.webGLImplementation.toBuffers(this._program);
         this.running = true;
         this._initialized = false;
@@ -928,7 +934,7 @@ WebGLModule.Rasterizer = class {
         this.gl.viewport(0, 0, width, height);
     }
 
-    init(width=1, height=1) {
+    init(width = 1, height = 1) {
         if (this._initialized) {
             console.error("Already initialized!");
             return;
@@ -997,7 +1003,7 @@ WebGLModule.Rasterizer = class {
         return triangles;
     }
 
-// create a circular doubly linked list from polygon points in the specified winding order
+    // create a circular doubly linked list from polygon points in the specified winding order
     static linkedList(data, start, end, dim, clockwise) {
         let i, last;
 
@@ -1161,7 +1167,7 @@ WebGLModule.Rasterizer = class {
         return true;
     }
 
-// go through all polygon nodes and cure small local self-intersections
+    // go through all polygon nodes and cure small local self-intersections
     static cureLocalIntersections(start, triangles, dim) {
         let p = start;
         do {
@@ -1186,7 +1192,7 @@ WebGLModule.Rasterizer = class {
         return this.filterPoints(p);
     }
 
-// try splitting polygon into two and triangulate them independently
+    // try splitting polygon into two and triangulate them independently
     static splitEarcut(start, triangles, dim, minX, minY, invSize) {
         // look for a valid diagonal that divides the polygon into two
         let a = start;
@@ -1212,7 +1218,7 @@ WebGLModule.Rasterizer = class {
         } while (a !== start);
     }
 
-// link every hole into the outer loop, producing a single-ring polygon without holes
+    // link every hole into the outer loop, producing a single-ring polygon without holes
     static eliminateHoles(data, holeIndices, outerNode, dim) {
         let queue = [],
             i, len, start, end, list;
@@ -1240,7 +1246,7 @@ WebGLModule.Rasterizer = class {
         return a.x - b.x;
     }
 
-// find a bridge between vertices that connects hole with an outer ring and and link it
+    // find a bridge between vertices that connects hole with an outer ring and and link it
     static eliminateHole(hole, outerNode) {
         let bridge = this.findHoleBridge(hole, outerNode);
         if (!bridge) {
@@ -1257,7 +1263,7 @@ WebGLModule.Rasterizer = class {
         return outerNode === bridge ? filteredBridge : outerNode;
     }
 
-// David Eberly's algorithm for finding a bridge between hole and outer polygon
+    // David Eberly's algorithm for finding a bridge between hole and outer polygon
     static findHoleBridge(hole, outerNode) {
         let p = outerNode,
             hx = hole.x,
@@ -1317,12 +1323,12 @@ WebGLModule.Rasterizer = class {
         return m;
     }
 
-// whether sector in vertex m contains sector in vertex p in the same coordinates
+    // whether sector in vertex m contains sector in vertex p in the same coordinates
     static sectorContainsSector(m, p) {
         return this.area(m.prev, m, p.prev) < 0 && this.area(p.next, m, m.next) < 0;
     }
 
-// interlink polygon nodes in z-order
+    // interlink polygon nodes in z-order
     static indexCurve(start, minX, minY, invSize) {
         let p = start;
         do {
@@ -1338,8 +1344,8 @@ WebGLModule.Rasterizer = class {
         this.sortLinked(p);
     }
 
-// Simon Tatham's linked list merge sort algorithm
-// http://www.chiark.greenend.org.uk/~sgtatham/algorithms/listsort.html
+    // Simon Tatham's linked list merge sort algorithm
+    // http://www.chiark.greenend.org.uk/~sgtatham/algorithms/listsort.html
     static sortLinked(list) {
         let i, p, q, e, tail, numMerges, pSize, qSize,
             inSize = 1;
@@ -1391,7 +1397,7 @@ WebGLModule.Rasterizer = class {
         return list;
     }
 
-// z-order of a point given coords and inverse of the longer side of data bbox
+    // z-order of a point given coords and inverse of the longer side of data bbox
     static zOrder(x, y, minX, minY, invSize) {
         // coords are transformed into non-negative 15-bit integer range
         x = 32767 * (x - minX) * invSize;
@@ -1410,7 +1416,7 @@ WebGLModule.Rasterizer = class {
         return x | (y << 1);
     }
 
-// find the leftmost node of a polygon ring
+    // find the leftmost node of a polygon ring
     static getLeftmost(start) {
         let p = start,
             leftmost = start;
@@ -1422,14 +1428,14 @@ WebGLModule.Rasterizer = class {
         return leftmost;
     }
 
-// check if a point lies within a convex triangle
+    // check if a point lies within a convex triangle
     static pointInTriangle(ax, ay, bx, by, cx, cy, px, py) {
         return (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0 &&
             (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0 &&
             (bx - px) * (cy - py) - (cx - px) * (by - py) >= 0;
     }
 
-// check if a diagonal between two polygon nodes is valid (lies in polygon interior)
+    // check if a diagonal between two polygon nodes is valid (lies in polygon interior)
     static isValidDiagonal(a, b) {
         return a.next.i !== b.i && a.prev.i !== b.i && !this.intersectsPolygon(a, b) && // dones't intersect other edges
             (this.locallyInside(a, b) && this.locallyInside(b, a) && this.middleInside(a, b) && // locally visible
@@ -1437,17 +1443,17 @@ WebGLModule.Rasterizer = class {
                 this.equals(a, b) && this.area(a.prev, a, a.next) > 0 && this.area(b.prev, b, b.next) > 0); // special zero-length case
     }
 
-// signed area of a triangle
+    // signed area of a triangle
     static area(p, q, r) {
         return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
     }
 
-// check if two points are equal
+    // check if two points are equal
     static equals(p1, p2) {
         return p1.x === p2.x && p1.y === p2.y;
     }
 
-// check if two segments intersect
+    // check if two segments intersect
     static intersects(p1, q1, p2, q2) {
         let o1 = this.sign(this.area(p1, q1, p2));
         let o2 = this.sign(this.area(p1, q1, q2));
@@ -1464,7 +1470,7 @@ WebGLModule.Rasterizer = class {
         return false;
     }
 
-// for collinear points p, q, r, check if point q lies on segment pr
+    // for collinear points p, q, r, check if point q lies on segment pr
     static onSegment(p, q, r) {
         return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) && q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
     }
@@ -1473,7 +1479,7 @@ WebGLModule.Rasterizer = class {
         return num > 0 ? 1 : num < 0 ? -1 : 0;
     }
 
-// check if a polygon diagonal intersects any polygon segments
+    // check if a polygon diagonal intersects any polygon segments
     static intersectsPolygon(a, b) {
         let p = a;
         do {
@@ -1485,14 +1491,14 @@ WebGLModule.Rasterizer = class {
         return false;
     }
 
-// check if a polygon diagonal is locally inside the polygon
+    // check if a polygon diagonal is locally inside the polygon
     static locallyInside(a, b) {
         return this.area(a.prev, a, a.next) < 0 ?
             this.area(a, b, a.next) >= 0 && this.area(a, a.prev, b) >= 0 :
             this.area(a, b, a.prev) < 0 || this.area(a, a.next, b) < 0;
     }
 
-// check if the middle point of a polygon diagonal is inside the polygon
+    // check if the middle point of a polygon diagonal is inside the polygon
     static middleInside(a, b) {
         let p = a,
             inside = false,
@@ -1508,8 +1514,8 @@ WebGLModule.Rasterizer = class {
         return inside;
     }
 
-// link two polygon vertices with a bridge; if the vertices belong to the same ring, it splits polygon into two;
-// if one belongs to the outer ring and another to a hole, it merges it into a single ring
+    // link two polygon vertices with a bridge; if the vertices belong to the same ring, it splits polygon into two;
+    // if one belongs to the outer ring and another to a hole, it merges it into a single ring
     static splitPolygon(a, b) {
         let a2 = new this.Node(a.i, a.x, a.y),
             b2 = new this.Node(b.i, b.x, b.y),
@@ -1531,7 +1537,7 @@ WebGLModule.Rasterizer = class {
         return b2;
     }
 
-// create a node and optionally link it with previous one (in a circular doubly linked list)
+    // create a node and optionally link it with previous one (in a circular doubly linked list)
     static insertNode(i, x, y, last) {
         let p = new this.Node(i, x, y);
 
@@ -1579,9 +1585,9 @@ WebGLModule.Rasterizer = class {
         this.steiner = false;
     }
 
-// return a percentage difference between the polygon area and its triangulation area;
-// used to verify correctness of triangulation
-    static deviation = function(data, holeIndices, dim, triangles) {
+    // return a percentage difference between the polygon area and its triangulation area;
+    // used to verify correctness of triangulation
+    static deviation = function (data, holeIndices, dim, triangles) {
         let hasHoles = holeIndices && holeIndices.length;
         let outerLen = hasHoles ? holeIndices[0] * dim : data.length;
 
@@ -1617,10 +1623,10 @@ WebGLModule.Rasterizer = class {
         return sum;
     }
 
-// turn a polygon in a multi-dimensional array form (e.g. as in GeoJSON) into a form Earcut accepts
-    static flatten = function(data) {
+    // turn a polygon in a multi-dimensional array form (e.g. as in GeoJSON) into a form Earcut accepts
+    static flatten = function (data) {
         let dim = data[0][0].length,
-            result = {vertices: [], holes: [], dimensions: dim},
+            result = { vertices: [], holes: [], dimensions: dim },
             holeIndex = 0;
 
         for (let i = 0; i < data.length; i++) {

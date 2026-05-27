@@ -3,6 +3,9 @@
 !*.js
 !*.json
 !*.md
+!*.php
+# Build needs to recognize git
+!.git/
 !docs/assets
 !docs/*.js
 !src
@@ -10,8 +13,11 @@
 !plugins
 !modules
 !env
+!ui
 !/tmp/openseadragon/build
-!docker/php/apache-dev.conf
-!docker/php/apache.conf
+!docker/php/*.conf
+!docker/php/*.sh
 !.htaccess
-!*php
+!package.json
+!package-lock.json
+!tailwind.config.js

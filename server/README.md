@@ -73,6 +73,10 @@ Servers should also allow to
    users to build sessions using JSON
    - ``directive=user_setup`` shows page with user-friendly setup of shaders (TODO: in progress of design)
 
+It should include all necessary dependencies respecting their inclusion order and requirements (e.g.
+support for WASM - see below, or JS modules). It should also ensure that new file versions are being labeled
+correctly so that the browser does not cache them across viewer versions.
+
 An existing server implementation demonstrates these requirements,
 which should new implementations adhere to.
 
@@ -144,4 +148,12 @@ To do so, each server must attempt to process POST data by:
          return item;
      }
  }
+````
+
+### WASM Support
+WASM Files need all content to be served with the correct MIME type and headers, required by threading.
+This is often not doable, therefore the following is not used (and threading not supported).
+````
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
 ````

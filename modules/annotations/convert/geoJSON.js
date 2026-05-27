@@ -76,6 +76,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             return res;
         },
         "polyline": (object) => this._asGEOJsonFeature(object, "LineString", ["points"], false),
+        "line": (object) => this._asGEOJsonFeature(object, "LineString", [], false),
         "point": (object) => {
             object = this._asGEOJsonFeature(object, "Point");
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
@@ -89,12 +90,15 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
         "ruler": (object) => {
             const factory = this.context.getAnnotationObjectFactory(object.factoryID);
             const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
+            object._objects = object.objects; // todo ugly, factory works with live objects
+            const props = factory.copyNecessaryProperties(object, [], true);
+            props.text = object._objects?.[1]?.text;
             return {
                 geometry: {
                     type: "LineString",
                     coordinates: factory?.toPointArray(object, converter, fabric.Object.NUM_FRACTION_DIGITS)
                 },
-                properties: factory.copyNecessaryProperties(object, [], true)
+                properties: props
             };
         },
     };
@@ -110,6 +114,12 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             (object, geometry) => object.points = geometry.map(ring => this._toNativeRing(ring))),
         "polyline": (object) => this._getAsNativeObject(object,
             (object, geometry) => object.points = this._toNativeRing(geometry, false)),
+        "line": (object) => {
+            const factory = this.context.getAnnotationObjectFactory("line");
+            const params = factory.fromPointArray(object.geometry.coordinates, ([x, y]) => ({ x, y }));
+            const opts = $.extend({}, this.context.presets.getCommonProperties(), object.properties);
+            return factory.create(params, opts);
+        },
         "point": (object) => this._getAsNativeObject(object, (object, geometry) => {
             //todo not necessary? left/top are already probably present in props
             object.left = geometry[0];
@@ -122,9 +132,19 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             object.top = geometry[1];
             return object;
         }),
-        "ruler": (object) => this._getAsNativeObject(object),
+        "ruler": (object) => {
+            const factory = this.context.getAnnotationObjectFactory("ruler");
+            const params = factory.fromPointArray(object.geometry.coordinates, ([x, y]) => ({ x, y }));
+            const opts = $.extend({}, this.context.presets.getCommonProperties(), object.properties);
+            const obj = factory.create(params, opts);
+            if (object.properties?.text && obj?._objects?.[1]) {
+                obj._objects[1].set({ text: object.properties.text });
+            }
+            return obj;
+        },
     };
 
+    // todo support unpacking like qupath does
     _decodeMulti(object, type) {
         let result = {};
         //for now we do not make use of Multi* so this has to be external GeoJSON
@@ -253,6 +273,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 const preset = object.properties;
                 presets[preset.presetID] = preset;
             } else {
+                // todo try to detect & map onto existing presets in the system
                 let result;
                 const type = object.properties["factoryID"] || object.properties["type"];
                 if (type) result = this.nativeDecoders[type]?.(object);

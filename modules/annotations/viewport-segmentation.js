@@ -176,24 +176,23 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         return this.data;
     }
 
-    _getBinaryMask(data, width, height, alpha) {
+    _getBinaryMask(data, width, height) {
         let mask = new Uint8ClampedArray(width * height);
         let maxX = -1, minX = width, maxY = -1, minY = height, bounds;
 
-        let compareAlpha;
-        if (!alpha) {
-            compareAlpha = (a) => a <= 10;
-        } else {
-            compareAlpha = (a) => a > 10;
-        }
-
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                const index = (y * width + x) * 4 + 3;
-                let a = data[index];
+                const index = (y * width + x) * 4;
+                const r = data[index];
+                const g = data[index + 1];
+                const b = data[index + 2];
+                const a = data[index + 3];
 
-                if (compareAlpha(a)) {
-                    mask[y * width + x] = 1;
+                // simple luminance threshold + alpha guard
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                if (a > 0 && lum >= 200) {  // instead of r === 255
+                    const idx = y * width + x;
+                    mask[idx] = 1;
 
                     if (x < minX) minX = x;
                     if (x > maxX) maxX = x;
@@ -203,8 +202,13 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
             }
         }
 
-        bounds = maxX === -1 || maxY === -1 ? null : { minX, minY, maxX, maxY };
-        return { data: mask, width: width, height: height, bounds: bounds };
+        if (maxX === -1 || maxY === -1) {
+            bounds = null;
+        } else {
+            bounds = { minX, minY, maxX, maxY };
+        }
+
+        return { data: mask, width, height, bounds };
     }
 
     _getViewportScreenshotDimensions() {

@@ -600,11 +600,13 @@ ${this._globalSelf}._context.deleteAllAnnotations()" id="delete-all-annotations"
 title="Edit annotation (disables navigation)" onclick="if (this.innerText === 'edit') {
 ${_this._globalSelf}._boardItemEdit(this, ${focusBox}, ${object.incrementId}); } 
 else { ${_this._globalSelf}._boardItemSave(); } return false;">edit</span>` : '';
+        const privateIcon = object.private ? `<span class="material-symbols-outlined" style="vertical-align:sub;">visibility_lock</span>` : '';
         const html = `
 <div id="log-object-${object.incrementId}" class="rounded-2" data-order="${object.internalID}"
 onclick="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event);"
 oncontextmenu="${_this._globalSelf}._clickBoardElement(${focusBox}, ${object.incrementId}, event); return false;">
 <span class="material-icons" style="vertical-align:sub;color: ${color}">${icon}</span> 
+${privateIcon}
 <div style="width: calc(100% - 80px); " class="d-inline-block">${inputs.join("")}</div>
 ${editIcon}
 </div>`;
@@ -643,6 +645,16 @@ ${editIcon}
     }
 
     _boardItemEdit(self, focusBBox, object) {
+        let cancelAction = false;
+		try {
+			if (object) this._context.raiseEvent('annotation-before-edit', {
+				object,
+				isCancelled: () => cancelAction,
+				setCancelled: (cancelled) => {cancelAction = cancelled},
+			});
+		} catch {}
+		if (cancelAction) return;
+
         let updateUI = false;
         if (this._editSelection) {
             this._boardItemSave(true);
@@ -755,9 +767,17 @@ ${editIcon}
                     await this._sleep(150); //let user to orient where canvas moved before deleting the element
                 }
             }
-            if (toRemove) canvas.remove(toRemove);
+            if (toRemove) {
+                canvas.remove(toRemove);
+                try {
+                    const wasSelected = this._context.canvas.getActiveObject() === toRemove;
+                    if (wasSelected) this._context.raiseEvent('annotation-deselected', {object: toRemove});
+                } catch (e) {
+                    console.warn('History swapping annotation - exception on deselection.', e);
+                }
+                this._context.raiseEvent('annotation-delete', {object: toRemove});
+            }
             canvas.setActiveObject(toAdd);
-
             this._context.raiseEvent('annotation-create', {object: toAdd});
         } else if (toRemove) {
             if (withFocus && (!focusOnlyIfNecessary || !this._annotationVisible(toRemove))) {
@@ -766,7 +786,13 @@ ${editIcon}
             }
             canvas.remove(toRemove);
             this._removeFromBoard(toRemove);
-            this._context.raiseEvent('annotation-delete', {object: toAdd});
+            try {
+                const wasSelected = this._context.canvas.getActiveObject() === toRemove;
+                if (wasSelected) this._context.raiseEvent('annotation-deselected', {object: toRemove});
+            } catch (e) {
+                console.warn('History removing annotation - exception on deselection.', e);
+            }
+            this._context.raiseEvent('annotation-delete', {object: toRemove});
         }
         canvas.renderAll();
     }

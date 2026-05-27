@@ -1,4 +1,5 @@
 import van from "../vanjs.mjs";
+const { span } = van.tags;
 
 const HtmlRenderer = (htmlString) => {
     const container = van.tags.div(); // Create a container div
@@ -15,22 +16,33 @@ class BaseComponent {
     /**
      *
      * @param {*} options - other options are defined in the constructor of the derived class
-     * @param  {...any} args
+     * @param  {...any} children
      * @param {string} [options.id] - The id of the component
      */
-    constructor(options, ...args) {
-        const extraClasses = options["extraClass"];
+    constructor(options, ...children) {
+        const extraClasses = options["extraClasses"];
         this.classMap = typeof extraClasses === "object" ? extraClasses : {};
-        this.additionalProperties = options["additionalProperties"] || {};
-        this._children = args;
+
+        const extraProperties = options["extraProperties"];
+        this.propertiesMap = typeof extraProperties === "object" ? extraProperties : {};
+        this.propertiesStateMap = {};
+        if (extraProperties){
+            for (let key in this.propertiesMap) {
+                this.propertiesStateMap[key] = van.state(this.propertiesMap[key]);
+            }
+        }
+
+        this._children = children;
         this._renderedChildren = null;
-        this._initializing = true;
         this.classState = van.state("");
 
         if (options) {
             if (options.id) {
                 this.id = options.id;
                 delete options.id;
+            }
+            else {
+                this.id = Math.random().toString(36).substring(2, 15);
             }
             this.options = options;
         } else {
@@ -43,23 +55,72 @@ class BaseComponent {
      * @param {*} element - The element to attach the component to
      */
     attachTo(element) {
-        this._initializing = false;
-        this.refreshState();
+        this.refreshClassState();
+        this.refreshPropertiesState();
+
         if (element instanceof BaseComponent) {
-            element.addChildren(this);
+            const mount = document.getElementById(element.id);
+            if (document.getElementById(element.id) === null) {
+                element._children.push(this);
+            } else {
+                mount.append(this.create());
+            }
         } else {
-            van.add(element,
-                this.create());
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
+
+            if (!mount) {
+                console.error(`Element ${element} not found`);
+                van.add(element, this.create());
+            } else {
+                mount.append(this.create());
+            }
         }
     }
 
     /**
-     * Refresh the state of the component, e.g. class names
+     *
+     * @param {*} element - The element to prepend the component to
      */
-    refreshState() {
+    prependedTo(element) {
+        this.refreshClassState();
+        this.refreshPropertiesState();
+
+        if (element instanceof BaseComponent) {
+            const mount = document.getElementById(element.id);
+            if (document.getElementById(element.id) === null) {
+                element._children.unshift(this);
+            } else {
+                mount.prepend(this.create());
+            }
+        } else {
+            const mount = typeof element === "string"
+                ? document.getElementById(element)
+                : element;
+
+            if (!mount) {
+                console.error(`Element ${element} not found`);
+                van.add(element, this.create());
+            } else {
+                mount.prepend(this.create());
+            }
+        }
+
+    }
+
+    /**
+     * @description Refresh the state of the component, e.g. class names
+     */
+    refreshClassState() {
         this.classState.val = Object.values(this.classMap).join(" ");
     }
 
+    refreshPropertiesState() {
+        for (let key in this.propertiesStateMap) {
+            this.propertiesStateMap[key].val = this.propertiesMap[key] instanceof Object ? this.propertiesMap[key].join(" ") : this.propertiesMap[key];
+        }
+    }
     /**
      *
      * @param  {...any} properties - functions to set the state of the component
@@ -78,20 +139,21 @@ class BaseComponent {
     }
 
     /**
-     * getter for children which will automatically refresh them and create them if they are BaseComponent
+     * @description getter for children which will automatically refresh them and create them if they are BaseComponent
      */
     get children() {
         if (this._renderedChildren) return this._renderedChildren;
         this._renderedChildren = (this._children || []).map(child => {
             if (child instanceof BaseComponent) {
-                child.refreshState();
+                child.refreshClassState();
+                child.refreshPropertiesState();
                 return child.create();
             }
             if (child instanceof Element) {
                 return child;
             }
             if (typeof child === "string") {
-                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : child;
+                return child.trimStart().startsWith("<") ? HtmlRenderer(child) : span(child);
             }
             console.warn(`Invalid child component provided - ${typeof child}:`, child);
             return undefined;
@@ -100,9 +162,10 @@ class BaseComponent {
     }
 
     /**
-     * getter for commonProperties which are shared against all components
+     * @description getter for commonProperties which are shared against all components
      */
     get commonProperties() {
+        this.refreshClassState();
         if (this.id) {
             return {
                 id: this.id,
@@ -115,6 +178,11 @@ class BaseComponent {
         };
     }
 
+    get extraProperties() {
+        this.refreshPropertiesState();
+        return this.propertiesStateMap;
+    }
+
     /**
      *
      * @param {string} key - The key of the class
@@ -125,9 +193,16 @@ class BaseComponent {
      */
     setClass(key, value) {
         this.classMap[key] = value;
-        if (!this._initializing) {
-            this.classState.val = Object.values(this.classMap).join(" ");
+        this.classState.val = Object.values(this.classMap).join(" ");
+    }
+
+    setExtraProperty(key, value) {
+        this.propertiesMap[key] = value;
+        let stateMap = this.propertiesStateMap[key];
+        if (!stateMap) {
+            throw new Error("Extra property setter set without extra definition in the component constructor!");
         }
+        stateMap.val = value instanceof Object ? value.join(" ") : value;
     }
 
     /**
@@ -136,6 +211,18 @@ class BaseComponent {
      */
     create() {
         throw new Error("Component must override create method");
+    }
+
+    /**
+     * @description Remove the component from the DOM
+     */
+    remove() {
+        this._children.forEach(child => {
+            if (child instanceof BaseComponent) {
+                child.remove();
+            }
+        });
+        document.getElementById(this.id).remove();
     }
 
     /**
@@ -154,8 +241,6 @@ class BaseComponent {
      * should be functions
      */
     _applyOptions(options, ...names) {
-        const wasInitializing = this._initializing;
-        this._initializing = true;
         for (let prop of names) {
             const option = options[prop];
             try {
@@ -164,11 +249,9 @@ class BaseComponent {
                 console.warn("Probably incorrect component usage! Option values should be component-defined functional properties!", e);
             }
         }
-        this._initializing = wasInitializing;
-        if (wasInitializing) {
-            this.refreshState();
-        }
 
+        this.refreshClassState();
+        this.refreshPropertiesState();
     }
 }
 

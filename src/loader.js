@@ -192,6 +192,15 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
     };
 
     /**
+     * Get one of allowed plugin meta keys
+     * @param id
+     * @param {string} metaKey one of "name", "description", "author", "version"
+     */
+    window.pluginMeta = function(id, metaKey) {
+        return ["name", "description", "author", "version"].includes(metaKey) ? PLUGINS[id]?.[metaKey] : undefined;
+    }
+
+    /**
      * Get a module singleton reference if instantiated.
      * @param id module id
      * @return {XOpatModuleSingleton|undefined} module if it is a singleton and already instantiated
@@ -578,7 +587,7 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         async importData(data) {}
 
         /**
-         *
+         * TODO: this does not wait once module is fully loaded!
          * @param moduleId
          * @param callback
          * @return {boolean} true if finished immediatelly, false if registered handler for the
@@ -750,6 +759,18 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
          * Root path - the modules folder
          */
         static ROOT = MODULES_FOLDER;
+
+        /**
+         * The root of this module folder
+         * @return {string}
+         * @constructor
+         */
+        get MODULE_ROOT() {
+            if (!MODULES[this.id]) {
+                throw new Error("Invalid module - not properly initialized!");
+            }
+            return MODULES_FOLDER + MODULES[this.id]?.directory
+        }
     }
 
     /**
@@ -943,6 +964,19 @@ function initXOpatLoader(PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_
         }
 
         static ROOT = PLUGINS_FOLDER;
+
+
+        /**
+         * The root of this plugin folder
+         * @return {string}
+         * @constructor
+         */
+        get PLUGIN_ROOT() {
+            if (!PLUGINS[this.id]) {
+                throw new Error("Invalid module - not properly initialized!");
+            }
+            return PLUGINS_FOLDER + PLUGINS[this.id]?.directory
+        }
     }
 
     /**

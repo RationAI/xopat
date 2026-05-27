@@ -1,4 +1,19 @@
 //ASAP XML not yet fully tested, does not render well all objects, problem with hierarchies
+const ASAP_TYPE_BY_FACTORY = {
+    rect: "Rectangle",
+    polygon: "Polygon",
+    multipolygon: "Polygon",
+    ellipse: "Polygon",
+    polyline: "Spline",
+    line: "Spline",
+    ruler: "Spline",
+    point: "Dot",
+    text: "Dot",
+};
+const ASAP_LOSSY_FACTORIES = new Set([
+    "multipolygon", "ellipse", "polyline", "line", "ruler", "text"
+]);
+
 OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'ASAP-XML Annotations';
     static description = 'ASAP-compatible XML Annotations Format';
@@ -52,6 +67,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
         const result = {};
 
         let wasError = '';
+        const lossyTypes = new Set();
 
         let doc = document.implementation.createDocument("", "", null);
         const presetsIdSet = new Set();
@@ -70,9 +86,7 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
 
                 let factory = this.context.getAnnotationObjectFactory(obj.factoryID);
                 if (factory) {
-                    // Todo some better reporting mechanism
                     if (factory.factoryID === "multipolygon") {
-                        wasError = 'ASAP XML Does not support multipolygons - saved as polygon.';
                         coordinates = this.context.polygonFactory.toPointArray({points: obj.points[0]},
                             OSDAnnotations.AnnotationObjectFactory.withArrayPoint);
                     } else {
@@ -84,7 +98,21 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
                         continue;
                     }
                 }
-                xml_annotation.setAttribute("Type", "Polygon");
+                const asapType = ASAP_TYPE_BY_FACTORY[factory?.factoryID] || "Polygon";
+                xml_annotation.setAttribute("Type", asapType);
+                // Per-annotation factoryID (custom attribute, ASAP ignores unknown attrs).
+                // Required because a preset's FactoryID is a default, but its annotations may differ.
+                if (factory?.factoryID) {
+                    xml_annotation.setAttribute("xopatFactoryID", factory.factoryID);
+                }
+                if (factory && ASAP_LOSSY_FACTORIES.has(factory.factoryID)) {
+                    lossyTypes.add(factory.factoryID);
+                }
+                if (factory?.factoryID === "ruler") {
+                    const inner = obj._objects || obj.objects;
+                    const txt = inner?.[1]?.text;
+                    if (txt) xml_annotation.setAttribute("Description", txt);
+                }
 
                 //todo attr name could be set from preset
                 xml_annotation.setAttribute("Name", "Annotation " + i);
@@ -150,9 +178,14 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             //todo check for consitency presetsIdSet?
         }
 
+        if (lossyTypes.size) {
+            const lossyMsg = `ASAP-XML is lossy for: ${[...lossyTypes].join(", ")}. `
+                + `Re-import in xopat preserves class via preset FactoryID; other tools see only the geometry.`;
+            wasError = wasError ? wasError + "\n" + lossyMsg : lossyMsg;
+        }
         // Todo - create some unified checking mechanism that reports on export issues
         if (wasError) {
-            Dialogs.show(wasError, 15000, Dialogs.MSG_ERR);
+            Dialogs.show(wasError, 15000, Dialogs.MSG_WARN);
         }
 
         return result;
@@ -210,22 +243,56 @@ OSDAnnotations.Convertor.register("asap-xml", class extends OSDAnnotations.Conve
             for (const coordElem of coords.getElementsByTagName("Coordinate")) {
                 const index = Number.parseInt(coordElem.getAttribute("Order"));
                 pointArray[index] = {
-                    x: Number.parseInt(coordElem.getAttribute("X")),
-                    y: Number.parseInt(coordElem.getAttribute("Y"))
+                    x: Number.parseFloat(coordElem.getAttribute("X")),
+                    y: Number.parseFloat(coordElem.getAttribute("Y"))
                 }
             }
 
-            const presetID = elem.getAttribute("PartOfGroup");
+            const rawPresetID = elem.getAttribute("PartOfGroup");
+            const presetID = Number.parseInt(rawPresetID) || rawPresetID;
+            const preset = presets[presetID];
+            // Prefer per-annotation factoryID (custom attribute) over the preset's default factoryID:
+            // a preset's FactoryID is just the default; its annotations may be of other types.
+            const xopatFacID = elem.getAttribute("xopatFactoryID");
+            let facID = xopatFacID || preset?.factoryID || "polygon";
+            // ASAP-XML drops multipolygon rings on export (only outer ring of first polygon is kept);
+            // decode that single ring as a polygon to avoid Multipolygon.fromPointArray misinterpreting flat points.
+            if (facID === "multipolygon") facID = "polygon";
+            const factory = this.context.getAnnotationObjectFactory(facID);
+            const color = elem.getAttribute("Color") || preset?.color || undefined;
 
-            //todo support: Dot, Rectangle, Polygon, Spline, and PointSet by implementation of general annotation structure
-            //todo attr name could be set as category custom meta
-            annotations.push({
-                type: "polygon",
-                points: pointArray,
-                presetID: presetID,
-                factoryID: "polygon",
-                color: elem.getAttribute("Color") || undefined
-            });
+            let pushed = false;
+            if (factory && typeof factory.fromPointArray === "function" &&
+                typeof factory.create === "function") {
+                try {
+                    const arrPts = pointArray.map(p => [p.x, p.y]);
+                    const params = factory.fromPointArray(arrPts, ([x, y]) => ({ x, y }));
+                    const opts = {
+                        color,
+                        presetID,
+                        factoryID: facID,
+                        ...(this.context.presets.getCommonProperties?.() || {}),
+                    };
+                    const obj = factory.create(params, opts);
+                    if (facID === "ruler") {
+                        const desc = elem.getAttribute("Description");
+                        if (desc && obj?._objects?.[1]) obj._objects[1].set({ text: desc });
+                    }
+                    annotations.push(obj);
+                    pushed = true;
+                } catch (e) {
+                    console.warn("ASAP-XML decode: factory reconstruction failed, falling back to polygon", facID, e);
+                }
+            }
+            if (!pushed) {
+                annotations.push({
+                    type: "polygon",
+                    points: pointArray,
+                    presetID,
+                    factoryID: "polygon",
+                    color
+                });
+            }
         }
 
         return {

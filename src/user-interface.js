@@ -303,6 +303,7 @@ window.addEventListener("beforeunload", (e) => {
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/assets/style.css">
         <link rel="stylesheet" href="${APPLICATION_CONTEXT.url}src/libs/primer_css.css">
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.5.1.min.js"
             integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0="
             crossorigin="anonymous"></script>
@@ -346,7 +347,7 @@ window.addEventListener("beforeunload", (e) => {
 
             let close = params.allowClose ? this._getCloseButton(parentId) : '';
             let resize = params.allowResize ? "resize:vertical;" : "";
-            footer = footer ? `<div class="position-absolute bottom-0 right-0 left-0 border-top"
+            footer = footer ? `<div class="border-top"
 style="border-color: var(--color-border-primary);">${footer}</div>` : "";
 
             let limits = isModal ? "style='width: 100%; height: 100vh;'" : "style='max-width:80vw; max-height: 80vh'";
@@ -359,7 +360,7 @@ style="border-color: var(--color-border-primary);">${footer}</div>` : "";
       ${close}
     </div>
     <div id="window-content" class="overflow-auto position-relative" style="${resize} height: ${height}; min-height: 63px;">
-      <div class="Box-body pr-2" style="padding-bottom: 45px; min-height: 100%">
+      <div class="Box-body pr-2" style="padding-bottom: 5px; min-height: 100%">
 	  ${content}
 	  </div>
     </div>
@@ -382,6 +383,7 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
      * @typedef {{
      *  icon: string | undefined,
      * 	iconCss: string | undefined,
+     *  containerCss: string | undefined,
      * 	title: string,
      * 	action: function,
      * 	selected: boolean | undefined
@@ -432,9 +434,9 @@ aria-label="Close help" onclick="Dialogs.closeWindow('${id}')">
          *   config.action {function} callback, argument given is 'selected' current value from config.icon
          *      - if undefined, the menu item is treated as separator - i.e. use '' title and undefined action for hr separator
          *      - you can also pass custom HTML and override the default styles and content, handler system etc...
-         *   config.styles {object} custom css styles, optional
          *   config.selected {boolean} whether to mark the option as selected, optional
          *   config.icon {string} custom option icon name, optional
+         *   config.containerCss {string} css for the container, optional
          *   config.iconCss {string} css for icon
          */
         bind: function(context, optionsGetter) {
@@ -494,7 +496,7 @@ style="width: 20px;font-size: 17px;${opts.iconCss || ''}" onclick="">${opts.icon
                     : "<span class='d-inline-block' style='width: 20px'></span>";
                 const selected = opts.selected ? "style=\"background: var(--color-state-focus-border);\"" : "";
 
-                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer"
+                this._body.append(`<li ${selected}><a class="pl-1 dropdown-item pointer ${opts.containerCss || ''}"
 onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             } else {
                 this._calls.push(null);
@@ -1097,9 +1099,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              */
             add: function(plugidId, name, description, icon, steps, prerequisites=undefined) {
                 if (!icon) icon = "school";
+                const pluginName = pluginMeta(plugidId, "name");
                 plugidId = plugidId ? `${plugidId}-plugin-root` : "";
+                const label = pluginName ? `<span class="rounded-2 px-3 py-1 position-absolute top-1 right-1 bg-opacity" style="font-size: 9px">${pluginName}</span>` : "";
                 this.tutorials.append(`
-<div class='d-inline-block px-2 py-2 m-1 pointer v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+<div class='d-inline-block px-2 pb-2 pt-3 m-1 pointer position-relative v-align-top rounded-2 tutorial-item ${plugidId}' onclick="USER_INTERFACE.Tutorials.run(${this.steps.length});">
+${label}
 <span class="d-block material-icons f1 text-center my-2">${icon}</span><p class='f3-light mb-0'>${name}</p><p>${description}</p></div>`);
                 this.steps.push(steps);
                 this.prerequisites.push(prerequisites);
@@ -1155,13 +1160,32 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
 
         /**
          * Add custom HTML to the DOM selector
-         * @param {string} html to append
+         * @param {string|Node|BaseComponent} html to append
          * @param {string} pluginId owner plugin ID
          * @param {string} selector jquery selector where to append, default 'body'
          */
         addHtml: function(html, pluginId, selector="body") {
+            function materialize(htmlLike) {
+                if (htmlLike == null) return [];
+                if (typeof htmlLike === "string") return htmlLike;
+                if (htmlLike.jquery) return htmlLike;
+                if (Array.isArray(htmlLike)) return htmlLike.map(materialize);
+
+                // BaseComponent instance (your components have create() or render())
+                if (htmlLike instanceof UI.BaseComponent ||
+                    (htmlLike && typeof htmlLike === "object" && (htmlLike.create || htmlLike.render))) {
+                    return (htmlLike.render?.() ?? htmlLike.create?.() ?? htmlLike.el ?? htmlLike.element ?? htmlLike);
+                }
+
+                // DOM Node / DocumentFragment
+                if (htmlLike.nodeType || htmlLike instanceof Node) return htmlLike;
+
+                // Fallback: stringify
+                return String(htmlLike);
+            }
+
             try {
-                $(html).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
+                $(materialize(html)).appendTo(selector).each((idx, element) => $(element).addClass(`${pluginId}-plugin-root`));
                 return true;
             } catch (e) {
                 console.error("Could not attach custom HTML.", e);

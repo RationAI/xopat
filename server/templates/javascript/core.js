@@ -31,6 +31,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         VIEWER_SOURCES_ABS_ROOT: absPath + 'src/',
         ABS_MODULES: absPath + 'modules/',
         ABS_PLUGINS: absPath + 'plugins/',
+        ABS_UI: absPath + 'ui/',
 
         //Relative Paths For the Viewer
         PROJECT_ROOT: projectRoot,
@@ -47,6 +48,7 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         CORE: {},
         MODULES: {},
         PLUGINS: {},
+        UI: {},
 
         isType: isType,
         parseBool: parseBool,

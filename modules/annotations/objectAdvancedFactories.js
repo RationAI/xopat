@@ -42,6 +42,12 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     configure(instance, options) {
         if (instance.type === "group") {
+            // Legacy/native imports may lack color on the group; recover from preset
+            // so the inner line gets a stroke and renders.
+            if (!options.color && instance.presetID) {
+                const preset = this._presets?.get?.(instance.presetID);
+                if (preset?.color) options = $.extend({}, options, { color: preset.color });
+            }
             this._configureParts(instance.item(0), instance.item(1), options);
             this._configureWrapper(instance, instance.item(0), instance.item(1), options);
         }
@@ -49,13 +55,29 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
 
     /**
      * @param {Object} ofObject fabricjs.Line object that is being copied
-     * @param {array} parameters array of line points [x, y, x, y ..]
+     * @param {number[] | {
+     *  left: number,
+     *  top: number,
+     *  points: number,
+     * }} parameters array of 'points' [x1, y1, x2, y2] or an object which also specifies 'left' and 'top' values
      */
-    copy(ofObject, parameters=undefined) {
-        let line = ofObject.item(0),
-            text = ofObject.item(1);
-        if (!parameters) parameters = [line.x1, line.y1, line.x2, line.y2];
-        return new fabric.Group([fabric.Line(parameters, {
+    copy(ofObject, parameters = undefined) {
+        const line = ofObject.item(0);
+        const text = ofObject.item(1);
+
+        if (parameters && Array.isArray(parameters)) {
+            parameters = {
+                left: ofObject.left,
+                top: ofObject.top,
+                points: parameters,
+            }
+        } else if (!parameters) parameters = {
+            left: ofObject.left,
+            top: ofObject.top,
+            points: [line.x1, line.y1, line.x2, line.y2]
+        }
+
+        const conf = new fabric.Group([new fabric.Line(parameters.points, {
             fill: line.fill,
             opacity: line.opacity,
             strokeWidth: line.strokeWidth,
@@ -71,7 +93,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             lockMovementY: line.lockMovementY,
             originalStrokeWidth: line.originalStrokeWidth,
             selectable: false,
-        }), new fabric.Text(text.text), {
+            originX: "left",
+            originY: "top",
+            left: line.left,
+            top: line.top,
+        }), new fabric.Text(text.text, {
             textBackgroundColor: text.textBackgroundColor,
             fontSize: text.fontSize,
             lockUniScaling: true,
@@ -81,9 +107,13 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             hasControls: false,
             stroke: text.stroke,
             fill: text.fill,
-            paintFirst: 'stroke',
+            paintFirst: text.paintFirst,
             strokeWidth: text.strokeWidth,
-        }], {
+            originX: "left",
+            originY: "top",
+            left: text.left,
+            top: text.top,
+        })], {
             presetID: ofObject.presetID,
             measure: ofObject.measure,
             meta: ofObject.meta,
@@ -94,16 +124,105 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             color: ofObject.color,
             zoomAtCreation: ofObject.zoomAtCreation,
             selectable: true,
-            hasControls: true
+            hasControls: true,
+            left: parameters.left,
+            top: parameters.top,
+            height: ofObject.height,
+            width: ofObject.width,
+            fill: ofObject.fill,
+            stroke: ofObject.stroke,
+            strokeWidth: ofObject.strokeWidth,
+            opacity: ofObject.opacity,
+            borderColor: ofObject.borderColor,
+            cornerColor: ofObject.cornerColor,
+            borderScaleFactor: ofObject.borderScaleFactor,
+            borderDashArray: ofObject.borderDashArray,
+            cornerSize: ofObject.cornerSize,
+            cornerStyle: ofObject.cornerStyle,
+            transparentCorners: ofObject.transparentCorners,
+            private: ofObject.private,
         });
+        this.renderAllControls(conf);
+        return conf;
     }
 
     edit(theObject) {
         //not allowed
     }
 
-    recalculate(theObject) {
-        //not supported error?
+    getLength(theObject) {
+        const line = theObject.item(0);
+        return Math.hypot(line.x1 - line.x2, line.y1 - line.y2);
+    }
+
+    /**
+     * Called when object is selected - restore custom controls
+     * @param {fabric.Object} theObject selected fabricjs object
+     */
+    selected(theObject) {
+        // Re-apply controls after object selection, as FabricJS might reset them
+        this.renderAllControls(theObject);
+        theObject.setControlsVisibility({ private: true });
+    }
+
+    recalculate(theObject, ignoreReplace=false) {
+        // warning: untested
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        const points = [line.x1, line.y1, line.x2, line.y2];
+        
+        const newObject = this.copy(theObject, {
+            left: theObject.left,
+            top: theObject.top,
+            points: points
+        });
+
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+
+        return newObject;
+    }
+
+    translate(theObject, pos, ignoreReplace=false) {
+        if (!theObject._objects || theObject._objects.length < 2) {
+            return theObject;
+        }
+
+        const line = theObject._objects[0];
+        let deltaX, deltaY;
+        
+        if (pos.mode === 'move') {
+            deltaX = pos.x;
+            deltaY = pos.y;
+        } else {
+            deltaX = pos.x - theObject.left;
+            deltaY = pos.y - theObject.top;
+        }
+
+        const newPoints = [
+            line.x1 + deltaX,
+            line.y1 + deltaY,
+            line.x2 + deltaX,
+            line.y2 + deltaY
+        ];
+
+        const newObject = this.copy(theObject, {
+            left: theObject.left + deltaX,
+            top: theObject.top + deltaY,
+            points: newPoints
+        });
+
+        if (!ignoreReplace) {
+            this._context.replaceAnnotation(theObject, newObject);
+            this._context.canvas.renderAll();
+        }
+
+        return newObject;
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties) {
@@ -174,13 +293,11 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }
 
         const props = this._presets.getCommonProperties();
+        // Helper line was created from the active preset and carries its color;
+        // forward it so the group is serialized with color and the inner line keeps a stroke after import.
+        if (line.color) props.color = line.color;
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
-        text.set({
-            top: line.top + line.height / 2,
-            left: line.left + line.width / 2
-        });
-        text.calcOCoords();
         this._context.addAnnotation(obj);
         this._current = undefined;
         return true;
@@ -223,22 +340,53 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        //fallback to line
-        //todo problem: can be used (by converters) for exported or active objects, one has the list underscored, other not
-        // probably ban using toPointArray on exported native format..
-        const line = obj._objects ? obj._objects[0] : obj.objects[0];
-        let x1 = obj.left + line.x1 + obj.width/2, x2 = obj.left + line.x2 + obj.width/2;
-        let y1 = obj.top + line.y1 + obj.height/2, y2 = obj.top + line.y2 + obj.height/2;
+        // Accept both live group (obj._objects) and serialized group (obj.objects).
+        const inner = obj._objects || obj.objects;
+        const line = inner ? inner[0] : null;
+        if (!line) return [];
+
+        // Inner line's x1..y2 are centered around the group's bbox center;
+        // compose with the group's left/top + half-extents to get absolute canvas coords.
+        const width = Number.isFinite(obj.width) ? obj.width : 0;
+        const height = Number.isFinite(obj.height) ? obj.height : 0;
+        const cx = (obj.left || 0) + width / 2;
+        const cy = (obj.top || 0) + height / 2;
+        let x1 = cx + (line.x1 || 0);
+        let y1 = cy + (line.y1 || 0);
+        let x2 = cx + (line.x2 || 0);
+        let y2 = cy + (line.y2 || 0);
 
         if (digits !== undefined) {
-            x1 = parseFloat(Number(x1).toFixed(digits)); y1 = parseFloat(Number(y1).toFixed(digits));
-            x2 = parseFloat(Number(x2).toFixed(digits)); y2 = parseFloat(Number(y2).toFixed(digits));
+            x1 = parseFloat(Number(x1).toFixed(digits));
+            y1 = parseFloat(Number(y1).toFixed(digits));
+            x2 = parseFloat(Number(x2).toFixed(digits));
+            y2 = parseFloat(Number(y2).toFixed(digits));
         }
         return [converter(x1, y1), converter(x2, y2)];
     }
 
+    fromPointArray(points, deconvertor) {
+        if (!points || points.length < 2) {
+            throw new Error("At least two points required");
+        }
+
+        const p1 = deconvertor(points[0]);
+        const p2 = deconvertor(points[1]);
+        return [p1.x, p1.y, p2.x, p2.y];
+    }
+
     _configureLine(line, options) {
-        options.stroke = options.color;
+        const lineOptions = Object.assign({}, options);
+        lineOptions.stroke = options.color;
+        // Don't carry the wrap group's positional/sizing props onto the inner line:
+        // the inner line's coords are local to the group and managed independently;
+        // applying the group's bbox here moves the line off-canvas (invisible).
+        delete lineOptions.left;
+        delete lineOptions.top;
+        delete lineOptions.width;
+        delete lineOptions.height;
+        delete lineOptions.scaleX;
+        delete lineOptions.scaleY;
 
         $.extend(line, {
             scaleX: 1,
@@ -246,7 +394,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             selectable: false,
             factoryID: this.factoryID,
             hasControls: false,
-        }, options);
+            originX: 'left',
+            originY: 'top'
+        }, lineOptions);
     }
 
     _configureText(text, options) {
@@ -261,7 +411,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             paintFirst: 'stroke',
             strokeWidth: 2,
             scaleX: 1/options.zoomAtCreation,
-            scaleY: 1/options.zoomAtCreation
+            scaleY: 1/options.zoomAtCreation,
+            originX: 'left',
+            originY: 'top'
         });
     }
 
@@ -275,9 +427,8 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
             factoryID: this.factoryID,
             type: this.type,
             presetID: options.presetID,
-            measure: this._updateText(line, text),
-            originX: 'left',
-            originY: 'top'
+            measure: text.text,
+            hasControls: true,
         });
     }
 
@@ -285,12 +436,22 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         const line = new fabric.Line(parameters),
             text = new fabric.Text('');
         this._configureParts(line, text, options);
+        this._updateText(line, text);
         return [line, text];
     }
 
     _createWrap(parts, options) {
-        const wrap = new fabric.Group(parts);
+        const line = parts[0];
+        const wrap = new fabric.Group(parts, {
+            originX: 'left',
+            originY: 'top',
+            left: line.left,
+            top: line.top,
+            width: line.width,
+            height: line.height,
+        });
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
+        wrap.setCoords();
         return wrap;
     }
 };

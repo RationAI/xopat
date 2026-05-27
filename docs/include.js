@@ -33,8 +33,7 @@ module.exports = {
         ...flatten(config.js.src).map(x => `src/${x}`),
         ...flatten(webglConfig.includes).map(x => `modules/webgl/${x}`),
         'README.md',
-        'ui/components/buttons.mjs',
-        'ui/components/baseComponent.mjs',
+        // TODO: ui not included in docs!  'ui/**/*.mjs',
         //other things we want to keep in docs, need @fileoverview tag, input as opts: {include: X }
         // 'src/assets/style.css',
         'src/config.json',

@@ -19,7 +19,7 @@
     "method": "redirect",
     //Whether to store the login session in: "default" (usually sessionStorage) / "cache" (usually localStorage) / "cookies" store
     // Note that cookies store might fail silently due to size limitations: in that case, use local storage instead.
-    "usesStore": "local",
+    "usesStore": "default",
     //OIDC configuration, see https://authts.github.io/oidc-client-ts/classes/UserManagerSettingsStore.html,
     "oidc": {
         //We recommend not to modify 'redirect_uri'

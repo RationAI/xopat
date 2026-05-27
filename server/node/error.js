@@ -2,6 +2,20 @@
 const fs = require("node:fs");
 const constants = require("./constants");
 
+/**
+ * Escape a string for safe interpolation into an HTML context.
+ * @param {string} str
+ * @returns {string}
+ */
+function htmlEscape(str) {
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
 function throwFatalErrorIf(res, condition, title, description="", details="") {
     if (condition) {
         try {
@@ -30,8 +44,8 @@ function throwFatalErrorIfFallback(res, condition, title, description, details="
             return `
                 <div class="collapsible" onclick="toggleContent()">Detailed Information</div>
                 <div class="content">
-                    <p>${description}</p>
-                    <code>${details}</code>
+                    <p>${htmlEscape(description)}</p>
+                    <code>${htmlEscape(details)}</code>
                 </div>`;
         default:
             break;
@@ -57,7 +71,7 @@ function showError(res, errTitle, errDesc, errDetails, locale='en') {
     let title = errTitle ? errTitle : false;  //i18n.t(errTitle) : false;
     let description = errDesc ? errDesc : false; //i18n.t(errDesc) : false;
     if (!description) description = 'No details are available'; // i18n.t('error.noDetails');
-    if (errDetails) description += "<br><code>"+errDetails+"</code>";
+    if (errDetails) description += "<br><code>"+htmlEscape(errDetails)+"</code>";
 
     let templateFile = constants.ABSPATH + "server/templates/error.html";
     if (!fs.existsSync(templateFile)) {
@@ -82,7 +96,9 @@ ${core.requireLib("jquery")}`;
             return core.GATEWAY ? `<button onclick="window.location='<?php echo GATEWAY; ?>'" class="btn" 
 type="button">back</button>` : "";
         case "display-error-call":
-            return `<script>DisplayError.show('${title}', \`${description}\`);<\/script>`;
+            // Escape for JS string context: backslash, backtick, and ${} interpolation
+            const jsEscape = (s) => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+            return `<script>DisplayError.show('${jsEscape(title)}', \`${jsEscape(description)}\`);<\/script>`;
         default:
             break;
         }
