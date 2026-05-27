@@ -2286,7 +2286,7 @@ class="btn m-2">Set for left click </button></div>`
 		if (unknown.length) {
 			groups.push({
 				name: "Unknown / Unsorted",
-				presets: unknown
+				presets: unknown.map(pId => presetManager.get(pId))
 			});
 		}
 		return groups;

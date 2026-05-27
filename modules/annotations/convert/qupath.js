@@ -135,6 +135,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return res;
         },
         "polyline": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", ["points"], false),
+        "line": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString", [], false),
         "point": (object, preset) => {
             object = this._asGEOJsonFeature(object, preset, "Point");
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
@@ -145,7 +146,10 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             object.geometry.coordinates = object.geometry.coordinates[0] || [];
             return object;
         },
-        "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
+        "ruler": (object, preset) => {
+            object._objects = object.objects; // todo ugly, factory used underneath expects live group with _objects
+            return this._asGEOJsonFeature(object, preset, "LineString");
+        },
     };
 
     _decodeMulti(object, featureParentDict, type) {
@@ -229,6 +233,12 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                     let encoded = this.encoders[obj.factoryID]?.(obj, presets.find(p => p.presetID == obj.presetID));
                     if (encoded) {
                         encoded.type = "Feature";
+                        encoded.properties = encoded.properties || {};
+                        encoded.properties.xopatFactoryID = obj.factoryID;
+                        if (obj.factoryID === "ruler") {
+                            const txt = obj._objects?.[1]?.text;
+                            if (txt) encoded.properties.xopatRulerText = txt;
+                        }
                         if (this.options.serialize) encoded = JSON.stringify(encoded);
                         result.objects.push(encoded);
                     }
@@ -299,7 +309,25 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
                 throw "Invalid feature! ";
             }
 
-            let result = this.decoders[object.geometry.type]?.(object.geometry, object);
+            let result;
+            const xid = object.properties?.xopatFactoryID;
+            if (xid === "line" || xid === "ruler") {
+                const factory = this.context.getAnnotationObjectFactory(xid);
+                if (factory) {
+                    const off = this.offset;
+                    const deconv = off
+                        ? ([x, y]) => ({ x: x + off.x, y: y + off.y })
+                        : ([x, y]) => ({ x, y });
+                    const params = factory.fromPointArray(object.geometry.coordinates, deconv);
+                    result = factory.create(params, this.context.presets.getCommonProperties());
+                    if (xid === "ruler" && object.properties?.xopatRulerText && result?._objects?.[1]) {
+                        result._objects[1].set({ text: object.properties.xopatRulerText });
+                    }
+                }
+            }
+            if (!result) {
+                result = this.decoders[object.geometry.type]?.(object.geometry, object);
+            }
 
             if (Array.isArray(result)) {
                 //MultiPolygon, MultiPoint, etc.

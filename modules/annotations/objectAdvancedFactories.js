@@ -42,6 +42,12 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
      */
     configure(instance, options) {
         if (instance.type === "group") {
+            // Legacy/native imports may lack color on the group; recover from preset
+            // so the inner line gets a stroke and renders.
+            if (!options.color && instance.presetID) {
+                const preset = this._presets?.get?.(instance.presetID);
+                if (preset?.color) options = $.extend({}, options, { color: preset.color });
+            }
             this._configureParts(instance.item(0), instance.item(1), options);
             this._configureWrapper(instance, instance.item(0), instance.item(1), options);
         }
@@ -287,6 +293,9 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
         }
 
         const props = this._presets.getCommonProperties();
+        // Helper line was created from the active preset and carries its color;
+        // forward it so the group is serialized with color and the inner line keeps a stroke after import.
+        if (line.color) props.color = line.color;
         obj = this._createWrap(obj, props);
         obj.presetID = pid;
         this._context.addAnnotation(obj);
@@ -331,18 +340,27 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     toPointArray(obj, converter, digits=undefined, quality=1) {
-        const line = obj._objects ? obj._objects[0] : [];
+        // Accept both live group (obj._objects) and serialized group (obj.objects).
+        const inner = obj._objects || obj.objects;
+        const line = inner ? inner[0] : null;
+        if (!line) return [];
 
-        let x1 = line.x1;
-        let y1 = line.y1;
-        let x2 = line.x2;
-        let y2 = line.y2;
+        // Inner line's x1..y2 are centered around the group's bbox center;
+        // compose with the group's left/top + half-extents to get absolute canvas coords.
+        const width = Number.isFinite(obj.width) ? obj.width : 0;
+        const height = Number.isFinite(obj.height) ? obj.height : 0;
+        const cx = (obj.left || 0) + width / 2;
+        const cy = (obj.top || 0) + height / 2;
+        let x1 = cx + (line.x1 || 0);
+        let y1 = cy + (line.y1 || 0);
+        let x2 = cx + (line.x2 || 0);
+        let y2 = cy + (line.y2 || 0);
 
         if (digits !== undefined) {
-            x1 = parseFloat(x1.toFixed(digits));
-            y1 = parseFloat(y1.toFixed(digits));
-            x2 = parseFloat(x2.toFixed(digits));
-            y2 = parseFloat(y2.toFixed(digits));
+            x1 = parseFloat(Number(x1).toFixed(digits));
+            y1 = parseFloat(Number(y1).toFixed(digits));
+            x2 = parseFloat(Number(x2).toFixed(digits));
+            y2 = parseFloat(Number(y2).toFixed(digits));
         }
         return [converter(x1, y1), converter(x2, y2)];
     }
@@ -360,6 +378,15 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     _configureLine(line, options) {
         const lineOptions = Object.assign({}, options);
         lineOptions.stroke = options.color;
+        // Don't carry the wrap group's positional/sizing props onto the inner line:
+        // the inner line's coords are local to the group and managed independently;
+        // applying the group's bbox here moves the line off-canvas (invisible).
+        delete lineOptions.left;
+        delete lineOptions.top;
+        delete lineOptions.width;
+        delete lineOptions.height;
+        delete lineOptions.scaleX;
+        delete lineOptions.scaleY;
 
         $.extend(line, {
             scaleX: 1,
@@ -414,8 +441,17 @@ OSDAnnotations.Ruler = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     _createWrap(parts, options) {
-        const wrap = new fabric.Group(parts);
+        const line = parts[0];
+        const wrap = new fabric.Group(parts, {
+            originX: 'left',
+            originY: 'top',
+            left: line.left,
+            top: line.top,
+            width: line.width,
+            height: line.height,
+        });
         this._configureWrapper(wrap, wrap.item(0), wrap.item(1), options);
+        wrap.setCoords();
         return wrap;
     }
 };
