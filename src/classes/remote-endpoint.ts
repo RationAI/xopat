@@ -69,6 +69,11 @@ export class XOpatRemoteEndpoint {
 
     private static _globalAuthHandlers: Record<string, AuthHandler> = {};
 
+    /** Origin parsed from `baseURL`, used for cross-origin auth-stripping. `null` when baseURL itself is not an absolute URL we can parse. */
+    private _baseOrigin: string | null = null;
+    /** One-shot warning suppression keyed by foreign origin. */
+    private _warnedForeignOrigins: Set<string> = new Set();
+
     constructor({ baseURL, proxy, auth = {} }: RemoteEndpointOptions = {}) {
         let base = "";
         if (proxy && typeof proxy === "string") {
@@ -100,6 +105,15 @@ export class XOpatRemoteEndpoint {
         this.baseURL = base.replace(/([^:])\/{2,}/g, "$1/").replace(/\/$/, "");
         this.usingProxy = !!proxy;
 
+        try {
+            const absoluteBase = /^https?:\/\//i.test(this.baseURL)
+                ? this.baseURL
+                : new URL(this.baseURL, (typeof window !== "undefined" && window.location?.href) || "http://localhost/").href;
+            this._baseOrigin = new URL(absoluteBase).origin;
+        } catch (_) {
+            this._baseOrigin = null;
+        }
+
         this.secretStore = XOpatUser.instance();
 
         const {
@@ -129,6 +143,34 @@ export class XOpatRemoteEndpoint {
             : `${this.baseURL}${path.startsWith("/") ? "" : "/"}${path}`;
     }
 
+    /**
+     * True when `url` is an absolute URL whose origin differs from `baseURL`.
+     * Relative URLs are always same-origin (they resolve onto `baseURL`).
+     * Prevents auth/CSRF leakage when a URL template or caller hands us an
+     * absolute URL pointing somewhere other than the configured upstream.
+     */
+    isCrossOriginUrl(url: string): boolean {
+        if (!url || !/^https?:\/\//i.test(url)) return false;
+        if (!this._baseOrigin) return false; // can't compare; defer to caller
+        try {
+            return new URL(url).origin !== this._baseOrigin;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Log once per foreign origin so absolute-URL misconfigurations are visible without flooding the console. */
+    protected _warnCrossOriginOnce(url: string): void {
+        let foreign = "";
+        try { foreign = new URL(url).origin; } catch { foreign = url; }
+        if (this._warnedForeignOrigins.has(foreign)) return;
+        this._warnedForeignOrigins.add(foreign);
+        console.warn(
+            `XOpatRemoteEndpoint: dropping auth headers for cross-origin URL (base=${this._baseOrigin}, target=${foreign}). ` +
+            `Absolute URLs that bypass the configured upstream are sent unauthenticated to avoid leaking credentials.`
+        );
+    }
+
     /** Register a global auth handler shared by every endpoint instance. */
     static registerAuthHandler(type: string, handler: AuthHandler): void {
         XOpatRemoteEndpoint._globalAuthHandlers[type] = handler;
@@ -147,6 +189,11 @@ export class XOpatRemoteEndpoint {
      * the collection step entirely.
      */
     protected async _authHeaders(url: string, method: string): Promise<Record<string, string>> {
+        if (this.isCrossOriginUrl(url)) {
+            this._warnCrossOriginOnce(url);
+            return {};
+        }
+
         const { types, handlers, contextId, required } = this.auth;
         const headers: Record<string, string> = {};
         let hasAnySecret = false;

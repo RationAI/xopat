@@ -83,6 +83,11 @@ async function verifyProxyAuth(req, res, core, alias, proxyConfig, upstream) {
 }
 
 async function verifyRpcAuth(req, res, core, verifierContextCfg, meta = {}) {
+    // The runtime in server-runtime.js owns the policy decisions (no entry /
+    // empty entry / enabled:false / session-only). By the time we reach here
+    // the caller has decided there *are* verifiers worth running, so we just
+    // run them. Empty / disabled inputs are still treated permissively as a
+    // belt-and-braces measure, but they should not be observable in practice.
     if (!verifierContextCfg || verifierContextCfg.enabled === false) {
         return { ok: true, user: req.user || null };
     }

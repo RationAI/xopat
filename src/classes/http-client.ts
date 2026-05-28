@@ -161,19 +161,20 @@ export class HttpClient extends XOpatRemoteEndpoint {
         }
 
         const hasBody = body !== undefined && body !== null && !/^(GET|HEAD)$/i.test(method);
+        const crossOrigin = this.isCrossOriginUrl(url);
 
         const getBaseHeaders = async () => ({
             ...(hasBody ? { "Content-Type": "application/json" } : {}),
             ...(await this._authHeaders(url, method)),
             ...headers,
-            ...(this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
+            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
                 ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN }
                 : {})
         });
 
         let currentHeaders = await getBaseHeaders();
 
-        if (this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
+        if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient: CSRF token not found in window.XOPAT_CSRF_TOKEN with proxy - the request will likely fail.", path);
         }
 
@@ -184,7 +185,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
             method,
             headers: currentHeaders,
             signal: controller.signal,
-            ...(this.usingProxy ? { credentials: "same-origin" } : {}),
+            ...(!crossOrigin && this.usingProxy ? { credentials: "same-origin" } : {}),
             ...(hasBody ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
         });
 
@@ -264,16 +265,17 @@ export class HttpClient extends XOpatRemoteEndpoint {
         const url = this.resolveUrl(path);
         const method = (init.method || "GET").toUpperCase();
         const callerHeaders = (init.headers as Record<string, string> | undefined) || undefined;
+        const crossOrigin = this.isCrossOriginUrl(url);
 
         const buildHeaders = async (): Promise<Record<string, string>> => ({
             ...(await this._authHeaders(url, method)),
-            ...(this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
+            ...(!crossOrigin && this.usingProxy && typeof window?.XOPAT_CSRF_TOKEN
                 ? { "X-XOPAT-CSRF": window.XOPAT_CSRF_TOKEN as string }
                 : {}),
             ...(callerHeaders || {}),
         });
 
-        if (this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
+        if (!crossOrigin && this.usingProxy && !window?.XOPAT_CSRF_TOKEN) {
             console.warn("HttpClient.fetchRaw: CSRF token not in window.XOPAT_CSRF_TOKEN with proxy — request will likely fail.", path);
         }
 
@@ -296,7 +298,7 @@ export class HttpClient extends XOpatRemoteEndpoint {
                         method,
                         headers: currentHeaders,
                         signal,
-                        ...(this.usingProxy ? { credentials: "same-origin" as RequestCredentials } : {}),
+                        ...(!crossOrigin && this.usingProxy ? { credentials: "same-origin" as RequestCredentials } : {}),
                     });
 
                     if (!res.ok) {
