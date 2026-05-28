@@ -3339,7 +3339,8 @@ form.submit();
                 // spawn several viewers per cell we'd otherwise crash with "out of contexts"
                 // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
                 // when key + webGLPreferredVersion + canvasOptions agree.
-                sharedContextKey: "xopat-flex-renderer",
+                // TODO: temporarily disabled until fixed
+                // sharedContextKey: "xopat-flex-renderer",
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);

@@ -9,7 +9,11 @@ import { ViewerStateBindingController } from "./classes/app/viewer-state-binding
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
-import { SessionSyncController } from "./classes/session/session-sync";
+// TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
+// Live shared sessions (WebRTC viewport/cursor/visualization sync) are
+// currently disabled — see src/SESSION.md. Re-import together with
+// `window.SESSION = new SessionSyncController()` below.
+// import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
 import { bootstrapSlideProtocols } from "./classes/slide-protocols";
 import { createApplicationContext } from "./classes/app/application-context";
@@ -262,8 +266,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * Live-collaboration session singleton. See src/SESSION.md.
      * Instantiated here so providers can lazily reach VIEWER_MANAGER
      * once they subscribe (i.e. once a session actually starts).
+     *
+     * TODO(live-sessions): the shared-session feature (WebRTC mesh sharing
+     * viewport / cursor / visualization between peers) is not fully developed
+     * and is disabled until the transport + provider story stabilises.
+     * Consumers already access this via `window.SESSION?.…` (optional chain),
+     * so leaving it `undefined` is safe. Re-instantiate together with the
+     * `SessionSyncController` import above and re-enable the
+     * `plugins/session-controls/` UI plugin (`enabled: false` in its
+     * `include.json`) to bring the feature back.
      */
-    window.SESSION = new SessionSyncController();
+    // window.SESSION = new SessionSyncController();
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with
