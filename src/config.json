@@ -531,6 +531,8 @@
         "libs": {
             "primer": "primer_css.css",
             "fontawesome": "fontawesome/css/v6-all.css",
+            "phosphor": "phoshor-icons/style.css",
+            "fa-to-phosphor": "phoshor-icons/fa-overrides.css",
             "tailwind": "tailwind.min.css"
         },
         "external": {

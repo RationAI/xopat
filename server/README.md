@@ -91,9 +91,11 @@ between PHP and Node under the same ENV.
    loadable). The intended use is per-deployment access control where
    leaking plugin identifiers is undesirable.
  - ``"available"`` — like ``"all"``, plus a per-element config-gate
-   driven by a single optional ``requiredConfig: string[]`` array on each
-   plugin's *or* module's ``include.json``. Each path is resolved against
-   TWO deployment-controlled sources; a path is satisfied when EITHER
+   driven by an optional ``requiredConfig: string[]`` array. The array
+   may be declared on the plugin's/module's ``include.json`` OR on a
+   companion ``server.json`` (see below); the loader takes the union
+   when both are present. Each path is resolved against TWO
+   deployment-controlled sources; a path is satisfied when EITHER
    source carries a non-``undefined``/non-``null``/non-empty value:
      1. **Deployment ENV block** — ``ENV.plugins[id]`` /
         ``ENV.modules[id]``, supplied via env.json's top-level
@@ -106,18 +108,39 @@ between PHP and Node under the same ENV.
         referencing a secret).
    The plugin author declares *what* keys are needed; the deployment
    admin decides *where* each value lives. Booleans ``false`` and the
-   number ``0`` count as configured. **Include.json defaults are NOT
-   consulted** — a plugin that ships
-   ``serviceUrl: "http://localhost:8042"`` in its own include.json AND
-   declares ``requiredConfig: ["serviceUrl"]`` is still dropped on
-   deployments that don't supply ``serviceUrl`` in either bucket. The
-   include.json default is treated purely as documentation / dev
-   convenience for the (default) ``"all"`` mode. Elements that don't
-   declare ``requiredConfig`` are always considered configured (so this
-   mode degrades to ``"all"`` for them). The gate applies to modules as
-   well — dropping a required module surfaces as a plugin-level
-   missing-dep error via the existing dependency check, which is the
-   desired UX when the module's upstream isn't available.
+   number ``0`` count as configured. **Neither include.json defaults
+   nor server.json defaults are consulted by the gate** — only the two
+   deployer-controlled sources above. A plugin that ships
+   ``serviceUrl: "http://localhost:8042"`` in its own include.json or
+   ``server.json`` AND declares ``requiredConfig: ["serviceUrl"]`` is
+   still dropped on deployments that don't supply ``serviceUrl`` in
+   either deployer bucket. Elements that don't declare ``requiredConfig``
+   are always considered configured (so this mode degrades to ``"all"``
+   for them). The gate applies to modules as well — dropping a required
+   module surfaces as a plugin-level missing-dep error via the existing
+   dependency check, which is the desired UX when the module's upstream
+   isn't available.
+
+### ``server.json`` — author server manifest
+
+A plugin or module may ship a ``server.json`` alongside its ``include.json``.
+The file is the author's server-only manifest. Two roles:
+
+  - ``requiredConfig: string[]`` — unioned with any ``requiredConfig`` from
+    ``include.json`` and fed to the ``"available"`` gate above. The gate
+    semantics are unchanged; this is purely a more discoverable home for
+    server-only requirement declarations.
+  - All other fields — become **author-tier secure defaults**, exposed to
+    plugin server code via ``XS.getSecurePluginConfig(ctx, id)`` /
+    ``XS.getSecureModuleConfig(ctx, id)``. The deployer's
+    ``env.server.secure.plugins[id]`` (or ``...modules[id]``) is layered
+    *on top* and wins on overlap. The author tier does **NOT** satisfy
+    the gate — only deployer ENV + deployer secure do.
+
+``server.json`` contents are kept in ``$GLOBALS['CORE_AUTHOR_SECURE']``
+(PHP) / ``core.CORE_AUTHOR_SECURE`` (Node), parallel to ``CORE_SECURE``,
+with the same hygiene rule: never JSON-encoded into the browser-bound
+page payload.
 
 Capture of the deployment-ENV ``enabled`` value for ``"whitelist"``
 happens *before* the per-plugin ENV merge, so a plugin's own

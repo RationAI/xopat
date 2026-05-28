@@ -88,20 +88,35 @@ export const ioMethods = {
             return { cancelled: true };
         }
 
-        const format = this.exportOptions.format;
+        const requestedFormat = this.exportOptions.format;
         const replace = this.getOption('importReplace', true);
-        this.context.setIOOption('format', format);
+        if (requestedFormat && requestedFormat !== 'auto') {
+            this.context.setIOOption('format', requestedFormat);
+        }
 
-        const data = await UTILITIES.readFileUploadEvent(e);
+        // Read from the captured File reference, not from the event: the input's
+        // onchange handler typically clears e.target.value synchronously right after
+        // dispatching importFromFile, so e.currentTarget.files is empty by the time
+        // any await resumes here. The File blob captured above is independent.
+        const data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = ev => resolve(ev.target?.result);
+            reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+            reader.readAsText(file);
+        });
         const fabric = this.context.getFabric(target.viewer);
-        const result = await fabric.import(data, { format }, replace);
+        // fabric.import mutates options.format to the resolved format (relevant
+        // for auto-detect); pass a fresh options object so we can read it back.
+        const importOptions = { format: requestedFormat, filename: file.name };
+        const result = await fabric.import(data, importOptions, replace);
 
         return {
             cancelled: false,
             result,
             target,
             fileName: file.name,
-            format
+            requestedFormat,
+            resolvedFormat: importOptions.format
         };
     },
 
@@ -112,17 +127,29 @@ export const ioMethods = {
             }
 
             if (payload.result) {
-                Dialogs.show(`Loaded into ${payload.target.title}.`, 1800, Dialogs.MSG_INFO);
+                const sameFormat = payload.requestedFormat === payload.resolvedFormat
+                    || payload.requestedFormat === 'auto';
+                const msg = sameFormat
+                    ? `Loaded into ${payload.target.title} as ${payload.resolvedFormat}.`
+                    : `Loaded into ${payload.target.title} as ${payload.resolvedFormat} (you selected ${payload.requestedFormat}).`;
+                Dialogs.show(msg, 2200, Dialogs.MSG_INFO);
             } else {
+                const fmt = payload.requestedFormat === 'auto'
+                    ? 'auto-detect'
+                    : payload.requestedFormat;
                 Dialogs.show(
-                    `No data was imported into ${payload.target.title}. Are you sure the selected format (${payload.format}) matches the file?`,
+                    `No data was imported into ${payload.target.title}. Are you sure the selected format (${fmt}) matches the file?`,
                     3500,
                     Dialogs.MSG_WARN
                 );
             }
         }).catch((error) => {
             console.log(error);
-            Dialogs.show('Failed to load the file. Is the selected file format correct and the file valid?', 5000, Dialogs.MSG_ERR);
+            const fmt = this.exportOptions.format;
+            const msg = fmt && fmt !== 'auto'
+                ? `Failed to load the file as ${fmt}. Is the selected file format correct and the file valid?`
+                : 'Failed to load the file. Could not auto-detect a matching format.';
+            Dialogs.show(msg, 5000, Dialogs.MSG_ERR);
         });
     },
 

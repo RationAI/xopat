@@ -554,7 +554,7 @@ class Menu extends BaseComponent {
                 )
             );
 
-        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
 
         // todo implement focus manager, similar to visibility manager
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
@@ -569,7 +569,7 @@ class Menu extends BaseComponent {
             div({ id: `${id}`, class: `inner-panel ${pluginId}-plugin-root` },
                 div({onclick: this.clickHeader},
                     span({
-                        class: "fa-auto fa-chevron-right inline-arrow plugins-pin btn-pointer",
+                        class: "ph-light ph-caret-right inline-arrow plugins-pin btn-pointer",
                         id: `${id}-pin`,
                         style: "padding: 0;" },
                     ),
@@ -584,7 +584,7 @@ class Menu extends BaseComponent {
                 ),
             );
 
-        this.addTab({id: id, icon: "fa-gear", title: title, body: [content], background: bg});
+        this.addTab({id: id, icon: "ph-gear", title: title, body: [content], background: bg});
 
         // todo move to focus manager like visibility manager
         if (APPLICATION_CONTEXT.AppCache.get(`${id}-open`, true)){
@@ -615,7 +615,7 @@ class Menu extends BaseComponent {
 
 ui = globalThis.UI;
 
-const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+const settingsIcon = new ui.PhIcon({name: "ph-gear"});
 
 window["workspaceItem"] = new ui.Menu({
     id: "myMenu",
@@ -630,7 +630,7 @@ window["workspaceItem"] = new ui.Menu({
 
 window["workspaceItem"].attachTo(document.getElementById("workspace"));
 
-window["workspaceItem"].addTab({id: "s4", icon: "fa-home", title: "Content3", body: "Settings3"});
+window["workspaceItem"].addTab({id: "s4", icon: "ph-house", title: "Content3", body: "Settings3"});
 
 window["workspaceItem"].deleteTab("s3");
 `;

@@ -60,7 +60,7 @@ export class FullscreenMenus {
             id: "settings-menu",
             title: $.t?.("main.bar.settings") || "Settings",
             label: $.t?.("main.bar.settings") || "Settings",
-            icon: "fa-gear",
+            icon: "ph-gear",
             body: () => this.getSettingsBody
         }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
 
@@ -70,7 +70,7 @@ export class FullscreenMenus {
                 id: "app-plugins",
                 title: $.t?.("main.bar.plugins") || "Plugins",
                 label: $.t?.("main.bar.plugins") || "Plugins",
-                icon: "fa-puzzle-piece",
+                icon: "ph-puzzle-piece",
                 body: () => this.getPluginsBody
             }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
         }
@@ -125,7 +125,7 @@ export class FullscreenMenus {
             id: item.id,
             title: label,
             label,
-            icon: item.icon || "fa-circle",
+            icon: item.icon || "ph-circle",
             body: () => item,
             namespace: ns
         });
@@ -294,7 +294,7 @@ export class FullscreenMenus {
         submenu.attachTo(mount);
 
         const label = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "name")) || ownerPluginId;
-        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon")) || "fa-puzzle-piece";
+        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon")) || "ph-puzzle-piece";
 
         this.register({
             id: key,
@@ -404,7 +404,7 @@ export class FullscreenMenus {
     get getSettingsBody() {
         const notification = div({ class: "mb-4 hidden", id: "settings-notification-wrap" },
             div({ class: "rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm" },
-                span({ class: "fa-auto fa-warning mr-2", style: "font-size: initial;" }),
+                span({ class: "ph-light ph-warning mr-2", style: "font-size: initial;" }),
                 "To apply changes, please ",
                 a({ onclick: () => { UTILITIES.refreshPage(); }, class: "link link-hover cursor-pointer font-semibold" },
                     b("reload the page")

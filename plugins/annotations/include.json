@@ -6,9 +6,9 @@
   "description": "A plugin for annotations creation, management and sharing.",
   "icon": null,
   "includes": ["annotationsPlugin.mjs"],
-  "modules": ["annotations", "human-readable-ids", "sam-segmentation-experimental", "annotation-measurements"],
+  "modules": ["annotations", "human-readable-ids", "annotation-measurements"],
   "permaLoad": false,
-  "factories": ["polygon", "rect", "ellipse", "ruler", "text"],
+  "factories": ["polygon", "rect", "ellipse", "ruler", "angle", "text"],
   "modalHistoryWindow": true,
   "enablePresetModify": true
 }

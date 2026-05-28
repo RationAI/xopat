@@ -45,7 +45,7 @@ builder.buildMetaDataMenu(config, sanitizeConfig);
   "id": "optional-id",
   "title": "Main Section Title",   // required
   "subtitle": "Tooltip subtitle",  // optional
-  "icon": "fa-cogs",              // optional FontAwesome icon name
+  "icon": "fa-cogs",              // optional icon — Font Awesome class name; renders as Phosphor if mapped in src/libs/phoshor-icons/fa-overrides.css
   "main": true,                    // marks this page as the main parent
   "page": [ ...elements... ]       // array of element specifications
 }
@@ -103,7 +103,8 @@ Insert a horizontal divider line.
 All other types resolve to compiled `UI` classes. The mapping is forgiving:
 
 * `button` → `UI.Button`
-* `fa-icon`, `faicon`, `FAIcon` → `UI.FAIcon`
+* `ph-icon`, `phicon`, `PhIcon` → `UI.PhIcon` (Phosphor — preferred for new code)
+* `fa-icon`, `faicon`, `FAIcon` → `UI.FAIcon` (Font Awesome — legacy)
 * `title`, `header`, `heading` → `UI.Title`
 * `checkbox` → `UI.Checkbox`
 * `dropdown` → `UI.Dropdown`
@@ -127,7 +128,7 @@ All other types resolve to compiled `UI` classes. The mapping is forgiving:
   "type": "button",
   "class": "btn btn-primary",
   "children": [
-    { "type": "fa-icon", "name": "fa-play" },
+    { "type": "ph-icon", "name": "ph-play" },
     " Run"
   ]
 }

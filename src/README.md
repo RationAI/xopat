@@ -103,10 +103,12 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `activeVisualizationIndex` | number \| number[] | `0` | Initial viz index; array for multi-view. Background `goalIndex` overrides per item. |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
-| `scaleBar` | bool | `true` | Requires microns to render. |
-| `toolBar` | bool | — | Top toolbar visibility. |
-| `statusBar` | bool | — | Bottom status bar visibility. |
+| `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render. |
+| `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`. |
+| `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`. |
+| `ui` | `XOpatUiSetup` | — | Initial visibility of UI components — see table below. |
 | `disablePluginsUi` | bool | `false` | Hide plugin UI without unloading the plugins. |
+| `disablePluginsAutoload` | bool | `false` | Skip the `_plugins` cookie restore for this session. `permaLoad` plugins and plugins listed in `config.plugins` still load. Use to ignore the user's prior manual picks while respecting deployment defaults and session-declared plugins. |
 | `grayscale` | bool | `false` | Force grayscale transfer. |
 | `tileCache` | bool | `true` | Enable tile caching. |
 | `maxImageCacheCount` | number | `1200` | Tile cache size. |
@@ -119,6 +121,24 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `historySize` | number | — | Cap on the history stack (`src/classes/history.ts`). |
 | `isStaticPreview` | bool | `false` | Disable interactive controls for thumbnail/preview embeds. |
 | `maxMobileWidthPx` | number | — | Responsive breakpoint. |
+
+#### `params.ui` — UI initial visibility
+
+Each flag is the *initial* visible state at boot. `false` boots the component
+collapsed, but the user can still bring it back via the settings menu, the
+hide-UI button, or the relevant opener. Defaults to `true` for every key.
+Reads go through `APPLICATION_CONTEXT.getUiOption(key)` which also honors the
+legacy flat aliases (`scaleBar` / `toolBar` / `statusBar`) and the AppCache
+of user-toggled settings — see `XOpatUiSetup` in `src/types/config.d.ts`.
+
+| Key | Affects |
+|---|---|
+| `scaleBar` | Per-viewer OSD scalebar overlay. Replaces legacy flat `scaleBar`. |
+| `toolBar` | Top viewer toolbar. Replaces legacy flat `toolBar`. |
+| `statusBar` | Bottom status bar (`#viewer-status-bar`). Replaces legacy flat `statusBar`. |
+| `mainMenu` | Global menu (`FullscreenMenus`). `false` boots collapsed; menu-open buttons still work. |
+| `navigator` | Per-viewer OSD navigator panel. |
+| `appBar` | Top AppBar chrome — `false` is equivalent to the hide-UI button being pre-toggled. |
 
 ### `background` — `BackgroundItem[]`
 
@@ -198,7 +218,7 @@ Each folder ships a `README` with more detail. The most up-to-date ones are this
     - `http-client.ts` — `HttpClient` (see [`HTTP_CLIENT.md`](HTTP_CLIENT.md)).
     - `history.ts`, `user.ts`.
 - `external/` — always-loaded third-party libraries and OSD extensions (DZI ext tile source, scalebar, autocomplete, …).
-- `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only.
+- `libs/` — vendored libraries: jQuery, i18next, OpenSeadragon (`openseadragon.js`), Tailwind CSS, Monaco, FontAwesome, Phosphor Icons (`phoshor-icons/`), plus `flex-renderer/` (WebGL renderer). **Do not edit `libs/`** — upstream-only. Exception: `phoshor-icons/fa-overrides.css` is xOpat-owned and *should* be edited to extend the Font Awesome → Phosphor mapping as we migrate.
 - `assets/` — `style.css`, icons, and other static assets.
 - `types/` — ambient TypeScript declarations (`app.d.ts`, `config.d.ts`, `globals.d.ts`, `slide-protocols.d.ts`, `io.d.ts`).
 

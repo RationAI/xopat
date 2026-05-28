@@ -72,6 +72,28 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 data["description"] = data["description"] || packageData["description"];
             }
 
+            // Author server manifest (server.json) — optional. Its
+            // `requiredConfig` is unioned into the gate paths; its remaining
+            // fields become the author tier of secure config (visible to
+            // plugin server code via XS.getSecurePluginConfig, NOT counted
+            // toward the `requiredConfig` gate).
+            const serverManifestPath = fullPath + "server.json";
+            if (fileExists(serverManifestPath)) {
+                const serverManifest = parse(readFile(serverManifestPath));
+                if (serverManifest && typeof serverManifest === "object") {
+                    data = data || {};
+                    if (Array.isArray(serverManifest.requiredConfig)) {
+                        const existing = Array.isArray(data.requiredConfig) ? data.requiredConfig : [];
+                        data.requiredConfig = [...new Set([...existing, ...serverManifest.requiredConfig])];
+                    }
+                    const { requiredConfig: _drop, ...authorSecure } = serverManifest;
+                    if (Object.keys(authorSecure).length && data.id) {
+                        if (!core.CORE_AUTHOR_SECURE) core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
+                        core.CORE_AUTHOR_SECURE.plugins[data.id] = authorSecure;
+                    }
+                }
+            }
+
             if (data) {
                 if (!data["id"]) {
                     data["id"] = "__generated_id_" + dir;

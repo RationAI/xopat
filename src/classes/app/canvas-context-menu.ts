@@ -24,6 +24,14 @@ export interface CanvasContextMenuContext {
      * the active object should prefer `ctx.active` over re-deriving it.
      */
     active?: any;
+    /**
+     * Origin of the right-click. `'canvas'` for the OSD viewer surface,
+     * `'board'` (or other plugin-specific values) for UI overlays that open
+     * the canvas menu programmatically. Providers can use this to disable
+     * spatially-invalid actions (e.g. Paste-at-mouse) when the click did
+     * not originate from a real position on the slide.
+     */
+    source?: string;
 }
 
 export interface CanvasContextMenuItem {
@@ -74,6 +82,36 @@ class CanvasContextMenuRegistry {
         return this.providers.has(id);
     }
 
+    /**
+     * Build the context, collect provider items, and render the menu via the
+     * van.js `window.ContextMenu` (preferred) or legacy `window.DropDown`
+     * fallback. Returns `true` iff at least one provider produced items and
+     * the menu was opened.
+     */
+    open(opts: {
+        event: MouseEvent;
+        viewer?: any;
+        active?: any;
+        source?: string;
+        osdPosition?: { x: number; y: number };
+        pixelPosition?: { x: number; y: number };
+    }): boolean {
+        const ctx: CanvasContextMenuContext = {
+            viewer: opts.viewer,
+            event: opts.event,
+            osdPosition: opts.osdPosition ?? { x: 0, y: 0 },
+            pixelPosition: opts.pixelPosition ?? { x: 0, y: 0 },
+            active: opts.active,
+            source: opts.source,
+        };
+        const items = this.collect(ctx);
+        if (!items.length) return false;
+        const ctxMenu = (window as any).ContextMenu;
+        if (ctxMenu?.open) ctxMenu.open(opts.event, items);
+        else (window as any).DropDown?.open(opts.event, items);
+        return true;
+    }
+
     /** Aggregate all provider items, separated by visual dividers. */
     collect(ctx: CanvasContextMenuContext): CanvasContextMenuItem[] {
         const items: CanvasContextMenuItem[] = [];
@@ -108,7 +146,14 @@ class CanvasContextMenuRegistry {
 const _existing: any = (window as any).CanvasContextMenu;
 export const CanvasContextMenu: CanvasContextMenuRegistry = (
     _existing && typeof _existing.register === "function" && typeof _existing.collect === "function"
-) ? _existing as CanvasContextMenuRegistry : (() => {
+) ? (() => {
+    // Older bundled copies may not expose `open`. Patch it on so all callers
+    // — regardless of which IIFE installed the singleton — get the helper.
+    if (typeof _existing.open !== "function") {
+        _existing.open = CanvasContextMenuRegistry.prototype.open;
+    }
+    return _existing as CanvasContextMenuRegistry;
+})() : (() => {
     const inst = new CanvasContextMenuRegistry();
     (window as any).CanvasContextMenu = inst;
     return inst;

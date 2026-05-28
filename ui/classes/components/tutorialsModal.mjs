@@ -137,7 +137,7 @@ export class TutorialsModal extends BaseComponent {
     }
 
     _renderCard(entry, index) {
-        const iconClass = entry.icon || "fa-school";
+        const iconClass = entry.icon || "ph-graduation-cap";
         const pluginRootClass = entry.pluginRootClass || "";
 
         const children = [];
@@ -148,7 +148,8 @@ export class TutorialsModal extends BaseComponent {
             }, entry.pluginName));
         }
 
-        children.push(iTag({ class: `fa-auto ${iconClass} text-3xl my-2 text-primary` }));
+        const _isPh = String(iconClass ?? '').trim().startsWith('ph-');
+        children.push(iTag({ class: `${_isPh ? 'ph-light' : 'fa-auto'} ${iconClass} text-3xl my-2 text-primary` }));
         children.push(div({ class: "card-title text-lg font-light justify-center" }, entry.name || ""));
         if (entry.description) {
             children.push(p({ class: "text-sm opacity-80" }, entry.description));

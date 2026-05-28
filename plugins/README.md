@@ -419,8 +419,14 @@ annotation logic, HTML sanitization, vega graphs, threading worker or keyframe s
 
 You can use
  - [jQuery](https://jquery.com/), 
- - [Font Awesome 6 Free icons](https://fontawesome.com/) for icons
-   - Do use ``fa-auto`` which prefers regular over solid icons
+ - [Phosphor Icons (Light)](https://phosphoricons.com/) — preferred for new code.
+   Use `new UI.PhIcon({ name: "ph-gear" })` or raw markup `<i class="ph-light ph-gear"></i>`.
+   Icon names are listed in `src/libs/phoshor-icons/style.css`.
+ - [Font Awesome 6 Free icons](https://fontawesome.com/) — legacy; still loaded for
+   coverage. Existing `<i class="fa-auto fa-..."></i>` markup keeps working and is
+   transparently swapped to Phosphor as entries are added to
+   `src/libs/phoshor-icons/fa-overrides.css` (any unmapped `fa-*` class falls back to
+   Font Awesome). When you add a new icon, prefer Phosphor directly.
  - DaisyUI + TailwindCSS styling
  - The CORE UI Component system (see `ui/`)
  - Pre-defined, documented CSS in the core ``src/assets/style.css``

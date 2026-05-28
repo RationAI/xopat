@@ -1,4 +1,5 @@
 {
+  "requiredConfig": ["providerDefaults.baseUrl"],
   "providerDefaults": {
     "baseUrl": "https://cerit.example/v1",
     "modelsPath": "/models",

@@ -4,7 +4,7 @@
   "author": "Aiosa",
   "version": "1.0.0",
   "description": "Anthropic Claude provider integration.",
-  "modules": ["vercel-ai-chat-sdk"],
+  "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
   "providerTypeId": "anthropic-claude",
   "baseUrl": "https://api.anthropic.com/v1",
   "defaultModelId": "",
@@ -15,5 +15,6 @@
     "authority": "https://your-auth-server.com",
     "client_id": "anthropic-plugin-client",
     "scope": "openid profile chat_api"
-  }
+  },
+  "requiredConfig": []
 }

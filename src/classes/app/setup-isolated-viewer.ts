@@ -74,6 +74,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         webGlPreferredVersion: preferredWebGlVersion,
         backgroundColor: APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
+        // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
+        // so playground/isolated viewers don't each consume a browser context slot.
+        sharedContextKey: "xopat-flex-renderer",
         interactive: true,
         htmlHandler: options.htmlHandler || (() => {}),
         htmlReset: options.htmlReset || (() => {}),

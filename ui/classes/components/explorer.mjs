@@ -508,7 +508,7 @@ export class Explorer extends BaseComponent {
                             this._loadAndRender(0, { replace: true });
                         }
                     },
-                    span({ class: "fa-auto fa-house" }),
+                    span({ class: "ph-light ph-house" }),
                     span(" Root"))
             )
         );
@@ -709,7 +709,7 @@ export class Explorer extends BaseComponent {
         const controls = div({ class: "flex items-center justify-between p-2 border-t border-base-300/70 gap-2" },
             div(
                 { class: "join" },
-                this._btn("fa-angle-left", async () => {
+                this._btn("ph-caret-left", async () => {
                     if (currentPage <= 0) return;
                     currentPage -= 1;
                     if (!bucket.pages.has(currentPage)) await this._fetchPage(levelIndex, parent, bucket, currentPage);
@@ -739,7 +739,7 @@ export class Explorer extends BaseComponent {
                     });
                 }),
                 span({ class: "join-item btn btn-sm pointer-events-none" }, () => `Page ${pageState.val}${totalState.val != null ? ` / ${totalState.val}` : " / ?"}`),
-                this._btn("fa-angle-right", async () => {
+                this._btn("ph-caret-right", async () => {
                     if (totalPages && currentPage >= totalPages) return;
                     currentPage += 1;
                     if (!bucket.pages.has(currentPage)) {
@@ -940,7 +940,8 @@ export class Explorer extends BaseComponent {
     }
 
     _btn(iconName, onClick) {
-        const b = div({ class: "join-item btn btn-sm", onclick: onClick }, span({ class: `fa-auto ${iconName}` }));
+        const isPh = String(iconName ?? '').trim().startsWith('ph-');
+        const b = div({ class: "join-item btn btn-sm", onclick: onClick }, span({ class: `${isPh ? 'ph-light' : 'fa-auto'} ${iconName}` }));
         return b;
     }
 
@@ -986,7 +987,7 @@ const list = new UI.Explorer({
       pageSize: 100,
       getChildren: (parent, ctx) => fetchPatients(ctx),
       renderItem: (p, { open }) => div({ class: "flex items-center gap-2" },
-        span({ class: "fa-auto fa-user" }),
+        span({ class: "ph-light ph-user" }),
         span(p.PatientName || p.name || p.id)
       ),
       canOpen: () => true,
@@ -998,7 +999,7 @@ const list = new UI.Explorer({
       pageSize: 50,
       getChildren: (patient, ctx) => fetchStudies(patient, ctx),
       renderItem: (s) => div({ class: "flex items-center gap-2" },
-        span({ class: "fa-auto fa-flask" }),
+        span({ class: "ph-light ph-flask" }),
         span(s.StudyDescription || s.id)
       ),
       canOpen: () => true,
@@ -1010,7 +1011,7 @@ const list = new UI.Explorer({
       pageSize: 64,             // fetch in batches of 64
       getChildren: (study, ctx) => fetchImages(study, ctx),
       renderItem: (img) => div({ class: "flex items-center gap-2" },
-        span({ class: "fa-auto fa-image" }),
+        span({ class: "ph-light ph-image" }),
         span(img.SOPInstanceUID?.slice?.(-8) || img.id)
       ),
       // heavy rendering (thumbnails/metadata) will be created only when visible

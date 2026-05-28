@@ -3333,6 +3333,13 @@ form.submit();
                 webGlPreferredVersion: preferredWebGlVersion,
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                // Share a single WebGL context across every FlexRenderer instance on the page
+                // (main viewer, navigator, standalone drawers, isolated playground viewers).
+                // Browsers cap concurrent WebGL contexts at ~16; on hosts like Jupyter that
+                // spawn several viewers per cell we'd otherwise crash with "out of contexts"
+                // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
+                // when key + webGLPreferredVersion + canvasOptions agree.
+                sharedContextKey: "xopat-flex-renderer",
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
@@ -3504,25 +3511,13 @@ form.submit();
                 } catch (e) {
                     // best-effort: still hand the event to providers without coordinates
                 }
-                const items = CanvasContextMenu.collect({
-                    viewer,
+                CanvasContextMenu.open({
                     event: orig,
+                    viewer,
                     osdPosition: osdPos,
                     pixelPosition: pixelPos,
+                    source: 'canvas',
                 });
-                if (items.length) {
-                    // Prefer the van.js-based `ContextMenu` which supports
-                    // cascading flyouts for items with `children: [...]`.
-                    // Falls back to the legacy flat `window.DropDown` for
-                    // pre-rebuild environments where the new component is
-                    // not yet bundled into `ui/index.js`.
-                    const ctxMenu = (window as any).ContextMenu;
-                    if (ctxMenu?.open) {
-                        ctxMenu.open(orig, items);
-                    } else {
-                        (window as any).DropDown?.open(orig, items);
-                    }
-                }
             });
 
             for (let event in this.broadcastEvents) {

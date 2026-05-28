@@ -90,7 +90,7 @@ export class Alert extends BaseComponent {
                     onclick: () => { this.hide(); this.onClose?.(); },
                     title: "Close",
                 },
-                span({ class: "fa-auto fa-close text-base" })
+                span({ class: "ph-light ph-x text-base" })
             )
             : null;
 

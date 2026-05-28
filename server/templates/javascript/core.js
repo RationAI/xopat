@@ -363,6 +363,14 @@ module.exports.getCore = function(absPath, projectRoot, fileExists, readFile, re
         delete CORE.server.secure;
     }
 
+    // Author-tier server-only config: per-plugin / per-module `server.json`
+    // contents (minus `requiredConfig`) are stashed here by the loaders so
+    // `getSecurePluginConfig` can fall back on author-shipped defaults. Does
+    // NOT count toward the `requiredConfig` gate — only deployer ENV +
+    // deployer secure satisfy that. Same hygiene as CORE_SECURE: never ships
+    // to the client.
+    core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
+
     core.VERSION = CORE["version"] || defaults.version || "dev";
     core["version"] = CORE.VERSION;
     core.GATEWAY = CORE["gateway"];

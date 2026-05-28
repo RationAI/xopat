@@ -1,7 +1,7 @@
 import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
+import { PhIcon } from "../elements/ph-icon.mjs";
 import van from "../../vanjs.mjs";
 
 const { div } = van.tags;
@@ -25,8 +25,8 @@ const { div } = van.tags;
  *     buttonSide: UI.Menu.BUTTONSIDE.LEFT,
  *     rounded: UI.Menu.ROUNDED.ENABLE,
  *     extraClasses: { bg: "bg-transparent" }
- * }, { id: "one", icon: "fa-gear", title: "one", body: undefined, onClick: function () {fullscreenMenu.menu.focus("1")} },
- *    { id: "two", icon: "fa-gear", title: "two", body: undefined, onClick: function () {fullscreenMenu.menu.focus("2")} },
+ * }, { id: "one", icon: "ph-gear", title: "one", body: undefined, onClick: function () {fullscreenMenu.menu.focus("1")} },
+ *    { id: "two", icon: "ph-gear", title: "two", body: undefined, onClick: function () {fullscreenMenu.menu.focus("2")} },
  * );
  * 
  * // you can also use just any buttons which have this type of onClick function
@@ -48,7 +48,7 @@ export class FullscreenMenu extends BaseComponent{
             type: Button.TYPE.NONE,
             onClick: () => this.unfocusAll(),
             extraClasses: {position: "absolute right-2"}
-        }, new FAIcon({name: 'fa-close'}));
+        }, new PhIcon({name: 'ph-x'}));
         for (let i of this._children) {
             this.addTab(i);
         }

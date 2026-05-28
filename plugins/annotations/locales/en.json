@@ -30,9 +30,15 @@
     "export": {
       "menuTitle": "Annotations",
       "description": "Annotations can be uploaded to a server, or downloaded using local files. For files, a desired format can be imported or exported.",
-      "formatSection": "File format",
-      "exportSection": "Export",
-      "importSection": "Import",
+      "ioSection": "Annotation file IO",
+      "formatLabel": "Format:",
+      "autoFormat": "auto detect",
+      "autoFormatHint": "Detect format from the file name and content. Export requires a concrete format.",
+      "autoExportHint": "Pick a concrete format above to export. Auto detect is only used on import.",
+      "modeTabs": {
+        "export": "Export",
+        "import": "Import"
+      },
       "scopeLabel": "Annotations to export:",
       "replaceOnImport": "Replace existing data on import",
       "downloadPresets": "Download presets",
@@ -107,8 +113,7 @@
       },
       "channelLabel": "Channel",
       "channelSource": {
-        "raw": "Raw image",
-        "shader": "Shader output"
+        "raw": "Raw image"
       },
       "channels": {
         "L": "Luminance",
@@ -117,6 +122,21 @@
         "B": "Blue"
       },
       "thresholdLabel": "Threshold",
+      "thresholdUnits": "(0–255)",
+      "intensityHelper": "Pick a preset, then click Run. We sample what the standalone visualization renders inside each annotation and report mean / median / % above threshold.",
+      "componentsHelperShort": "Pick a preset and threshold, then click Run. We threshold the chosen channel and label connected regions inside each annotation.",
+      "reason": {
+        "noApi": "Visualization API isn't reachable from this module. Reload the page; if it keeps failing, the build is missing the visualization-api global bridge.",
+        "noActiveVisualization": "No visualization is active. Enable a visualization layer first, then re-run.",
+        "outOfViewport": "{{count}} annotation(s) are off-screen. Pan/zoom to bring them into view; partial overlaps are sampled automatically.",
+        "tooSmall": "{{count}} annotation(s) are below the 16-pixel minimum after downscaling.",
+        "renderFailed": "Standalone render failed for {{count}} annotation(s). Try toggling the active visualization off and on; check the browser console for details.",
+        "renderEmpty": "Standalone render produced no pixels for {{count}} annotation(s).",
+        "noSample": "Sampler returned no data for {{count}} annotation(s).",
+        "unsupportedShape": "{{count}} annotation(s) have a shape this tool can't rasterize (only polygons / rects / ellipses are supported).",
+        "unknown": "{{count}} annotation(s) failed with no specific reason.",
+        "generic": "{{count}} annotation(s) failed ({{- reason}})."
+      },
       "scopeLabel": "Scope",
       "scope": {
         "preset": "Preset",
@@ -130,9 +150,6 @@
       "progress": "{{done}} / {{total}}",
       "noPolygon": "No polygon-shaped annotations to measure for this scope.",
       "noPixels": "No raster pixels could be sampled.",
-      "outOfViewport": "Some annotations were outside the current viewport. Pan/zoom to cover them or switch to raw image source.",
-      "tooSmallSkipped": "{{count}} annotation(s) too small to sample.",
-      "noCoverageSkipped": "{{count}} annotation(s) had no rendered tiles under them. Pan/zoom over them, then re-run.",
       "componentsTitle": "Connected components",
       "componentsHelper": "Threshold the chosen channel inside each annotation, then label connected regions.",
       "componentMinSize": "Min size (px)",
@@ -144,7 +161,6 @@
       "perAnnotationEmpty": "Run a measurement to populate per-annotation values.",
       "annotationLabel": "#{{id}} ({{type}})",
       "channelHint": "{{source}} \u00b7 {{channel}}",
-      "shaderUnavailable": "Shader output sampling is not yet wired in this build. Use raw image for now.",
       "viewMeasurements": "View measurements",
       "computeMissing": "Compute missing",
       "popoverTitle": "Annotation measurements",

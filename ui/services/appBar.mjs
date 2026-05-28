@@ -4,7 +4,7 @@ import { MainPanel } from '../classes/components/mainPanel.mjs';
 import { Dropdown } from '../classes/elements/dropdown.mjs';
 import { Button } from '../classes/elements/buttons.mjs';
 import { Menu } from '../classes/components/menu.mjs';
-import { FAIcon } from '../classes/elements/fa-icon.mjs';
+import { PhIcon } from '../classes/elements/ph-icon.mjs';
 import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 
 export class AppBar {
@@ -25,7 +25,7 @@ export class AppBar {
                 extraClasses: {bg: "bg-transparent"},
             }, {
                 id: "view",
-                icon: "fa-window-restore",
+                icon: "ph-corners-out",
                 title: $.t('main.bar.view'),
                 body: [],
                 class: Dropdown,
@@ -34,14 +34,14 @@ export class AppBar {
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
                 id: "edit",
-                icon: "fa-bars",
+                icon: "ph-list",
                 title: $.t('main.bar.edit'),
                 body: [],
                 class: Dropdown,
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.Edit.refresh(true)
             }, {
-                id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'),
+                id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
             }
         );
@@ -55,7 +55,7 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: {bg: "bg-transparent"},
             },{
-                id: "Menu", icon: "fa-bars",
+                id: "Menu", icon: "ph-list",
                 body: [], class: Dropdown
             }
         );
@@ -69,9 +69,9 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: { bg: "bg-transparent" }
             },
-            { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
-            { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-            { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
+            { id: "settings", icon: "ph-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
+            { id: "tutorial", icon: "ph-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+            { id: "share", icon: "ph-share-network", title: $.t('main.bar.share'), items: [
                     {
                         id: "global-export",
                         domID: true,
@@ -81,7 +81,7 @@ export class AppBar {
                             UTILITIES.export();
                             this.rightMenu.closeTab("share");
                         },
-                        icon: "fa-download"
+                        icon: "ph-download-simple"
                     },
                     {
                         id: "copy-url-inner",
@@ -92,10 +92,10 @@ export class AppBar {
                             UTILITIES.copyUrlToClipboard();
                             this.rightMenu.closeTab("share");
                         },
-                        icon: "fa-link"
+                        icon: "ph-link"
                     }
                 ], class: Dropdown},
-            { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
+            { id: "user", icon: "ph-user-circle", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
         );
 
         this.rightMenu.attachTo($("#top-side-left-user"));
@@ -120,7 +120,7 @@ export class AppBar {
                     this._fullscreen = this.Chrome.isHidden();
                 }
             },
-            new FAIcon("fa-up-right-and-down-left-from-center"));
+            new PhIcon("ph-arrows-out"));
         this._fullscreen = false;
         this.button.attachTo($("#top-side-left-fullscreen"));
 
@@ -222,7 +222,7 @@ export class AppBar {
      * @param {('success'|'warning'|'error'|'info'|'neutral'|'primary'|'secondary'|'accent')} [opts.color='neutral']
      * @param {('none'|'soft'|'outline'|'ghost')} [opts.style='none']
      * @param {('xs'|'sm'|'md'|'lg')} [opts.size='sm']
-     * @param {string} [opts.icon] FontAwesome icon class (e.g. "fa-users").
+     * @param {string} [opts.icon] Icon class — Phosphor (`ph-users`) preferred; legacy `fa-users` also accepted.
      * @param {boolean} [opts.dot=false] Render a colored dot before label.
      * @param {string} [opts.dotColor] Optional explicit dot colour token (defaults to opts.color).
      * @param {boolean} [opts.pulse=false] Animate the dot for "active/connecting" states.
@@ -441,12 +441,12 @@ export class AppBar {
     rightMenuSideCollapsed = {
         init(subMenu) {
             this.subMenu = subMenu;
-            this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
-            this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
+            this.subMenu.addItem({ id: "settings", icon: "ph-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
+            this.subMenu.addItem({ id: "tutorial", icon: "ph-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
                 id: 'share',
                 label: $.t('main.bar.share'),
-                icon: 'fa-share-nodes',
+                icon: 'ph-share-network',
                 children: [
                     {
                         id: "global-export",
@@ -456,7 +456,7 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.export();
                         },
-                        icon: "fa-download"
+                        icon: "ph-download-simple"
                     },
                     {
                         id: "copy-url-inner",
@@ -466,7 +466,7 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.copyUrlToClipboard();
                         },
-                        icon: "fa-link"
+                        icon: "ph-link"
                     }
                 ],
             });
@@ -483,19 +483,19 @@ export class AppBar {
                 'sideViewerMenu': {
                     id: 'viewer-sidebars',
                     label: $.t('main.bar.viewerSidebars'),
-                    icon: 'fa-columns',
+                    icon: 'ph-columns',
                     section: 'global-windows',
                 },
                 'toolbarMenu': {
                     id: 'viewer-toolbars',
                     label: $.t('main.bar.viewerToolbars'),
-                    icon: 'fa-columns',
+                    icon: 'ph-columns',
                     section: 'global-windows',
                 },
                 'globalMenuTabs': {
                     id: 'global-menu-tabs',
                     label: $.t('main.bar.globalMenus'),
-                    icon: 'fa-table-columns',
+                    icon: 'ph-columns',
                     section: 'global-windows',
                 }
             };
@@ -508,7 +508,7 @@ export class AppBar {
             this.subMenu.addItem({
                 id: 'clone-viewer',
                 onClick: () => UTILITIES.clone(),
-                icon: "fa-clone",
+                icon: "ph-copy-simple",
                 label: $.t('main.global.clone'),
             });
 
@@ -708,7 +708,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'history-undo',
-                icon: 'fa-rotate-left',
+                icon: 'ph-arrow-counter-clockwise',
                 label: $.t('main.bar.undo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
@@ -737,7 +737,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'history-redo',
-                icon: 'fa-rotate-right',
+                icon: 'ph-arrow-clockwise',
                 label: $.t('main.bar.redo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
@@ -770,7 +770,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'value-inspector',
-                icon: 'fa-crosshairs',
+                icon: 'ph-crosshair',
                 label: 'Value inspector',
                 section: 'visualization-inspector',
                 onClick: () => {
@@ -782,13 +782,13 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'visualization-inspector',
-                icon: 'fa-eye',
+                icon: 'ph-eye',
                 label: 'Visualization inspector',
                 section: 'visualization-inspector',
                 children: [
                     {
                         id: 'visualization-inspector-toggle',
-                        icon: 'fa-power-off',
+                        icon: 'ph-power',
                         label: 'Toggle inspector',
                         onClick: () => {
                             UTILITIES.toggleVisualizationInspector();
@@ -798,13 +798,13 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-mode',
-                        icon: 'fa-circle-half-stroke',
+                        icon: 'ph-circle-half',
                         label: 'Reveal mode',
                         childSelectionStyle: 'check',
                         children: [
                             {
                                 id: 'visualization-inspector-mode-inclusive',
-                                icon: 'fa-circle',
+                                icon: 'ph-circle',
                                 label: 'Inclusive reveal',
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-inside');
@@ -814,7 +814,7 @@ export class AppBar {
                             },
                             {
                                 id: 'visualization-inspector-mode-exclusive',
-                                icon: 'fa-circle-notch',
+                                icon: 'ph-circle-notch',
                                 label: 'Exclusive reveal',
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-outside');
@@ -826,7 +826,7 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-radius-down',
-                        icon: 'fa-minus',
+                        icon: 'ph-minus',
                         label: 'Smaller radius',
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(-24);
@@ -836,7 +836,7 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-radius-up',
-                        icon: 'fa-plus',
+                        icon: 'ph-plus',
                         label: 'Larger radius',
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(24);
@@ -965,7 +965,7 @@ export class AppBar {
             }
             this.subMenu.addItem({
                 id: 'plugins',
-                icon: "fa-puzzle-piece",
+                icon: "ph-puzzle-piece",
                 label: $.t('main.bar.plugins'),
                 onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
             });

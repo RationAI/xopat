@@ -2,7 +2,7 @@
 import { ToolbarGroup } from "./toolbarGroup.mjs";
 import { BaseComponent } from "../../baseComponent.mjs";
 import { Div } from "../../elements/div.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
+import { iconComponentFor } from "../../elements/ph-icon.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import van from "../../../vanjs.mjs";
 
@@ -96,7 +96,7 @@ class Toolbar extends BaseComponent {
         USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
             {
                 id: this.id,
-                icon: "fa-gear",
+                icon: "ph-gear",
                 title: this.id, // todo name!!!!
                 visibilityManager: this.visibility
             }
@@ -127,7 +127,7 @@ class Toolbar extends BaseComponent {
         const inText  = item.title;
         const inIcon  = item.icon instanceof BaseComponent
             ? item.icon
-            : new FAIcon({ name: item.icon });
+            : iconComponentFor(item.icon);
 
         const action = item.onClick || (() => {});
 
@@ -310,7 +310,7 @@ class Toolbar extends BaseComponent {
         return {
             id: this.id,
             title: this._embeddedTitle || firstHeader?.extraProperties?.title?.val || this.id,
-            icon: this._embeddedIcon || 'fa-wrench'
+            icon: this._embeddedIcon || 'ph-wrench'
         };
     }
 

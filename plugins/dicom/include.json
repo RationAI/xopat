@@ -3,7 +3,16 @@
   "author": "Aiosa",
   "name": "DICOM Integration",
   // Provide service URL of your DICOM API
+  // (default below is dev-only — see `requiredConfig` note).
   "serviceUrl": "http://localhost:8042/dicom-web",
+  // Under `pluginSelectionMode: "available"` the gate resolves these paths
+  // against the deployment env.json — EITHER `plugins.dicom.serviceUrl` OR
+  // `core.server.secure.plugins.dicom.serviceUrl` will satisfy it. The
+  // include.json default above is NOT consulted by the gate and is kept
+  // purely as a dev/local convenience for the (default) "all" mode.
+  // DICOM is dropped in `"available"` mode unless the deployment supplies
+  // a real `serviceUrl` in one of the two buckets.
+  "requiredConfig": ["serviceUrl"],
   "includes": [
     "dist/dcmjs.js",
     "dist/cornerstoneWADOImageLoader.bundle.min.js",

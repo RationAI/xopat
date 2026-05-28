@@ -1,4 +1,5 @@
 {
+  "requiredConfig": ["providerDefaults.baseUrl"],
   "providerDefaults": {
     "baseUrl": "https://api.anthropic.com/v1",
     "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",

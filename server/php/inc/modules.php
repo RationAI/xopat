@@ -194,6 +194,27 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 $data['requires'] = [];
             }
 
+            // Author server manifest (server.json) — optional. See plugins.php
+            // for full semantics. Mirrors `requiredConfig` hoist + author-secure
+            // stash for modules.
+            $serverManifestPath = $full_path . "server.json";
+            if (file_exists($serverManifestPath)) {
+                $serverManifest = (new Comment)->decode(file_get_contents($serverManifestPath), true);
+                if (is_array($serverManifest)) {
+                    if (isset($serverManifest['requiredConfig']) && is_array($serverManifest['requiredConfig'])) {
+                        $existing = (isset($data['requiredConfig']) && is_array($data['requiredConfig']))
+                            ? $data['requiredConfig'] : [];
+                        $data['requiredConfig'] = array_values(array_unique(
+                            array_merge($existing, $serverManifest['requiredConfig'])));
+                    }
+                    $authorSecure = $serverManifest;
+                    unset($authorSecure['requiredConfig']);
+                    if (!empty($authorSecure) && !empty($data['id'])) {
+                        $GLOBALS['CORE_AUTHOR_SECURE']['modules'][$data['id']] = $authorSecure;
+                    }
+                }
+            }
+
             // Pre-merge captures: deployment-ENV module block AND preserved
             // server-secure module block. Include.json defaults must NOT
             // pollute the gate input. The secure block is read from the

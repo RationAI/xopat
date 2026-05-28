@@ -5,7 +5,7 @@ import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Checkbox } from "../elements/checkbox.mjs";
 import { Select } from "../elements/select.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
+import { PhIcon } from "../elements/ph-icon.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
 
 const { div, span, select, option, button, input, label } = van.tags;
@@ -207,7 +207,7 @@ export class ShaderLayer extends BaseComponent {
                 title: $.t("main.shaders.blendConfigure"),
                 onclick: () => this._toggleBlendPopup()
             },
-            new FAIcon({name: "fa-cogs"}).create()
+            new PhIcon({name: "ph-gear"}).create()
         );
 
         return div(
@@ -249,7 +249,7 @@ export class ShaderLayer extends BaseComponent {
                     : ($.t("common.Expand") || "Expand"),
                 onclick: () => this._toggleGroupBody()
             },
-            new FAIcon({ name: "fa-chevron-right" }).create()
+            new PhIcon({ name: "ph-caret-right" }).create()
         );
     }
 
@@ -527,7 +527,7 @@ export class ShaderLayer extends BaseComponent {
             miss: "text-error bg-error/10"
         }[this.cacheApplied] || "text-info bg-info/10";
 
-        const icon = new FAIcon({ name: "fa-broom" });
+        const icon = new PhIcon({ name: "ph-broom" });
         return button(
             {
                 type: "button",
@@ -558,7 +558,7 @@ export class ShaderLayer extends BaseComponent {
                     this._toggleCachePopup();
                 }
             }
-        }, new FAIcon({ name: "fa-broom" }), span($.t("main.shaders.cacheClear")));
+        }, new PhIcon({ name: "ph-broom" }), span($.t("main.shaders.cacheClear")));
 
         const closeButton = new Button({
             size: Button.SIZE.TINY,
@@ -566,7 +566,7 @@ export class ShaderLayer extends BaseComponent {
             onClick: () => {
                 this._toggleCachePopup();
             }
-        }, new FAIcon({ name: "fa-close" }), span($.t("common.Close")));
+        }, new PhIcon({ name: "ph-x" }), span($.t("common.Close")));
 
         return div(
             {
@@ -659,7 +659,7 @@ export class ShaderLayer extends BaseComponent {
                 title: $.t("main.shaders.moveUp"),
                 onclick: () => this.cb.onReorder?.("up")
             },
-            new FAIcon({ name: "fa-chevron-up" }).create()
+            new PhIcon({ name: "ph-caret-up" }).create()
         );
 
         const moveDownBtn = button(
@@ -670,7 +670,7 @@ export class ShaderLayer extends BaseComponent {
                 title: $.t("main.shaders.moveDown"),
                 onclick: () => this.cb.onReorder?.("down")
             },
-            new FAIcon({ name: "fa-chevron-down" }).create()
+            new PhIcon({ name: "ph-caret-down" }).create()
         );
 
         const mainControls = this._buildMainControls();

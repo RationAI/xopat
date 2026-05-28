@@ -2,6 +2,7 @@ import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
 import {FAIcon} from "./fa-icon.mjs";
+import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
 
 const { div, ul, li, a, span, i } = van.tags;
 
@@ -59,7 +60,7 @@ class Dropdown extends BaseSelectableComponent {
     createButton() {
         const inIcon = (this.icon instanceof BaseComponent)
             ? this.icon
-            : new FAIcon({ name: this.icon });
+            : iconComponentFor(this.icon);
 
         this._headerIconComp = inIcon;
         this._headerLabelSpan = span(this.title);
@@ -69,7 +70,7 @@ class Dropdown extends BaseSelectableComponent {
         if (this._useActiveSelection) {
             dropdownIcon = i(
                 { "data-dropdown-arrow": "1", class: "ml-0 pr-3 pl-1" },
-                new FAIcon({ name: "fa-caret-down" }).create()
+                new PhIcon({ name: "ph-caret-down" }).create()
             );
             buttonClasses['padding'] = 'pr-0';
             inIcon.setClass('dropdownPadding', 'pl-2')
@@ -206,8 +207,23 @@ class Dropdown extends BaseSelectableComponent {
         if (btnEl && typeof item.label === "string") {
             btnEl.title = item.label;
         }
-        if (this._headerIconComp instanceof FAIcon && typeof item.icon === "string") {
-            this._headerIconComp.changeIcon(item.icon);
+        if (typeof item.icon === "string") {
+            const wantsPh = item.icon.trim().startsWith('ph-');
+            const isPh = this._headerIconComp instanceof PhIcon;
+            const isFa = this._headerIconComp instanceof FAIcon;
+            // Same family: in-place glyph swap. Different family or unknown:
+            // rebuild the header icon component so the wrapper class flips
+            // between fa-auto and ph-light (otherwise the codepoint renders
+            // through the wrong font and produces tofu / unrelated glyphs).
+            if ((wantsPh && isPh) || (!wantsPh && isFa)) {
+                this._headerIconComp.changeIcon(item.icon);
+            } else {
+                const oldEl = document.getElementById(this._headerIconComp.id);
+                const newComp = iconComponentFor(item.icon);
+                const newEl = newComp.create();
+                if (oldEl && oldEl.parentNode) oldEl.parentNode.replaceChild(newEl, oldEl);
+                this._headerIconComp = newComp;
+            }
         }
     }
     _removeFocus() {}
@@ -382,7 +398,7 @@ class Dropdown extends BaseSelectableComponent {
     /* ---------------- rendering ---------------- */
 
     _renderIcon(icon) {
-        return new FAIcon({name: icon}).create();
+        return iconComponentFor(icon).create();
     }
 
     _renderItem(item, styleOverride = null) {
@@ -429,7 +445,7 @@ class Dropdown extends BaseSelectableComponent {
         let leftIconSlot;
         if (isCheckStyle) {
             // Always create check icon, toggle visibility via class
-            const checkIcon = new FAIcon({name: "fa-check"}).create();
+            const checkIcon = new PhIcon({name: "ph-check"}).create();
             checkIcon.classList.add("check-icon"); // Marker class for setSelected
             if (!selected) checkIcon.classList.add("invisible");
 
@@ -446,7 +462,7 @@ class Dropdown extends BaseSelectableComponent {
         // --- Right Side Slot ---
         let rightSide = null;
         if (hasChildren) {
-            const chevron = new FAIcon({ name: "fa-chevron-right" }).create();
+            const chevron = new PhIcon({ name: "ph-caret-right" }).create();
             if (isCheckStyle && item.icon) {
                 // Check mode: Icon + Chevron
                 rightSide = span({ class: "text-xs opacity-60 flex items-center gap-2" },
