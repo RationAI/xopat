@@ -20,6 +20,10 @@ function looksLikeInlineTemplate(s: string): boolean {
 }
 
 function compileUrlEntry(entry: SlideProtocolUrlTemplateEntry): (data: any) => string {
+    // Trust boundary: templates fed here come from registry entries
+    // (admin-controlled env.client.*). Inline user overrides via
+    // spec.protocol / configEntry.protocol are rejected in resolve() before
+    // they reach this function, so new Function() below stays safe.
     // Cache the compiled Function on the entry so we don't `new Function` per tile.
     const cached = (entry as any).__compiled as ((data: any) => string) | undefined;
     if (cached) return cached;
@@ -174,7 +178,7 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
     }
 
     resolve(args: SlideProtocolResolveArgs & { role: "background" | "visualization" }): ResolvedSlideProtocol {
-        const { spec, isSecureMode, role } = args;
+        const { spec, role } = args;
         const isObjectSpec = spec && typeof spec === "object";
 
         // 1. Deprecated TileSource short-circuit.
@@ -206,25 +210,13 @@ export class SlideProtocolRegistry implements SlideProtocolRegistryLike {
             if (this.entries.has(protoOverride)) {
                 entry = this.entries.get(protoOverride);
             } else if (looksLikeInlineTemplate(protoOverride)) {
-                if (isSecureMode) {
-                    console.warn(
-                        `[SLIDE_PROTOCOLS] inline-JS protocol override rejected in secure mode ` +
-                        `(value: ${JSON.stringify(protoOverride)}); falling back to default.`
-                    );
-                    entry = undefined;
-                } else {
-                    // Synthesize a transient legacy-style entry (matches the previous
-                    // `new Function("path,data", ...)` behavior). Not added to the
-                    // registry — single-shot eval.
-                    entry = {
-                        id: "__inline_override",
-                        urlTemplate: protoOverride,
-                        legacy: true,
-                        legacyServer: undefined,
-                        legacyArrayData: role === "visualization",
-                        deprecated: true,
-                    } as SlideProtocolUrlTemplateEntry;
-                }
+                // Inline JS-style templates supplied via spec/configEntry are
+                // user-influenced and were previously fed to new Function(),
+                // which is an RCE sink. Registered protocols only.
+                console.warn(
+                    `[SLIDE_PROTOCOLS] rejected inline protocol override; only registered protocol ids are accepted ` +
+                    `(value: ${JSON.stringify(protoOverride)}); falling back to default.`
+                );
             } else {
                 console.warn(
                     `[SLIDE_PROTOCOLS] unknown protocol "${protoOverride}"; falling back to default.`

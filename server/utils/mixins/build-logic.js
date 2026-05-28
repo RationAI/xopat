@@ -5,25 +5,24 @@ const path = require("path");
 const fs = require("fs");
 const glob = require("glob");
 
+// Windows npm/npx/yarn/pnpm are .cmd shims; specifying the extension lets
+// Node spawn them directly without invoking cmd.exe. Avoiding shell:true is
+// what keeps argv quoting safe — see `spawnAsync` below.
+const WIN_CMD_SHIM_EXECUTABLES = /^(npm|npx|node|yarn|pnpm|tailwindcss)$/i;
+
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
         const isWin = process.platform === "win32";
-
-        // On Windows, we must use shell: true for npx/npm,
-        // but we should pass the command and args as a single string
-        // to avoid the "Invalid build flag" concatenation error.
-        const fullCommand = isWin
-            ? `${cmd} ${args.map(a => `"${a}"`).join(" ")}`
+        const executable = isWin && WIN_CMD_SHIM_EXECUTABLES.test(cmd)
+            ? `${cmd}.cmd`
             : cmd;
 
-        const spawnArgs = isWin ? [] : args;
-        const options = {
+        const child = spawn(executable, args, {
             stdio: "inherit",
-            shell: isWin,
-            ...opts
-        };
-
-        const child = spawn(fullCommand, spawnArgs, options);
+            shell: false,
+            windowsVerbatimArguments: false,
+            ...opts,
+        });
 
         child.on("exit", (code) => {
             if (code === 0) resolve();
@@ -32,6 +31,22 @@ function spawnAsync(cmd, args, opts = {}) {
 
         child.on("error", (err) => reject(err));
     });
+}
+
+// Reject any string heading into a child-process argv that contains shell
+// metacharacters, control bytes, or attempts directory traversal. The argv
+// path is shell-free since we drop shell:true above, but defense-in-depth
+// keeps malicious workspace items from injecting esbuild flags either.
+const UNSAFE_ARG_CHARS = /[\x00-\x1f"`$&|;<>\r\n]/;
+
+function isSafeRelativeEntry(value, baseDir) {
+    if (typeof value !== "string" || value.length === 0) return false;
+    if (UNSAFE_ARG_CHARS.test(value)) return false;
+    if (path.isAbsolute(value)) return false;
+    const resolved = path.resolve(baseDir, value);
+    const rel = path.relative(baseDir, resolved);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+    return true;
 }
 
 function executeCopy(itemDirectory, copyMap, logger, prefix) {
@@ -171,6 +186,11 @@ const BuildLogic = {
         }
         // 2. Default fallback: Use esbuild if a buildEntry entry point is defined
         else if (packageData.buildEntry) {
+            if (!isSafeRelativeEntry(packageData.buildEntry, itemDirectory)) {
+                logger.error(`${logPrefix} refusing to build: "buildEntry" must be a safe relative path inside the workspace item (got ${JSON.stringify(packageData.buildEntry)}).`);
+                return;
+            }
+
             const outFile = path.join(itemDirectory, "index.workspace.js");
 
             const rawId = packageData.name || itemDirectory;

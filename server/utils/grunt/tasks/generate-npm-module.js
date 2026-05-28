@@ -10,9 +10,20 @@ function ensureDir(p) { fs.mkdirSync(p, { recursive: true }); }
 function writeJson(p, obj) { fs.writeFileSync(p, JSON.stringify(obj, null, 2)); }
 function writeFile(p, s) { fs.writeFileSync(p, s); }
 
+const WIN_CMD_SHIM_EXECUTABLES = /^(npm|npx|node|yarn|pnpm|tailwindcss)$/i;
+
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn(cmd, args, { stdio: "inherit", shell: process.platform === "win32", ...opts });
+        const isWin = process.platform === "win32";
+        const executable = isWin && WIN_CMD_SHIM_EXECUTABLES.test(cmd)
+            ? `${cmd}.cmd`
+            : cmd;
+        const child = spawn(executable, args, {
+            stdio: "inherit",
+            shell: false,
+            windowsVerbatimArguments: false,
+            ...opts,
+        });
         child.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`)));
         child.on("error", reject);
     });

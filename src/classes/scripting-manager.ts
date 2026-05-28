@@ -20,6 +20,15 @@ const WORKER_RESERVED_GLOBALS = [
     "location",
     "navigator",
     "fetch",
+    "eval",
+    "Function",
+    "XMLHttpRequest",
+    "WebSocket",
+    "EventSource",
+    "Worker",
+    "SharedWorker",
+    "caches",
+    "indexedDB",
 ] as const;
 
 const WORKER_SCHEMA_META_KEYS = new Set([
@@ -33,6 +42,27 @@ const WORKER_SCHEMA_META_KEYS = new Set([
     "name",
     "description",
 ]);
+
+// Cache the debug flag to avoid an APPLICATION_CONTEXT.getOption + try/catch
+// per worker dispatch. Refreshed on the `option-change` broadcast and
+// re-checked once after first access; flipping it mid-session takes effect
+// on the next debugLog call.
+let _scriptingDebugCache: boolean | null = null;
+function isScriptingDebugEnabled(): boolean {
+    if (_scriptingDebugCache !== null) return _scriptingDebugCache;
+    try {
+        const app = (globalThis as any)?.APPLICATION_CONTEXT;
+        _scriptingDebugCache = app?.getOption?.("debugMode", false, false) === true;
+    } catch {
+        _scriptingDebugCache = false;
+    }
+    return _scriptingDebugCache;
+}
+
+function scriptingDebugLog(label: string, data?: unknown): void {
+    if (!isScriptingDebugEnabled()) return;
+    console.debug(`[SCRIPTING DEBUG] ${label}`, data);
+}
 
 function createContextWorkerId(contextId: string, prefix = "script"): string {
     const safeContextId = String(contextId || "default")
@@ -108,7 +138,132 @@ function generateWorkerBoilerplate<TNamespaces extends ScriptApiNamespaces>(
     return workerCode;
 }
 
+/**
+ * If the user script is exactly one top-level parenthesised expression
+ * (a single IIFE, possibly trailed by `;`) with no top-level `return`,
+ * prepend `return ` so the AsyncFunction wrapper resolves to the IIFE's
+ * value instead of `undefined`. Strings/templates/comments are skipped
+ * during bracket-depth tracking; anything more complex passes through
+ * unchanged.
+ */
+function maybeAutoReturnTrailingIife(script: string): string {
+    const len = script.length;
+    if (len === 0) return script;
+
+    let i = 0;
+    let depth = 0;
+    let hasTopLevelReturn = false;
+    let stripped = "";
+
+    const isIdent = (ch: string | undefined) => !!ch && (ch >= "0" && ch <= "9" || ch >= "A" && ch <= "Z" || ch >= "a" && ch <= "z" || ch === "_" || ch === "$");
+    const isWs = (ch: string | undefined) => ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+
+    while (i < len) {
+        const ch = script[i];
+        const nx = i + 1 < len ? script[i + 1] : "";
+
+        // Line comment
+        if (ch === "/" && nx === "/") {
+            while (i < len && script[i] !== "\n") i++;
+            stripped += " ";
+            continue;
+        }
+        // Block comment
+        if (ch === "/" && nx === "*") {
+            i += 2;
+            while (i + 1 < len && !(script[i] === "*" && script[i + 1] === "/")) i++;
+            i += 2;
+            stripped += " ";
+            continue;
+        }
+        // String literal
+        if (ch === '"' || ch === "'") {
+            const q = ch;
+            i++;
+            while (i < len && script[i] !== q) {
+                if (script[i] === "\\" && i + 1 < len) i++;
+                i++;
+            }
+            i++;
+            stripped += '""';
+            continue;
+        }
+        // Template literal (handles ${...} interpolation depth)
+        if (ch === "`") {
+            i++;
+            while (i < len && script[i] !== "`") {
+                if (script[i] === "\\" && i + 1 < len) { i += 2; continue; }
+                if (script[i] === "$" && i + 1 < len && script[i + 1] === "{") {
+                    i += 2;
+                    let td = 1;
+                    while (i < len && td > 0) {
+                        if (script[i] === "{") td++;
+                        else if (script[i] === "}") td--;
+                        i++;
+                    }
+                    continue;
+                }
+                i++;
+            }
+            i++;
+            stripped += "``";
+            continue;
+        }
+
+        if (ch === "{" || ch === "(" || ch === "[") depth++;
+        else if (ch === "}" || ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+
+        if (depth === 0 && isIdent(ch) && (i === 0 || !isIdent(script[i - 1]))) {
+            let j = i;
+            while (j < len && isIdent(script[j])) j++;
+            const word = script.slice(i, j);
+            if (word === "return") hasTopLevelReturn = true;
+            stripped += word;
+            i = j;
+            continue;
+        }
+
+        stripped += ch;
+        i++;
+    }
+
+    if (hasTopLevelReturn) return script;
+
+    // Trim trailing semicolons + whitespace from the stripped form.
+    let tailEnd = stripped.length;
+    while (tailEnd > 0) {
+        const c = stripped[tailEnd - 1];
+        if (c === ";" || isWs(c)) tailEnd--;
+        else break;
+    }
+    let head = 0;
+    while (head < tailEnd && isWs(stripped[head])) head++;
+    if (head >= tailEnd) return script;
+    if (stripped[head] !== "(" || stripped[tailEnd - 1] !== ")") return script;
+
+    // Confirm the entire trimmed body is one parenthesised expression: bracket
+    // depth must touch 0 only at tailEnd-1, never in between.
+    let d = 0;
+    let lastZeroAt = -1;
+    for (let k = head; k < tailEnd; k++) {
+        const c = stripped[k];
+        if (c === "(" || c === "[" || c === "{") d++;
+        else if (c === ")" || c === "]" || c === "}") {
+            d--;
+            if (d === 0) lastZeroAt = k;
+            if (d < 0) return script;
+        }
+    }
+    if (lastZeroAt !== tailEnd - 1) return script;
+
+    // Prepend `return ` at the original script's first non-whitespace position.
+    let firstNonWs = 0;
+    while (firstNonWs < script.length && isWs(script[firstNonWs])) firstNonWs++;
+    return script.slice(0, firstNonWs) + "return " + script.slice(firstNonWs);
+}
+
 function buildWorkerSource(script: string, boilerplate: string, apiTimeout: number): string {
+    const userScript = maybeAutoReturnTrailingIife(script);
     return `
 (function() {
 let _securePort = null;
@@ -153,17 +308,49 @@ const initHandler = (e) => {
 
         ${boilerplate}
 
+        // Harden the global object before user code runs. Local const shadows
+        // inside the IIFE below cannot rebind 'eval' (strict-mode reserved
+        // binding) and cannot defeat constructor-chain lookups like
+        // ({}).constructor.constructor. Neutralising these on 'self' itself
+        // is the load-bearing barrier; the IIFE-local shadows are a hint only.
+        const _lockGlobal = (name) => {
+            try {
+                Object.defineProperty(self, name, {
+                    value: undefined,
+                    writable: false,
+                    configurable: false,
+                });
+            } catch (_) { /* already locked */ }
+        };
+        [
+            "eval", "Function",
+            "fetch", "XMLHttpRequest", "WebSocket", "EventSource",
+            "Worker", "SharedWorker", "importScripts",
+            "postMessage", "navigator", "caches", "indexedDB",
+        ].forEach(_lockGlobal);
+
+        try {
+            const AsyncFn    = (async function () {}).constructor;
+            const GenFn      = (function* () {}).constructor;
+            const AsyncGenFn = (async function* () {}).constructor;
+            Object.defineProperty(AsyncFn.prototype,    "constructor", { value: undefined, configurable: false });
+            Object.defineProperty(GenFn.prototype,      "constructor", { value: undefined, configurable: false });
+            Object.defineProperty(AsyncGenFn.prototype, "constructor", { value: undefined, configurable: false });
+            Object.defineProperty(Function.prototype,   "constructor", { value: undefined, configurable: false });
+        } catch (_) { /* already locked */ }
+
         Object.defineProperty(self, "onmessage", {
             value: null,
             writable: false,
             configurable: false
         });
 
-        // Run the user script inside an async scope so top-level await works. 'eval' not in strict mode
+        // Run the user script inside an async scope so top-level await works.
         (async () => {
             "use strict";
 
-            // Shadow common escape hatches / side-effectful globals inside the script scope.
+            // Belt-and-braces local shadows. The real barrier is the
+            // Object.defineProperty(self, …) hardening block above.
             const self = undefined;
             const globalThis = undefined;
             const postMessage = undefined;
@@ -177,9 +364,8 @@ const initHandler = (e) => {
             const navigator = undefined;
             const caches = undefined;
             const indexedDB = undefined;
-            const Function = undefined;
 
-            ${script}
+            ${userScript}
         })().then(finishWithResult).catch(finishWithError);
     }
 };
@@ -209,6 +395,14 @@ async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
     const nsConfig = manager.namespaces[namespace];
     context.touchWorker(workerId);
 
+    if (isScriptingDebugEnabled()) {
+        scriptingDebugLog("API_CALL", {
+            contextId: context.id,
+            activeViewerContextId: context.getActiveViewerContextId(),
+            workerId, namespace, method, params, callId,
+        });
+    }
+
     const workerTimeoutId = setTimeout(() => {
         console.warn(`Worker ${workerId} exceeded global timeout in context ${context.id}.`);
         port.postMessage({
@@ -228,9 +422,19 @@ async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
                     ? await hostAction(context, ...params)
                     : await hostAction(...params);
                 clearTimeout(workerTimeoutId);
+                if (isScriptingDebugEnabled()) {
+                    scriptingDebugLog("API_RESULT", {
+                        contextId: context.id, workerId, namespace, method, callId, result,
+                    });
+                }
                 port.postMessage({ type: "api-response", callId, result } satisfies ApiResponseMessage);
             } catch (err) {
                 clearTimeout(workerTimeoutId);
+                if (isScriptingDebugEnabled()) {
+                    scriptingDebugLog("API_ERROR", {
+                        contextId: context.id, workerId, namespace, method, callId, error: err,
+                    });
+                }
                 port.postMessage({
                     type: "api-response",
                     callId,
@@ -406,9 +610,23 @@ export class ScriptingContext<
         return new Promise((resolve, reject) => {
             let worker: Worker | null;
 
+            scriptingDebugLog("EXECUTE_SCRIPT_START", {
+                contextId: this._id,
+                label: this._label,
+                activeViewerContextId: this._activeViewerContextId,
+                workerId,
+                options,
+                script,
+            });
+
             try {
                 worker = this.createWorker(script, { ...options, workerId });
             } catch (error) {
+                scriptingDebugLog("EXECUTE_SCRIPT_CREATE_WORKER_ERROR", {
+                    contextId: this._id,
+                    workerId,
+                    error,
+                });
                 reject(error instanceof Error ? error : new Error(String(error)));
                 return;
             }
@@ -419,6 +637,10 @@ export class ScriptingContext<
             }
 
             const timeoutId = setTimeout(() => {
+                scriptingDebugLog("EXECUTE_SCRIPT_TIMEOUT", {
+                    contextId: this._id,
+                    workerId,
+                });
                 this.terminateWorker(workerId);
                 reject(new Error("Script execution timed out."));
             }, this.manager.apiTimeout);
@@ -426,6 +648,12 @@ export class ScriptingContext<
             worker.onmessage = (event: MessageEvent<{ result?: unknown; error?: string }>) => {
                 clearTimeout(timeoutId);
                 const { result, error } = event.data || {};
+                scriptingDebugLog("EXECUTE_SCRIPT_MESSAGE", {
+                    contextId: this._id,
+                    workerId,
+                    result,
+                    error,
+                });
                 this.terminateWorker(workerId);
 
                 if (error) reject(new Error(error));
@@ -434,6 +662,15 @@ export class ScriptingContext<
 
             worker.onerror = (event: ErrorEvent) => {
                 clearTimeout(timeoutId);
+                scriptingDebugLog("EXECUTE_SCRIPT_WORKER_ERROR", {
+                    contextId: this._id,
+                    workerId,
+                    message: event.message,
+                    filename: event.filename,
+                    lineno: event.lineno,
+                    colno: event.colno,
+                    error: event.error,
+                });
                 this.terminateWorker(workerId);
                 reject(new Error(event.message || "Script worker failed."));
             };
@@ -477,6 +714,13 @@ export class ScriptingContext<
 
         worker.postMessage({ type: "init" } satisfies WorkerInitMessage, [channel.port2]);
         URL.revokeObjectURL(workerUrl);
+        scriptingDebugLog("WORKER_CREATED", {
+            contextId: this._id,
+            label: this._label,
+            activeViewerContextId: this._activeViewerContextId,
+            workerId,
+            reusable: !!options.reuseWorker,
+        });
 
         return worker;
     }
@@ -499,7 +743,11 @@ export class ScriptingContext<
         record.worker.terminate();
         record.channel.port1.close();
         this.unregisterWorker(workerId);
-        console.log(`Worker ${workerId} ${reason} in context ${this._id}.`);
+        scriptingDebugLog("WORKER_TERMINATED", {
+            contextId: this._id,
+            workerId,
+            reason,
+        });
     }
 
     destroy(): void {
@@ -554,7 +802,7 @@ export class ScriptingManager<
         return instance._registerExternalApiRegistration(registration);
     }
 
-    constructor(viewerActions: ViewerActionMap<TNamespaces> = {}, apiTimeout = 30000) {
+    constructor(viewerActions: ViewerActionMap<TNamespaces> = {}, apiTimeout = 3_600_000) {
         const staticContext = this.constructor as unknown as ScriptManagerStatic<TNamespaces>;
         if (staticContext.__self) {
             throw `Trying to instantiate a singleton. Instead, use ${(this.constructor as typeof ScriptingManager).name}.instance().`;
