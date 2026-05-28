@@ -184,6 +184,7 @@ export class PathologyMetricsWindow {
     const { div } = globalThis.van.tags;
     return div(
       { 'data-tab-pane': 'intensity', class: 'p-2 space-y-2 hidden' },
+      div({ class: 'text-xs opacity-70' }, this.plugin.t('annotations.measurements.intensityHelper')),
       this._buildChannelControls(),
       this._buildScopeControls(),
       this._buildThresholdControls(),
@@ -202,7 +203,7 @@ export class PathologyMetricsWindow {
     const { div, input, label } = globalThis.van.tags;
     return div(
       { 'data-tab-pane': 'components', class: 'p-2 space-y-2 hidden' },
-      div({ class: 'text-xs opacity-70' }, this.plugin.t('annotations.measurements.componentsHelper')),
+      div({ class: 'text-xs opacity-70' }, this.plugin.t('annotations.measurements.componentsHelperShort')),
       this._buildChannelControls(true),
       this._buildScopeControls(true),
       this._buildThresholdControls(true),
@@ -239,35 +240,23 @@ export class PathologyMetricsWindow {
   _buildChannelControls(_secondary) {
     const { div, label, select, option } = globalThis.van.tags;
     const t = (k) => this.plugin.t(`annotations.measurements.${k}`);
+    // Only "raw" is wired today; re-add a shader-output option here when
+    // sampling per shader output is actually implemented in the engine.
     return div(
       { class: 'flex flex-wrap gap-2 items-center text-sm' },
       div({ class: 'font-medium' }, t('channelLabel')),
-      select({
-        class: 'px-2 py-1 text-sm border rounded',
-        oninput: (e) => { this.channel = { ...this.channel, source: e.target.value }; this._syncChannelSelectors(); }
-      },
-        option({ value: 'raw', selected: this.channel.source === 'raw' }, t('channelSource.raw')),
-        option({ value: 'shader', selected: this.channel.source === 'shader' }, t('channelSource.shader')),
-      ),
+      div({ class: 'opacity-70' }, t('channelSource.raw')),
       select({
         class: 'px-2 py-1 text-sm border rounded',
         'data-role': 'pmw-channel-select',
-        oninput: (e) => { this.channel = { ...this.channel, channel: e.target.value }; this._syncChannelSelectors(); }
+        oninput: (e) => { this.channel = { ...this.channel, channel: e.target.value }; }
       },
         option({ value: 'L', selected: this.channel.channel === 'L' }, t('channels.L')),
         option({ value: 'R', selected: this.channel.channel === 'R' }, t('channels.R')),
         option({ value: 'G', selected: this.channel.channel === 'G' }, t('channels.G')),
         option({ value: 'B', selected: this.channel.channel === 'B' }, t('channels.B')),
       ),
-      div({ 'data-role': 'pmw-shader-warning', class: 'text-xs opacity-60', style: this.channel.source === 'shader' ? '' : 'display:none' },
-        t('shaderUnavailable')),
     );
-  }
-
-  _syncChannelSelectors() {
-    document.querySelectorAll('[data-role="pmw-shader-warning"]').forEach((el) => {
-      el.style.display = this.channel.source === 'shader' ? '' : 'none';
-    });
   }
 
   _buildScopeControls(_secondary) {
@@ -298,7 +287,7 @@ export class PathologyMetricsWindow {
     const t = (k) => this.plugin.t(`annotations.measurements.${k}`);
     return div(
       { class: 'flex items-center gap-2 text-sm' },
-      div({ class: 'font-medium' }, t('thresholdLabel')),
+      div({ class: 'font-medium' }, `${t('thresholdLabel')} ${t('thresholdUnits')}`),
       input({
         type: 'range', min: '0', max: '255', step: '1', value: String(this.threshold),
         class: 'flex-1',
@@ -499,7 +488,10 @@ export class PathologyMetricsWindow {
   }
 
   _computeForPreset(presetId, metric) {
-    const objs = this.annotations.filter((o) => this.annotations.isAnnotation(o) && o.presetID === presetId);
+    const engine = this._engine();
+    const objs = engine
+      ? engine._collectScope({ kind: 'preset', presetID: presetId })
+      : [];
     const preset = this.annotations.presets.get(presetId);
     const human = (preset?.meta?.category?.value || preset?.meta?.category || presetId).toString();
 
@@ -563,11 +555,6 @@ export class PathologyMetricsWindow {
       return;
     }
     if (this._abortController) return;
-    if (this.channel.source === 'shader') {
-      // Shader sampling isn't wired up in this build; force raw and warn.
-      this.channel = { ...this.channel, source: 'raw' };
-      this._syncChannelSelectors();
-    }
 
     this._runningTab = kind;
     this._abortController = new AbortController();
@@ -647,43 +634,45 @@ export class PathologyMetricsWindow {
     const objs = engine._collectScope(this.scope === 'preset' ? { kind: 'preset', presetID: presetId } : { kind: this.scope });
 
     // Run summary: total scope size, cached, and per-reason skip breakdown.
+    // Group dynamically so any reason the engine emits surfaces verbatim
+    // instead of being lumped under a catch-all "no-sample" bucket.
     const total = outcome?.total ?? 0;
     const errors = outcome?.errors || [];
-    const oovCount = errors.filter(e => e.reason === 'out-of-viewport').length;
-    const tinyCount = errors.filter(e => e.reason === 'too-small').length;
-    const noCovCount = errors.filter(e => e.reason === 'no-coverage').length;
-    const otherCount = errors.length - oovCount - tinyCount - noCovCount;
+    const byReason = new Map();
+    for (const e of errors) {
+      const key = e?.reason || 'unknown';
+      byReason.set(key, (byReason.get(key) || 0) + 1);
+    }
     let cached = 0;
     for (const obj of objs) if (engine.getCached(obj, this.channel)) cached++;
 
     const summary = document.createElement('div');
     summary.className = 'text-xs';
     const skipped = errors.length;
-    const reasonBits = [];
-    if (oovCount) reasonBits.push(`out-of-viewport: ${oovCount}`);
-    if (tinyCount) reasonBits.push(`too-small: ${tinyCount}`);
-    if (noCovCount) reasonBits.push(`no-coverage: ${noCovCount}`);
-    if (otherCount) reasonBits.push(`no-sample: ${otherCount}`);
+    const reasonBits = [...byReason.entries()].map(([r, n]) => `${r}: ${n}`);
     summary.textContent = `Ran on ${total} · cached ${cached}${skipped ? ` · skipped ${skipped} (${reasonBits.join(', ')})` : ''}`;
     root.appendChild(summary);
 
-    if (oovCount) {
-      const tip = document.createElement('div');
-      tip.className = 'text-xs text-yellow-500';
-      tip.textContent = this.plugin.t('annotations.measurements.outOfViewport');
-      root.appendChild(tip);
-    }
-    if (tinyCount) {
-      const tinyLine = document.createElement('div');
-      tinyLine.className = 'text-xs text-yellow-500';
-      tinyLine.textContent = this.plugin.t('annotations.measurements.tooSmallSkipped', { count: tinyCount });
-      root.appendChild(tinyLine);
-    }
-    if (noCovCount) {
-      const covLine = document.createElement('div');
-      covLine.className = 'text-xs text-yellow-500';
-      covLine.textContent = this.plugin.t('annotations.measurements.noCoverageSkipped', { count: noCovCount });
-      root.appendChild(covLine);
+    // Map each emitted engine reason to a localised actionable line. Reasons
+    // not in this map fall through to `reason.generic` so the user still
+    // sees the raw key — better than swallowing the failure.
+    const reasonKeys = {
+      'no-api': 'reason.noApi',
+      'no-active-visualization': 'reason.noActiveVisualization',
+      'out-of-viewport': 'reason.outOfViewport',
+      'too-small': 'reason.tooSmall',
+      'render-failed': 'reason.renderFailed',
+      'render-empty': 'reason.renderEmpty',
+      'no-sample': 'reason.noSample',
+      'unsupported-shape': 'reason.unsupportedShape',
+      'unknown': 'reason.unknown',
+    };
+    for (const [reason, count] of byReason) {
+      const i18nKey = reasonKeys[reason] || 'reason.generic';
+      const line = document.createElement('div');
+      line.className = 'text-xs text-yellow-500';
+      line.textContent = this.plugin.t(`annotations.measurements.${i18nKey}`, { count, reason });
+      root.appendChild(line);
     }
 
     const hint = document.createElement('div');

@@ -10,7 +10,8 @@ import { iconComponentFor } from "../../elements/ph-icon.mjs";
  * @param {object} options - Configuration options for the toolbar item.
  * @param {string} [options.id] - The ID for the component.
  * @param {string|BaseComponent} options.icon - Icon name string ("fa-…" or "ph-…") or a pre-built icon component instance (FAIcon / PhIcon).
- * @param {string} [options.label] - The text to display as a tooltip (title attribute).
+ * @param {string} [options.label] - Visible text for the button (used by parents like ToolbarChoiceGroup to render dropdown rows). When `tooltip` is not provided, also used as the title attribute.
+ * @param {string} [options.tooltip] - Hover tooltip (title attribute). Falls back to `label`.
  * @param {Function} [options.onClick] - The function to execute when the button is clicked.
  * @param {object} [options.extraClasses] - Additional classes to apply to the button.
  */
@@ -37,7 +38,7 @@ class ToolbarItem extends BaseSelectableComponent {
                 ...(this.options.extraClasses || {})
             },
             extraProperties: {
-                title: this.options.label || "",
+                title: this.options.tooltip ?? this.options.label ?? "",
                 "data-toolbar-item": this.itemID
             }
         }, iconComp);

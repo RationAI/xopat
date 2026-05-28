@@ -35,6 +35,7 @@
       "autoFormat": "auto detect",
       "autoFormatHint": "Detect format from the file name and content. Export requires a concrete format.",
       "autoExportHint": "Pick a concrete format above to export. Auto detect is only used on import.",
+      "lossyDefaultHint": "This format is lossy — some annotation data may not be preserved on re-import.",
       "modeTabs": {
         "export": "Export",
         "import": "Import"

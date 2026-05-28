@@ -25,7 +25,7 @@ export class AppBar {
                 extraClasses: {bg: "bg-transparent"},
             }, {
                 id: "view",
-                icon: "ph-corners-out",
+                icon: "ph-layout",
                 title: $.t('main.bar.view'),
                 body: [],
                 class: Dropdown,

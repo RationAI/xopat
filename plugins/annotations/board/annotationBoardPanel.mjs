@@ -21,43 +21,48 @@ function sanitizeId(value) {
 }
 
 const FA_ICON_MAP = {
-    chevron_right: 'fa-chevron-right',
-    expand_more: 'fa-chevron-down',
-    visibility: 'fa-eye',
-    visibility_off: 'fa-eye-slash',
-    arrow_upward: 'fa-arrow-up',
-    arrow_downward: 'fa-arrow-down',
-    edit: 'fa-pen-to-square',
-    question_mark: 'fa-circle-question',
-    visibility_lock: 'fa-user-lock',
+    chevron_right: 'ph-caret-right',
+    expand_more: 'ph-caret-down',
+    visibility: 'ph-eye',
+    visibility_off: 'ph-eye-slash',
+    arrow_upward: 'ph-arrow-up',
+    arrow_downward: 'ph-arrow-down',
+    edit: 'ph-note-pencil',
+    question_mark: 'ph-question',
+    visibility_lock: 'ph-user-circle-gear',
 };
 
 function faIcon(name, extraClasses = '') {
     const el = document.createElement('i');
     const key = String(name ?? '').trim();
-    const mapped = FA_ICON_MAP[key] || (key.startsWith('fa-') ? key : 'fa-tag');
-    el.className = `fa-solid ${mapped} ${extraClasses}`.trim();
+    if (key.startsWith('ph-')) {
+        el.className = `ph-light ${key} ${extraClasses}`.trim();
+    } else {
+        const mapped = FA_ICON_MAP[key] || (key.startsWith('fa-') ? key : 'fa-tag');
+        el.className = `fa-solid ${mapped} ${extraClasses}`.trim();
+    }
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
 
 function factoryIcon(icon, extraClasses = '') {
     const el = document.createElement('i');
-    const tokens = String(icon ?? 'fa-tag')
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
+    const tokens = String(icon ?? 'fa-tag').trim().split(/\s+/).filter(Boolean);
 
-    const hasStyleClass = tokens.some(token =>
-        ['fa-solid', 'fa-regular', 'fa-light', 'fa-thin', 'fa-duotone', 'fa-brands'].includes(token)
-    );
+    if (tokens.some(t => t.startsWith('ph-'))) {
+        const phName = tokens.find(t => t.startsWith('ph-') && t !== 'ph-light') || 'ph-tag';
+        el.className = ['ph-light', phName, extraClasses].filter(Boolean).join(' ');
+    } else {
+        const hasStyleClass = tokens.some(token =>
+            ['fa-solid', 'fa-regular', 'fa-light', 'fa-thin', 'fa-duotone', 'fa-brands'].includes(token)
+        );
+        const hasIconClass = tokens.some(token => token.startsWith('fa-') && !token.startsWith('fa-rotate'));
 
-    const hasIconClass = tokens.some(token => token.startsWith('fa-') && !token.startsWith('fa-rotate'));
+        if (!hasStyleClass) tokens.unshift('fa-solid');
+        if (!hasIconClass) tokens.push('fa-tag');
 
-    if (!hasStyleClass) tokens.unshift('fa-solid');
-    if (!hasIconClass) tokens.push('fa-tag');
-
-    el.className = [...tokens, extraClasses].filter(Boolean).join(' ').trim();
+        el.className = [...tokens, extraClasses].filter(Boolean).join(' ').trim();
+    }
     el.setAttribute('aria-hidden', 'true');
     return el;
 }
@@ -115,12 +120,6 @@ export class AnnotationBoardPanel {
         // contiguous range between this anchor and the clicked row.
         // Stored as the row's incrementId.
         this._selectionAnchorId = null;
-
-        // Header-selectable metric column. 'off' = column hidden (no visual
-        // change for users that don't enable it). Other values: 'area',
-        // 'length', 'mean', 'median', 'percentPositive', 'components'.
-        // Persisted on the plugin so it survives session restore.
-        this._displayMetric = String(this.plugin.getOption?.('boardDisplayMetric', 'off') || 'off');
     }
 
     get fabric() {
@@ -150,7 +149,7 @@ export class AnnotationBoardPanel {
             extraClasses: 'btn btn-ghost btn-xs',
             extraProperties: { title: this.plugin.t('annotations.board.deleteSelection') },
             onClick: () => this.fabric?.deleteSelection()
-        }, new UI.FAIcon('fa-trash'));
+        }, new UI.PhIcon({ name: 'ph-trash' }));
 
         this.rootComponent = new UI.Div({
                 id: this.containerId,
@@ -168,7 +167,7 @@ export class AnnotationBoardPanel {
                         extraClasses: 'btn btn-ghost btn-xs',
                         extraProperties: { title: this.plugin.t('annotations.board.createLayer') },
                         onClick: () => this.fabric?.createLayer()
-                    }, this.plugin.t('annotations.board.layer'),new UI.FAIcon('fa-circle-plus')),
+                    }, this.plugin.t('annotations.board.layer'),new UI.PhIcon({ name: 'ph-plus-circle' })),
                     this.deleteButton,
                     new UI.Button({
                         id: `${this.containerId}-refresh`,
@@ -176,7 +175,7 @@ export class AnnotationBoardPanel {
                         extraClasses: 'btn btn-ghost btn-xs',
                         extraProperties: { title: this.plugin.t('annotations.board.refresh') },
                         onClick: () => this.requestRender(true)
-                    }, new UI.FAIcon('fa-rotate'))
+                    }, new UI.PhIcon({ name: 'ph-arrows-clockwise' }))
                 )
             ),
             new UI.Div({
@@ -187,8 +186,7 @@ export class AnnotationBoardPanel {
                     placeholder: this.plugin.t?.('annotations.board.searchPlaceholder') || 'Search annotations…',
                     class: 'input input-xs input-bordered flex-1',
                     oninput: (e) => this._onSearchInput(e.target.value)
-                }),
-                this._buildMetricColumnSelect()
+                })
             ),
             new UI.Div({
                 id: this.bodyId,
@@ -256,14 +254,37 @@ export class AnnotationBoardPanel {
             const focus = this._getFocusBBox(obj, factory);
             this._clickBoardElement(focus, id, e);
         });
-        // Right-click handling on board rows is intentionally absent — all
-        // annotation actions (incl. grouping) live in the canvas right-click
-        // menu so there is a single mental model. Native browser menu on the
-        // list is suppressed for cleanliness.
+        // Right-click on annotation / group rows opens the same menu the
+        // canvas does, with the row's annotation pre-resolved as the active
+        // target and `source: 'board'` so providers can disable spatially-
+        // invalid actions (e.g. Paste-at-mouse).
         this.layerLogsEl.addEventListener('contextmenu', (e) => {
-            if (e.target.closest('[data-type="annotation"], [data-type="annotation-group"]')) {
-                e.preventDefault();
+            let active = null;
+            const groupRow = e.target.closest('[data-type="annotation-group"]');
+            if (groupRow) {
+                const key = String(groupRow.dataset.id || '');
+                const group = this._findGroupRow(key);
+                active = group?.members?.[0] ?? null;
+            } else {
+                const annRow = e.target.closest('[data-type="annotation"]');
+                if (annRow) {
+                    const id = Number(annRow.dataset.id);
+                    if (Number.isFinite(id)) {
+                        active = this.fabric?.findObjectOnCanvasByIncrementId?.(id) ?? null;
+                    }
+                }
             }
+
+            if (!active) return; // layer rows / empty gutters fall through
+
+            e.preventDefault();
+            const viewer = this.fabric?.viewer ?? this.viewer ?? null;
+            window.CanvasContextMenu?.open?.({
+                event: e,
+                viewer,
+                active,
+                source: 'board',
+            });
         });
         this._delegatedClickInstalled = true;
     }
@@ -286,7 +307,6 @@ export class AnnotationBoardPanel {
             'layer-objects-changed',
             'annotation-selection-changed',
             'layer-selection-changed',
-            'annotation-measurements-updated',
         ];
         const handlers = [];
         const bump = () => {
@@ -642,62 +662,40 @@ export class AnnotationBoardPanel {
     }
 
     /**
-     * Lightweight ad-hoc menu listing available layers (+ "(no layer)") to
-     * re-parent the given annotation. Placed below the anchor button; first
-     * outside-click dismisses.
+     * Open the annotation actions dropdown anchored to the row's "more"
+     * button. Sources items from `_buildAnnotationContextActions` directly
+     * (NOT through `CanvasContextMenu.open`, which aggregates the recorder /
+     * playground / etc. providers) so the dropdown only shows annotation
+     * actions — preset / copy-cut-paste-delete / move-to-layer / group /
+     * z-order / mark-private / view-measurements.
      */
-    _openMoveToLayerMenu(anchorBtn, object) {
+    _openAnnotationActionsMenu(anchorBtn, object, originalEvent) {
         const fabric = this.fabric;
-        if (!fabric) return;
+        if (!fabric || !object) return;
 
-        const existing = document.body.querySelector('[data-role="board-move-to-layer-menu"]');
-        if (existing) { existing.remove(); }
-
-        const layers = (fabric.getAllLayers?.() || [])
-            .filter(l => String(l.id) !== String(object.layerID ?? ''));
-
-        const menu = document.createElement('div');
-        menu.dataset.role = 'board-move-to-layer-menu';
-        menu.className = 'absolute z-50 menu menu-sm bg-base-200 rounded-box shadow border border-base-300';
-        menu.style.minWidth = '160px';
-
-        const addItem = (label, onClick) => {
-            const item = document.createElement('button');
-            item.className = 'btn btn-ghost btn-xs justify-start w-full';
-            item.textContent = label;
-            item.onclick = (e) => { e.stopPropagation(); onClick(); menu.remove(); };
-            menu.appendChild(item);
-        };
-
-        if (object.layerID) addItem('(no layer)', () => {
-            fabric.setAnnotationLayer?.(object, null);
+        const tree = this.plugin._buildAnnotationContextActions(object, fabric, {
+            originalEvent,
+            source: 'board',
+            includePresetSelection: true,
+            includeMarkAsPrivate: true,
+            includeMoveToLayer: true,
         });
-        for (const l of layers) {
-            addItem(l.name || `Layer ${l.id}`, () => {
-                fabric.setAnnotationLayer?.(object, l.id);
-            });
-        }
-        if (!menu.children.length) {
-            addItem('(no other layers)', () => {});
-        }
 
-        document.body.appendChild(menu);
-        const rect = anchorBtn.getBoundingClientRect();
-        menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
-        menu.style.left = `${rect.left + window.scrollX - 120}px`;
+        // _buildAnnotationContextActions wraps everything under a single
+        // "Annotation" parent on the flyout path; unwrap so the dropdown
+        // opens directly to the action list.
+        const items = (Array.isArray(tree) && tree.length === 1 && Array.isArray(tree[0].children))
+            ? tree[0].children
+            : tree;
+        if (!Array.isArray(items) || !items.length) return;
 
-        const onDocClick = (ev) => {
-            if (!menu.contains(ev.target)) {
-                menu.remove();
-                document.removeEventListener('mousedown', onDocClick, true);
-            }
-        };
-        // defer one frame so the click that opened the menu doesn't immediately close it
-        requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
+        const ctxMenu = window.ContextMenu;
+        if (ctxMenu?.open) ctxMenu.open(originalEvent, items);
+        else window.DropDown?.open?.(originalEvent, items);
     }
 
     /**
-     * Bulk variant of _openMoveToLayerMenu: lists destination layers and
+     * Bulk variant of the layer-pick menu: lists destination layers and
      * reparents the entire `members` array atomically via
      * `fabric.setAnnotationsLayer`. Members are guaranteed to share a level
      * (groups are per-level), so we sample the first member's `layerID` to
@@ -752,208 +750,6 @@ export class AnnotationBoardPanel {
             }
         };
         requestAnimationFrame(() => document.addEventListener('mousedown', onDocClick, true));
-    }
-
-    _buildMetricColumnSelect() {
-        const { select, option } = globalThis.van.tags;
-        const t = (k) => this.plugin.t(`annotations.board.metricColumn.${k}`);
-        const opts = [
-            { v: 'off', label: t('off') },
-            { v: 'area', label: t('area') },
-            { v: 'length', label: t('length') },
-            { v: 'mean', label: t('mean') },
-            { v: 'median', label: t('median') },
-            { v: 'percentPositive', label: t('percentPositive') },
-            { v: 'components', label: t('components') },
-        ];
-        return select({
-            class: 'select select-xs select-bordered max-w-[7rem]',
-            title: this.plugin.t('annotations.board.metricColumn.label'),
-            oninput: (e) => this._setDisplayMetric(e.target.value),
-        }, ...opts.map(({ v, label }) => option({ value: v, selected: v === this._displayMetric }, label)));
-    }
-
-    _setDisplayMetric(metric) {
-        const next = String(metric || 'off');
-        if (next === this._displayMetric) return;
-        this._displayMetric = next;
-        try { this.plugin.setOption?.('boardDisplayMetric', next); } catch { /* non-fatal */ }
-        this.requestRender(true);
-    }
-
-    /**
-     * Resolve the value for the currently-selected metric on a single
-     * annotation. Returns null when no value is available — callers render
-     * a "↻" affordance so the user can dispatch a measurement run.
-     */
-    _annotationMetricValue(object) {
-        if (this._displayMetric === 'off' || !object) return { kind: 'hidden' };
-        const factory = this.context.getAnnotationObjectFactory?.(object.factoryID);
-        if (this._displayMetric === 'area') {
-            const a = factory?.getArea?.(object);
-            if (Number.isFinite(a)) return { kind: 'value', text: this._formatArea(a) };
-            return { kind: 'missing' };
-        }
-        if (this._displayMetric === 'length') {
-            const l = factory?.getLength?.(object);
-            if (Number.isFinite(l)) {
-                const sb = window.VIEWER?.scalebar;
-                return { kind: 'value', text: sb?.formatLength?.(sb.imageLength(l)) || String(l) };
-            }
-            return { kind: 'missing' };
-        }
-        // Pixel-derived metrics: read from the most recently used cache slot.
-        const slot = this._lookupAnyMeasurementSlot(object);
-        if (!slot) return { kind: 'missing' };
-        switch (this._displayMetric) {
-            case 'mean':
-                return Number.isFinite(slot.mean) ? { kind: 'value', text: slot.mean.toFixed(1) } : { kind: 'missing' };
-            case 'median':
-                return Number.isFinite(slot.median) ? { kind: 'value', text: slot.median.toFixed(1) } : { kind: 'missing' };
-            case 'percentPositive':
-                return Number.isFinite(slot.percentPositive)
-                    ? { kind: 'value', text: `${(slot.percentPositive * 100).toFixed(1)}%` }
-                    : { kind: 'missing' };
-            case 'components':
-                return slot.components && Number.isFinite(slot.components.count)
-                    ? { kind: 'value', text: String(slot.components.count) }
-                    : { kind: 'missing' };
-            default:
-                return { kind: 'missing' };
-        }
-    }
-
-    _isPixelMetric(metric) {
-        return metric === 'mean' || metric === 'median'
-            || metric === 'percentPositive' || metric === 'components';
-    }
-
-    _measurementsEngine() {
-        const mod = (typeof globalThis.singletonModule === 'function')
-            ? globalThis.singletonModule('annotation-measurements')
-            : null;
-        return mod?.getEngine?.() || null;
-    }
-
-    /**
-     * Compute the currently-selected metric for a single annotation. Reuses
-     * the engine's last-used config so the user's most recent channel +
-     * threshold pair flows through. Disables the trigger button while the
-     * compute is running and restores it on completion (success or error).
-     */
-    async _runSingleAnnotation(object, anchorBtn) {
-        const engine = this._measurementsEngine();
-        if (!engine || !object) return;
-        if (anchorBtn) {
-            anchorBtn.disabled = true;
-            anchorBtn.textContent = '…';
-        }
-        try {
-            const includeComponents = this._displayMetric === 'components';
-            await engine.computeForObject(object, { includeComponents });
-        } catch (err) {
-            console.warn('[board] single-annotation measurement failed', err);
-        } finally {
-            if (anchorBtn) {
-                anchorBtn.disabled = false;
-                anchorBtn.textContent = '↻';
-            }
-        }
-    }
-
-    /**
-     * Compute the metric for a batch of annotations (members of a collapsed
-     * group). Yields between objects so the UI stays responsive on 1000s of
-     * polygons; an in-flight call is recorded on the wrapper-keyed map so a
-     * second click on the same group cancels the run.
-     */
-    async _runGroupMeasurement(members, anchorBtn) {
-        const engine = this._measurementsEngine();
-        if (!engine || !members?.length) return;
-        if (!this._activeGroupRuns) this._activeGroupRuns = new Map();
-        const key = members[0]?.presetID ?? 'group';
-        const existing = this._activeGroupRuns.get(key);
-        if (existing) {
-            existing.aborted = true;
-            this._activeGroupRuns.delete(key);
-            if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '↻'; }
-            return;
-        }
-        const handle = { aborted: false };
-        this._activeGroupRuns.set(key, handle);
-        const includeComponents = this._displayMetric === 'components';
-        if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '⏵'; }
-        try {
-            for (let i = 0; i < members.length; i++) {
-                if (handle.aborted) break;
-                await engine.computeForObject(members[i], { includeComponents });
-                if ((i & 7) === 7) await new Promise((r) => requestAnimationFrame(r));
-                if (anchorBtn) anchorBtn.textContent = `${i + 1}/${members.length}`;
-            }
-        } catch (err) {
-            console.warn('[board] group measurement failed', err);
-        } finally {
-            this._activeGroupRuns.delete(key);
-            if (anchorBtn) { anchorBtn.disabled = false; anchorBtn.textContent = '↻'; }
-        }
-    }
-
-    _lookupAnyMeasurementSlot(object) {
-        const slots = object?._measurements;
-        if (!slots) return null;
-        // Pick the most recently computed slot (highest computedAt).
-        let best = null;
-        for (const key of Object.keys(slots)) {
-            const s = slots[key];
-            if (!s) continue;
-            if (!best || (s.computedAt || 0) > (best.computedAt || 0)) best = s;
-        }
-        return best;
-    }
-
-    /** Aggregate metric value for a group of same-preset members. */
-    _groupMetricValue(members) {
-        if (this._displayMetric === 'off' || !members?.length) return { kind: 'hidden' };
-        if (this._displayMetric === 'area' || this._displayMetric === 'length') {
-            // Sum
-            let sum = 0, n = 0;
-            for (const m of members) {
-                const factory = this.context.getAnnotationObjectFactory?.(m.factoryID);
-                const v = this._displayMetric === 'area' ? factory?.getArea?.(m) : factory?.getLength?.(m);
-                if (Number.isFinite(v)) { sum += v; n++; }
-            }
-            if (!n) return { kind: 'missing' };
-            const sb = window.VIEWER?.scalebar;
-            const text = this._displayMetric === 'area'
-                ? sb?.formatArea?.(sb.imageArea(sum)) || String(sum)
-                : sb?.formatLength?.(sb.imageLength(sum)) || String(sum);
-            return { kind: 'value', text: `Σ ${text}` };
-        }
-        // Pixel-derived metrics: weighted mean (or sum for components).
-        let acc = 0, weight = 0, count = 0;
-        for (const m of members) {
-            const slot = this._lookupAnyMeasurementSlot(m);
-            if (!slot) continue;
-            count++;
-            if (this._displayMetric === 'percentPositive') {
-                acc += (slot.percentPositive || 0) * (slot.pixelCount || 1);
-                weight += (slot.pixelCount || 1);
-            } else if (this._displayMetric === 'mean' || this._displayMetric === 'median') {
-                acc += (this._displayMetric === 'mean' ? slot.mean : slot.median) * (slot.pixelCount || 1);
-                weight += (slot.pixelCount || 1);
-            } else if (this._displayMetric === 'components') {
-                acc += slot.components?.count || 0;
-                weight += 1;
-            }
-        }
-        if (!count) return { kind: 'missing', total: members.length };
-        if (this._displayMetric === 'percentPositive') return weight > 0
-            ? { kind: 'value', text: `${(acc / weight * 100).toFixed(1)}% (${count}/${members.length})` }
-            : { kind: 'missing', total: members.length };
-        if (this._displayMetric === 'components') return { kind: 'value', text: `Σ ${acc | 0} (${count}/${members.length})` };
-        return weight > 0
-            ? { kind: 'value', text: `${(acc / weight).toFixed(1)} (${count}/${members.length})` }
-            : { kind: 'missing', total: members.length };
     }
 
     _onSearchInput(value) {
@@ -1155,7 +951,7 @@ export class AnnotationBoardPanel {
             const upBtn = document.createElement('button');
             upBtn.className = 'btn btn-ghost btn-xs btn-square';
             upBtn.title = 'Move layer up';
-            upBtn.appendChild(faIcon('fa-arrow-up', 'text-xs'));
+            upBtn.appendChild(faIcon('ph-arrow-up', 'text-xs'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(upBtn) || layer, 'up');
@@ -1164,7 +960,7 @@ export class AnnotationBoardPanel {
             const downBtn = document.createElement('button');
             downBtn.className = 'btn btn-ghost btn-xs btn-square';
             downBtn.title = 'Move layer down';
-            downBtn.appendChild(faIcon('fa-arrow-down', 'text-xs'));
+            downBtn.appendChild(faIcon('ph-arrow-down', 'text-xs'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 this.fabric?.moveLayer?.(targetForRow(downBtn) || layer, 'down');
@@ -1232,17 +1028,10 @@ export class AnnotationBoardPanel {
         subText.append(time, sep, area, filteredBadge);
         content.append(title, subText);
 
-        // Configurable metric column. Hidden by default; populated by
-        // _renderAnnotation when this._displayMetric !== 'off'.
-        const metricCell = document.createElement('div');
-        metricCell.dataset.tplRole = 'metric';
-        metricCell.className = 'hidden text-xs font-mono opacity-80 ml-2 whitespace-nowrap';
-        metricCell.style.pointerEvents = 'none';
-
         const actions = document.createElement('div');
         actions.dataset.tplRole = 'actions';
 
-        root.append(dragHandle, iconBox, content, metricCell, actions);
+        root.append(dragHandle, iconBox, content, actions);
 
         this._annotationRowTemplate = root;
         return root;
@@ -1278,43 +1067,9 @@ export class AnnotationBoardPanel {
         const timeEl = row.querySelector('[data-tpl-role="time"]');
         const areaEl = row.querySelector('[data-tpl-role="area"]');
         const filteredBadgeEl = row.querySelector('[data-tpl-role="filteredBadge"]');
-        const metricEl = row.querySelector('[data-tpl-role="metric"]');
         const actionsEl = row.querySelector('[data-tpl-role="actions"]');
 
-        // Populate the configurable metric column.
-        metricEl.replaceChildren();
-        metricEl.style.pointerEvents = '';
-        if (this._displayMetric !== 'off') {
-            const metric = this._annotationMetricValue(object);
-            metricEl.classList.remove('hidden');
-            if (metric.kind === 'value') {
-                metricEl.textContent = metric.text;
-                metricEl.classList.remove('opacity-50');
-            } else if (metric.kind === 'missing' && this._isPixelMetric(this._displayMetric)) {
-                // Render a clickable ↻ button so the user can compute on
-                // demand without opening the metrics window.
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'btn btn-ghost btn-xs px-1 min-h-0 h-5';
-                btn.title = this.plugin.t('annotations.board.compute');
-                btn.textContent = '↻';
-                btn.style.pointerEvents = 'auto';
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    this._runSingleAnnotation(object, btn);
-                };
-                metricEl.appendChild(btn);
-            } else if (metric.kind === 'missing') {
-                metricEl.textContent = this.plugin.t('annotations.board.noData') || '—';
-                metricEl.classList.add('opacity-50');
-            } else {
-                metricEl.classList.add('hidden');
-            }
-        } else {
-            metricEl.classList.add('hidden');
-        }
-
-        const objectIcon = factoryIcon(factory?.getIcon?.() || 'fa-tag');
+        const objectIcon = factoryIcon(factory?.getIcon?.() || 'ph-tag');
         objectIcon.style.color = color;
         iconBox.appendChild(objectIcon);
 
@@ -1322,8 +1077,29 @@ export class AnnotationBoardPanel {
         if (isFiltered) titleEl.classList.add('line-through');
 
         timeEl.textContent = new Date(object.created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        areaEl.replaceChildren();
         const area = factory?.getArea?.(object);
-        areaEl.textContent = area ? this._formatArea(area) : 'No area';
+        if (Number.isFinite(area) && area > 0) {
+            // ph-bounding-box = area metric (square units).
+            areaEl.append(
+                faIcon('ph-bounding-box', 'text-[9px] mr-0.5 align-middle'),
+                this._formatArea(area)
+            );
+        } else {
+            // Fall back to length for 1-D shapes (ruler, line, angle) where
+            // `getArea` is unimplemented or returns 0. `_formatLength` uses
+            // `imageLengthToGivenUnits` which formats with linear units
+            // (µm, mm, …) — never ². ph-ruler marks the value as length.
+            const length = factory?.getLength?.(object);
+            if (Number.isFinite(length) && length > 0) {
+                areaEl.append(
+                    faIcon('ph-ruler', 'text-[9px] mr-0.5 align-middle'),
+                    this._formatLength(length)
+                );
+            } else {
+                areaEl.textContent = '—';
+            }
+        }
         if (isFiltered) filteredBadgeEl.classList.remove('hidden');
 
         actionsEl.className = `flex gap-0.5 ${isFiltered ? 'opacity-30' : 'opacity-0 group-hover/ann:opacity-100'}`.trim();
@@ -1344,10 +1120,18 @@ export class AnnotationBoardPanel {
                     : null;
             };
 
+            // Stack up/down into a single column-shaped cell so the row
+            // saves a button slot. Each half-height button still resolves
+            // its target via `targetForRow` (data-id) at click time.
+            const reorderCell = document.createElement('div');
+            reorderCell.className = 'flex flex-col w-6';
+
             const upBtn = document.createElement('button');
-            upBtn.className = 'btn btn-ghost btn-xs btn-square';
+            upBtn.className = 'btn btn-ghost btn-square min-h-0 w-6 px-0 py-0';
+            upBtn.style.minHeight = '17px';
+            upBtn.style.height = '17px';
             upBtn.title = 'Move up';
-            upBtn.appendChild(faIcon('fa-arrow-up', 'text-xs'));
+            upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
             upBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(upBtn) || object;
@@ -1355,26 +1139,34 @@ export class AnnotationBoardPanel {
             };
 
             const downBtn = document.createElement('button');
-            downBtn.className = 'btn btn-ghost btn-xs btn-square';
+            downBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
             downBtn.title = 'Move down';
-            downBtn.appendChild(faIcon('fa-arrow-down', 'text-xs'));
+            downBtn.style.minHeight = '17px';
+            downBtn.style.height = '17px';
+            downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
             downBtn.onclick = (e) => {
                 e.stopPropagation();
                 const obj = targetForRow(downBtn) || object;
                 this.fabric?.moveAnnotation?.(obj, 'down');
             };
 
-            const layerBtn = document.createElement('button');
-            layerBtn.className = 'btn btn-ghost btn-xs btn-square';
-            layerBtn.title = 'Move to layer';
-            layerBtn.appendChild(faIcon('fa-layer-group', 'text-xs'));
-            layerBtn.onclick = (e) => {
+            reorderCell.append(upBtn, downBtn);
+
+            // Annotation-only actions dropdown — replaces the standalone
+            // layer button. Builds items from `_buildAnnotationContextActions`
+            // directly so the menu shows only annotation actions (no
+            // recorder / playground / other providers).
+            const menuBtn = document.createElement('button');
+            menuBtn.className = 'btn btn-ghost btn-xs btn-square';
+            menuBtn.title = 'Annotation actions';
+            menuBtn.appendChild(faIcon('ph-dots-three-vertical', 'text-xs'));
+            menuBtn.onclick = (e) => {
                 e.stopPropagation();
-                const obj = targetForRow(layerBtn) || object;
-                this._openMoveToLayerMenu(layerBtn, obj);
+                const obj = targetForRow(menuBtn) || object;
+                this._openAnnotationActionsMenu(menuBtn, obj, e);
             };
 
-            actionsEl.append(upBtn, downBtn, layerBtn);
+            actionsEl.append(reorderCell, menuBtn);
         }
 
         // Per-row click handler is NOT attached: the delegated handler on
@@ -1427,7 +1219,7 @@ export class AnnotationBoardPanel {
         const iconBox = document.createElement('div');
         iconBox.className = 'flex-shrink-0 flex items-center justify-center w-5';
         iconBox.style.pointerEvents = 'none';
-        iconBox.appendChild(factoryIcon(factory?.getIcon?.() || 'fa-tag'));
+        iconBox.appendChild(factoryIcon(factory?.getIcon?.() || 'ph-tag'));
         iconBox.firstChild.style.color = color;
 
         const content = document.createElement('div');
@@ -1454,35 +1246,6 @@ export class AnnotationBoardPanel {
 
         row.append(iconBox, content);
 
-        if (this._displayMetric !== 'off') {
-            const groupMetric = this._groupMetricValue(members);
-            if (groupMetric.kind === 'value') {
-                const metricBadge = document.createElement('span');
-                metricBadge.className = 'text-xs font-mono opacity-80 mr-2 whitespace-nowrap';
-                metricBadge.textContent = groupMetric.text;
-                row.appendChild(metricBadge);
-            } else if (groupMetric.kind === 'missing' && this._isPixelMetric(this._displayMetric)) {
-                // Group-level compute: kicks off engine.computeForObject for
-                // every member sequentially, yielding to the UI between items.
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'btn btn-ghost btn-xs px-1 min-h-0 h-5 mr-2';
-                btn.title = this.plugin.t('annotations.board.compute');
-                btn.textContent = '↻';
-                btn.style.pointerEvents = 'auto';
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    this._runGroupMeasurement(members, btn);
-                };
-                row.appendChild(btn);
-            } else if (groupMetric.kind === 'missing') {
-                const metricBadge = document.createElement('span');
-                metricBadge.className = 'text-xs font-mono opacity-50 mr-2 whitespace-nowrap';
-                metricBadge.textContent = this.plugin.t('annotations.board.noData') || '—';
-                row.appendChild(metricBadge);
-            }
-        }
-
         // Hover-actions: same affordances as per-annotation rows, but
         // operating on the whole `members` array. Wrapper APIs do this in
         // O(N) regardless of group size — no per-member loops on the panel
@@ -1491,34 +1254,39 @@ export class AnnotationBoardPanel {
         actionsEl.dataset.tplRole = 'actions';
         actionsEl.className = 'flex gap-0.5 opacity-0 group-hover/grp:opacity-100';
 
+        const reorderCell = document.createElement('div');
+        reorderCell.className = 'flex flex-col w-6';
+
         const upBtn = document.createElement('button');
-        upBtn.className = 'btn btn-ghost btn-xs btn-square';
+        upBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         upBtn.title = 'Move group up';
-        upBtn.appendChild(faIcon('fa-arrow-up', 'text-xs'));
+        upBtn.appendChild(faIcon('ph-caret-up', 'text-[10px]'));
         upBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'up');
         };
 
         const downBtn = document.createElement('button');
-        downBtn.className = 'btn btn-ghost btn-xs btn-square';
+        downBtn.className = 'btn btn-ghost btn-square min-h-0 h-4 w-6 px-0 py-0';
         downBtn.title = 'Move group down';
-        downBtn.appendChild(faIcon('fa-arrow-down', 'text-xs'));
+        downBtn.appendChild(faIcon('ph-caret-down', 'text-[10px]'));
         downBtn.onclick = (e) => {
             e.stopPropagation();
             this.fabric?.moveAnnotationBlock?.(members, 'down');
         };
 
+        reorderCell.append(upBtn, downBtn);
+
         const layerBtn = document.createElement('button');
         layerBtn.className = 'btn btn-ghost btn-xs btn-square';
         layerBtn.title = 'Move group to layer';
-        layerBtn.appendChild(faIcon('fa-layer-group', 'text-xs'));
+        layerBtn.appendChild(faIcon('ph-stack', 'text-xs'));
         layerBtn.onclick = (e) => {
             e.stopPropagation();
             this._openMoveToLayerMenuForGroup(layerBtn, members);
         };
 
-        actionsEl.append(upBtn, downBtn, layerBtn);
+        actionsEl.append(reorderCell, layerBtn);
         row.appendChild(actionsEl);
 
         return row;
@@ -1789,6 +1557,10 @@ export class AnnotationBoardPanel {
 
     _formatArea(area) {
         return this.viewer?.scalebar?.imageAreaToGivenUnits ? this.viewer.scalebar.imageAreaToGivenUnits(area || 0) : String(area || 0);
+    }
+
+    _formatLength(length) {
+        return this.viewer?.scalebar?.imageLengthToGivenUnits ? this.viewer.scalebar.imageLengthToGivenUnits(length || 0) : String(length || 0);
     }
 
     _computeLayerArea(layer) {

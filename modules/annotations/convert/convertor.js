@@ -224,6 +224,40 @@ OSDAnnotations.Convertor = class {
     static get formats() {
         return Object.keys(this.CONVERTERS);
     }
+
+    /**
+     * Detect a likely format from a filename based on the registered convertors'
+     * getSuffix() output and a small alias table for community extensions.
+     * Returns the format ID or null when nothing matches.
+     * @param {string} name
+     * @return {string|null}
+     */
+    static detectFromFilename(name) {
+        if (!name || typeof name !== 'string') return null;
+        const lower = name.toLowerCase();
+
+        // Longest declared suffix wins so 'qu.geo.json' beats '.json'.
+        let best = null;
+        let bestLen = 0;
+        for (const format of Object.keys(this.CONVERTERS)) {
+            let suffix;
+            try { suffix = this.CONVERTERS[format].getSuffix?.() || ''; } catch (_e) { suffix = ''; }
+            if (!suffix) continue;
+            const s = suffix.toLowerCase().replace(/^\.+/, '');
+            if (!s) continue;
+            if (lower.endsWith('.' + s) && s.length > bestLen) {
+                best = format;
+                bestLen = s.length;
+            }
+        }
+        if (best) return best;
+
+        // Aliases for common third-party extensions not directly produced by us.
+        if (lower.endsWith('.geojson') || lower.endsWith('.geo.json')) {
+            return this.CONVERTERS['geo-json'] ? 'geo-json' : null;
+        }
+        return null;
+    }
 };
 
 /**
@@ -276,6 +310,21 @@ OSDAnnotations.Convertor.IConvertor = class {
      * @type {boolean}
      */
     static exportsPresets = true;
+
+    /**
+     * Whether export through this convertor loses information (geometry
+     * simplification, dropped property, lossy text rendering, etc.). If true,
+     * the UI shows a warning toast when the user triggers an export so they
+     * know the stored file does not round-trip cleanly.
+     * @type {boolean}
+     */
+    static lossy = false;
+    /**
+     * Human-readable explanation paired with `lossy`. Used by the export UI
+     * to tell the user *what* will be dropped/simplified.
+     * @type {string}
+     */
+    static lossyReason = "";
 
     /**
      * @param {OSDAnnotations} annotationsModule  reference to the module

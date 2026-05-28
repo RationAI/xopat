@@ -8,7 +8,15 @@
   "includes": ["annotationsPlugin.mjs"],
   "modules": ["annotations", "human-readable-ids", "annotation-measurements"],
   "permaLoad": false,
-  "factories": ["polygon", "rect", "ellipse", "ruler", "angle", "text"],
-  "modalHistoryWindow": true,
+  "factories": [
+    "polygon",
+    "rect",
+    "ellipse",
+    "ruler",
+    "polyline",
+    "point",
+    "angle",
+    "line"
+  ],
   "enablePresetModify": true
 }

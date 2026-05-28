@@ -247,11 +247,14 @@ OSDAnnotations.PresetManager = class {
      * @param {string} [id] to create, generates random otherwise
      * @param {string} [categoryName=""] custom name
      * @param {string} [color] hex color
+     * @param {OSDAnnotations.AnnotationObjectFactory} [factory] optional factory binding;
+     *      defaults to the module's polygonFactory so existing callers are unchanged
      * @event preset-create
      * @returns {OSDAnnotations.Preset} newly created preset
      */
-    addPreset(id=undefined, categoryName="", color=undefined) {
-        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), this._context.polygonFactory, categoryName, color || this.randomColorHexString());
+    addPreset(id=undefined, categoryName="", color=undefined, factory=undefined) {
+        const objFactory = factory || this._context.polygonFactory;
+        let preset = new OSDAnnotations.Preset(id || Date.now().toString(), objFactory, categoryName, color || this.randomColorHexString());
         this._presets.set(preset.presetID, preset);
         this._context.raiseEvent('preset-create', {preset: preset});
         return preset;

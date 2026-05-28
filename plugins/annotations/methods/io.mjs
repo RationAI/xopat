@@ -209,6 +209,16 @@ export const ioMethods = {
 
         return this.getExportData(ioArgs, withObjects, withPresets, fabric).then((result) => {
             UTILITIES.downloadAsFile(name + this.context.getFormatSuffix(toFormat), result);
+
+            // Lossy-format heads-up: the file just downloaded does not round-trip
+            // cleanly. Surfaced after the download so it doesn't block the action.
+            try {
+                const convertor = OSDAnnotations.Convertor.get(toFormat);
+                if (convertor?.lossy) {
+                    const reason = convertor.lossyReason || `${toFormat} is a lossy format — some annotation data may not be preserved.`;
+                    Dialogs.show(`Exported as ${toFormat}. ${reason}`, 8000, Dialogs.MSG_WARN);
+                }
+            } catch (_e) { /* unknown format ID — nothing to warn about */ }
         }).catch((error) => {
             if (error?.code === 'EXPORT_NO_SELECTION') {
                 Dialogs.show('No annotations selected to export.', 2500, Dialogs.MSG_WARN);

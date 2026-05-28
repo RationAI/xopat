@@ -204,8 +204,10 @@ class Dropdown extends BaseSelectableComponent {
             this._headerLabelSpan.textContent = item.label;
         }
         const btnEl = document.getElementById(this.headerButton.id);
-        if (btnEl && typeof item.label === "string") {
-            btnEl.title = item.label;
+        const headerTitle = (typeof item.title === "string" ? item.title
+            : (typeof item.label === "string" ? item.label : undefined));
+        if (btnEl && typeof headerTitle === "string") {
+            btnEl.title = headerTitle;
         }
         if (typeof item.icon === "string") {
             const wantsPh = item.icon.trim().startsWith('ph-');
@@ -416,6 +418,7 @@ class Dropdown extends BaseSelectableComponent {
             "aria-current": selected ? "true" : "false",
             tabindex: "-1",
             href: item.href || undefined,
+            title: item.title || (typeof item.label === "string" ? item.label : undefined),
             class: [
                 "flex items-center gap-3 rounded-md px-3 py-2",
                 // Highlight background ONLY if NOT in check mode

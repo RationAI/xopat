@@ -7,7 +7,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-square";
+        return "ph-rectangle";
     }
 
     fabricStructure() {
@@ -139,6 +139,25 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
+    supportsFixedArea() {
+        return true;
+    }
+
+    // Fixed-area variant: draw a SQUARE anchored at the initial click corner,
+    // growing into the quadrant the cursor is in. Side = √area.
+    updateCreateFixedArea(x, y, areaPx) {
+        if (!this._current || !(areaPx > 0)) return false;
+        const side = Math.sqrt(areaPx);
+        const dx = x - this._origX, dy = y - this._origY;
+        this._current.set({
+            left:   dx >= 0 ? this._origX : this._origX - side,
+            top:    dy >= 0 ? this._origY : this._origY - side,
+            width:  side,
+            height: side,
+        });
+        return true;
+    }
+
     discardCreate() {
         if (this._current) {
             this._context.fabric.deleteHelperAnnotation(this._current);
@@ -221,7 +240,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-circle";
+        return "ph-circle";
     }
 
     fabricStructure() {
@@ -407,6 +426,26 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
+    supportsFixedArea() {
+        return true;
+    }
+
+    // Fixed-area variant: draw a CIRCLE (rx === ry) whose bounding-box corner
+    // is the initial click and which grows into the cursor's quadrant.
+    updateCreateFixedArea(x, y, areaPx) {
+        if (!this._current || !(areaPx > 0)) return false;
+        const r = Math.sqrt(areaPx / Math.PI);
+        const dx = x - this._origX, dy = y - this._origY;
+        this._current.set({
+            left: dx >= 0 ? this._origX : this._origX - 2 * r,
+            top:  dy >= 0 ? this._origY : this._origY - 2 * r,
+            rx: r,
+            ry: r,
+            angle: -this._getViewportRotation(),
+        });
+        return true;
+    }
+
     discardCreate() {
         if (this._current) {
             this._context.fabric.deleteHelperAnnotation(this._current);
@@ -437,6 +476,20 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
+    // Snap targets the visual centre of the ellipse — perimeter samples
+    // from toPointArray are correct for area/export but wrong for snap:
+    // the user thinks they're clicking the dot, but lands on its edge.
+    // Use fabric's getCenterPoint() so origin (Point uses 'center') and
+    // scale (Point's onZoom adjusts rx/ry inversely) are both respected.
+    getSnapVertices(obj) {
+        if (typeof obj.getCenterPoint === 'function') {
+            const c = obj.getCenterPoint();
+            return [{ x: c.x, y: c.y }];
+        }
+        const rx = obj.rx || 0, ry = obj.ry || 0;
+        return [{ x: (obj.left || 0) + rx, y: (obj.top || 0) + ry }];
+    }
+
     toPointArray(obj, converter, digits=undefined, quality=1) {
         //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
         //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
@@ -534,7 +587,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-font";
+        return "ph-text-aa";
     }
 
     fabricStructure() {
@@ -828,6 +881,20 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return [converter(obj.left, obj.top)];
     }
 
+    // toPointArray returns the text's top-left anchor; snap targets the
+    // visible centre of the text bbox so clicks land where the label is.
+    // getCenterPoint() handles origin / scale correctly.
+    getSnapVertices(obj) {
+        if (typeof obj.getCenterPoint === 'function') {
+            const c = obj.getCenterPoint();
+            return [{ x: c.x, y: c.y }];
+        }
+        return [{
+            x: (obj.left || 0) + (obj.width  || 0) / 2,
+            y: (obj.top  || 0) + (obj.height || 0) / 2,
+        }];
+    }
+
     fromPointArray(points, deconvertor) {
         if (!points || points.length === 0) {
             throw new Error("Points array must contain at least one point");
@@ -858,7 +925,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     getIcon() {
-        return "fa-solid fa-location-crosshairs";
+        return "ph-map-pin";
     }
 
     getDescription(ofObject) {
@@ -905,7 +972,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      */
     configure(object, options) {
         const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
-        const zoom = 3 / graphicZoom;
+        const zoom = 7 / graphicZoom;
         $.extend(object, options, {
             angle: 0,
             rx: zoom,
@@ -930,7 +997,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
-        const zoom = 3 / graphicZoom;
+        const zoom = 7 / graphicZoom;
         ofObject.rx = ofObject.ry = zoom;
         ofObject.width = ofObject.height = zoom*1.5;
         ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
@@ -1442,7 +1509,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
 
     getIcon() {
-        return "fa-minus";
+        return "ph-line-segment";
     }
 
     fabricStructure() {
@@ -1484,6 +1551,10 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
     exportsGeometry() {
         return ["x1", "x2", "y1", "y2"];
+    }
+
+    getLength(theObject) {
+        return Math.hypot(theObject.x1 - theObject.x2, theObject.y1 - theObject.y2);
     }
 
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
@@ -1738,7 +1809,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "fa-draw-polygon";
+        return "ph-polygon";
     }
 
     fabricStructure() {
@@ -1760,7 +1831,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "fa-share-nodes";
+        return "ph-path";
     }
 
     fabricStructure() {
@@ -1787,6 +1858,26 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return "Polyline";
     }
 
+    // Polylines are open paths — the shoelace inherited from
+    // ExplicitPointsObjectFactory would give a nonsensical "area" by
+    // pretending the shape is closed.
+    getArea(theObject) {
+        return undefined;
+    }
+
+    // Sum of segment lengths between consecutive points.
+    getLength(theObject) {
+        const points = theObject?.points;
+        if (!Array.isArray(points) || points.length < 2) return undefined;
+        let total = 0;
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            total += Math.hypot(dx, dy);
+        }
+        return total;
+    }
+
     finishDirect() {
         this.finishIndirect();
         return true;
@@ -1800,7 +1891,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-object-group";
+        return "ph-frame-corners";
     }
 
     fabricStructure() {
@@ -1990,7 +2081,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getIcon() {
-        return "fa-draw-polygon"; //todo same icon as polygon... does it matter?
+        return "ph-polygon"; //todo same icon as polygon... does it matter?
     }
 
     fabricStructure() {

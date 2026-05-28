@@ -59,6 +59,7 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
                 id: key,
                 itemID: key,
                 label: ci.options.label,
+                tooltip: ci.options.tooltip,
                 icon: childIconName(ci),
                 _childItem: ci
             };
@@ -71,11 +72,12 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
         this._dropdown = new Dropdown({
             id: this.id,
             icon: headerIcon,
-            title: defaultItem.options.label,
+            title: defaultItem.options.tooltip ?? defaultItem.options.label,
             items: this._items.map(item => ({
                 id: item.itemID,
                 itemID: item.itemID,
                 label: item.label,
+                title: item.tooltip ?? item.label,
                 icon: item.icon,
                 onClick: (e, data) => {
                     // user picked a new item from the menu
