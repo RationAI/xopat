@@ -12,6 +12,7 @@ export class MobileBottomBar {
         this._activeViewerId = null;
         this._activePanel = null;
         this._syncBound = () => this.sync();
+        this._canvasTapBound = (e) => this._handleCanvasTap(e);
     }
 
     init() {
@@ -32,6 +33,9 @@ export class MobileBottomBar {
 
         window.addEventListener("pointerdown", this._syncBound, true);
         window.addEventListener("focusin", this._syncBound, true);
+        // Tap-the-canvas-to-collapse-menu handler (mobile + Viewer-Menu only).
+        // Capture phase so OSD's MouseTracker can't consume the gesture first.
+        window.addEventListener("pointerdown", this._canvasTapBound, true);
 
         if (window.VIEWER_MANAGER?.addHandler) {
             VIEWER_MANAGER.addHandler("viewer-create", this._syncBound);
@@ -45,6 +49,7 @@ export class MobileBottomBar {
     destroy() {
         window.removeEventListener("pointerdown", this._syncBound, true);
         window.removeEventListener("focusin", this._syncBound, true);
+        window.removeEventListener("pointerdown", this._canvasTapBound, true);
         this._closeViewerPicker();
         this.root?.remove();
         this.root = null;
@@ -264,6 +269,17 @@ export class MobileBottomBar {
             this.viewerMenuButton.disabled = this.getViewerMenus().length === 0;
         }
 
+        // Keep the visible menu in lock-step with the active viewer while the
+        // Viewer-Menu panel is open (mobile renders only the active viewer's
+        // canvas, so only its menu should overlay).
+        if (this._activePanel === "viewerMenu") {
+            const activeMenu = this._getViewerMenu();
+            for (const menu of this.getViewerMenus()) {
+                if (menu === activeMenu) this._showViewerMenu(menu);
+                else this._hideViewerMenu(menu);
+            }
+        }
+
         this._setActivePanel(this._activePanel);
     }
 
@@ -445,8 +461,54 @@ export class MobileBottomBar {
         this._hideGlobalMenu();
         window.LAYOUT?.closeFullscreen?.();
 
-        menus.forEach((menu) => this._showViewerMenu(menu));
+        // Show only the active viewer's menu; hide the rest. Mobile renders a
+        // single viewer's canvas at a time, so stacking inactive viewers' menus
+        // would only obscure the tissue.
+        const activeMenu = this._getViewerMenu();
+        for (const menu of menus) {
+            if (menu === activeMenu) this._showViewerMenu(menu);
+            else this._hideViewerMenu(menu);
+        }
         this._setActivePanel("viewerMenu");
         this.sync();
+    }
+
+    /**
+     * Capture-phase pointerdown handler: when the Viewer-Menu panel is open in
+     * mobile mode, tapping the visible tissue collapses the menu (back to the
+     * Viewer panel) and focuses the tapped viewer. Inside the menu / bottom bar
+     * / AppBar the tap is left alone.
+     * @private
+     */
+    _handleCanvasTap(e) {
+        if (this._activePanel !== "viewerMenu") return;
+        if (!this._isMobileWidth()) return;
+        if (e.button !== undefined && e.button !== 0) return;
+
+        const target = e.target;
+        if (!target) return;
+
+        // Ignore taps inside any visible viewer menu, the bottom bar itself, or
+        // the AppBar/top container — those are not "the tissue".
+        const insideMenu = this.getViewerMenus().some(m => m?.context?.contains?.(target));
+        if (insideMenu) return;
+        if (this.root?.contains?.(target)) return;
+        if (document.getElementById("top-container")?.contains?.(target)) return;
+
+        // Identify which viewer's cell was tapped (multi-viewport-safe).
+        const tappedViewer = this.getViewers().find(v => v?.element?.contains?.(target));
+        if (tappedViewer && tappedViewer !== this.getActiveViewer()) {
+            window.VIEWER_MANAGER?.setActive?.(tappedViewer);
+            window.LAYOUT?.syncActiveViewerMobile?.();
+        }
+
+        // Collapse the menu, switch back to the Viewer panel, and swallow the
+        // gesture so OSD doesn't start a pan from this same pointerdown.
+        this._hideViewerMenus();
+        this._setActivePanel("viewer");
+        this.sync();
+
+        e.preventDefault();
+        e.stopPropagation();
     }
 }

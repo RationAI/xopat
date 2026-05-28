@@ -1,6 +1,7 @@
 import { BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Dropdown } from "../../elements/dropdown.mjs";
 import { FAIcon } from "../../elements/fa-icon.mjs";
+import { PhIcon, iconComponentFor } from "../../elements/ph-icon.mjs";
 import { ToolbarItem } from "./toolbarItem.mjs";
 import van from "../../../vanjs.mjs";
 
@@ -43,36 +44,40 @@ class ToolbarChoiceGroup extends BaseSelectableComponent {
         const defaultItemKey = defaultItem.options.itemID ?? defaultItem.id;
         this._selectedId.val = defaultItemKey;
 
-        // icon name from child
-        const defaultIconName = defaultItem.options.icon instanceof FAIcon
-            ? defaultItem.options.icon.options.name
-            : defaultItem.options.icon;
+        // icon name from child — works for both FAIcon and PhIcon since both
+        // expose the glyph name under options.name
+        const childIconName = (ci) => (ci.options.icon instanceof FAIcon || ci.options.icon instanceof PhIcon)
+            ? ci.options.icon.options.name
+            : ci.options.icon;
+
+        const defaultIconName = childIconName(defaultItem);
 
         // normalize items so we can map between logical IDs and ToolbarItems
         this._items = childItems.map(ci => {
             const key = ci.options.itemID ?? ci.id;
-            const iconName = ci.options.icon instanceof FAIcon
-                ? ci.options.icon.options.name
-                : ci.options.icon;
-
             return {
                 id: key,
                 itemID: key,
                 label: ci.options.label,
-                icon: iconName,
+                tooltip: ci.options.tooltip,
+                icon: childIconName(ci),
                 _childItem: ci
             };
         });
 
+        // Header icon — Phosphor names go through PhIcon, everything else FAIcon.
+        const headerIcon = iconComponentFor(defaultIconName);
+
         // single dropdown; header icon will be driven by activeSelection
         this._dropdown = new Dropdown({
             id: this.id,
-            icon: new FAIcon({ name: defaultIconName }),
-            title: defaultItem.options.label,
+            icon: headerIcon,
+            title: defaultItem.options.tooltip ?? defaultItem.options.label,
             items: this._items.map(item => ({
                 id: item.itemID,
                 itemID: item.itemID,
                 label: item.label,
+                title: item.tooltip ?? item.label,
                 icon: item.icon,
                 onClick: (e, data) => {
                     // user picked a new item from the menu

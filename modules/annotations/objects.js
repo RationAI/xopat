@@ -121,10 +121,10 @@ OSDAnnotations.AnnotationObjectFactory = class {
 
     /**
      * Get icon for the object
-     * @returns {string} pluggable to current icon system (see https://fonts.google.com/icons?selected=Material+Icons)
+     * @returns {string} pluggable to current icon system (using font awesome)
      */
     getIcon() {
-        return "yard";
+        return "ph-tag";
     }
 
     /**
@@ -136,9 +136,9 @@ OSDAnnotations.AnnotationObjectFactory = class {
     }
 
     /**
-     * Get icon for the object
+     * Get description
      * @param {fabric.Object} ofObject object to describe
-     * @returns {string} pluggable to current icon system (see https://fonts.google.com/icons?selected=Material+Icons)
+     * @returns {string}
      */
     getDescription(ofObject) {
         return "Generic object.";
@@ -219,6 +219,33 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     initializeBeforeImport(object) {
         // do nothing by default
+    }
+
+    /**
+     * Canonical snap targets — the visual vertices a user expects to grab
+     * when clicking near this annotation. Returns a flat array of `{x, y}`
+     * in image-space, or `null` when there are no snap targets.
+     *
+     * Default implementation reuses `toPointArray` (with the sentinel
+     * converter at `quality=1`, so polygon/multipolygon avoid copies and
+     * simplification) for back-compat with external factories. Built-in
+     * factories whose `toPointArray` is geometry-export-shaped (ellipse
+     * perimeter, text top-left, …) override this to return real vertices.
+     */
+    getSnapVertices(obj) {
+        if (typeof this.toPointArray !== "function") return null;
+        let pts;
+        try {
+            pts = this.toPointArray(
+                obj,
+                OSDAnnotations.AnnotationObjectFactory.withObjectPoint,
+                undefined,
+                1
+            );
+        } catch (e) { return null; }
+        if (!Array.isArray(pts) || pts.length === 0) return null;
+        // Multipolygon returns rings-of-rings; flatten one level.
+        return Array.isArray(pts[0]) ? pts.flat() : pts;
     }
 
     trimExportJSON(objectList) {
@@ -1126,6 +1153,29 @@ OSDAnnotations.AnnotationObjectFactory = class {
      */
     supportsBrush() {
         return true;
+    }
+
+    /**
+     * Whether this factory can size its in-progress shape to a target area
+     * during create-drag. Used by the fixed-area annotation mode.
+     * @return {boolean}
+     */
+    supportsFixedArea() {
+        return false;
+    }
+
+    /**
+     * Like updateCreate(x, y), but the resulting shape MUST have the given
+     * area in image pixels². Anchor / orientation semantics stay owned by the
+     * factory. Only invoked when supportsFixedArea() returns true.
+     * @param {number} x cursor x in image coordinates
+     * @param {number} y cursor y in image coordinates
+     * @param {number} areaPx target area in image pixels²
+     * @param {boolean} isLeftClick true if originating from left mouse button
+     * @return {boolean} true if the shape was updated; false if unsupported
+     */
+    updateCreateFixedArea(x, y, areaPx, isLeftClick) {
+        return false;
     }
 
     /**

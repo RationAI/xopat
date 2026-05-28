@@ -25477,7 +25477,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2026-05-21
 //! Git commit: --a315d3c-dirty
@@ -26186,7 +26187,8 @@ function computeAABB(f) {
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2026-05-21
 //! Git commit: --a315d3c-dirty

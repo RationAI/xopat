@@ -201,13 +201,28 @@ $.ExtendedDziTileSource = class extends $.TileSource {
     }
 
     /**
-     * Retrieve image metadata for given image index - tilesources can fetch data or data-arrays.
-     * @param index index of the data if tilesource supports multi data fetching
+     * Retrieve image metadata. The underlying ImageArray is a per-image bag
+     * populated by `configureFromObject`; the first entry is the one that drives
+     * this tile source.
      * @return {TileSourceMetadata}
      */
     getMetadata() {
-        //not really compatible type, but carries over the error property
-        return this.ImageArray[index];
+        return this.ImageArray?.[0] || {};
+    }
+
+    getDisplayMetadata() {
+        const fields = [];
+        if (this.tilesUrl) fields.push({ label: "Tiles URL", value: String(this.tilesUrl) });
+        if (this.fileFormat) fields.push({ label: "Format", value: String(this.fileFormat) });
+        if (this.width != null && this.height != null) {
+            fields.push({ label: "Dimensions", value: `${this.width} × ${this.height} px` });
+        }
+        if (Number.isFinite(this.maxLevel)) {
+            fields.push({ label: "Pyramid levels", value: this.maxLevel + 1 });
+        }
+        const meta = this.getMetadata();
+        if (meta?.error) return [{ title: "Slide unavailable", description: String(meta.error) }];
+        return fields.length ? [{ title: "DZI slide", fields }] : [];
     }
 
     // todo legacy remove support...

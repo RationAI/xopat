@@ -3333,6 +3333,13 @@ form.submit();
                 webGlPreferredVersion: preferredWebGlVersion,
                 backgroundColor: APPLICATION_CONTEXT.getOption("backgroundColor"),
                 debug: !!APPLICATION_CONTEXT.getOption("webglDebugMode"),
+                // Share a single WebGL context across every FlexRenderer instance on the page
+                // (main viewer, navigator, standalone drawers, isolated playground viewers).
+                // Browsers cap concurrent WebGL contexts at ~16; on hosts like Jupyter that
+                // spawn several viewers per cell we'd otherwise crash with "out of contexts"
+                // and lose the oldest contexts to GC. FlexRenderer reuses the matching entry
+                // when key + webGLPreferredVersion + canvasOptions agree.
+                sharedContextKey: "xopat-flex-renderer",
                 interactive: true,
                 htmlHandler: (shaderLayer, shaderConfig, htmlContext) => {
                     viewer.getMenu().getShadersTab().createLayer(viewer, shaderLayer, shaderConfig, htmlContext);
@@ -3433,7 +3440,7 @@ form.submit();
                 barThickness: 2,
                 destroy: false
             });
-            if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
+            if (!APPLICATION_CONTEXT.getUiOption("scaleBar")) {
                 viewer.scalebar.setActive(false);
             }
 
@@ -3450,6 +3457,24 @@ form.submit();
             viewer.addOnceHandler?.("destroy", () => {
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
             });
+
+            // OSD navigator: opt into AppBar.Chrome and honor `params.ui.navigator`
+            // at boot. Per-viewer id keeps multi-viewport snapshot/restore correct.
+            const navigatorEl = (viewer as any).navigator?.element as HTMLElement | undefined;
+            if (navigatorEl) {
+                if (!APPLICATION_CONTEXT.getUiOption("navigator")) {
+                    navigatorEl.style.display = "none";
+                }
+                const navigatorChromeKey = `navigator::${(viewer as any).uniqueId ?? index}`;
+                (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(navigatorChromeKey, {
+                    is:  () => navigatorEl.style.display !== "none",
+                    on:  () => { navigatorEl.style.display = ""; },
+                    off: () => { navigatorEl.style.display = "none"; },
+                });
+                viewer.addOnceHandler?.("destroy", () => {
+                    (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(navigatorChromeKey);
+                });
+            }
 
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);
@@ -3486,25 +3511,13 @@ form.submit();
                 } catch (e) {
                     // best-effort: still hand the event to providers without coordinates
                 }
-                const items = CanvasContextMenu.collect({
-                    viewer,
+                CanvasContextMenu.open({
                     event: orig,
+                    viewer,
                     osdPosition: osdPos,
                     pixelPosition: pixelPos,
+                    source: 'canvas',
                 });
-                if (items.length) {
-                    // Prefer the van.js-based `ContextMenu` which supports
-                    // cascading flyouts for items with `children: [...]`.
-                    // Falls back to the legacy flat `window.DropDown` for
-                    // pre-rebuild environments where the new component is
-                    // not yet bundled into `ui/index.js`.
-                    const ctxMenu = (window as any).ContextMenu;
-                    if (ctxMenu?.open) {
-                        ctxMenu.open(orig, items);
-                    } else {
-                        (window as any).DropDown?.open(orig, items);
-                    }
-                }
             });
 
             for (let event in this.broadcastEvents) {

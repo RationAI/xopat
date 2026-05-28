@@ -1,4 +1,4 @@
-const { div, button, input, span, h3, h4, label, select, option, section, header, i } = globalThis.van.tags;
+const { div, button, input, span, label, select, option } = globalThis.van.tags;
 
 const textarea = globalThis.van.tags("textarea").textarea;
 const p = globalThis.van.tags("p").p;
@@ -194,8 +194,17 @@ export const createAnnotationSettingsMenu = (plugin) => {
         vm.addHandler('active-viewer-changed', _onActiveViewerChanged);
     }
 
-    // Derived state for the current convertor
-    const getConvertor = () => OSDAnnotations.Convertor.get(selectedFormat.val);
+    // Mode toggle for the merged IO card. Persisted only in-session — the
+    // user typically opens this panel to do one of import/export, not both.
+    const ioMode = van.state('export');
+
+    // Derived state for the current convertor. Returns null in 'auto' mode
+    // (no concrete convertor selected).
+    const getConvertor = () => {
+        if (selectedFormat.val === 'auto') return null;
+        try { return OSDAnnotations.Convertor.get(selectedFormat.val); }
+        catch (_e) { return null; }
+    };
 
     // Resolve the actual viewer to act on for a given selection state. When
     // the user hasn't picked anything (null), we follow the focused viewer.
@@ -244,55 +253,14 @@ export const createAnnotationSettingsMenu = (plugin) => {
         );
     };
 
-    // Section divider with a small uppercase tag and an icon.
-    const sectionLabel = (icon, text) =>
-        div({ class: "flex items-center gap-2 mt-3 mb-1" },
-            i({ class: `fa-solid ${icon} text-xs opacity-50` }),
-            span({ class: "text-[11px] font-bold uppercase tracking-wider opacity-60" }, text),
-            div({ class: "flex-1 h-px bg-base-300" })
-        );
+    const fs = window.USER_INTERFACE?.FullscreenMenu;
 
-    const root = div({ class: "p-3 flex flex-col h-full overflow-y-auto text-sm" },
-        // --- Header (compact, no per-slide subtitle) ---
-        header({ class: "flex items-center gap-2 mb-2" },
-            i({ class: "fa-solid fa-file-export opacity-70" }),
-            h3({ class: "text-base font-bold" }, plugin.t('annotations.export.menuTitle'))
-        ),
-
-        // --- File format (shared by Download and Upload) ---
-        // Single-row dropdown — much tighter than the previous 2x2 chip grid
-        // and scales gracefully if more formats are added.
-        fieldRow(plugin.t('annotations.export.formatSection'),
-            select({
-                    class: "select select-bordered select-xs flex-1 min-w-0",
-                    onchange: (e) => {
-                        selectedFormat.val = e.target.value;
-                        plugin.updateSelectedFormat(e.target.value);
-                    }
-                },
-                plugin.exportOptions.availableFormats.map(format => {
-                    const conv = OSDAnnotations.Convertor.get(format);
-                    return option({
-                        value: format,
-                        selected: selectedFormat.val === format,
-                        title: conv?.description || ''
-                    }, format);
-                })
-            )
-        ),
-        // Format-specific options (only render when the convertor exposes any).
-        () => {
-            const convertor = getConvertor();
-            const opts = renderConvertorOptions(convertor);
-            if (!opts.length) return div({ class: "hidden" });
-            return div({ class: "bg-base-200/60 p-2 mt-1 rounded text-xs space-y-2" }, ...opts);
-        },
-
-        // --- Download ---
-        sectionLabel("fa-download", plugin.t('annotations.export.exportSection')),
+    // --- Export panel (mode-specific body of the merged IO card) ---
+    const renderExportPanel = () => div({ class: "space-y-2" },
         // Scope (All / Selected) — only when the convertor handles annotation objects.
         () => {
-            if (!getConvertor().exportsObjects) return null;
+            const conv = getConvertor();
+            if (!conv?.exportsObjects) return null;
             return fieldRow(plugin.t('annotations.export.scopeLabel'),
                 div({ class: "join flex-1" },
                     ['all', 'selected'].map(s => button({
@@ -306,21 +274,42 @@ export const createAnnotationSettingsMenu = (plugin) => {
             );
         },
         renderViewerField(plugin.t('annotations.export.fromSlide'), exportViewerId),
-        div({ class: "grid grid-cols-2 gap-2 mt-2" },
-            button({
-                class: () => `btn btn-primary btn-sm ${getConvertor().exportsObjects ? '' : 'btn-disabled'}`,
-                onclick: () => plugin.exportToFile(true, true, resolveActionViewerId(exportViewerId))
-            }, plugin.t('annotations.export.downloadAnnotations')),
-            button({
-                class: () => `btn btn-outline btn-sm ${getConvertor().exportsPresets ? '' : 'btn-disabled'}`,
-                onclick: () => plugin.exportToFile(false, true, resolveActionViewerId(exportViewerId))
-            }, plugin.t('annotations.export.downloadPresets'))
-        ),
+        // Inline lossy-format hint so the user can switch formats before
+        // clicking export. Mirrors the post-export warning toast.
+        () => {
+            const conv = getConvertor();
+            if (!conv?.lossy) return null;
+            const reason = conv.lossyReason
+                || plugin.t('annotations.export.lossyDefaultHint');
+            return div({ class: "alert alert-warning py-1 px-2 text-xs flex gap-2 items-start" },
+                span({ class: "ph-light ph-warning text-base shrink-0" }),
+                span(reason)
+            );
+        },
+        () => {
+            const conv = getConvertor();
+            // Auto cannot export — needs a concrete format.
+            if (!conv) {
+                return div({ class: "text-xs opacity-70 italic mt-1" },
+                    plugin.t('annotations.export.autoExportHint'));
+            }
+            return div({ class: "grid grid-cols-2 gap-2 mt-1" },
+                button({
+                    class: () => `btn btn-primary btn-sm ${conv.exportsObjects ? '' : 'btn-disabled'}`,
+                    onclick: () => plugin.exportToFile(true, true, resolveActionViewerId(exportViewerId))
+                }, plugin.t('annotations.export.downloadAnnotations')),
+                button({
+                    class: () => `btn btn-outline btn-sm ${conv.exportsPresets ? '' : 'btn-disabled'}`,
+                    onclick: () => plugin.exportToFile(false, true, resolveActionViewerId(exportViewerId))
+                }, plugin.t('annotations.export.downloadPresets'))
+            );
+        }
+    );
 
-        // --- Upload ---
-        sectionLabel("fa-upload", plugin.t('annotations.export.importSection')),
+    // --- Import panel (mode-specific body of the merged IO card) ---
+    const renderImportPanel = () => div({ class: "space-y-2" },
         renderViewerField(plugin.t('annotations.export.intoSlide'), importViewerId),
-        label({ class: "flex items-center gap-2 cursor-pointer text-xs opacity-80 mt-1" },
+        label({ class: "flex items-center gap-2 cursor-pointer text-xs opacity-80" },
             input({
                 type: "checkbox", class: "checkbox checkbox-xs checkbox-primary",
                 checked: importReplace,
@@ -331,7 +320,7 @@ export const createAnnotationSettingsMenu = (plugin) => {
             }),
             span(plugin.t('annotations.export.replaceOnImport'))
         ),
-        div({ class: "mt-2" },
+        div({ class: "mt-1" },
             button({
                 class: "btn btn-primary btn-sm w-full",
                 onclick: (e) => e.target.nextElementSibling.click()
@@ -343,30 +332,108 @@ export const createAnnotationSettingsMenu = (plugin) => {
                     e.target.value = '';
                 }
             })
-        ),
-
-        // --- Comments (separate concern: not file IO) ---
-        sectionLabel("fa-comment", plugin.t('annotations.comments.title')),
-        label({ class: "flex items-center justify-between cursor-pointer text-sm" },
-            span(plugin.t('annotations.comments.enable')),
-            input({
-                type: "checkbox", class: "toggle toggle-primary toggle-sm",
-                checked: plugin._commentsEnabled,
-                onchange: (e) => plugin.enableComments(e.target.checked)
-            })
-        ),
-        fieldRow(plugin.t('annotations.comments.rememberState'),
-            select({
-                    class: "select select-bordered select-xs flex-1 min-w-0",
-                    onchange: (e) => plugin.switchCommentsClosedMethod(e.target.value)
-                },
-                ['none', 'global', 'individual'].map(m => option({
-                    value: m,
-                    selected: plugin._commentsClosedMethod === m
-                }, plugin.t(`annotations.comments.rememberOptions.${m}`)))
-            )
         )
     );
 
-    return root;
+    return fs.layout(
+        plugin.t('annotations.export.menuTitle'),
+        // --- Merged File IO card: format selection + import/export tabs ---
+        fs.card(plugin.t('annotations.export.ioSection'),
+            // Mode tabs (Import / Export) — same DaisyUI join pattern as scope.
+            div({ class: "join w-full mb-2" },
+                ['export', 'import'].map(m => button({
+                    class: () => `join-item btn btn-sm flex-1 ${ioMode.val === m ? 'btn-active' : ''}`,
+                    onclick: () => { ioMode.val = m; }
+                }, plugin.t(`annotations.export.modeTabs.${m}`)))
+            ),
+
+            // Format dropdown — shared by import and export.
+            fieldRow(plugin.t('annotations.export.formatLabel'),
+                select({
+                        class: "select select-bordered select-xs flex-1 min-w-0",
+                        onchange: (e) => {
+                            selectedFormat.val = e.target.value;
+                            plugin.updateSelectedFormat(e.target.value);
+                        }
+                    },
+                    // Auto detect — sentinel, only useful for import (export is disabled in auto).
+                    option({
+                        value: 'auto',
+                        selected: selectedFormat.val === 'auto',
+                        title: plugin.t('annotations.export.autoFormatHint')
+                    }, plugin.t('annotations.export.autoFormat')),
+                    plugin.exportOptions.availableFormats.map(format => {
+                        let conv;
+                        try { conv = OSDAnnotations.Convertor.get(format); } catch (_e) { conv = null; }
+                        return option({
+                            value: format,
+                            selected: selectedFormat.val === format,
+                            title: conv?.description || ''
+                        }, format);
+                    })
+                )
+            ),
+
+            // Format-specific options (only when a concrete format is selected
+            // and the convertor exposes any).
+            () => {
+                const convertor = getConvertor();
+                if (!convertor) return div({ class: "hidden" });
+                const opts = renderConvertorOptions(convertor);
+                if (!opts.length) return div({ class: "hidden" });
+                return div({ class: "bg-base-200/60 p-2 mt-1 rounded text-xs space-y-2" }, ...opts);
+            },
+
+            // Mode-specific body (Import vs Export panels).
+            div({ class: "mt-2 pt-2 border-t border-base-300/60" },
+                () => ioMode.val === 'import' ? renderImportPanel() : renderExportPanel()
+            )
+        ),
+
+        // --- Comments (separate concern: not file IO) ---
+        fs.card(plugin.t('annotations.comments.title'),
+            label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+                span(plugin.t('annotations.comments.enable')),
+                input({
+                    type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                    checked: plugin._commentsEnabled,
+                    onchange: (e) => plugin.enableComments(e.target.checked)
+                })
+            ),
+            fieldRow(plugin.t('annotations.comments.rememberState'),
+                select({
+                        class: "select select-bordered select-xs flex-1 min-w-0",
+                        onchange: (e) => plugin.switchCommentsClosedMethod(e.target.value)
+                    },
+                    ['none', 'global', 'individual'].map(m => option({
+                        value: m,
+                        selected: plugin._commentsClosedMethod === m
+                    }, plugin.t(`annotations.comments.rememberOptions.${m}`)))
+                )
+            )
+        ),
+
+        // --- Point snapping ---
+        fs.card('Point snapping',
+            label({ class: "flex items-center justify-between cursor-pointer text-sm" },
+                span('Snap clicks to nearby vertices'),
+                input({
+                    type: "checkbox", class: "toggle toggle-primary toggle-sm",
+                    checked: plugin.context.getSnap().enabled,
+                    onchange: (e) => plugin.context.setSnap({ enabled: e.target.checked })
+                })
+            ),
+            fieldRow('Snap radius (screen px)',
+                input({
+                    type: "number",
+                    class: "input input-bordered input-xs flex-1 min-w-0",
+                    min: 2, max: 64, step: 1,
+                    value: plugin.context.getSnap().radiusPx,
+                    onchange: (e) => plugin.context.setSnap({ radiusPx: Number(e.target.value) })
+                })
+            ),
+            p({ class: "text-xs opacity-60" },
+                'Measured in screen pixels — the same visual distance at any zoom level. Image-pixel radius scales automatically.')
+        )
+    );
 };

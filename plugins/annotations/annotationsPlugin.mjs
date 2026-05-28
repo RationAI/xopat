@@ -56,6 +56,7 @@ class AnnotationsGUI extends XOpatPlugin {
         this.context.setCustomModeUsed('MAGIC_WAND', OSDAnnotations.MagicWand);
         this.context.setCustomModeUsed('FREE_FORM_TOOL_CORRECT', OSDAnnotations.StateCorrectionTool);
         this.context.setCustomModeUsed('VIEWPORT_SEGMENTATION', OSDAnnotations.ViewportSegmentation);
+        this.context.setCustomModeUsed('FIXED_AREA', OSDAnnotations.FixedAreaMode);
         this.context.setCustomModeUsed('EDIT_SELECTION', OSDAnnotations.StateEditSelection);
 
         this._commentsEnabled = this.getOption('commentsEnabled', this.getStaticMeta('commentsEnabled', true));
@@ -151,8 +152,13 @@ class AnnotationsGUI extends XOpatPlugin {
             scope: 'all'
         };
         const formats = OSDAnnotations.Convertor.formats;
-        if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = 'native';
-        if (!formats.includes(this._defaultFormat)) this._defaultFormat = 'native';
+        // 'auto' is a UI-only sentinel (import-time auto-detect), not a registered convertor.
+        if (this.exportOptions.format !== 'auto' && !formats.includes(this.exportOptions.format)) {
+            this.exportOptions.format = 'native';
+        }
+        if (this._defaultFormat !== 'auto' && !formats.includes(this._defaultFormat)) {
+            this._defaultFormat = 'native';
+        }
 
         const staticPresetList = this.getOption('staticPresets', undefined, false);
         if (staticPresetList) {

@@ -19,6 +19,10 @@ function getSecureRoot(ctx) {
   return ctx?.secure || ctx?.core?.CORE?.server?.secure || {};
 }
 
+function getAuthorRoot(ctx) {
+  return ctx?.core?.CORE_AUTHOR_SECURE || {};
+}
+
 function getSecureModules(ctx) {
   return getSecureRoot(ctx).modules || {};
 }
@@ -27,14 +31,34 @@ function getSecurePlugins(ctx) {
   return getSecureRoot(ctx).plugins || {};
 }
 
+// Author tier (server.json contents minus `requiredConfig`) layered under
+// the deployer tier. Deployer values win on overlap; nested keys merge
+// per-leaf when `core.objectMergeRecursiveDistinct` is available.
+function composeSecure(ctx, author, deployer) {
+  const hasAuthor = author && typeof author === "object" && Object.keys(author).length > 0;
+  const hasDeployer = deployer && typeof deployer === "object" && Object.keys(deployer).length > 0;
+  if (!hasAuthor) return hasDeployer ? deployer : {};
+  if (!hasDeployer) return author;
+  // objectMergeRecursiveDistinct uses `this` for recursion, so call it as
+  // a method on core (not an unbound reference).
+  if (ctx?.core && typeof ctx.core.objectMergeRecursiveDistinct === "function") {
+    return ctx.core.objectMergeRecursiveDistinct(JSON.parse(JSON.stringify(author)), deployer);
+  }
+  return { ...author, ...deployer };
+}
+
 function getSecureModuleConfig(ctx, moduleId) {
   const id = moduleId || ctx?.itemId;
-  return getSecureModules(ctx)?.[id] || {};
+  const deployer = getSecureModules(ctx)?.[id] || {};
+  const author = (getAuthorRoot(ctx).modules || {})[id] || {};
+  return composeSecure(ctx, author, deployer);
 }
 
 function getSecurePluginConfig(ctx, pluginId) {
   const id = pluginId || ctx?.itemId;
-  return getSecurePlugins(ctx)?.[id] || {};
+  const deployer = getSecurePlugins(ctx)?.[id] || {};
+  const author = (getAuthorRoot(ctx).plugins || {})[id] || {};
+  return composeSecure(ctx, author, deployer);
 }
 
 function getSecureItemConfig(ctx, explicitId) {

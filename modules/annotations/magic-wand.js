@@ -1,6 +1,6 @@
 OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "magic-wand", "fa-wand-sparkles", "🆃  automatic selection wand");
+        super(context, "magic-wand", "ph-magic-wand", "🆃  automatic selection wand");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.threshold = 10;
@@ -341,7 +341,7 @@ OSDAnnotations.MagicWand = class extends OSDAnnotations.AnnotationState {
         return `
 <span class="d-inline-block">
 <span class="position-absolute top-1" style="font-size: xx-small">Growth:</span>
-<input type="range" id="a-magic-wand-threshold" style="width: 150px;" 
+<input type="range" id="a-magic-wand-threshold" style="width: 150px; margin-top: 16px;" 
 max="${this.maxThreshold}" min="${this.minThreshold}" value="${this.threshold}" 
 onchange="OSDAnnotations.instance().Modes['MAGIC_WAND'].threshold = Number.parseInt(this.value) || 0;"/>
 </span><select class="ml-2 form-control text-small"

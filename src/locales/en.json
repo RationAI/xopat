@@ -197,7 +197,8 @@
       "debugMode": "Debug Mode",
       "cookies": "Disable Cookies",
       "scaleBar": "Show Scale Bar",
-      "statusBar": "Show Status Bar"
+      "statusBar": "Show Status Bar",
+      "navigator": "Show Navigator"
     },
     "plugins": {
       "title": "Plugins",
@@ -217,7 +218,13 @@
       "Source": "Source",
       "selectAll": "Select All",
       "deselectAll": "Deselect All",
-      "Close": "Close"
+      "Close": "Close",
+      "cancel": "Cancel",
+      "confirm": "Confirm"
+    },
+    "toolbar": {
+      "hide": "Hide toolbar",
+      "confirmHide": "Hide this toolbar? You can re-enable it from the View menu."
     }
   }
 }

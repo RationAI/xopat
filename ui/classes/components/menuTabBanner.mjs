@@ -1,6 +1,6 @@
 import { BaseComponent } from "../baseComponent.mjs";
 import van from "../../vanjs.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
+import { iconComponentFor } from "../elements/ph-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 import {Badge} from "../elements/badge.mjs";
@@ -8,7 +8,7 @@ import {MenuTab} from "./menuTab.mjs";
 
 import {VisibilityManager} from "../mixins/visibilityManager.mjs";
 
-const ui = { Button, Div, FAIcon };
+const ui = { Button, Div };
 const { span } = van.tags
 
 /**
@@ -59,7 +59,7 @@ class MenuTabBanner extends MenuTab {
      */
     _createTab(item) {
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new ui.FAIcon({ name: item["icon"] });
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : iconComponentFor(item["icon"]);
 
         this.iconName = inIcon.options.name;
         this.title = inText;

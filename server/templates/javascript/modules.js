@@ -64,6 +64,26 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 data["description"] = data["description"] || packageData["description"];
             }
 
+            // Author server manifest (server.json) — see plugins.js for
+            // semantics. Mirrors `requiredConfig` hoist + author-secure stash
+            // for modules.
+            const serverManifestPath = fullPath + "server.json";
+            if (fileExists(serverManifestPath)) {
+                const serverManifest = parse(readFile(serverManifestPath));
+                if (serverManifest && typeof serverManifest === "object") {
+                    data = data || {};
+                    if (Array.isArray(serverManifest.requiredConfig)) {
+                        const existing = Array.isArray(data.requiredConfig) ? data.requiredConfig : [];
+                        data.requiredConfig = [...new Set([...existing, ...serverManifest.requiredConfig])];
+                    }
+                    const { requiredConfig: _drop, ...authorSecure } = serverManifest;
+                    if (Object.keys(authorSecure).length && data.id) {
+                        if (!core.CORE_AUTHOR_SECURE) core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
+                        core.CORE_AUTHOR_SECURE.modules[data.id] = authorSecure;
+                    }
+                }
+            }
+
             if (data) {
                 data["directory"] = dir;
                 data["path"] = `${core.MODULES_FOLDER}${dir}/`;

@@ -3,7 +3,11 @@ addPlugin('slide-info', class extends XOpatPlugin {
     constructor(id) { 
         super(id);
 
-        this.infoMenuBuilder = new AdvancedMenuPages(this.id, 'guessUIFromJson');
+        // Render with `renderUIFromJson` (the strict, schema-driven strategy)
+        // instead of `guessUIFromJson` — the slide-info panel now consumes the
+        // typed `TileSource.getDisplayMetadata()` contract (see src/tile-source.ts)
+        // so it never has to introspect raw TileSource instances.
+        this.infoMenuBuilder = new AdvancedMenuPages(this.id, 'renderUIFromJson');
         this.hasCustomBrowser = false;
 
         this.slideSwitching = this.getOptionOrConfiguration('slideSwitching', 'slideSwitching', true);
@@ -19,20 +23,21 @@ addPlugin('slide-info', class extends XOpatPlugin {
 
             try {
                 const mainTiledImage = viewer.world.getItemAt(0);
-                let metadata = mainTiledImage?.source.getMetadata();
-                if (metadata !== undefined && metadata !== null) {
-                    metadata = metadata.info || metadata;
-                    result.page = Array.isArray(metadata) ? metadata : [metadata];
-                }
+                const source = mainTiledImage?.source;
+                const raw = source?.getDisplayMetadata?.();
+                const sections = Array.isArray(raw) ? raw : [];
 
-                if (!result.page?.length) {
-                    result.page = [{
-                        title: "No metadata available",
-                        description: "This slide source did not expose any metadata for the information panel."
-                    }];
+                if (sections.length) {
+                    result.page = sections.map(section => this._displaySectionToSpec(section));
+                } else {
+                    result.page = [this._noMetadataSpec()];
                 }
             } catch (e) {
                 console.error('Failed to load slide meta for slide viewer', viewer, e);
+                result.page = [{
+                    type: "div", extraClasses: "p-3 text-sm text-error",
+                    children: ["Failed to load slide information."]
+                }];
             }
 
             return result;
@@ -88,6 +93,53 @@ addPlugin('slide-info', class extends XOpatPlugin {
         if (this.slideSwitching) {
             this.setupSlideSwitching();
         }
+    }
+
+    /**
+     * Render a single `TileSourceDisplaySection` into the UI-JSON spec consumed
+     * by `AdvancedMenuPages.renderUIFromJson`. Defensive against malformed input:
+     * non-primitive `value`s are coerced to JSON; missing labels/values are
+     * skipped silently.
+     * @private
+     */
+    _displaySectionToSpec(section) {
+        const children = [];
+        if (section.title) {
+            children.push({ type: "div", extraClasses: "text-base font-semibold mb-2", children: [String(section.title)] });
+        }
+        if (section.description) {
+            children.push({
+                type: "div",
+                extraClasses: "text-sm whitespace-pre-wrap break-words leading-relaxed opacity-90",
+                children: [String(section.description)]
+            });
+        }
+        if (Array.isArray(section.fields) && section.fields.length) {
+            const rows = [];
+            for (const f of section.fields) {
+                if (!f || f.label == null) continue;
+                const v = f.value;
+                const text = v == null ? "—"
+                    : typeof v === "string" ? v
+                    : typeof v === "number" || typeof v === "boolean" ? String(v)
+                    : JSON.stringify(v);
+                rows.push({ type: "div", extraClasses: "text-xs opacity-70 col-span-1", children: [String(f.label)] });
+                rows.push({ type: "div", extraClasses: "text-sm font-mono col-span-1 break-words", children: [text] });
+            }
+            if (rows.length) {
+                children.push({ type: "div", extraClasses: "grid grid-cols-2 gap-x-3 gap-y-1 mt-2", children: rows });
+            }
+        }
+        return { type: "div", extraClasses: "card bg-base-100 shadow-sm p-3 mb-3 rounded-md border border-base-300", children };
+    }
+
+    /** @private */
+    _noMetadataSpec() {
+        return {
+            type: "div",
+            extraClasses: "p-3 text-sm opacity-70",
+            children: ["No metadata available for this slide."]
+        };
     }
 
     setupSlideSwitching() {

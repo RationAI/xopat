@@ -11,7 +11,16 @@ export const globalPluginWindowMethods = {
         this._initAnnotationsToolbar();
 
         const menuContainer = div({ id: 'annotations-shared-settings-container' });
-        USER_INTERFACE.AppBar.Plugins.setMenu(this.id, 'annotations-shared', this.t('annotations.export.menuTitle'), menuContainer);
+        // `chrome: "plain"` — body renders its own `fs.card`s; skip the outer
+        // rounded card so we don't double-border.
+        USER_INTERFACE.AppBar.Plugins.setMenu(
+            this.id,
+            'annotations-shared',
+            this.t('annotations.export.menuTitle'),
+            menuContainer,
+            'fa-fw',
+            { chrome: 'plain' }
+        );
         van.add(menuContainer, createAnnotationSettingsMenu(this));
 
         this.updateSelectedFormat(this.exportOptions.format);
@@ -156,19 +165,19 @@ export const globalPluginWindowMethods = {
             const gHistory = new ui.ToolbarGroup({ id: 'g-history' },
                 new ui.ToolbarItem({
                     id: 'toolbar-history-undo',
-                    icon: 'fa-rotate-left',
+                    icon: 'ph-arrow-counter-clockwise',
                     label: this.t('annotations.toolbar.undo'),
                     onClick: () => APPLICATION_CONTEXT.history.undo()
                 }),
                 new ui.ToolbarItem({
                     id: 'toolbar-history-redo',
-                    icon: 'fa-rotate-right',
+                    icon: 'ph-arrow-clockwise',
                     label: this.t('annotations.toolbar.redo'),
                     onClick: () => APPLICATION_CONTEXT.history.redo()
                 }),
                 new ui.ToolbarItem({
                     id: 'toolbar-history-metrics',
-                    icon: 'fa-square-poll-horizontal',
+                    icon: 'ph-chart-bar-horizontal',
                     label: this.t('annotations.toolbar.measurements'),
                     onClick: () => this.showMeasurementsWindow()
                 })
@@ -211,7 +220,8 @@ export const globalPluginWindowMethods = {
             }, ...factories.map((factory) => new ui.ToolbarItem({
                 itemID: factory.factoryID,
                 icon: factory.getIcon(),
-                label: `${modes.CUSTOM.getDescription()}: ${factory.title()}`
+                label: factory.title(),
+                tooltip: `${modes.CUSTOM.getDescription()}: ${factory.title()}`
             }))).attachTo(gModes);
 
             // Keep the toolbar in sync when the preset's factory changes from
@@ -266,6 +276,11 @@ export const globalPluginWindowMethods = {
                 itemID: modes.VIEWPORT_SEGMENTATION.getId(),
                 icon: modes.VIEWPORT_SEGMENTATION.getIcon(),
                 label: modes.VIEWPORT_SEGMENTATION.getDescription()
+            }),
+            new ui.ToolbarItem({
+                itemID: modes.FIXED_AREA.getId(),
+                icon: modes.FIXED_AREA.getIcon(),
+                label: modes.FIXED_AREA.getDescription()
             })).attachTo(gModes);
 
             new ui.ToolbarItem({
@@ -291,12 +306,9 @@ export const globalPluginWindowMethods = {
             this._modeOptionsPanel = new UI.ToolbarPanelButton({
                 id: 'mode-options',
                 itemID: 'mode-options',
-                icon: 'fa-sliders',
+                icon: 'ph-sliders',
                 label: this.t('annotations.toolbar.modeOptions'),
                 panelClass: 'w-80 max-h-[60vh] overflow-y-auto space-y-2',
-                onToggle: (open) => {
-                    if (!open) this._forceCloseModeOptions = true;
-                }
             }, this._htmlWrap);
 
             USER_INTERFACE.Tools.setMenu(this.id, 'annotations-tool-bar', this.t('annotations.toolbar.title'),
@@ -310,20 +322,26 @@ export const globalPluginWindowMethods = {
                 const modeId = mode.getId();
 
                 if (this._htmlWrap && this._modeOptionsPanel) {
-                    const rawHtml = (this.context.mode.customHtml && this.context.mode.customHtml()) || '';
+                    // Read from `e.mode`, not `this.context.mode`: the
+                    // _setModeToAuto path in annotations.js fires the event
+                    // BEFORE assigning `this.mode`, so the global would still
+                    // point at the previous (now-stale) mode and the panel
+                    // would never hide when switching to navigation.
+                    const rawHtml = (mode.customHtml && mode.customHtml()) || '';
                     const hasHtml = !!rawHtml && rawHtml.trim().length > 0;
 
                     if (hasHtml) {
                         this._htmlWrap.setHtml(rawHtml);
-                        this._modeOptionsPanel.setEnabled(true);
-                        if (!this._forceCloseModeOptions && !this._modeOptionsPanel.isOpen()) {
+                        this._modeOptionsPanel.setVisible(true);
+                        // Auto-open on every tool switch where options exist.
+                        // Manual close within a tool stays closed until the
+                        // next mode-changed fires — this re-opens by design.
+                        if (!this._modeOptionsPanel.isOpen()) {
                             this._modeOptionsPanel.open();
                         }
                     } else {
                         this._htmlWrap.setHtml('');
-                        this._modeOptionsPanel.close();
-                        this._modeOptionsPanel.setEnabled(false);
-                        this._forceCloseModeOptions = true;
+                        this._modeOptionsPanel.setVisible(false);
                     }
                 }
 
@@ -332,7 +350,8 @@ export const globalPluginWindowMethods = {
                 } else if (
                     modeId === modes.MAGIC_WAND.getId() ||
                     modeId === modes.FREE_FORM_TOOL_CORRECT.getId() ||
-                    modeId === modes.VIEWPORT_SEGMENTATION.getId()
+                    modeId === modes.VIEWPORT_SEGMENTATION.getId() ||
+                    modeId === modes.FIXED_AREA.getId()
                 ) {
                     this._gModes.setSelected('cg-auto', false);
                     this._autoChoice.setSelected(modeId, false, false);

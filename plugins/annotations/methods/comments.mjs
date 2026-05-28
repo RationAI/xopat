@@ -16,7 +16,7 @@ function renderEmptyState(plugin) {
             id: 'comments-list-empty',
             class: 'h-full flex flex-col items-center justify-center opacity-30 text-center gap-2 p-8 select-none'
         },
-        i({ class: 'fa-solid fa-comments text-5xl mb-2' }),
+        i({ class: 'ph-light ph-chats text-5xl mb-2' }),
         p({ class: 'text-sm font-bold' }, plugin.t('annotations.comments.empty'))
     );
     return empty;
@@ -220,13 +220,13 @@ export const commentMethods = {
                     class: 'btn btn-ghost btn-xs btn-square',
                     onclick: (e) => this._showReplyBox(e, comment.id),
                     title: this.t('annotations.comments.reply')
-                }, i({ class: 'fa-solid fa-reply' })) : null,
+                }, i({ class: 'ph-light ph-arrow-bend-up-left' })) : null,
 
                 isAuthor ? button({
                     class: 'btn btn-ghost btn-xs btn-square text-error',
                     onclick: () => this._deleteComment(comment),
                     title: this.t('annotations.comments.delete')
-                }, i({ class: 'fa-solid fa-trash' })) : null
+                }, i({ class: 'ph-light ph-trash' })) : null
             )
         );
 

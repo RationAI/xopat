@@ -1,6 +1,6 @@
 import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Button } from "../../elements/buttons.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
+import { iconComponentFor } from "../../elements/ph-icon.mjs";
 
 /**
  * @class ToolbarItem
@@ -9,8 +9,9 @@ import { FAIcon } from "../../elements/fa-icon.mjs";
  *
  * @param {object} options - Configuration options for the toolbar item.
  * @param {string} [options.id] - The ID for the component.
- * @param {string|FAIcon} options.icon - The FontAwesome icon name (e.g., "fa-mouse-pointer") or a FAIcon instance.
- * @param {string} [options.label] - The text to display as a tooltip (title attribute).
+ * @param {string|BaseComponent} options.icon - Icon name string ("fa-…" or "ph-…") or a pre-built icon component instance (FAIcon / PhIcon).
+ * @param {string} [options.label] - Visible text for the button (used by parents like ToolbarChoiceGroup to render dropdown rows). When `tooltip` is not provided, also used as the title attribute.
+ * @param {string} [options.tooltip] - Hover tooltip (title attribute). Falls back to `label`.
  * @param {Function} [options.onClick] - The function to execute when the button is clicked.
  * @param {object} [options.extraClasses] - Additional classes to apply to the button.
  */
@@ -25,9 +26,8 @@ class ToolbarItem extends BaseSelectableComponent {
      * @returns {HTMLElement} The rendered button element.
      */
     create() {
-        const iconComp = (this.options.icon instanceof BaseComponent)
-            ? this.options.icon
-            : new FAIcon({ name: this.options.icon });
+        const raw = this.options.icon;
+        const iconComp = (raw instanceof BaseComponent) ? raw : iconComponentFor(raw);
 
         this._button = new Button({
             id: this.id,
@@ -38,7 +38,7 @@ class ToolbarItem extends BaseSelectableComponent {
                 ...(this.options.extraClasses || {})
             },
             extraProperties: {
-                title: this.options.label || "",
+                title: this.options.tooltip ?? this.options.label ?? "",
                 "data-toolbar-item": this.itemID
             }
         }, iconComp);
@@ -71,7 +71,7 @@ ui = globalThis.UI;
 // A simple toolbar item
 const item = new ui.ToolbarItem({
     id: "my-item",
-    icon: "fa-mouse-pointer",
+    icon: "ph-cursor",
     label: "Select Tool",
     onClick: () => console.log("Select clicked")
 });

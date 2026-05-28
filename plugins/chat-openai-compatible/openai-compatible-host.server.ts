@@ -63,7 +63,7 @@ function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
     };
 }
 
-function buildCeritProviderType(input: {
+function buildOpenAICompatibleProviderType(input: {
     id: string;
     label: string;
     description?: string;
@@ -78,7 +78,7 @@ function buildCeritProviderType(input: {
     return {
         id: input.id,
         label: input.label,
-        description: input.description || "CERIT OpenAI-compatible endpoint",
+        description: input.description || "OpenAI-compatible endpoint",
         adapter: "openai-compatible",
         supportsUploads: true,
         supportsFiles: false,
@@ -108,7 +108,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         throw new Error("XOPAT_SERVER helpers are not available.");
     }
 
-    const pluginId = ctx?.itemId || "chat-cerit-io";
+    const pluginId = ctx?.itemId || "chat-openai-compatible";
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
@@ -118,12 +118,12 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         "ensureManagedPluginProvider"
     );
 
-    const typeId = pick(defaults.id, input.typeId, "cerit-openai")!;
-    const label = pick(defaults.label, input.label, "CERIT")!;
+    const typeId = pick(defaults.id, input.typeId, "openai-compatible")!;
+    const label = pick(defaults.label, input.label, "OpenAI-compatible")!;
     const description = pick(
         defaults.description,
         input.description,
-        "CERIT OpenAI-compatible endpoint"
+        "OpenAI-compatible endpoint"
     )!;
     const contextId = pick(defaults.contextId, input.contextId, "jwt")!;
     const authType = pick(defaults.authType, input.authType, "jwt")!;
@@ -133,7 +133,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
 
-    const providerType = buildCeritProviderType({
+    const providerType = buildOpenAICompatibleProviderType({
         id: typeId,
         label,
         description,

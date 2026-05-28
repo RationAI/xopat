@@ -56,14 +56,45 @@ type ViewportSetup = {
     rotation?: number;
 }
 
+/**
+ * UI visibility namespace under `params.ui.*`. Each flag is the *initial*
+ * visible state at boot — `false` boots the component collapsed/hidden but
+ * the user can still bring it back via the relevant toggle (settings
+ * checkbox, hide-UI button, menu opener). Defaults to `true` for every key
+ * when unset. Read at boot via `APPLICATION_CONTEXT.getUiOption(key)` —
+ * which also honors the legacy flat `XOpatSetup.scaleBar`/`toolBar`/
+ * `statusBar` aliases.
+ */
+type XOpatUiSetup = {
+    /** Initial visible state of the scalebar overlay. */
+    scaleBar?: boolean | null;
+    /** Initial visible state of the top toolbar. */
+    toolBar?: boolean | null;
+    /** Initial visible state of the bottom status bar. */
+    statusBar?: boolean | null;
+    /** Initial visible state of the global menu (FullscreenMenus panel). */
+    mainMenu?: boolean | null;
+    /** Initial visible state of the OSD navigator panel (per viewer). */
+    navigator?: boolean | null;
+    /**
+     * Initial visible state of the top app bar chrome. `false` is equivalent
+     * to the hide-UI button being pre-toggled at boot — hides every
+     * Chrome-registered component until the user toggles back.
+     */
+    appBar?: boolean | null;
+};
+
 type XOpatSetup = {
     sessionName?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
     webglDebugMode?: boolean | null;
+    /** @deprecated Use `params.ui.scaleBar` instead. Kept as backwards-compatible alias. */
     scaleBar?: boolean | null;
+    /** @deprecated Use `params.ui.toolBar` instead. Kept as backwards-compatible alias. */
     toolBar?: boolean | null;
+    /** @deprecated Use `params.ui.statusBar` instead. Kept as backwards-compatible alias. */
     statusBar?: boolean | null;
     background?: string | null;
     viewport?: ViewportSetup | ViewportSetup[] | null;
@@ -82,6 +113,15 @@ type XOpatSetup = {
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    /**
+     * If true, skip the cookie-driven plugin restore (`_plugins`) for this
+     * session. Plugins flagged `permaLoad: true` in their `include.json` and
+     * plugins explicitly listed in this session's `config.plugins` still come
+     * up normally. The intent is to ignore the user's *previous* manual
+     * picks while still respecting the deployment's auto-loaded set and the
+     * current session's declared plugins.
+     */
+    disablePluginsAutoload?: boolean | null;
     valueInspectorEnabled?: boolean | null;
     visualizationInspectorEnabled?: boolean | null;
     visualizationInspectorMode?: string | null;
@@ -90,6 +130,8 @@ type XOpatSetup = {
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
+    /** Canonical home for UI initial-visibility flags. See `XOpatUiSetup`. */
+    ui?: XOpatUiSetup | null;
 };
 
 type XOpatServerProxyAuthJwt = {

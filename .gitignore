@@ -1,5 +1,7 @@
-# allow only build-in items in modules/plugins
-/modules/**
+# allow only built-in items in modules/plugins
+# Only top-level entries in modules/ and plugins/ are ignored;
+# once a directory below is un-ignored, all of its contents are tracked normally.
+/modules/*
 !/modules/annotations
 !/modules/chat
 !/modules/empaia-wsi-tile-source
@@ -22,23 +24,25 @@
 !/modules/sam-segmentation-experimental
 !/modules/web-worker-manager
 
-/plugins/**
-!/plugins/analyze-dev/*
-!/plugins/annotations/*
-!/plugins/custom-pages/*
-!/plugins/empaia/*
-!/plugins/extra-tutorials/*
-!/plugins/rationai-wsi-file-browser/*
-!/plugins/hotkeys/*
-!/plugins/navigation-tracker/*
-!/plugins/profiler/*
-!/plugins/questionaire/*
-!/plugins/recorder/*
-!/plugins/user-session/*
-!/plugins/youtrack-feedback-form/*
-!/plugins/sam-segment-tool-experimental/*
-!/plugins/dicom/*
-!/plugins/slide-info/*
+/plugins/*
+!/plugins/annotations
+!/plugins/analyze-dev
+!/plugins/chat-anthropic
+!/plugins/chat-openai-compatible
+!/plugins/custom-pages
+!/plugins/empaia
+!/plugins/extra-tutorials
+!/plugins/rationai-wsi-file-browser
+!/plugins/hotkeys
+!/plugins/navigation-tracker
+!/plugins/profiler
+!/plugins/questionaire
+!/plugins/recorder
+!/plugins/user-session
+!/plugins/youtrack-feedback-form
+!/plugins/sam-segment-tool-experimental
+!/plugins/dicom
+!/plugins/slide-info
 
 #rubbish
 *.txt

@@ -316,8 +316,10 @@ OSDAnnotations.FreeFormTool = class {
 
             //fixme still small problem - updated annotaion gets replaced in the board, changing its position!
             if (_withDeletion) {
-                //revert annotation replacement and delete the initial (annotation was erased by modification)
-                this._context.fabric.replaceAnnotation(this.polygon, this.initial, true);
+                // Erase brush emptied the polygon. `initial` is still off-canvas
+                // (FFT doppelganger swap from init); deleteAnnotation now
+                // dismisses the doppelganger stand-in itself, so the canvas
+                // transitions stand-in → empty without flashing the original.
                 this._context.fabric.deleteAnnotation(this.initial);
             } else if (!this._created) {
                 //revert annotation replacement and when updated, really swap

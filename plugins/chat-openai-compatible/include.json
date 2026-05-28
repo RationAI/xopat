@@ -1,0 +1,13 @@
+{
+  "description": "Generic OpenAI-compatible chat provider. Works with any GPT-like API (vLLM, Ollama, LM Studio, OpenAI, Together, Groq, CERIT-AI, etc.). Configure baseUrl / apiKey / models via server.json — they are server-only.",
+  "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
+  // none or jwt — secures the viewer (proxy) endpoint, NOT the upstream model
+  "authMode": "jwt",
+  // if null, inherits the core auth context (same as viewer login)
+  "authContext": null,
+  "oidc": {
+    "authority": "https://your-auth-server.com",
+    "client_id": "openai-plugin-client",
+    "scope": "openid profile chat_api"
+  }
+}

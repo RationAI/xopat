@@ -176,7 +176,7 @@ export class ShaderSideMenu extends BaseComponent {
                     id: this.id + "-cache-snapshot",
                     tabindex: "0",
                     role: "button",
-                    class: "fa-auto fa-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 pt-2",
+                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 pt-2",
                     title: $.t("main.shaders.saveCookies"),
                     onclick: (e) => {
                         e.stopPropagation();
@@ -202,7 +202,7 @@ export class ShaderSideMenu extends BaseComponent {
                             },
                         },
                         // icon: sort_by_alpha
-                        span({ class: "fa-auto fa-arrow-down-a-z mr-2" }),
+                        span({ class: "ph-light ph-sort-ascending mr-2" }),
                         $.t("main.shaders.cacheByName")
                     )
                 ),
@@ -216,7 +216,7 @@ export class ShaderSideMenu extends BaseComponent {
                             },
                         },
                         // icon: format_list_numbered
-                        span({ class: "fa-auto fa-list-ol mr-2" }),
+                        span({ class: "ph-light ph-list-numbers mr-2" }),
                         $.t("main.shaders.cacheByOrder")
                     )
                 )

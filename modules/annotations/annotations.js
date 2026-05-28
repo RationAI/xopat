@@ -33,6 +33,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._activeViewer = VIEWER;
         this.commentsEnabled = true;
         this._init();
+
+        // Point-snap settings. Persisted via cache; clamped on read so a
+        // corrupted entry can't make the snap radius absurd.
+        const snapEnabledRaw = this.cache?.get?.('snap.enabled');
+        this.snapEnabled = snapEnabledRaw === undefined || snapEnabledRaw === null
+            ? true : !!snapEnabledRaw;
+        const snapRadiusRaw = Number(this.cache?.get?.('snap.radiusPx'));
+        this.snapRadiusPx = Number.isFinite(snapRadiusRaw) && snapRadiusRaw > 0
+            ? Math.min(64, Math.max(2, snapRadiusRaw)) : 12;
+
         this.user = XOpatUser.instance();
 
         this._annotationsHistoryProvider = new OSDAnnotations.HistoryProvider(this);
@@ -168,6 +178,15 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             persistMaxEntries: 5000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
             validate: (item, ctx) => {
+                // Delete carries only an itemId — no item to validate.
+                if (ctx?.direction === "delete") return { ok: true };
+                // History replays (undo/redo of a previously-applied mutation)
+                // dispatch back through the resource with a placeholder
+                // payload. The real mutation happens via the closure-captured
+                // apply; the wire payload is meaningless here, so don't
+                // refuse on shape.
+                if (ctx?.meta?.fromUndo || ctx?.meta?.fromRedo) return { ok: true };
+
                 const bad = requireObject(item, "annotation");
                 if (bad) return bad;
                 // Update patches are partial — they carry only the fields
@@ -976,6 +995,26 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this.isAnnotation(annotation) && !this.annotationMatchesFilters(annotation);
     }
 
+    /** Current point-snap settings (live; reflects cache-restored state). */
+    getSnap() {
+        return { enabled: !!this.snapEnabled, radiusPx: this.snapRadiusPx };
+    }
+
+    /**
+     * Update point-snap settings; persists to cache so the choice survives
+     * a reload. Partial updates allowed: `{ enabled }` or `{ radiusPx }` or both.
+     */
+    setSnap(opts = {}) {
+        if (typeof opts.enabled === 'boolean') {
+            this.snapEnabled = opts.enabled;
+            this.cache?.set?.('snap.enabled', opts.enabled);
+        }
+        if (Number.isFinite(opts.radiusPx) && opts.radiusPx > 0) {
+            this.snapRadiusPx = Math.min(64, Math.max(2, opts.radiusPx));
+            this.cache?.set?.('snap.radiusPx', this.snapRadiusPx);
+        }
+    }
+
     /**
      * Returns currently available filter values discovered from existing full annotations.
      * The return object contains arrays for `instanceId`, `author`, `presetName`, and `factoryType`.
@@ -1372,6 +1411,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		const _this = this;
         this._ioArgs = this.getStaticMeta("convertors") || {};
+        // Normalize imageCoordinatesOffset to the documented {x, y} shape.
+        // include.json ships it as a [x, y] array which the convertors read as
+        // `offset.x` / `offset.y` — undefined on an array, producing NaN
+        // coordinates in every exported feature. Normalize here so every
+        // downstream consumer sees the contract shape.
+        const rawOffset = this._ioArgs.imageCoordinatesOffset;
+        if (Array.isArray(rawOffset)) {
+            this._ioArgs.imageCoordinatesOffset = {
+                x: Number.isFinite(rawOffset[0]) ? rawOffset[0] : 0,
+                y: Number.isFinite(rawOffset[1]) ? rawOffset[1] : 0,
+            };
+        } else if (rawOffset && (!Number.isFinite(rawOffset.x) || !Number.isFinite(rawOffset.y))) {
+            // Object shape but with non-numeric components — drop it rather
+            // than letting NaN propagate.
+            delete this._ioArgs.imageCoordinatesOffset;
+        }
         this._defaultFormat = this._ioArgs.format || "native";
 
 		/**
@@ -1527,6 +1582,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Angle, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
@@ -2193,7 +2249,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "fa-arrows-up-down-left-right", "🆀  navigate / select annotations");
+		super(context, "auto", "ph-arrows-out-cardinal", "🆀  navigate / select annotations");
 	}
 
 	// handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2372,7 +2428,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "fa-paintbrush", "🅴  brush to create/edit");
+		super(context, "fft-add", "ph-paint-brush", "🅴  brush to create/edit");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2426,7 +2482,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "fa-paintbrush", "🆁  brush to remove");
+		super(context, "fft-remove", "ph-eraser", "🆁  brush to remove");
 		this.candidates = null;
 	}
 
@@ -2494,7 +2550,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "fa-object-group", "🆆  create annotations manually");
+		super(context, "custom", "ph-bounding-box", "🆆  create annotations manually");
 		this._lastUsed = null;
 	}
 
@@ -2559,7 +2615,14 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	_init(point, isLeftClick, updater) {
 		if (!updater) return;
-		updater.initCreate(point.x, point.y, isLeftClick);
+		let px = point.x, py = point.y;
+		// Snap the click position to a nearby visible annotation vertex when
+		// enabled. Drag motion (updateCreate) is NOT snapped; only clicks.
+		if (this.context.snapEnabled) {
+			const snapped = this.context.fabric?.findSnapTarget?.(px, py, this.context.snapRadiusPx);
+			if (snapped) { px = snapped.x; py = snapped.y; }
+		}
+		updater.initCreate(px, py, isLeftClick);
 		this._lastUsed = updater;
 	}
 
@@ -2611,7 +2674,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "fa-paintbrush", "🆉  correction tool");
+		super(context, "fft-correct", "ph-paint-brush-broad", "🆉  correction tool");
 		this.candidates = null;
 	}
 
@@ -2680,7 +2743,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 
 OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "edit-selection", "fa-pen-to-square", "Edit selected annotation");
+        super(context, "edit-selection", "ph-note-pencil", "Edit selected annotation");
     }
 
     setFromAuto() {

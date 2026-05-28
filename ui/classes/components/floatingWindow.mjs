@@ -2,7 +2,7 @@ import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
 import {Div} from "../elements/div.mjs";
 import {Button} from "../elements/buttons.mjs";
-import {FAIcon} from "../elements/fa-icon.mjs";
+import {PhIcon} from "../elements/ph-icon.mjs";
 
 const { div, span } = van.tags;
 
@@ -195,7 +195,7 @@ export class FloatingWindow extends BaseComponent {
                 extraClasses: { btn: "btn btn-ghost btn-xs btn-square" },
                 extraProperties: { "data-no-drag": "true" },
                 onClick: () => this.close(),
-            }, new FAIcon({ name: "fa-close" }))).create()
+            }, new PhIcon({ name: "ph-x" }))).create()
         ] : [];
 
         this._header = new Div({
@@ -204,7 +204,7 @@ export class FloatingWindow extends BaseComponent {
                 }
             },
             div({ class: "flex items-center gap-2" },
-                new FAIcon({ name: "fa-up-down-left-right" }).create(),
+                new PhIcon({ name: "ph-arrows-out-cardinal" }).create(),
                 span({ class: "font-semibold truncate" }, this.title),
             ),
             div({ class: "ml-auto flex items-center gap-1" }, ...btnClose)

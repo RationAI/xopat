@@ -577,6 +577,11 @@ const server = http.createServer(async (req, res) => {
         if (urlObj.pathname.startsWith("/__rpc/")) {
             const core = initViewerCoreAndPlugins(req, res, true);
             if (!core) return;
+            // Populate core.CORE_AUTHOR_SECURE so getSecurePluginConfig can
+            // fall back on author-shipped server.json defaults during RPC.
+            // serverOnly mode preserves CORE.server.secure (deployer tier);
+            // running loadPlugins additionally fills the author tier.
+            loadPlugins(core, fs.existsSync, p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }), i18n);
             const session = getSession(req);
             return serverRuntime.handleRpc(req, res, core, session, urlObj);
         }

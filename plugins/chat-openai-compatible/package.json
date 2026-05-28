@@ -1,0 +1,8 @@
+{
+  "name": "chat-openai-compatible",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible chat provider plugin (works with any GPT-like endpoint).",
+  "keywords": [
+  ],
+  "author": "Aiosa"
+}

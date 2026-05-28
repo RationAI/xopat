@@ -1,6 +1,6 @@
 import { BaseComponent } from "../baseComponent.mjs";
 import van from "../../vanjs.mjs";
-import { FAIcon } from "../elements/fa-icon.mjs";
+import { iconComponentFor } from "../elements/ph-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 
@@ -59,7 +59,7 @@ class MenuTab extends BaseComponent {
     _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : iconComponentFor(item["icon"]);
 
         //todo dirty?
         this.iconName = inIcon.options.name;

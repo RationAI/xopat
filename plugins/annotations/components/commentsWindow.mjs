@@ -41,7 +41,7 @@ export function createCommentsWindow(plugin) {
                         onclick: () => plugin._addComment(),
                         title: plugin.t('annotations.comments.send')
                     },
-                    i({ class: 'fa-solid fa-paper-plane' })
+                    i({ class: 'ph-light ph-paper-plane-tilt' })
                 )
             )
         )

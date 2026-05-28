@@ -357,7 +357,7 @@ input.switch:checked + label span {
 
 .fa-auto,
 .fa-auto::before {
-    font-family: "FA6FreeRegular","FA6FreeSolid", var(--fa-style-family, "Font Awesome 6 Free") !important; /* fallback order */
+    font-family: "FA6FreeRegular","FA6FreeSolid", var(--fa-style-family, "Font Awesome 6 Free"); /* fallback order */
     font-weight: 200;
     font-style: normal;
     font-variant: normal;

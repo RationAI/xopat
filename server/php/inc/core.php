@@ -290,6 +290,15 @@ if (isset($CORE["server"]["secure"])) {
     unset($CORE["server"]["secure"]);
 }
 
+// Author-tier server-only config: populated by plugins.php / modules.php
+// when a plugin/module ships a `server.json`. Holds the manifest minus
+// `requiredConfig`. Does NOT count toward the `requiredConfig` gate.
+// Same hygiene rule as $GLOBALS['CORE_SECURE']: never JSON-encoded into
+// the browser-bound page payload.
+if (!isset($GLOBALS['CORE_AUTHOR_SECURE'])) {
+    $GLOBALS['CORE_AUTHOR_SECURE'] = ['plugins' => [], 'modules' => []];
+}
+
 /*
  * Printing Functions - dependencies from the config
  */

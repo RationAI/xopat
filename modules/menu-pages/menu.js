@@ -267,6 +267,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
         "div": "Div",
         "button": "Button",
         "faicon": "FAIcon", "icon": "FAIcon", "fa-auto": "FAIcon",
+        "phicon": "PhIcon", "ph-icon": "PhIcon", "ph-light": "PhIcon",
         "join": "Join",
         "dropdown": "Dropdown",
         "menu": "Menu",

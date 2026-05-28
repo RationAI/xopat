@@ -131,8 +131,9 @@ export class ContextMenu extends BaseComponent {
         const base = "inline-flex items-center justify-center shrink-0";
         const style = "width: 20px; height: 20px; font-size: 16px; line-height: 1;";
         if (!icon) return span({ class: base, style });
+        const isPh = String(icon).trim().startsWith('ph-');
         return span({
-            class: `${base} fa-auto ${icon}`,
+            class: `${base} ${isPh ? 'ph-light' : 'fa-auto'} ${icon}`,
             style: `${style} ${iconCss || ""}`,
         });
     }
@@ -186,7 +187,7 @@ export class ContextMenu extends BaseComponent {
                 // Use a Font Awesome chevron rather than the U+25B6 triangle:
                 // some systems render ▶ with emoji presentation (a coloured
                 // raster glyph), which clashes with the rest of the menu.
-                i({ class: "fa-auto fa-chevron-right opacity-60 ml-2 shrink-0", style: "font-size: 11px;" })
+                i({ class: "ph-light ph-caret-right opacity-60 ml-2 shrink-0", style: "font-size: 11px;" })
             );
             liEl.appendChild(anchor);
 

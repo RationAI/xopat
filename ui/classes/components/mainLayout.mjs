@@ -27,7 +27,7 @@ const { div } = van.tags;
 /**
  * @typedef {Object} MainLayoutTab
  * @property {string} id - Unique tab identifier.
- * @property {string} [icon] - Icon class name, e.g., "fa-circle-info".
+ * @property {string} [icon] - Icon class name, e.g., "ph-info" (or legacy "fa-circle-info").
  * @property {string} [title] - Human-readable title.
  * @property {VisibilityManager} [visibilityManager] - The visibility manager for this tab. Required.
  * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
@@ -524,10 +524,10 @@ export class MainLayout extends BaseComponent {
             const wrapper = new DockableWindow({
                 id: mainLayoutTab.id,
                 title: mainLayoutTab.title || mainLayoutTab.id,
-                icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                icon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
                 tabId: mainLayoutTab.id,
                 tabTitle: mainLayoutTab.title || mainLayoutTab.id,
-                tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
                 defaultMode: "tab",
                 layout: this,
                 visibilityManager: mainLayoutTab.visibilityManager,
@@ -540,10 +540,10 @@ export class MainLayout extends BaseComponent {
         const wrapper = new DockableWindow({
             id: mainLayoutTab.id,
             title: mainLayoutTab.title || mainLayoutTab.id,
-            icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            icon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
             tabId: mainLayoutTab.id,
             tabTitle: mainLayoutTab.title || mainLayoutTab.id,
-            tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
             defaultMode: "tab",
             layout: this,
             visibilityManager: mainLayoutTab.visibilityManager,
@@ -875,7 +875,7 @@ export class MainLayout extends BaseComponent {
             const meta = toolbar.getEmbeddedMeta?.() || {
                 id: toolbar.id,
                 title: toolbar.id,
-                icon: "fa-wrench"
+                icon: "ph-wrench"
             };
 
             this._toolbarDropdown.addItem({
@@ -1054,7 +1054,7 @@ export class MainLayout extends BaseComponent {
             id: `${this.id}-toolbar-switcher`,
             parentId: this.id,
             title: "Toolbars",
-            icon: "fa-toolbox",
+            icon: "ph-toolbox",
             items: []
         });
         this._toolbarDropdown.iconOnly();
@@ -1124,7 +1124,7 @@ export class MainLayout extends BaseComponent {
             view.structure[this._dockViewTabCategory] = {
                 id: "global-menu-tabs",
                 label: $.t("main.globalMenu.globalMenuTabs"),
-                icon: "fa-table-columns",
+                icon: "ph-columns",
                 section: "global-windows",
             };
             view._visualMenuNeedsRefresh = true;
@@ -1143,7 +1143,7 @@ export class MainLayout extends BaseComponent {
 
         view.append(
             this._dockViewItemId,
-            "fa-table-columns",
+            "ph-columns",
             $.t("main.globalMenu.globalMenu"),
             {
                 is: () => this._isDockEffectivelyVisible(),
@@ -1167,7 +1167,7 @@ export class MainLayout extends BaseComponent {
         view.registerViewComponent(this._dockViewTabCategory, {
             id: viewRegistration?.id || tab.id,
             title: viewRegistration?.title || tab.title || tab.id,
-            icon: viewRegistration?.icon || tab.iconName || tab.icon || "fa-window-maximize",
+            icon: viewRegistration?.icon || tab.iconName || tab.icon || "ph-frame-corners",
             visibilityManager: {
                 is: () => this._isTabVisible(tab),
                 set: next => next
