@@ -1,6 +1,9 @@
 {
   "requiredConfig": ["providerDefaults.baseUrl"],
   "providerDefaults": {
+    "id": "anthropic-claude",
+    "label": "Anthropic",
+    "description": "Anthropic Claude API endpoint",
     "baseUrl": "https://api.anthropic.com/v1",
     "apiKey": "YOUR_SERVER_ONLY_DEFAULT_TOKEN",
     "defaultModelId": "",

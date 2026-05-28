@@ -43,3 +43,26 @@ viewer URL — the upstream proxy is the one enforcing the API token, so
 make sure it's locked down. For viewer-side auth, switch to
 `"authMode": "jwt"` and configure `authContext` / `oidc` in
 `include.json`.
+
+## Naming the provider
+
+`OpenAI-compatible` is just the default label. Give the provider a
+deployment-specific identity by setting `providerDefaults.id` /
+`label` / `description` in `server.json` (or in the secure section of
+your xOpat env override):
+
+````json
+"chat-openai-compatible": {
+  "providerDefaults": {
+    "id": "groq-llama",
+    "label": "Groq · Llama 3.1",
+    "description": "Internal Groq endpoint serving Llama 3.1 70B",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "apiKey": "..."
+  }
+}
+````
+
+The label is what users see in the model picker; `id` is the stable
+provider-type identifier the chat module persists, so pick something
+unique and don't rename it after rollout.

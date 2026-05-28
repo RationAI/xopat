@@ -3,12 +3,8 @@
   "name": "Anthropic Claude Chat",
   "author": "Aiosa",
   "version": "1.0.0",
-  "description": "Anthropic Claude provider integration.",
+  "description": "Anthropic Claude provider integration. Configure baseUrl / apiKey / model / anthropicVersion via server.json — they are server-only.",
   "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
-  "providerTypeId": "anthropic-claude",
-  "baseUrl": "https://api.anthropic.com/v1",
-  "defaultModelId": "",
-  "modelsDiscoveryPath": "/models",
   "authMode": "jwt",
   "authContext": "anthropic",
   "oidc": {
