@@ -1,0 +1,15 @@
+{
+    "id": "annotation-measurements",
+    "name": "Annotation Measurements",
+    "description": "Pixel-aware metrics over annotated regions: intensity statistics, % positive, connected-component analysis. Pure compute layer; UI lives in the annotations plugin.",
+    "version": "0.1.0",
+    "includes": [
+        "statistics.js",
+        "polygon-rasterizer.js",
+        "connected-components.js",
+        "raster-sampler.js",
+        "measurement-engine.js",
+        "index.js"
+    ],
+    "requires": ["annotations"]
+}
