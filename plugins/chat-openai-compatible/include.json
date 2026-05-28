@@ -1,15 +1,15 @@
 {
-  "description": "Cerit-IO Hosted Model provider integration.",
+  "description": "Generic OpenAI-compatible chat provider. Point baseUrl at any GPT-like API (vLLM, Ollama, LM Studio, OpenAI, Together, Groq, CERIT-AI, etc.).",
   "modules": ["oidc-client-ts", "vercel-ai-chat-sdk"],
-  "providerTypeId": "cerit-llm-ai",
-  // alias key to use in server proxy
-  "baseUrl": "https://llm.ai.e-infra.cz/",
+  "providerTypeId": "openai-compatible",
+  // Base URL of the upstream OpenAI-compatible API. Override per deployment.
+  "baseUrl": "",
   "modelsDiscoveryPath": "/v1/models",
   "defaultModelId": "",
   // none or jwt, this auth secures viewer (proxy) endpoint, NOT the model
   "authMode": "jwt",
   // if set to null, it inherits the core auth context (same as viewer login)
-  "authContext": "cerit-io",
+  "authContext": null,
   "oidc": {
     "authority": "https://your-auth-server.com",
     "client_id": "openai-plugin-client",

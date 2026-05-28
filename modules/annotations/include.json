@@ -21,6 +21,7 @@
         "convert/qupath.js",
         "magic-wand.js",
         "viewport-segmentation.js",
+        "fixed-area-mode.js",
         "presets.js",
         "objects.js",
         "objectGenericFactories.js",

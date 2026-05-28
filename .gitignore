@@ -26,6 +26,8 @@
 
 /plugins/*
 !/plugins/annotations
+!/plugins/chat-anthropic
+!/plugins/chat-openai-compatible
 !/plugins/custom-pages
 !/plugins/empaia
 !/plugins/extra-tutorials

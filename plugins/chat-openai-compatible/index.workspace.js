@@ -1,4 +1,4 @@
-addPlugin("chat-cerit-io", class extends XOpatPlugin {
+addPlugin("chat-openai-compatible", class extends XOpatPlugin {
     constructor(id) {
         super(id);
     }
@@ -7,7 +7,7 @@ addPlugin("chat-cerit-io", class extends XOpatPlugin {
         const baseUrl = this.getStaticMeta("baseUrl", "");
         const modelsPath = this.getStaticMeta("modelsDiscoveryPath", "/models");
         const defaultModelId = this.getStaticMeta("defaultModelId", "");
-        const contextId = this.getStaticMeta("authContext", "cerit");
+        const contextId = this.getStaticMeta("authContext", null);
         const authType = this.getStaticMeta("authMode", "jwt");
         const requiresLogin = authType === "jwt";
 
