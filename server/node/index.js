@@ -102,15 +102,18 @@ function createSession(res) {
 
     sessions.set(id, session);
 
-    // Set an HttpOnly cookie so front-end JS can’t steal it
-    // (but browser will send it automatically with requests)
+    const isCrossSiteCookieMode = process.env.XOPAT_CROSS_SITE_COOKIES === 'true';
+
     const cookieParts = [
         `xopat_session=${encodeURIComponent(id)}`,
         'Path=/',
         'HttpOnly',
-        'SameSite=Lax'
+        isCrossSiteCookieMode ? 'SameSite=None' : 'SameSite=Lax'
     ];
-    if (process.env.NODE_ENV === 'production') {
+
+    // SameSite=None is rejected by browsers unless Secure is also present.
+    // In Colab/proxy mode this must be enabled even if NODE_ENV !== 'production'.
+    if (process.env.NODE_ENV === 'production' || isCrossSiteCookieMode) {
         cookieParts.push('Secure');
     }
     const cookie = cookieParts.join('; ');
