@@ -9,6 +9,12 @@ const {
     getServerBuildDir,
 } = require("./server-module-loader");
 
+const {
+    SsrfBlockedError,
+    validateUpstreamUrl,
+    safeFetch,
+} = require("./ssrf-guard");
+
 const SERVER_FILE_RE = /\.server\.(js|mjs|ts)$/i;
 
 function getItemServerBuildDir(runtime, file) {
@@ -246,6 +252,11 @@ function createServerHelpers(runtime) {
     resolveServerFile: (ctx, target) => resolveServerFile(runtime, ctx, target),
     importServerModule: (ctx, target) => importServerModule(ctx, runtime, target),
     importServerExport: (ctx, target, exportName) => importServerExport(ctx, runtime, target, exportName),
+    // SSRF-safe outbound HTTP. See server/node/ssrf-guard.js for the threat
+    // model and what they do (and don't) cover.
+    safeFetch,
+    validateUpstreamUrl,
+    SsrfBlockedError,
   };
 }
 

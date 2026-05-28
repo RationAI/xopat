@@ -353,6 +353,44 @@ Proxy auth is configured separately from RPC auth, under
 `server.secure.proxy.<alias>`. Proxy verifier configuration uses the same
 verifier maps but is unrelated to the RPC decision matrix above.
 
+## Outbound HTTP — SSRF guard
+
+Any `*.server.{ts,js,mjs}` file can reach a small server-level outbound-HTTP
+guard via `globalThis.XOPAT_SERVER`. Use it instead of raw `fetch` whenever
+the URL is operator- or user-influenced — provider registration, webhooks,
+custom proxies, model discovery, etc.
+
+```ts
+const XS = globalThis.XOPAT_SERVER;
+
+// Validate only — returns the parsed URL or throws SsrfBlockedError.
+const url = await XS.validateUpstreamUrl(config.baseUrl);
+
+// Fetch with: scheme allowlist (http/https), private/loopback/link-local/
+// CGNAT/multicast block (IPv4 + IPv6), redirect: "manual" enforced, and
+// a clear error on any 3xx so attacker-controlled hosts can't chain into
+// private space.
+const res = await XS.safeFetch(url.toString(), {
+  method: "GET",
+  headers: { ... },
+  signal: ctx?.signal,
+});
+```
+
+What the guard does **not** do:
+
+- Vet redirects performed *inside* third-party SDKs that bring their own
+  fetch (e.g. handing a baseURL to the Vercel AI SDK). Vet the baseURL with
+  `validateUpstreamUrl` before constructing the SDK client; once the SDK
+  takes over, its internal fetches are trusted.
+- Pin DNS between validation and the actual fetch. The TOCTOU window is
+  small and the upstream is typically operator-configured. A custom
+  dispatcher (e.g. `undici` with `lookup`) or fetching by literal IP is
+  required to close that gap.
+
+`SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
+callers can distinguish guard rejections from upstream errors.
+
 ### Runtime policy API
 
 Each RPC method may optionally define a runtime section.

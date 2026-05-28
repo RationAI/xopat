@@ -117,6 +117,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         "module:vercel-ai-chat-sdk/server/providerRegistration.server.ts",
         "ensureManagedPluginProvider"
     );
+    const { safeFetch, validateUpstreamUrl } = XS;
 
     const typeId = pick(defaults.id, input.typeId, "openai-compatible")!;
     const label = pick(defaults.label, input.label, "OpenAI-compatible")!;
@@ -178,7 +179,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 const modelsPath = String(config.modelsPath || "/models");
                 const url = resolveEndpointUrl(baseURL, modelsPath);
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
-                const res = await fetch(url, { method: "GET", headers, signal: ctx?.signal });
+                const res = await safeFetch(url, { method: "GET", headers, signal: ctx?.signal });
                 if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : [];
@@ -196,9 +197,12 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                     };
                 });
             },
-            resolveModel({ instance, modelId, config, secrets }: any) {
+            async resolveModel({ instance, modelId, config, secrets }: any) {
                 const baseURL = String(config.baseUrl || config.baseURL || "").trim();
                 if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
+                // Vet the baseURL before handing it to the SDK; see the
+                // analogous note in chat-anthropic for the reasoning.
+                await validateUpstreamUrl(baseURL);
                 const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
                 return createOpenAICompatible({ name: instance.id, baseURL, apiKey, headers })(modelId);
