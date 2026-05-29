@@ -74,7 +74,6 @@ export class MainLayout extends BaseComponent {
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
-        this._dockRegisteredInView = false;
         this._registeredTabViewIds = new Set();
 
         this._wrapperRegistry = new Map();
@@ -1123,8 +1122,8 @@ export class MainLayout extends BaseComponent {
         if (!view.structure[this._dockViewTabCategory]) {
             view.structure[this._dockViewTabCategory] = {
                 id: "global-menu-tabs",
-                label: $.t("main.globalMenu.globalMenuTabs"),
-                icon: "ph-columns",
+                label: $.t("main.bar.globalMenus"),
+                icon: "ph-tabs",
                 section: "global-windows",
             };
             view._visualMenuNeedsRefresh = true;
@@ -1135,25 +1134,6 @@ export class MainLayout extends BaseComponent {
 
     _shouldHideToolbarsForMobileGlobalWindow() {
         return this._isFullscreen && window.innerWidth < this.collapseBreakpointPx;
-    }
-
-    _registerDockInView() {
-        const view = this._ensureViewCategory();
-        if (!view || this._dockRegisteredInView) return;
-
-        view.append(
-            this._dockViewItemId,
-            "ph-columns",
-            $.t("main.globalMenu.globalMenu"),
-            {
-                is: () => this._isDockEffectivelyVisible(),
-                set: next => next
-                    ? this.showGlobalMenu()
-                    : this.hideGlobalMenu()
-            }
-        );
-
-        this._dockRegisteredInView = true;
     }
 
     _registerTabInView(tab) {
@@ -1181,7 +1161,7 @@ export class MainLayout extends BaseComponent {
 
     _syncMenuTabs() {
         if (!this._menu) return;
-        this._registerDockInView();
+        this._ensureViewCategory();
         for (const tab of this._getMenuTabs()) {
             this._setTabVisibleState(tab, this._isTabVisible(tab));
             this._attachCloseButton(tab);

@@ -483,19 +483,19 @@ export class AppBar {
                 'sideViewerMenu': {
                     id: 'viewer-sidebars',
                     label: $.t('main.bar.viewerSidebars'),
-                    icon: 'ph-columns',
+                    icon: 'ph-sidebar',
                     section: 'global-windows',
                 },
                 'toolbarMenu': {
                     id: 'viewer-toolbars',
                     label: $.t('main.bar.viewerToolbars'),
-                    icon: 'ph-columns',
+                    icon: 'ph-toolbox',
                     section: 'global-windows',
                 },
                 'globalMenuTabs': {
                     id: 'global-menu-tabs',
                     label: $.t('main.bar.globalMenus'),
-                    icon: 'ph-columns',
+                    icon: 'ph-tabs',
                     section: 'global-windows',
                 }
             };
@@ -540,31 +540,6 @@ export class AppBar {
                 const item = this.structure[id];
                 const subItemSpecs = this[id];
                 if (!subItemSpecs) continue;
-
-                if (id === 'globalMenuTabs') {
-                    for (let subItem of subItemSpecs) {
-                        const vm = subItem.visibilityManager;
-                        if (!vm) {
-                            console.error(`View.registerViewComponent: "${subItem.id}" has no visibilityManager`);
-                            continue;
-                        }
-
-                        this.subMenu.addItem({
-                            id: subItem.id,
-                            icon: subItem.iconName || subItem.icon,
-                            label: subItem.title || subItem.label || subItem.id,
-                            selected: vm.is(),
-                            onClick: () => {
-                                const next = !vm.is();
-                                this._setVisibility(vm, next);
-                                this._visualMenuNeedsRefresh = true;
-                                return true;
-                            },
-                            section: item.section || 'global-windows',
-                        });
-                    }
-                    continue;
-                }
 
                 const subChildren = [];
                 for (let subItem of subItemSpecs) {

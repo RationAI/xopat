@@ -370,6 +370,15 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
      */
     (window as any).addModule = function addModule(id: string, ModuleClass: any, eager: boolean = false) {
         if (!id || !ModuleClass) return;
+        if (!MODULES[id]) {
+            const known = Object.keys(MODULES);
+            const guess = known.find(k => k.toLowerCase() === id.toLowerCase() || k.startsWith(id) || id.startsWith(k));
+            console.warn(
+                `[loader] addModule("${id}", ${ModuleClass.name || "<anon>"}) registered an id that does not match any include.json. ` +
+                `Singleton instantiation will throw "module not registered". ` +
+                (guess ? `Did you mean "${guess}"?` : `Known module ids: ${known.join(", ")}`)
+            );
+        }
         ModuleClass.$id = id;
         const xmods = (window as any).xmodules = (window as any).xmodules || {};
         xmods[id] = ModuleClass;
@@ -1256,7 +1265,9 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
 
             const modRef = MODULES[this.id];
             if (!modRef) {
-                throw `Trying to instantiate a module that is not registered!`;
+                throw `Trying to instantiate a module that is not registered! id="${this.id}" (class ${staticContext.name}). ` +
+                    `Check that addModule("<id>", ${staticContext.name}) uses the same id as include.json. ` +
+                    `Known module ids: ${Object.keys(MODULES).join(", ")}`;
             }
             modRef.instance = this;
 

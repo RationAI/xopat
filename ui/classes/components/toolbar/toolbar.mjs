@@ -96,8 +96,8 @@ class Toolbar extends BaseComponent {
         USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
             {
                 id: this.id,
-                icon: "ph-gear",
-                title: this.id, // todo name!!!!
+                icon: this._embeddedIcon || undefined,
+                title: this._embeddedTitle || this.id,
                 visibilityManager: this.visibility
             }
         );

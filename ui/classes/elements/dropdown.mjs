@@ -453,8 +453,10 @@ class Dropdown extends BaseSelectableComponent {
             if (!selected) checkIcon.classList.add("invisible");
 
             leftIconSlot = div({class: "w-5 text-center text-primary"}, checkIcon);
-        } else {
+        } else if (item.icon) {
             leftIconSlot = this._renderIcon(item.icon);
+        } else {
+            leftIconSlot = null;
         }
 
         const labelBlock = div({ class: "flex-1 min-w-0" },

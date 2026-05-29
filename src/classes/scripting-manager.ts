@@ -413,8 +413,27 @@ async function dispatchWorkerApiCall<TNamespaces extends ScriptApiNamespaces>(
         context.terminateWorker(workerId);
     }, manager.apiTimeout);
 
-    if (nsConfig && ((nsConfig as Record<string, unknown>)[method] || nsConfig["__self__"])) {
-        const action = manager.viewerActions[`${namespace}:${method}`] || manager.viewerActions[method];
+    // Cross-namespace bypass guard:
+    //  - Schema entries set by ingestApi/registerNamespace are booleans
+    //    (true = consented, false = revoked). Method names that aren't on
+    //    the namespace appear as `undefined`. Meta keys (`_docs`, `params`,
+    //    …) are objects. We require the lookup to land on a boolean → the
+    //    method is genuinely declared for *this* namespace.
+    //  - `__self__: true` is a blanket namespace consent; it grants every
+    //    real method of the namespace, but it must not bypass the existence
+    //    check (the old code let `viewer.setActiveViewer` through because
+    //    the bare action was registered globally).
+    //  - Action lookup is fully-qualified only — no bare-name fallback —
+    //    so a worker can't reach `application.setActiveViewer` from the
+    //    `viewer` namespace by guessing the bare method name.
+    const methodSchema = nsConfig
+        ? (nsConfig as Record<string, unknown>)[method]
+        : undefined;
+    const isRealMethod = methodSchema === true || methodSchema === false;
+    const consented = methodSchema === true
+        || (isRealMethod && nsConfig?.["__self__"] === true);
+    if (consented) {
+        const action = manager.viewerActions[`${namespace}:${method}`];
         if (typeof action === "function") {
             try {
                 const hostAction = action as ContextAwareHostAction;
@@ -991,8 +1010,10 @@ export class ScriptingManager<
                     { __scriptingContextAware: true }
                 ) as ContextAwareHostAction;
 
+                // Fully-qualified key only. A bare `viewerActions[name]`
+                // alias woud let worker guess the bare name — see the cross-namespace ACL
+                // guard in dispatchWorkerApiCall.
                 this.viewerActions[`${ns}:${name}`] = boundFn;
-                this.viewerActions[name] ??= boundFn;
 
                 const funcStr = (apiInstance as any)[name].toString();
                 const docMatch = funcStr.match(/\/\*\*([\s\S]*?)\*\//);
