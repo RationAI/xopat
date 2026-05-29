@@ -96,11 +96,15 @@ class InMemoryChatSessionStore implements ChatSessionStore {
     async listSessions(args?: { providerId?: string; userId?: string | null }): Promise<ChatSession[]> {
         let items = Array.from(this.sessions.values());
         if (args?.providerId) items = items.filter((s) => s.providerId === args.providerId);
-        if (args?.userId) {
-            items = items.filter((s) => {
-                const owner = (s.metadata?.userId ?? null) as string | null;
-                return owner === null || owner === args.userId;
-            });
+        // ACL: when the caller supplies `userId` (including explicit null), we
+        // match the owner *exactly*. The old `owner === null || owner === id`
+        // shortcut leaked anon-owned sessions to every signed-in user and the
+        // omitted-filter branch leaked every session to anon callers — that
+        // was the original cross-user disclosure bug. `undefined` still means
+        // "no ACL filter" so server-internal callers can opt out explicitly.
+        if (args && "userId" in args) {
+            const wanted = args.userId ?? null;
+            items = items.filter((s) => ((s.metadata?.userId ?? null) as string | null) === wanted);
         }
         return items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     }
@@ -344,11 +348,11 @@ class ChatServerRegistry {
     async listProviderInstances(args?: { userId?: string | null; typeId?: string | null }): Promise<ChatProviderClientRegistration[]> {
         let items = Array.from(this.providerInstances.values());
         if (args?.typeId) items = items.filter((p) => p.typeId === args.typeId);
-        if (args?.userId) {
-            items = items.filter((p) => {
-                const owner = (p.metadata?.ownerUserId ?? null) as string | null;
-                return owner === null || owner === args.userId;
-            });
+        // ACL: same shape as listSessions — explicit `userId` (incl. null)
+        // means exact-match on the stored owner. `undefined` means no filter.
+        if (args && "userId" in args) {
+            const wanted = args.userId ?? null;
+            items = items.filter((p) => ((p.metadata?.ownerUserId ?? null) as string | null) === wanted);
         }
         return items
             .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
