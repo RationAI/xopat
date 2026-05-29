@@ -6,21 +6,25 @@ type Params={delay:number;duration:number;transition:number};
 type AnnObj={presenterSids?:string[];visible?:boolean;dirty?:boolean;canvas?:AnnCanvas;set(v:Record<string,unknown>):void;toObject(k?:string):Record<string,unknown>};
 type AnnCanvas={forEachObject(cb:(o:AnnObj)=>void):void;renderAll():void};
 type AnnWrap={canvas?:AnnCanvas;loadObjects(input:{objects:Record<string,unknown>[]}):Promise<void>};
-type AnnModule={forceExportsProp?:string;fabric?:AnnWrap|{canvas?:AnnCanvas};wrapper?:AnnWrap;canvas?:AnnCanvas;fabricCanvas?:AnnCanvas;initPostIO?():Promise<unknown>;getFabric?(viewer:OpenSeadragon.Viewer):AnnWrap|undefined;trimExportJSON?(data:Record<string,unknown>[],key?:string):unknown;addFabricHandler(event:string,handler:(e:any)=>void):void;enableAnnotations(v:boolean):void};
+type AnnModule={forceExportsProp?:string;fabric?:AnnWrap|{canvas?:AnnCanvas};wrapper?:AnnWrap;canvas?:AnnCanvas;fabricCanvas?:AnnCanvas;getFabric?(viewer:OpenSeadragon.Viewer):AnnWrap|undefined;trimExportJSON?(data:Record<string,unknown>[],key?:string):unknown;addFabricHandler(event:string,handler:(e:any)=>void):void;enableAnnotations(v:boolean):void};
 type Viewer=OpenSeadragon.Viewer&{uniqueId:UniqueViewerId;tools?:RecorderViewerTools};
 type RendererWithVisualization=OpenSeadragon.EventSource&{exportVisualization?:()=>RecorderVisualizationSnapshot;getVisualizationSnapshot?:()=>RecorderVisualizationSnapshot;};
 type ViewerContextMeta={viewer?:Viewer;index:number;uniqueId?:string;title?:string;label?:string;fileName?:string};
 type StepNode=(HTMLCanvasElement|HTMLSpanElement)&{dataset:DOMStringMap};
-type NavSession={viewer:Viewer;viewerId:UniqueViewerId;startedAt:number;samples:RecorderNavigationSample[];visualizationSamples:RecorderVisualizationTimedSample[];sampleHandler:()=>void;visualizationHandler?:()=>void;rafPending:boolean;lastSignature:string|null;lastVisualizationSignature:string|null};
+type NavSession={viewer:Viewer;viewerId:UniqueViewerId;startedAt:number;samples:RecorderNavigationSample[];visualizationSamples:RecorderVisualizationTimedSample[];visualizationHandler?:()=>void;rafId:number;lastVisualizationSignature:string|null};
 const DELAY_PX_PER_SECOND=2;
 const DURATION_PX_PER_SECOND=4;
 const MIN_DURATION_WIDTH=6;
+const SMOOTH_POINT_EPS=0.0005;
+const SMOOTH_ZOOM_REL_EPS=0.005;
+const SMOOTH_ROT_EPS=0.25;
 
 class RecorderPlugin extends XOpatPlugin{
     private readonly _toolsMenuId="presenter-tools-menu";
     private readonly _capture:Params={delay:2,duration:1.4,transition:6.5};
     private readonly playOnEnter:number;
     private captureAnnotations=true;
+    private smoothPath=false;
     private annotations:AnnModule|null=null;
     private navSession:NavSession|null=null;
     private annotationRefs:Record<string,AnnObj[]>={};
@@ -36,7 +40,8 @@ class RecorderPlugin extends XOpatPlugin{
     private measureDuration=0;
     recorder!:RecorderModule; track!:HTMLDivElement; recordPathButton!:HTMLButtonElement; playButton!:HTMLButtonElement; defaultsButton!:HTMLButtonElement;
 
-    constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1;}
+
+    constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1; this.smoothPath=!!this.getOption("smoothPath",false);}
 
     pluginReady():void{
         this.recorder=OpenSeadragon.Recorder.instance();
@@ -121,14 +126,21 @@ class RecorderPlugin extends XOpatPlugin{
         if(this.isPlaying) return;
         const viewer=this._getActiveViewer(); if(!viewer) return void Dialogs.show("No active viewer is available for path recording.",2500,Dialogs.MSG_WARN);
         const renderer=this._getRenderer(viewer);
-        const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:performance.now(),samples:[],visualizationSamples:[],rafPending:false,lastSignature:null,lastVisualizationSignature:null,sampleHandler:()=>{if(s.rafPending) return; s.rafPending=true; window.requestAnimationFrame(()=>{s.rafPending=false; this._captureNavigationSample(s);});}};
+        const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:performance.now(),samples:[],visualizationSamples:[],rafId:0,lastVisualizationSignature:null};
         if(renderer&&this.recorder.capturesVisualization){
             s.visualizationHandler=()=>this._captureNavigationVisualizationSample(s);
         }
-        this.navSession=s; this._captureNavigationSample(s);
-        viewer.addHandler("pan",s.sampleHandler);
-        viewer.addHandler("zoom",s.sampleHandler);
-        viewer.addHandler("animation",s.sampleHandler);
+        this.navSession=s;
+        // Continuous rAF sampling: every frame is recorded so playback timing
+        // matches wall clock 1:1, including idle holds. Event-driven capture
+        // dropped frames during pauses, smearing motion across silent gaps.
+        const tick=()=>{
+            if(this.navSession!==s) return;
+            this._captureNavigationSample(s);
+            s.rafId=window.requestAnimationFrame(tick);
+        };
+        this._captureNavigationSample(s);
+        s.rafId=window.requestAnimationFrame(tick);
         if(renderer&&s.visualizationHandler) renderer.addHandler("visualization-change",s.visualizationHandler);
         this._syncRecordPathButton();
     }
@@ -136,9 +148,7 @@ class RecorderPlugin extends XOpatPlugin{
     private stopNavigationRecording(save:boolean):void{
         const s=this.navSession; if(!s) return;
         const renderer=this._getRenderer(s.viewer);
-        s.viewer.removeHandler("pan",s.sampleHandler);
-        s.viewer.removeHandler("zoom",s.sampleHandler);
-        s.viewer.removeHandler("animation",s.sampleHandler);
+        if(s.rafId) window.cancelAnimationFrame(s.rafId);
         if(renderer&&s.visualizationHandler) renderer.removeHandler("visualization-change",s.visualizationHandler);
         this._captureNavigationSample(s); this.navSession=null; this._syncRecordPathButton();
         if(!save) return;
@@ -149,8 +159,37 @@ class RecorderPlugin extends XOpatPlugin{
     private _captureNavigationSample(s:NavSession):void{
         const center=s.viewer.viewport.getCenter(), zoom=s.viewer.viewport.getZoom(), bounds=s.viewer.viewport.getBounds(), rotation=s.viewer.viewport.getRotation();
         const sample:RecorderNavigationSample={at:performance.now()-s.startedAt,rotation,point:new OpenSeadragon.Point(center.x,center.y),zoomLevel:zoom,bounds:new OpenSeadragon.Rect(bounds.x,bounds.y,bounds.width,bounds.height)};
-        const sig=`${sample.point?.x.toFixed(5)}:${sample.point?.y.toFixed(5)}:${zoom.toFixed(5)}:${rotation.toFixed(3)}:${sample.bounds?.width.toFixed(5)}:${sample.bounds?.height.toFixed(5)}`;
-        if(sig===s.lastSignature) return; s.lastSignature=sig; s.samples.push(sample);
+        // Smooth mode: if the new sample continues the linear trajectory of the
+        // previous two within tolerance, replace the previous one instead of
+        // appending. Effectively a streaming line-fit: holds collapse to two
+        // samples, constant pans/zooms to two, inertia decays to a few.
+        if(this.smoothPath&&s.samples.length>=2&&this._continuesLinearTrend(s.samples[s.samples.length-2],s.samples[s.samples.length-1],sample)){
+            s.samples[s.samples.length-1]=sample;
+            return;
+        }
+        s.samples.push(sample);
+    }
+
+    private _continuesLinearTrend(a:RecorderNavigationSample,b:RecorderNavigationSample,c:RecorderNavigationSample):boolean{
+        const dt1=b.at-a.at, dt2=c.at-b.at;
+        if(dt1<=0||dt2<=0) return false;
+        const scale=dt2/dt1;
+        if(a.point&&b.point&&c.point){
+            const predX=b.point.x+(b.point.x-a.point.x)*scale;
+            const predY=b.point.y+(b.point.y-a.point.y)*scale;
+            if(Math.abs(predX-c.point.x)>SMOOTH_POINT_EPS) return false;
+            if(Math.abs(predY-c.point.y)>SMOOTH_POINT_EPS) return false;
+        }
+        if(typeof a.zoomLevel==="number"&&typeof b.zoomLevel==="number"&&typeof c.zoomLevel==="number"){
+            const predZ=b.zoomLevel+(b.zoomLevel-a.zoomLevel)*scale;
+            const tol=Math.max(Math.abs(b.zoomLevel),1e-6)*SMOOTH_ZOOM_REL_EPS;
+            if(Math.abs(predZ-c.zoomLevel)>tol) return false;
+        }
+        if(typeof a.rotation==="number"&&typeof b.rotation==="number"&&typeof c.rotation==="number"){
+            const predR=b.rotation+(b.rotation-a.rotation)*scale;
+            if(Math.abs(predR-c.rotation)>SMOOTH_ROT_EPS) return false;
+        }
+        return true;
     }
 
     private _getRenderer(viewer:Viewer):RendererWithVisualization|undefined{
@@ -246,7 +285,8 @@ class RecorderPlugin extends XOpatPlugin{
         const durationField=createNumberField("Default duration",this._capture.duration,"0.1","0.1");
         const visualizationToggle=createToggle("Capture visualization",!!this.recorder.capturesVisualization);
         const annotationsToggle=createToggle("Capture annotations",this.captureAnnotations);
-        body.append(delayField.wrapper,durationField.wrapper,visualizationToggle.wrapper,annotationsToggle.wrapper);
+        const smoothToggle=createToggle("Smooth path (fewer keyframes, less precise)",this.smoothPath);
+        body.append(delayField.wrapper,durationField.wrapper,visualizationToggle.wrapper,annotationsToggle.wrapper,smoothToggle.wrapper);
 
         let modal:InstanceType<typeof UI.Modal>;
         modal=new UI.Modal({
@@ -272,6 +312,8 @@ class RecorderPlugin extends XOpatPlugin{
                     if(Number.isFinite(duration)&&duration>0) this._capture.duration=duration;
                     this.recorder.setCapturesVisualization(visualizationToggle.field.checked);
                     this.captureAnnotations=annotationsToggle.field.checked;
+                    this.smoothPath=smoothToggle.field.checked;
+                    this.setOption("smoothPath",this.smoothPath);
                     if(this.selectedIndex===null) this._syncInputs();
                     modal.close();
                 };
@@ -360,22 +402,18 @@ class RecorderPlugin extends XOpatPlugin{
         child.remove();
         this.clearSelection();
     }
-    export():void{UTILITIES.downloadAsFile("visualization-recording.json",JSON.stringify({recorder:this.recorder.exportJSON(false),annotations:this.exportAnnotations(false)}));}
-
-    exportAnnotations(serialize=true):string|Record<string,unknown>{
-        if(!this.annotations?.trimExportJSON) return serialize?"{}":{};
-        const result:Record<string,unknown>={}; for(const stepId of Object.keys(this.annotationRefs)){const exported=this.annotationRefs[stepId].map(o=>o.toObject("presenterSids")); result[stepId]=this.annotations.trimExportJSON(exported,"presenterSids");}
-        return serialize?JSON.stringify(result):result;
-    }
-
-    importAnnotations(content:Record<string,unknown>|null|undefined):boolean{
-        if(!content||!Object.keys(content).length) return false;
-        if(!this.annotations){UTILITIES.loadModules(()=>{this._handleInitAnnotationsModule(); void this._importAnnotations(content);},"annotations"); return true;}
-        void this._importAnnotations(content); return true;
-    }
-
-    importFromFile(event:Event):void{
-        UTILITIES.readFileUploadEvent(event).then((data:string)=>{const parsed=JSON.parse(data) as {recorder?:RecorderSnapshotStep[];snapshots?:RecorderSnapshotStep[];annotations?:Record<string,unknown>}; this.recorder.importJSON(parsed.recorder||parsed.snapshots||[]); if(!this.importAnnotations(parsed.annotations)) Dialogs.show("Loaded.",1500,Dialogs.MSG_INFO);}).catch((error:unknown)=>{console.error(error); Dialogs.show("Failed to load the file.",2500,Dialogs.MSG_ERR);});
+    /**
+     * Trigger a bundle export through the IO pipeline. This fans the
+     * recorder's `bundle-export` capability to whatever sinks the admin
+     * has bound (e.g. github + file-download fallback). Annotations are
+     * exported by the annotations module independently — `presenterSids`
+     * already links each annotation to its recorder step(s), so a separate
+     * fused file is no longer needed.
+     */
+    async export():Promise<void>{
+        const io=(window as any).IO_PIPELINE;
+        if(!io?.flushBundleExport){console.error("[recorder] IO pipeline not available."); return;}
+        await io.flushBundleExport({ownerUid:"recorder"});
     }
 
     private _highlight(step:RecorderSnapshotStep|undefined,index:number):void{
@@ -555,22 +593,13 @@ class RecorderPlugin extends XOpatPlugin{
     private _handleInitAnnotationsModule():void{
         try{
             const ctor=(window as Window&{OSDAnnotations?:{instance():AnnModule}}).OSDAnnotations; if(!ctor||this.annotations) return;
-            this.annotations=ctor.instance(); this.annotations.forceExportsProp="presenterSids"; void this.annotations.initPostIO?.();
+            this.annotations=ctor.instance(); this.annotations.forceExportsProp="presenterSids";
             if(!this._bindAnnotations()){let retries=6; const retry=()=>{if(this._bindAnnotations()||--retries<=0) return; window.setTimeout(retry,150);}; window.setTimeout(retry,150);}
             const add=(o:AnnObj)=>o.presenterSids?.forEach(id=>this._recordAnnotationRef(o,id));
             this.annotations.addFabricHandler("annotation-create",(e)=>add(e.object));
             this.annotations.addFabricHandler("annotation-delete",(e)=>this._removeAnnotationRef(e.object));
             this.annotations.addFabricHandler("annotation-replace",(e)=>{this._removeAnnotationRef(e.previous); e.next.presenterSids=e.previous.presenterSids; add(e.next);});
         }catch(error){console.error(error);}
-    }
-
-    private async _importAnnotations(content:Record<string,unknown>):Promise<void>{
-        try{
-            const data=(typeof content==="string"?JSON.parse(content):content) as Record<string,Record<string,unknown>[]>;
-            for(const [stepId,objects] of Object.entries(data)){if(!Array.isArray(objects)) continue; if((objects[0] as {presenterSids?:string[]}|undefined)?.presenterSids) break; objects.forEach(object=>{const sids=Array.isArray((object as {presenterSids?:string[]}).presenterSids)?(object as {presenterSids?:string[]}).presenterSids!:[]; if(!sids.includes(stepId)) sids.push(stepId); (object as {presenterSids?:string[]}).presenterSids=sids;});}
-            const wrapper=this._getAnnotationsWrapper(); if(!wrapper?.loadObjects) throw new Error("Annotations wrapper is not ready.");
-            await wrapper.loadObjects({objects:Object.values(data).flat(1)}); this._bindAnnotations(); Dialogs.show("Loaded.",1500,Dialogs.MSG_INFO);
-        }catch(_error){Dialogs.show("Load finished. Failed to setup annotations: these will be unavailable.",3000,Dialogs.MSG_WARN);}
     }
 
     private _initEvents():void{

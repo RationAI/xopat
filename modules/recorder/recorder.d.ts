@@ -53,6 +53,19 @@ declare global {
         renderer?: RecorderVisualizationSnapshot;
     }
 
+    /**
+     * Snapshot of the annotations a step "owns" — used by the recorder
+     * plugin (UI) to highlight / restore visible annotations when entering
+     * the step. Stored on the step itself so it round-trips with the
+     * timeline through the IO pipeline (no side-channel maps).
+     */
+    interface RecorderAnnotationRef {
+        /** Fabric `toObject()` payload for one annotation. */
+        object: any;
+        /** Optional viewer hint when the ref originated on a specific viewer. */
+        viewerId?: UniqueViewerId;
+    }
+
     interface RecorderSnapshotStep {
         id: string;
         viewerId: UniqueViewerId;
@@ -71,6 +84,12 @@ declare global {
         visualization?: RecorderVisualizationStateSnapshot;
         annotationFilters?: RecorderAnnotationFilter[];
         screenShot?: unknown;
+        /**
+         * Annotations associated with this step. Migrated from the recorder
+         * plugin's side-channel `annotationRefs: Record<stepId, AnnObj[]>`
+         * map so the timeline export is self-contained.
+         */
+        annotationRefs?: RecorderAnnotationRef[];
     }
 
     interface RecorderDelayHandle {

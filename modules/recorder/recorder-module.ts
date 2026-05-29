@@ -37,16 +37,22 @@ function getViewerContextMeta(viewer: RecorderManagedViewer | undefined): { key?
 
 class Recorder extends XOpatModuleSingleton implements RecorderModule {
     private readonly _snapshotsState: RecorderState;
+    /** CRUD façade for per-step sync; inert until an admin binds `crud:step`. */
+    private stepResource?: any;
+    /** Set during bundle hydration so per-step CRUD doesn't echo back upstream. */
+    private _suppressDispatch = false;
 
     constructor() {
         super();
-        void this.initPostIO();
 
         OpenSeadragon.Recorder.__exportViewer = async (viewerId: UniqueViewerId) => {
             try {
-                const viewer = VIEWER_MANAGER.getViewer(viewerId);
-                const data = await this.exportViewerData(viewer, "", viewerId);
-                UTILITIES.downloadAsFile(`recorder-${viewerId}.json`, data);
+                // Per-viewer slice export. The full timeline goes through
+                // `IO_PIPELINE.flushBundleExport({ ownerUid: "recorder" })`
+                // (driven by the user-facing Export action); this helper
+                // only handles the legacy single-viewer download.
+                const slice = this._snapshotsState.steps.filter(s => s.viewerId === viewerId);
+                UTILITIES.downloadAsFile(`recorder-${viewerId}.json`, JSON.stringify(slice));
             } catch (error) {
                 console.error(error);
                 Dialogs.show("Failed to export recorder state.", 2500, Dialogs.MSG_ERR);
@@ -65,14 +71,57 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             playbackAnnotationFilters: null,
             playbackVisualizationSnapshots: {},
         };
+
+        this._initIOPipeline().catch(e => console.error("[recorder] IO pipeline init failed:", e));
     }
 
-    async exportData(_key: string): Promise<string> {
-        return JSON.stringify(this._snapshotsState.steps);
-    }
+    /**
+     * Generic IO pipeline integration. The full timeline is exposed as a
+     * single global bundle (the steps array spans all viewers, with
+     * `viewerId` / `viewerContextKey` on each step). Per-step CRUD is
+     * declared but inert until an admin binds `crud:step` to a sink. See
+     * src/IO_PIPELINE.md.
+     */
+    private async _initIOPipeline(): Promise<void> {
+        await this.initIO({
+            bundleScope: "global",
+            exportBundle: async (_ctx) => JSON.stringify(this._snapshotsState.steps),
+            importBundle: async (_ctx, data) => {
+                if (data === undefined || data === null) return;
+                try {
+                    await APPLICATION_CONTEXT.history.withoutRecording(() => {
+                        this._importJSON(data as any);
+                    });
+                } catch (e: any) {
+                    const reason = e?.message ?? String(e);
+                    console.warn("[recorder] importBundle failed:", e);
+                    const wrapped = new Error(`Failed to load recorder timeline: ${reason}`);
+                    (wrapped as any).userMessage = `Could not load recorder timeline. ${reason}`;
+                    throw wrapped;
+                }
+            },
+        });
 
-    async importData(_key: string, data: string): Promise<void> {
-        this._importJSON(data);
+        const requireStep = (step: any) => {
+            if (!step || typeof step !== "object") {
+                return { ok: false, refused: true, reason: "step must be an object" };
+            }
+            if (!step.id) {
+                return { ok: false, refused: true, reason: "missing step id" };
+            }
+            return { ok: true };
+        };
+
+        this.stepResource = (this as any).defineResource({
+            name: "step",
+            identityOf: (step: any) => String(step?.id ?? ""),
+            coalesce: true,
+            merge: (prev: any, next: any) => ({ ...(prev || {}), ...(next || {}) }),
+            persistOutbox: true,
+            persistMaxEntries: 2000,
+            persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+            validate: requireStep,
+        });
     }
 
     create(
@@ -111,7 +160,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             screenShot: state.captureScreen ? viewer.tools?.screenshot(true, { x: 120, y: 120 }) : undefined,
         };
 
-        this._add(step, atIndex);
+        this._addUserStep(step, atIndex);
         return step;
     }
 
@@ -163,7 +212,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
             viewerTitle: viewerContext.title,
         };
 
-        this._add(step, atIndex);
+        this._addUserStep(step, atIndex);
         return step;
     }
 
@@ -175,9 +224,43 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         const step = state.steps[resolvedIndex];
         if (!step) return;
 
-        state.steps.splice(resolvedIndex, 1);
+        // History-wrapped removal. The forward fn does the splice + emits
+        // events + dispatches a CRUD delete (when bound). The backward fn
+        // re-inserts at the original index and dispatches a CRUD create.
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeAt(resolvedIndex)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(step, resolvedIndex)),
+            { name: "Recorder: remove step", type: "recorder.removeStep" } as any,
+        );
+    }
+
+    /**
+     * History-wrapped append used by user-facing `create`/`createNavigation`.
+     * The forward fn inserts and dispatches CRUD; the backward fn removes
+     * the step by id (location may have shifted since add).
+     */
+    private _addUserStep(step: RecorderSnapshotStep, atIndex?: number): void {
+        APPLICATION_CONTEXT.history.push(
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._add(step, atIndex)),
+            () => APPLICATION_CONTEXT.history.withoutRecording(() => this._removeStepById(step.id)),
+            { name: "Recorder: add step", type: "recorder.addStep" } as any,
+        );
+    }
+
+    /** Splice + raise + dispatch CRUD delete. Suppression-aware. */
+    private _removeAt(index: number): void {
+        const state = this._snapshotsState;
+        const step = state.steps[index];
+        if (!step) return;
+        state.steps.splice(index, 1);
         state.idx = state.steps.length ? state.idx % state.steps.length : 0;
-        this.raiseEvent("remove", { viewerId: step.viewerId, index: resolvedIndex, step });
+        this.raiseEvent("remove", { viewerId: step.viewerId, index, step });
+        if (!this._suppressDispatch) this.stepResource?.delete(step.id);
+    }
+
+    private _removeStepById(id: string): void {
+        const idx = this._snapshotsState.steps.findIndex(s => s.id === id);
+        if (idx >= 0) this._removeAt(idx);
     }
 
     getSteps(): RecorderSnapshotStep[] {
@@ -347,6 +430,10 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
     }
 
     private _importJSON(json: string | RecorderSnapshotStep[]): void {
+        // Hydration is bulk-replace: don't echo each step back through the
+        // CRUD outbox or it would feedback-loop into bound sinks.
+        this._suppressDispatch = true;
+        try {
         const state = this._snapshotsState;
         const parsed = typeof json === "string" ? JSON.parse(json) : json;
 
@@ -399,6 +486,9 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         }
 
         state.idx = 0;
+        } finally {
+            this._suppressDispatch = false;
+        }
     }
 
     private _resolveViewer(viewerId?: UniqueViewerId): RecorderManagedViewer | undefined {
@@ -737,6 +827,7 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
         }
 
         this.raiseEvent("create", { viewerId: step.viewerId, index: resolvedIndex, step });
+        if (!this._suppressDispatch) this.stepResource?.create(step);
     }
 
     private _jumpAt(index: number, fromIndex?: number): RecorderSnapshotStep | undefined {
@@ -1242,4 +1333,4 @@ class Recorder extends XOpatModuleSingleton implements RecorderModule {
 }
 
 window.OpenSeadragon.Recorder = Recorder as typeof OpenSeadragon.Recorder;
-addModule("recorder-module", Recorder);
+addModule("recorder", Recorder);
