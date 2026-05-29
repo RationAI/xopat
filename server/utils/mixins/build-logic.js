@@ -1,26 +1,26 @@
 "use strict";
 
-const { spawn } = require("child_process");
+const crossSpawn = require("cross-spawn");
 const path = require("path");
 const fs = require("fs");
 const glob = require("glob");
 
-// Windows npm/npx/yarn/pnpm are .cmd shims; specifying the extension lets
-// Node spawn them directly without invoking cmd.exe. Avoiding shell:true is
-// what keeps argv quoting safe — see `spawnAsync` below.
-const WIN_CMD_SHIM_EXECUTABLES = /^(npm|npx|node|yarn|pnpm|tailwindcss)$/i;
-
+// We route every child process through `cross-spawn` instead of the bare
+// `child_process.spawn`. Two reasons:
+//   1) Security — the original code flattened cmd + args into a single
+//      shell string and wrapped each arg in `"..."`, which allowed
+//      embedded double-quotes to break out of cmd.exe quoting and
+//      execute arbitrary commands. `cross-spawn` does the correct
+//      libuv-style escaping per argument.
+//   2) Compatibility — Node 20+ refuses to spawn `.cmd` / `.bat` shims
+//      (npm, npx, tailwindcss, …) without `shell: true`, throwing
+//      `EINVAL`. `cross-spawn` invokes `cmd.exe /d /s /c` with the
+//      escaped command line itself, so we don't pass `shell: true`
+//      and don't lose argv quoting safety either.
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-        const isWin = process.platform === "win32";
-        const executable = isWin && WIN_CMD_SHIM_EXECUTABLES.test(cmd)
-            ? `${cmd}.cmd`
-            : cmd;
-
-        const child = spawn(executable, args, {
+        const child = crossSpawn(cmd, args, {
             stdio: "inherit",
-            shell: false,
-            windowsVerbatimArguments: false,
             ...opts,
         });
 
