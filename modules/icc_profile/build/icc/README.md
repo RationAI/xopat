@@ -29,7 +29,7 @@
 - build using emscripten code sdk (emsdk)
   - ````bash
     emcc icc_profile.c [path to lcms2]/src/.libs/liblcms2.a \
-        -I lcms2-2.15/include \
+        -I [path to lcms2]/include \
         -O3 \
         -s MODULARIZE=1 \
         -s EXPORT_ES6=1 \
