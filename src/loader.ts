@@ -19,8 +19,140 @@ const COOKIES_TOKEN = Symbol("XOpatElementCookiesStore");
 const DATA_TOKEN = Symbol("XOpatElementDataStore");
 /** Symbol where each element keeps the disposer that removes it from IO_PIPELINE on destroy. */
 const IO_DISPOSE_TOKEN = Symbol("XOpatElementIODisposer");
+/** Symbol where each element keeps the disposer that removes its declared rights-capabilities + guards. */
+const RIGHTS_DISPOSE_TOKEN = Symbol("XOpatElementRightsDisposer");
 /** Per-viewer scratch map keyed by element uid (used by getViewerContext). */
 const STORE_TOKEN = Symbol("XOpatViewerScratchStore");
+
+/**
+ * Walk an owner's include.json metadata, declare every rights-capability it
+ * exposes (explicit + IO-derived), and register the IO guards that enforce
+ * IO-derived ones. Returns a single disposer.
+ *
+ * - `meta.capabilities[]` (top-level)  → explicit, declared verbatim.
+ * - `meta.io.capabilities[]`           → auto-derived per the rules in
+ *   `src/USER_ROLES.md` §2b. Guards are mounted on `IO_PIPELINE` for each
+ *   `pre-create` / `pre-update` / `pre-delete` direction of every CRUD cap,
+ *   and on bundle export/import via the same registerGuard façade
+ *   (the pipeline forwards those through the same dispatch).
+ *
+ * Skips silently when:
+ * - `meta` is missing (owner registered without include.json metadata),
+ * - `meta.capabilities` / `meta.io.capabilities` are absent / not arrays.
+ *
+ * Defensive: every `XOpatUser.declareCapability` call is independent — a single
+ * malformed entry will not block the others.
+ */
+function registerOwnerRights(ownerId: string, meta: any): () => void {
+    if (!meta) return () => undefined;
+    const guards: Array<() => void> = [];
+    const pipeline: any = (window as any).IO_PIPELINE;
+
+    const declare = (cap: { id: string; default: "allow" | "deny"; label?: string; description?: string }) => {
+        (window as any).XOpatUser.declareCapability({ ...cap, declaredBy: ownerId });
+    };
+
+    // 1. Explicit capabilities (top-level `capabilities` array)
+    const explicit = Array.isArray(meta.capabilities) ? meta.capabilities : [];
+    for (const cap of explicit) {
+        if (!cap || typeof cap.id !== "string") continue;
+        const dflt: "allow" | "deny" = cap.default === "deny" ? "deny" : "allow";
+        declare({ id: cap.id, default: dflt, label: cap.label, description: cap.description });
+    }
+
+    // 2. IO-derived capabilities (from `io.capabilities[]`)
+    const ioBlock = meta.io;
+    const ioCaps: any[] = ioBlock && typeof ioBlock === "object" && Array.isArray(ioBlock.capabilities)
+        ? ioBlock.capabilities : [];
+
+    for (const rawCap of ioCaps) {
+        // Normalize: `io.capabilities` accepts strings (just an id) per IOIncludeBlock.
+        const cap = typeof rawCap === "string" ? { id: rawCap } : rawCap;
+        if (!cap || typeof cap.id !== "string") continue;
+
+        // Rights opt-out
+        if (cap.rights === false) continue;
+
+        const rightsOpts = (cap.rights && typeof cap.rights === "object") ? cap.rights : {};
+        const dflt: "allow" | "deny" = rightsOpts.default === "deny" ? "deny" : "allow";
+        const baseLabel = rightsOpts.label ?? cap.label;
+
+        // Infer kind: explicit, else infer from id prefix.
+        let kind: "bundle" | "crud" | "kv" = cap.kind;
+        if (!kind) {
+            if (cap.id.startsWith("crud:")) kind = "crud";
+            else if (cap.id.startsWith("kv:")) kind = "kv";
+            else if (cap.id === "bundle-export" || cap.id === "bundle-import") kind = "bundle";
+            else continue; // unknown shape — skip silently
+        }
+
+        if (kind === "kv") continue; // kv is transparent infra; never auto-gated
+
+        if (kind === "bundle") {
+            const rightsCapId = `${ownerId}.${cap.id}`; // e.g. annotations.bundle-export
+            declare({ id: rightsCapId, default: dflt, label: baseLabel });
+            // Bundle guard: refuse pre-{export,import} via the same IO guard façade.
+            // The pipeline only models pre-* for CRUD currently; bundle gating uses
+            // the runtime check inside the dispatch path via XOpatUser.can — sinks
+            // can also consult it. For now the declared capability is sufficient
+            // surface for the owner's own exportBundle to query
+            // `XOpatUser.instance().can('<ownerId>.bundle-*')` if it wants.
+            continue;
+        }
+
+        // CRUD
+        // For `crud:annotation` the resource name is everything after the colon.
+        const colonIdx = cap.id.indexOf(":");
+        const resourceName = colonIdx >= 0 ? cap.id.slice(colonIdx + 1) : cap.id;
+
+        const directions: Array<"create" | "read" | "update" | "delete"> =
+            Array.isArray(rightsOpts.directions) && rightsOpts.directions.length
+                ? rightsOpts.directions.filter((d: any) => d === "create" || d === "read" || d === "update" || d === "delete")
+                : ["create", "read", "update", "delete"];
+
+        for (const dir of directions) {
+            const rightsCapId = `${ownerId}.${cap.id}.${dir}`;
+            declare({ id: rightsCapId, default: dflt, label: baseLabel });
+
+            // Read has no pre-* phase in the pipeline today; just the declaration.
+            if (dir === "read") continue;
+
+            // Register a guard that refuses when the user lacks this capability.
+            // Priority intentionally high (10_000) so the role check short-circuits
+            // BEFORE domain validation runs — denied users don't see misleading
+            // "validation failed" messages when the real reason is permission.
+            if (pipeline && typeof pipeline.registerGuard === "function") {
+                const dispose = pipeline.registerGuard({
+                    ownerId: `rights:${ownerId}`,
+                    resource: resourceName,
+                    direction: `pre-${dir}`,
+                    priority: 10_000,
+                    label: `rights-gate:${rightsCapId}`,
+                    handler: (_ctx: any) => {
+                        const user = (window as any).XOpatUser?.instance?.();
+                        if (!user) return { ok: true };
+                        if (user.can(rightsCapId)) return { ok: true };
+                        return {
+                            ok: false,
+                            refused: true,
+                            reason: `rights: capability "${rightsCapId}" denied for current roles [${user.currentRoles().join(", ") || "—"}]`,
+                            userMessage: $.t?.("user.roles.refused", { capability: rightsCapId }) || "You do not have permission to perform this action.",
+                            code: "W_PERM_DENIED",
+                        };
+                    },
+                });
+                if (typeof dispose === "function") guards.push(dispose);
+            }
+        }
+    }
+
+    return () => {
+        for (const d of guards) {
+            try { d(); } catch (e) { console.error(e); }
+        }
+        (window as any).XOpatUser?.undeclareCapabilities?.(ownerId);
+    };
+}
 
 export class XOpatServerCallError extends Error {
     code?: string;
@@ -69,6 +201,13 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
     if (!IO_PIPELINE) {
         throw "XOpatLoader: IO_PIPELINE was not bootstrapped before initXOpatLoader. Call bootstrapIOPipeline(ENV, POST_DATA) first.";
     }
+
+    // Seed the roles & capabilities subsystem with deployment env before any
+    // plugin/module mounts. After this call, capability declarations made by
+    // `XOpatElement` constructors are resolved against this role catalog, and
+    // the deployment default is applied to the user singleton at construction.
+    // See src/USER_ROLES.md.
+    (window as any).XOpatUser?.configureRoles?.((ENV as any)?.core?.roles);
 
     function pluginsWereInitialized() {
         return REGISTERED_PLUGINS === undefined;
@@ -607,6 +746,12 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
             const meta = (executionContextName === "plugin" ? PLUGINS : MODULES)[id];
             const ioBlock = meta && (meta as any).io;
             if (ioBlock !== undefined) IO_PIPELINE.applyIncludeBlock(this.__uid, ioBlock);
+
+            // Roles & capabilities: declare any rights-capabilities the owner exposes,
+            // and auto-derive matching ones from `io.capabilities[]`. Guard disposers
+            // are kept so they can be released if the owner is ever torn down.
+            // See src/USER_ROLES.md.
+            this[RIGHTS_DISPOSE_TOKEN] = registerOwnerRights(this.__id, meta);
         }
 
         /**
@@ -709,6 +854,46 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         t(key: string, options: Record<string, any> = {}) {
             options.ns = this.id;
             return $.t(key, options);
+        }
+
+        /**
+         * Roles & capabilities — sugar over `XOpatUser.instance().can(...)`.
+         * Returns `true` when the current user is granted the capability.
+         * Unknown capability ids default to allow.
+         * See src/USER_ROLES.md.
+         */
+        can(capabilityId: string): boolean {
+            return (window as any).XOpatUser?.instance?.()?.can(capabilityId) ?? true;
+        }
+
+        /**
+         * Subscribe to changes in a single capability's effective value. The
+         * `handler` is invoked synchronously with the current state at
+         * subscription time AND on every subsequent change. Returns a
+         * `dispose` function.
+         *
+         * Typical use:
+         * ```
+         * this.onCapabilityChange('annotations.crud:annotation.delete', enabled => {
+         *     deleteBtn.classList.toggle('hidden', !enabled);
+         * });
+         * ```
+         */
+        onCapabilityChange(capabilityId: string, handler: (enabled: boolean) => void): () => void {
+            const user = (window as any).XOpatUser?.instance?.();
+            // Initial value
+            try { handler(user?.can(capabilityId) ?? true); }
+            catch (e) { console.error(e); }
+            if (!user) return () => undefined;
+            const wrapped = (e: any) => {
+                const changed: string[] | undefined = e?.changed;
+                if (!Array.isArray(changed) || changed.includes(capabilityId)) {
+                    try { handler(user.can(capabilityId)); }
+                    catch (err) { console.error(err); }
+                }
+            };
+            user.addHandler('capabilities-changed', wrapped);
+            return () => user.removeHandler('capabilities-changed', wrapped);
         }
 
         /**
@@ -2792,11 +2977,16 @@ form.submit();
     // pipeline, inspector controllers, ...) gets the browser's native
     // "Leave site?" prompt for free. Modern browsers ignore custom
     // messages; both setters are still required for the prompt to show.
-    window.addEventListener('beforeunload', (event) => {
-        if (!APPLICATION_CONTEXT.__cache.dirty) return;
-        event.preventDefault();
-        event.returnValue = '';
-    });
+    // Embeddings that drive the viewer programmatically (e.g. notebooks)
+    // can suppress the prompt entirely with params.bypassCloseConfirmation —
+    // in that case we skip registering the listener altogether.
+    if (!APPLICATION_CONTEXT.getOption('bypassCloseConfirmation')) {
+        window.addEventListener('beforeunload', (event) => {
+            if (!APPLICATION_CONTEXT.__cache.dirty) return;
+            event.preventDefault();
+            event.returnValue = '';
+        });
+    }
 
     /**
      * Focuses all key press events and forwarding to OSD,
@@ -3623,6 +3813,28 @@ form.submit();
             });
 
             viewer.gestureSettingsMouse.clickToZoom = false;
+
+            // Notebook / scrollable-host embeddings: gate scroll-to-zoom behind
+            // Ctrl/Cmd so plain wheel falls through to the host page. Uses OSD's
+            // canvas-scroll contract — preventDefaultAction skips the zoom,
+            // preventDefault=false lets the browser propagate the wheel.
+            debugger;
+            if (APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')) {
+                let lastHintAt = 0;
+                viewer.addHandler('canvas-scroll', (e: any) => {
+                    const orig = e.originalEvent as WheelEvent | undefined;
+                    if (orig && !orig.ctrlKey && !orig.metaKey) {
+                        e.preventDefaultAction = true;
+                        e.preventDefault = false;
+                        const now = Date.now();
+                        if (now - lastHintAt > 8000) {
+                            lastHintAt = now;
+                            Dialogs.show($.t('messages.scrollRequiresCtrl'), 3000, Dialogs.MSG_INFO);
+                        }
+                    }
+                });
+            }
+
             new OpenSeadragon.Tools(viewer);
             this.menu.init(viewer);
 

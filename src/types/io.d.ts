@@ -60,12 +60,28 @@ type IOCapabilityKind = "bundle" | "crud" | "kv";
  *  - `kind`   `bundle` or `crud`.
  *  - `label`  optional human label for admin UIs / logs.
  *  - `schema` optional JSON Schema describing the payload shape.
+ *  - `rights` controls rights/roles auto-derivation. See src/USER_ROLES.md.
+ *             - `undefined` / `true` → derive (default allow) rights-capabilities
+ *               and auto-register IO guards that refuse on deny. For `crud` this
+ *               yields `<ownerId>.crud:<name>.create|update|delete` (and `.read`
+ *               for future use). For `bundle` it yields `<ownerId>.bundle-*`.
+ *               `kv` capabilities are NEVER auto-derived (transparent infra).
+ *             - `false` → skip rights integration entirely for this capability.
+ *             - object → fine-grained override.
  */
 interface IOCapability {
     id: string;
     kind: IOCapabilityKind;
     label?: string;
     schema?: object;
+    rights?: boolean | {
+        /** Default state of derived rights-capabilities (default `"allow"`). */
+        default?: "allow" | "deny";
+        /** For `crud`: limit derivation to these directions (default all four). */
+        directions?: Array<"create" | "read" | "update" | "delete">;
+        /** Human-facing label propagated to all derived rights-capabilities. */
+        label?: string;
+    };
 }
 
 /**

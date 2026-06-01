@@ -203,10 +203,14 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
         },
         /**
          * Read a UI visibility flag with precedence:
-         *   1. explicit `params.ui[key]` (session JSON wins over cached user pref),
+         *   1. explicit `params.ui[key]` (session JSON wins over cached user pref);
+         *      `params.ui === false` is a global override that hides every key,
+         *      `params.ui === true` falls through to lower-priority sources,
          *   2. legacy flat `params[key]` (back-compat with old session shape),
          *   3. cached AppCache value (Settings checkbox toggles persist here),
-         *   4. `defaultSetup.ui[key]` → legacy flat `defaultSetup[key]` → `true`.
+         *   4. `defaultSetup.ui[key]` (or `defaultSetup.ui === false` as a
+         *      deployment-wide hide-all default) → legacy flat
+         *      `defaultSetup[key]` → `true`.
          * The "explicit > cache" order lets a session author hard-set a boot state
          * without bypassCache; if the session leaves the key unset, the user's
          * last Settings toggle is honored.
@@ -215,8 +219,12 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             const self = this as unknown as ApplicationContext;
             const params = self.config.params as Record<string, any>;
             const defaults = self.config.defaultParams as Record<string, any>;
-            const fromParamsUi = params.ui?.[key];
-            if (fromParamsUi !== undefined && fromParamsUi !== null) return !!fromParamsUi;
+            const paramsUi = params.ui;
+            if (paramsUi === false) return false;
+            if (paramsUi && typeof paramsUi === "object") {
+                const v = paramsUi[key];
+                if (v !== undefined && v !== null) return !!v;
+            }
             const fromParamsFlat = params[key];
             if (fromParamsFlat !== undefined && fromParamsFlat !== null) return !!fromParamsFlat;
             if (self.AppCache) {
@@ -227,8 +235,12 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     return !!cached;
                 }
             }
-            const fromDefaultsUi = defaults.ui?.[key];
-            if (fromDefaultsUi !== undefined && fromDefaultsUi !== null) return !!fromDefaultsUi;
+            const defaultsUi = defaults.ui;
+            if (defaultsUi === false) return false;
+            if (defaultsUi && typeof defaultsUi === "object") {
+                const v = defaultsUi[key];
+                if (v !== undefined && v !== null) return !!v;
+            }
             const fromDefaultsFlat = defaults[key];
             if (fromDefaultsFlat !== undefined && fromDefaultsFlat !== null) return !!fromDefaultsFlat;
             return true;

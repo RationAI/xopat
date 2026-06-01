@@ -1584,7 +1584,7 @@
                 title: () => (enabled.val ? "Disable sync" : "Enable sync")
             },
             // Use a simple Link icon or text abbreviation
-            van.tags.span({ class: "text-[10px] font-bold" },
+            van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
                 () => {
                     if (busy.val) return "...";
                     if (!enabled.val) return "LINK";
@@ -1657,7 +1657,7 @@
         toggle.type = "button";
         toggle.className = "btn btn-xs border-none px-1 bg-base-content/10 hover:bg-base-content/20";
         toggle.title = "Minimize";
-        toggle.innerHTML = '<span class="text-[10px] font-bold">▾</span>';
+        toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
         header.appendChild(toggle);
 
         // 2) SYNC button.
@@ -1669,7 +1669,7 @@
         reset.type = "button";
         reset.className = "btn btn-xs text-error border-none px-1";
         reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
-        reset.innerHTML = '<span class="text-[10px] font-bold leading-none">✕</span>';
+        reset.innerHTML = '<span class="font-bold leading-none" style="font-size:10px">✕</span>';
         reset.style.display = "none";
 
         const updateResetVisibility = () => {
@@ -1738,14 +1738,16 @@
         const showLabelPlaceholder = () => {
             if (scalebar._ui?.labelEl !== labelEl) return;
             labelEl.innerHTML = "";
-            labelEl.classList.remove("bg-base-200", "cursor-zoom-in");
+            labelEl.classList.remove("cursor-zoom-in");
             labelEl.classList.add(
-                "border", "border-dashed", "border-base-content/30", "bg-transparent"
+                "border", "border-dashed", "border-base-content/30"
             );
             labelEl.style.cursor = "default";
             labelEl.style.pointerEvents = "none";
             const span = document.createElement("span");
-            span.className = "text-[9px] italic text-base-content/40 whitespace-nowrap px-1";
+            span.className = "italic text-base-content/60 whitespace-nowrap px-1";
+            span.style.fontSize = "9px";
+            span.style.lineHeight = "1";
             span.textContent = "no label";
             labelEl.appendChild(span);
             labelEl.title = "No slide label available";

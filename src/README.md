@@ -103,6 +103,7 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `activeVisualizationIndex` | number \| number[] | `0` | Initial viz index; array for multi-view. Background `goalIndex` overrides per item. |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
+| `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
 | `scaleBar` | bool | `true` | **Deprecated**, use `ui.scaleBar`. Requires microns to render. |
 | `toolBar` | bool | — | **Deprecated**, use `ui.toolBar`. |
 | `statusBar` | bool | — | **Deprecated**, use `ui.statusBar`. |
@@ -131,6 +132,10 @@ Reads go through `APPLICATION_CONTEXT.getUiOption(key)` which also honors the
 legacy flat aliases (`scaleBar` / `toolBar` / `statusBar`) and the AppCache
 of user-toggled settings — see `XOpatUiSetup` in `src/types/config.d.ts`.
 
+Shorthand: set `params.ui: false` (or `setup.ui: false` for a deployment-wide
+default) to hide every global UI component in one shot — handy for notebook
+embeddings. `params.ui: true` is equivalent to leaving the field unset.
+
 | Key | Affects |
 |---|---|
 | `scaleBar` | Per-viewer OSD scalebar overlay. Replaces legacy flat `scaleBar`. |
@@ -139,6 +144,7 @@ of user-toggled settings — see `XOpatUiSetup` in `src/types/config.d.ts`.
 | `mainMenu` | Global menu (`FullscreenMenus`). `false` boots collapsed; menu-open buttons still work. |
 | `navigator` | Per-viewer OSD navigator panel. |
 | `appBar` | Top AppBar chrome — `false` is equivalent to the hide-UI button being pre-toggled. |
+| `globalMenu` | Global right-side dock (`window.LAYOUT`) that hosts plugin tabs (chats, slide-switcher, questionnaire, …). `false` boots the dock closed; user opens/plugins focus still work. |
 
 ### `background` — `BackgroundItem[]`
 

@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-05-21
-//! Git commit: --a315d3c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -3190,10 +3190,6 @@
 
         downloadTileStart(context) {
             return context.finish("_blank", undefined, "undefined");
-        }
-
-        getMetadata() {
-            return this;
         }
     }
 
@@ -17830,7 +17826,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
 
     static exampleParams() {
         /* eslint-disable camelcase */
-        return { color: "#ffffff", cell_x: 256, cell_y: 256, line_width: 1, adaptive_lod: false };
+        return { color: "#ffffff", cell_x: 256, cell_y: 256, offset_x: 0, offset_y: 0, line_width: 1, adaptive_lod: false };
         /* eslint-enable camelcase */
     }
 
@@ -17848,6 +17844,8 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
                 { name: "color", ui: "color", valueType: "vec3", default: "#ffffff" },
                 { name: "cell_x", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
                 { name: "cell_y", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
+                { name: "offset_x", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
+                { name: "offset_y", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
                 { name: "line_width", ui: "range_input", valueType: "float", default: 1, min: 0.5, max: 10, step: 0.5 },
                 { name: "adaptive_lod", ui: "bool", valueType: "bool", default: false }
             ],
@@ -17884,6 +17882,14 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
                 default: {type: "range_input", default: 256, min: 1, max: 8192, step: 1, title: "Cell height (image px): "},
                 accepts: (type, instance) => type === "float"
             },
+            offset_x: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset X (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            offset_y: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset Y (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
             line_width: {  // eslint-disable-line camelcase
                 default: {type: "range_input", default: 1, min: 0.5, max: 10, step: 0.5, title: "Line width (screen px): "},
                 accepts: (type, instance) => type === "float"
@@ -17903,10 +17909,14 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
         const cx = this.cell_x.params;
         const cy = this.cell_y.params;
+        const ox = this.offset_x.params;
+        const oy = this.offset_y.params;
         const lw = this.line_width.params;
         return `
     float cellX = max(mix(${f(cx.min)}, ${f(cx.max)}, ${this.cell_x.sample()}), 1.0);
     float cellY = max(mix(${f(cy.min)}, ${f(cy.max)}, ${this.cell_y.sample()}), 1.0);
+    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
+    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
     float scale = max(pixelSize, 1e-6);
 
     // Symmetric LOD: snap cell size to a power of two so on-screen cell stays
@@ -17917,7 +17927,7 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
         cellY *= lodMult;
     }
 
-    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale;
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale - vec2(offsetX, offsetY);
 
     float modX = mod(imgCoord.x, cellX);
     float modY = mod(imgCoord.y, cellY);
@@ -24859,8 +24869,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-05-21
-//! Git commit: --a315d3c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25477,11 +25487,10 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-21
-//! Git commit: --a315d3c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26187,11 +26196,10 @@ function computeAABB(f) {
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-21
-//! Git commit: --a315d3c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

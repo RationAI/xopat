@@ -82,6 +82,13 @@ type XOpatUiSetup = {
      * Chrome-registered component until the user toggles back.
      */
     appBar?: boolean | null;
+    /**
+     * Initial visible state of the global right-side dock (`window.LAYOUT`,
+     * `MainLayout`) that hosts plugin tabs such as chats, slide-switcher and
+     * questionnaire. `false` boots the dock closed; the user (and plugins
+     * that explicitly focus a tab) can still reopen it.
+     */
+    globalMenu?: boolean | null;
 };
 
 type XOpatSetup = {
@@ -103,7 +110,14 @@ type XOpatSetup = {
     grayscale?: boolean | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
+    /**
+     * If true, the viewer only zooms on `Ctrl/Cmd + wheel`; plain wheel scrolls
+     * the host page through. Intended for notebook / scrollable-host embeddings
+     * where unintentional viewer zoom hijacks page scroll.
+     */
+    scrollRequiresCtrl?: boolean | null;
     permaLoadPlugins?: boolean | null;
+    bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;
     bypassCache?: boolean | null;
     bypassCacheLoadTime?: boolean | null;
@@ -130,8 +144,13 @@ type XOpatSetup = {
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
-    /** Canonical home for UI initial-visibility flags. See `XOpatUiSetup`. */
-    ui?: XOpatUiSetup | null;
+    /**
+     * Canonical home for UI initial-visibility flags. See `XOpatUiSetup`.
+     * As a shorthand, set to `false` to hide every global UI component at
+     * boot (useful for headless / notebook embeddings). `true` is equivalent
+     * to leaving the field unset.
+     */
+    ui?: XOpatUiSetup | boolean | null;
 };
 
 type XOpatServerProxyAuthJwt = {

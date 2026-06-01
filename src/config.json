@@ -284,12 +284,13 @@
           the full contract.
          */
         "ui": {
-            "scaleBar":  true,
-            "toolBar":   true,
-            "statusBar": true,
-            "mainMenu":  true,
-            "navigator": true,
-            "appBar":    true
+            "scaleBar":   true,
+            "toolBar":    true,
+            "statusBar":  true,
+            "mainMenu":   true,
+            "navigator":  true,
+            "appBar":     true,
+            "globalMenu": true
         },
         // default background color, a hex RGB or RGBA
         "backgroundColor": null,
@@ -303,7 +304,12 @@
         "grayscale": false,
         "tileCache": true,
         "preventNavigationShortcuts": false,
+        // require Ctrl/Cmd + wheel to zoom the viewer — plain wheel falls through
+        // to the host page. Recommended for notebook / scrollable-host embeddings.
+        "scrollRequiresCtrl": false,
         "permaLoadPlugins": true,
+        // suppress the browser's "Leave site?" prompt when there are unsaved changes
+        "bypassCloseConfirmation": false,
         // can disable cookies support
         "bypassCookies": false,
         // can disable cache data loading

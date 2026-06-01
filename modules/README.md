@@ -60,6 +60,7 @@ The list of features is below. Similar to plugins, you need to call ``addModule(
 Unlike plugins, module options are usually built-in centered, or used to cache values - vales
 are actually not stored anywhere, unless the cache itself is being persisted by overriding xOpat storage API.
 - `ignorePostIO` - see below the default IO lifecycle
+- `capabilities` — top-level array of rights-capabilities the module exposes for the role-based UI gating layer. Each entry is `{ "id": "mymodule.<gate>", "default": "allow" | "deny", "label": "..." }`. Entries listed under `io.capabilities[]` are auto-derived and need not be repeated. See `src/USER_ROLES.md`.
 
 #### Basic DO's
 The integration to the global scope, application etc. is left to the module itself.

@@ -5,6 +5,24 @@
     <meta charset="utf-8">
     <title>Visualization Developer Setup</title>
     <template id="template-head"></template>
+    <style>
+        .editor-shell .editor-gutter {
+            flex: 0 0 auto;
+            width: 3rem;
+            white-space: pre;
+            tab-size: 4;
+            line-height: inherit;
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+        }
+        .editor-shell textarea {
+            padding-top: 0.75rem;
+            padding-bottom: 0.75rem;
+            tab-size: 4;
+            line-height: inherit;
+            min-width: 0;
+        }
+    </style>
 </head>
 
 <body class="min-h-screen bg-base-100 text-base-content">
@@ -26,11 +44,16 @@
                     <span class="text-xs font-mono" id="save-status">Saved</span>
                 </div>
 
-                <textarea
-                        class="textarea textarea-ghost font-mono text-sm leading-relaxed w-full h-[60vh] focus:outline-none"
-                        id="custom-params"
-                        placeholder="Enter JSON configuration..."
-                        spellcheck="false"></textarea>
+                <div class="editor-shell flex w-full h-[60vh] font-mono text-sm leading-relaxed">
+                    <div id="line-numbers" class="editor-gutter select-none text-right pr-2 pl-1 py-3 text-base-content/40 border-r border-base-300 overflow-hidden whitespace-pre"
+                         aria-hidden="true">1</div>
+                    <textarea
+                            class="textarea textarea-ghost flex-1 font-mono text-sm leading-relaxed focus:outline-none resize-none"
+                            id="custom-params"
+                            placeholder="Enter JSON configuration..."
+                            spellcheck="false"
+                            wrap="off"></textarea>
+                </div>
 
                 <label class="label">
                     <span class="label-text-alt text-error font-bold" id="json-error-msg"></span>
@@ -55,7 +78,8 @@
             "toolBar": true,
             "statusBar": true,
             "navigator": true,
-            "appBar": true
+            "appBar": true,
+            "globalMenu": true
         }
     },
     "data": ["data-to-fetch-1", "data-to-fetch-2"],
@@ -297,14 +321,26 @@
 
         init: function() {
             this.editor = document.getElementById('custom-params');
+            this.gutter = document.getElementById('line-numbers');
             this.loadState();
 
             // Event Listeners
             this.editor.addEventListener('input', () => this.handleInput());
+            this.editor.addEventListener('scroll', () => {
+                this.gutter.scrollTop = this.editor.scrollTop;
+            });
 
             // Initial Render
             this.renderTabs();
             this.loadActiveContent();
+        },
+
+        renderLineNumbers: function() {
+            const lines = (this.editor.value.match(/\n/g) || []).length + 1;
+            let out = '';
+            for (let i = 1; i <= lines; i++) out += i + '\n';
+            this.gutter.textContent = out;
+            this.gutter.scrollTop = this.editor.scrollTop;
         },
 
         getDefaultJson: function() {
@@ -413,6 +449,7 @@
             if (tab) {
                 this.editor.value = tab.content;
                 this.validateJson(tab.content); // Check validity on load
+                this.renderLineNumbers();
             }
         },
 
@@ -421,6 +458,7 @@
             this.validateJson(content);
             this.updateActiveTabContent(content);
             this.saveState();
+            this.renderLineNumbers();
         },
 
         validateJson: function(str) {

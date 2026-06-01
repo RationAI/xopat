@@ -1,3 +1,12 @@
+import {
+    CapabilityRegistry,
+    type CapabilityDescriptor,
+    type RoleDescriptor,
+    type RolesEnvConfig,
+    diffEffective,
+    resolveCapabilities,
+} from "./user-roles-core";
+
 /**
  * Lightweight user instance, mainly for event interaction
  * @class
@@ -10,6 +19,17 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
     private _secret: Record<string, any> = {};
     private _identities: Record<string, { id: string; name: string; icon: string } | undefined> = {};
     private _refreshing: Record<string, Promise<void>> = {};
+
+    // ── roles & capabilities (see src/USER_ROLES.md) ────────────────────
+    /** Currently assigned roles, in declaration order. Recomputed on assignRoles. */
+    private _roles: string[] = [];
+    /** Effective capability map cached for fast `can()` reads. */
+    private _effective: Record<string, boolean> = {};
+
+    /** Process-global capability registry. Shared across all instances. */
+    private static readonly _capRegistry = new CapabilityRegistry();
+    /** Live env config snapshot — populated by `configureRoles(...)` at boot. */
+    private static _envConfig: RolesEnvConfig = {};
 
     /** @static */
     private static __self: XOpatUser | undefined = undefined;
@@ -35,6 +55,19 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
                 50000,
                 // @ts-ignore: Legacy global Dialogs
                 Dialogs.MSG_ERR);
+        });
+
+        // Recompute capabilities whenever a new one is declared (lazy plugin load).
+        XOpatUser._capRegistry.onDeclared(() => this._recomputeEffective([]));
+
+        // Apply the deployment default role(s) immediately so calls to `can(...)`
+        // before any rights-resolver plugin runs still answer correctly.
+        this._roles = (XOpatUser._envConfig.default ?? []).slice();
+        this._recomputeEffective([]);
+
+        // On any logout, revert role assignments to the deployment default.
+        this.addHandler(this.getEventName('logout'), () => {
+            this.assignRoles(XOpatUser._envConfig.default ?? []);
         });
     }
 
@@ -222,6 +255,116 @@ export class XOpatUser extends window.OpenSeadragon.EventSource {
      */
     static instantiated(): boolean {
         return !!this.__self;
+    }
+
+    // ── roles & capabilities API ─────────────────────────────────────────
+    // Full design in src/USER_ROLES.md.
+
+    /**
+     * Configure the deployment-level roles block at boot. Called once by
+     * the application bootstrap with `ENV.core.roles`. If never called, all
+     * capabilities fall back to their declared defaults.
+     */
+    static configureRoles(env: RolesEnvConfig | undefined): void {
+        XOpatUser._envConfig = env ? { ...env } : {};
+        if (XOpatUser.__self) {
+            XOpatUser.__self.assignRoles(XOpatUser._envConfig.default ?? []);
+        }
+    }
+
+    /** Register a capability gate. Called by the loader for each include.json declaration. */
+    static declareCapability(desc: CapabilityDescriptor): boolean {
+        const ok = XOpatUser._capRegistry.declare(desc);
+        if (ok && XOpatUser.__self) {
+            // raise the event on the instance so consumers can subscribe lazily
+            XOpatUser.__self.raiseEvent('capability-declared', { id: desc.id, declaredBy: desc.declaredBy });
+        }
+        return ok;
+    }
+
+    /** Remove all capabilities declared by an owner (e.g. on plugin unload). */
+    static undeclareCapabilities(ownerId: string): string[] {
+        const removed = XOpatUser._capRegistry.undeclareAll(ownerId);
+        if (removed.length && XOpatUser.__self) XOpatUser.__self._recomputeEffective([]);
+        return removed;
+    }
+
+    /** All currently declared capabilities. Snapshot — safe to iterate. */
+    static listCapabilities(): CapabilityDescriptor[] {
+        return XOpatUser._capRegistry.list();
+    }
+
+    /** Definition of a single capability, if declared. */
+    static describeCapability(id: string): CapabilityDescriptor | undefined {
+        return XOpatUser._capRegistry.get(id);
+    }
+
+    /** Role catalog from env config. Snapshot. */
+    static listRoles(): RoleDescriptor[] {
+        const defs = XOpatUser._envConfig.definitions ?? {};
+        return Object.keys(defs).map(id => ({ id, ...defs[id] }));
+    }
+
+    /** Definition of a single role, if defined in env. */
+    static describeRole(id: string): RoleDescriptor | undefined {
+        const def = XOpatUser._envConfig.definitions?.[id];
+        return def ? { id, ...def } : undefined;
+    }
+
+    /** True iff the current user is granted this capability. */
+    can(capabilityId: string): boolean {
+        // Unknown capability id → default to allow (don't accidentally lock UI
+        // when role config references something not present in this deployment).
+        const known = XOpatUser._capRegistry.has(capabilityId);
+        if (!known) return true;
+        return this._effective[capabilityId] !== false;
+    }
+
+    /** Inverse of `can()`. Sugar for readability. */
+    cannot(capabilityId: string): boolean { return !this.can(capabilityId); }
+
+    /** Currently assigned roles, in array order (does not include inherited parents). */
+    currentRoles(): string[] { return this._roles.slice(); }
+
+    /** Replace the assigned role set. Triggers recomputation; emits diff events. */
+    assignRoles(roles: string[]): void {
+        const next = Array.isArray(roles) ? roles.filter(r => typeof r === "string") : [];
+        const previous = this._roles.slice();
+        // Cheap equality short-circuit so resolver plugins can be idempotent.
+        if (next.length === previous.length && next.every((r, i) => r === previous[i])) return;
+        this._roles = next;
+        this.raiseEvent('roles-changed', { roles: next.slice(), previous });
+        this._recomputeEffective(previous);
+    }
+
+    /** Add a single role if not already present. */
+    addRole(role: string): void {
+        if (this._roles.includes(role)) return;
+        this.assignRoles([...this._roles, role]);
+    }
+
+    /** Remove a single role if present. */
+    removeRole(role: string): void {
+        if (!this._roles.includes(role)) return;
+        this.assignRoles(this._roles.filter(r => r !== role));
+    }
+
+    /** Revert to the deployment default role set. */
+    clearRoles(): void {
+        this.assignRoles(XOpatUser._envConfig.default ?? []);
+    }
+
+    private _recomputeEffective(previousRoles: string[]): void {
+        const prev = this._effective;
+        this._effective = resolveCapabilities({
+            capabilities: XOpatUser._capRegistry.list(),
+            assignedRoles: this._roles,
+            definitions: XOpatUser._envConfig.definitions ?? {},
+        });
+        const changed = diffEffective(prev, this._effective);
+        if (changed.length) {
+            this.raiseEvent('capabilities-changed', { changed });
+        }
     }
 }
 

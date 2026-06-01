@@ -46,6 +46,7 @@ exception to this rule is a workspace plugin, which is set to use NPM ([see deve
 
 ##### Built-in options
   - `ignorePostIO` - see below the default IO lifecycle
+  - `capabilities` — top-level array of rights-capabilities the plugin exposes for the role-based UI gating layer. Each entry is `{ "id": "myplugin.<gate>", "default": "allow" | "deny", "label": "..." }`. IO-mediated actions are auto-derived from `io.capabilities[]` and do **not** need to be listed here; this array is for UI gates that aren't tied to a typed IO resource. See `src/USER_ROLES.md` for the full model.
 
 ##### Custom keys
 A developer can provide custom parameters to `include.json` and retrieve them later in the code.

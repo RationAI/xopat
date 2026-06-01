@@ -67,6 +67,20 @@ Three concepts:
 
 `io: false` hard-disables IO for this owner regardless of admin config.
 
+#### Rights integration (auto-derived)
+
+For every entry in `io.capabilities[]`, the roles & capabilities system (`src/USER_ROLES.md`) automatically derives matching rights-capabilities and — for CRUD — installs `pre-create` / `pre-update` / `pre-delete` guards that refuse with `code: "W_PERM_DENIED"` when the current user lacks the corresponding role. Naming convention: `<ownerId>.<ioCapId>` (bundle) or `<ownerId>.<ioCapId>.<direction>` (crud). KV capabilities are never auto-derived.
+
+Opt out on a per-capability basis:
+
+```jsonc
+{ "id": "crud:annotation", "kind": "crud", "rights": false }   // skip entirely
+{ "id": "crud:annotation", "kind": "crud",
+  "rights": { "default": "deny", "directions": ["create", "delete"], "label": "Annotation write" } }
+```
+
+See `src/USER_ROLES.md` for the full model.
+
 ### Bundle-level export/import
 
 Inside the element's constructor or `pluginReady()`/`_init()`:

@@ -109,6 +109,29 @@ export class AppBar {
             this.rightMenuCollapsed.setClass("display", "hidden");
         }
 
+        // Keep the user tab title in sync with the user's currently assigned
+        // role(s). See src/USER_ROLES.md — this is the v1 surface for the
+        // "show user role in the user detail" requirement until the user tab
+        // gains a proper popup body.
+        const user = window.XOpatUser?.instance?.();
+        if (user) {
+            const renderTitle = () => {
+                const name = user.name || $.t('user.anonymous');
+                const roles = user.currentRoles?.() ?? [];
+                if (!roles.length) return name;
+                const labels = roles.map(id => window.XOpatUser?.describeRole?.(id)?.label ?? id);
+                return `${name} · ${labels.join(", ")}`;
+            };
+            const setTitle = () => {
+                try { this.rightMenu.getTab('user')?.setTitle?.(renderTitle()); }
+                catch (e) { /* ignore during teardown */ }
+            };
+            setTitle();
+            user.addHandler('roles-changed', setTitle);
+            user.addHandler('login', setTitle);
+            user.addHandler('logout', setTitle);
+        }
+
         // Hide-chrome button — toggles every component registered with AppBar.Chrome.
         // Components opt in via AppBar.Chrome.register(id, vm) (or get auto-enrolled
         // by AppBar.View.append / View.registerViewComponent). No hardcoded IDs here.
