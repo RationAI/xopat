@@ -27,8 +27,7 @@ Plugins may layer additional opening behavior on top of this pipeline — check 
 {
   "params": {
     "sessionName": "Demo case 0042",
-    "locale": "en",
-    "activeVisualizationIndex": 0
+    "locale": "en"
   },
   "data": [
     {
@@ -100,7 +99,6 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 | `visualizationInspectorRadiusPx` | number | — | Inspector radius. |
 | `visualizationInspectorLensZoom` | number | — | Lens zoom factor. |
 | `activeBackgroundIndex` | number \| number[] | `0` | Initial bg index; array for multi-view. |
-| `activeVisualizationIndex` | number \| number[] | `0` | Initial viz index; array for multi-view. Background `goalIndex` overrides per item. |
 | `viewport` | `ViewportSetup \| ViewportSetup[]` | — | `{ point, zoomLevel, rotation? }`; single value applies to all viewers or one per viewer in multi-view. |
 | `preventNavigationShortcuts` | bool | `false` | Disable xOpat navigation bindings (OSD defaults still apply). |
 | `scrollRequiresCtrl` | bool | `false` | Require `Ctrl/Cmd + wheel` to zoom; plain wheel scrolls the host page. Use for notebook / scrollable-host embeddings. A throttled toast nudges first-time users toward the modifier. |
@@ -155,7 +153,7 @@ Each item is an image group rendered as one OSD layer (`src/types/app.d.ts:76–
 - **`id`** — unique id; derived from the data path if unset.
 - **`name`** — tissue name shown in the UI.
 - **`sessionName`** — overrides `params.sessionName` for this background.
-- **`goalIndex`** — preferred visualization index for this background; overrides `params.activeVisualizationIndex`.
+- **`visualizationIndex`** — index into `visualizations` selected when this background is mounted. Authoritative per-viewer viz binding — the slot's viz follows the bg entry through slot reordering / insertion / deletion. Pass `null` for "no overlay". Legacy `goalIndex` is still accepted on read (folded with a one-time warning).
 - **`options`** — forwarded to the TileSource.
 
 > Legacy fields `lossless`, `protocol`, `microns`, `micronsX`, `micronsY` are still accepted at the background level for back-compat, but new code should put them on the `DataOverride` instead.

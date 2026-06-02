@@ -52,7 +52,7 @@ export interface CanonicalBackground {
     protocol?: string;
     name?: string;
     options?: any;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     /** Ordered array; renderer ids are derived (see backgroundShaderRendererIds). */
     shaders: CanonicalShader[];
     [k: string]: any;
@@ -78,7 +78,6 @@ export interface CanonicalScene {
     background: CanonicalBackground[];
     visualizations: CanonicalVisualization[];
     activeBackgroundIndex?: Array<number | undefined>;
-    activeVisualizationIndex?: Array<number | undefined>;
     viewers?: CanonicalViewerOverlay[];
 }
 
@@ -267,6 +266,9 @@ export function serializeScene(_opts: { includeViewport?: boolean } = {}): Canon
     const APP: any = (window as any).APPLICATION_CONTEXT;
     const cfg = APP?.config || {};
 
+    // Per-viewer viz selection rides on each background entry as
+    // `background[i].visualizationIndex`; the cloned `background` array
+    // below preserves it.
     const scene: CanonicalScene = {
         version: 1,
         data: Array.isArray(cfg.data) ? deepClone(cfg.data) : [],
@@ -274,9 +276,6 @@ export function serializeScene(_opts: { includeViewport?: boolean } = {}): Canon
         visualizations: Array.isArray(cfg.visualizations) ? deepClone(cfg.visualizations) : [],
         activeBackgroundIndex: normalizeActiveIndex(
             APP?.getOption?.("activeBackgroundIndex", undefined, true, true),
-        ),
-        activeVisualizationIndex: normalizeActiveIndex(
-            APP?.getOption?.("activeVisualizationIndex", undefined, true, true),
         ),
     };
 
@@ -349,11 +348,13 @@ export async function deserializeScene(
     if (typeof APP?.openViewerWith !== "function") {
         throw new Error("[canonical-scene] APPLICATION_CONTEXT.openViewerWith unavailable");
     }
+    // Per-viewer viz selection rides on each background entry; no vizSpec
+    // needed. activeBackgroundIndex is restored explicitly.
     await APP.openViewerWith(
         scene.data,
         scene.background,
         scene.visualizations,
-        undefined,
+        scene.activeBackgroundIndex,
         undefined,
         {
             historyMode: opts.historyMode ?? "visualization-step",

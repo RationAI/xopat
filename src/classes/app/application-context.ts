@@ -136,6 +136,24 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (builtin === undefined) {
                 console.warn(`Trying to read non-existing option: only viewer parameters ${Object.keys(self.config.defaultParams)} are supported.`, name);
             }
+            const normalize = (value: any) => {
+                if (value === "false") return false;
+                if (value === "true") return true;
+                if (parse && typeof value === "string") {
+                    try {
+                        return JSON.parse(value);
+                    } catch (e) {
+                        // todo: how to better recognize we should try not to parse real strings?
+                        //pass, just a string
+                    }
+                }
+                return value;
+            };
+            // Explicit param (URL hash / init payload) wins over cached value:
+            // cache is a fallback for when the option was not issued, not an override.
+            if (self.config.params[name] !== undefined) {
+                return normalize(self.config.params[name]);
+            }
             if (cache && self.AppCache) {
                 let cached = self.AppCache.get(name);
                 if (parse && typeof cached === "string") {
@@ -158,20 +176,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     return cached;
                 }
             }
-            let value = self.config.params[name] !== undefined
-                ? self.config.params[name]
-                : (defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
-            if (value === "false") return false;
-            if (value === "true") return true;
-            if (parse && typeof value === "string") {
-                try {
-                    return JSON.parse(value);
-                } catch (e) {
-                    // todo: how to better recognize we should try not to parse real strings?
-                    //pass, just a string
-                }
-            }
-            return value;
+            return normalize(defaultValue !== undefined ? defaultValue : self.config.defaultParams[name]);
         },
         /**
          * Set option, preferred way of accessing the viewer config values.
@@ -318,11 +323,16 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             return config ? CONFIG.data?.[config.dataReference] : "__anonymous__";
         },
         /**
-         * Return the current active visualization
+         * Return the current active visualization (slot 0). Derived from the
+         * slot-0 background entry's `visualizationIndex`.
          * @return {*}
          */
         activeVisualizationConfig() {
-            return CONFIG.visualizations?.[APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true)[0]];
+            const activeBg = APPLICATION_CONTEXT.getOption('activeBackgroundIndex', undefined, true, true);
+            const slot0Bg = Array.isArray(activeBg) ? activeBg[0] : activeBg;
+            const bg = Number.isInteger(slot0Bg) ? CONFIG.background?.[slot0Bg as number] : undefined;
+            const vizIdx = bg?.visualizationIndex;
+            return Number.isInteger(vizIdx) ? CONFIG.visualizations?.[vizIdx as number] : undefined;
         },
         /**
          * Get the viewer currently considered active by the viewer manager.

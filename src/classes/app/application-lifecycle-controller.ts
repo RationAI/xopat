@@ -112,19 +112,25 @@ export class ApplicationLifecycleController {
 
         const previousData = this.cloneRuntimeState(Array.isArray(this.appContext.config.data) ? this.appContext.config.data : []);
         const previousVisualizations = this.cloneRuntimeState(Array.isArray(this.appContext.config.visualizations) ? this.appContext.config.visualizations : []);
-        const previousActiveViz = this.cloneRuntimeState(
-            ViewerSelectionState.normalizeSelectionValue(this.appContext.getOption("activeVisualizationIndex", undefined, true, true))
-        );
+        // Capture the per-slot viz selection by reading each bg entry's
+        // `visualizationIndex`. The active slot order is `activeBackgroundIndex`.
+        const previousActiveBg = ViewerSelectionState.normalizeSelectionValue(
+            this.appContext.getOption("activeBackgroundIndex", undefined, true, true)
+        ) || [];
+        const previousBackgrounds: any[] = Array.isArray(this.appContext.config.background) ? this.appContext.config.background : [];
+        const previousActiveViz = previousActiveBg.map((bgIdx: any) => {
+            const v = Number.isInteger(bgIdx) ? previousBackgrounds[bgIdx as number]?.visualizationIndex : undefined;
+            return Number.isInteger(v) ? v as number : undefined;
+        });
 
         const currentData = [...previousData];
         if (newData.length > 0) {
             currentData.push(...newData);
         }
 
-        let vizSpec = activeVizIndex;
-        if (vizSpec === undefined) {
-            vizSpec = this.appContext.getOption("activeVisualizationIndex", 0, true, true);
-        }
+        // If the caller supplies an explicit selection, honor it; otherwise
+        // keep the previous per-slot viz selection.
+        const vizSpec = activeVizIndex !== undefined ? activeVizIndex : previousActiveViz;
 
         try {
             return await this.appContext.openViewerWith(

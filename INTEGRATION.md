@@ -138,7 +138,7 @@ A session is a JSON object with up to five meaningful top-level keys:
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `params`         | Viewer settings (theme, viewport, `backgroundColor`, `activeBackgroundIndex`, …). Allowlist = the `setup` block in `src/config.json`. |
 | `data`           | Flat list of DataIDs referenced by index from `background` and `visualizations`.                                                  |
-| `background`     | Base-layer slides. Each entry references `data[i]` via `dataReference` and optionally carries `microns`, `goalIndex`, `name`, `protocol`. |
+| `background`     | Base-layer slides. Each entry references `data[i]` via `dataReference` and optionally carries `microns`, `visualizationIndex`, `name`, `protocol`. |
 | `visualizations` | Optional shader stacks rendered on top of the background.                                                                        |
 | `plugins`        | Per-plugin runtime config (optional; consumed by individual plugins).                                                            |
 

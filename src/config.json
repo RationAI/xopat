@@ -300,7 +300,6 @@
         "viewport": null,
         // default active indexes for image (background) and data (visualization) group
         "activeBackgroundIndex": 0,
-        "activeVisualizationIndex": 0,
         "grayscale": false,
         "tileCache": true,
         "preventNavigationShortcuts": false,

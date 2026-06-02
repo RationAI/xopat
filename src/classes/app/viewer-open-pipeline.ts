@@ -6,7 +6,6 @@ import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-sha
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
 
 export interface OpenViewerWithOptions {
-    deriveOverlayFromBackgroundGoals?: boolean;
     dataMode?: "replace" | "merge" | "merge-exact";
     backgroundMode?: "replace" | "merge" | "merge-exact";
     historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
@@ -106,18 +105,13 @@ export class ViewerOpenPipeline {
         },
         opts: OpenViewerWithOptions = {}
     ) {
+        const appContext = this.deps.appContext;
         const activeBackground = ViewerSelectionState.normalizeSelectionValue(
-            this.deps.appContext.getOption("activeBackgroundIndex", undefined, true, true)
-        ) || [];
-        const activeVisualization = ViewerSelectionState.normalizeSelectionValue(
-            this.deps.appContext.getOption("activeVisualizationIndex", undefined, true, true)
+            appContext.getOption("activeBackgroundIndex", undefined, true, true)
         ) || [];
 
         while (activeBackground.length <= viewerIndex) {
             activeBackground.push(activeBackground[0]);
-        }
-        while (activeVisualization.length <= viewerIndex) {
-            activeVisualization.push(activeVisualization[0]);
         }
 
         if (selection.backgroundIndex !== undefined) {
@@ -125,10 +119,19 @@ export class ViewerOpenPipeline {
                 ? selection.backgroundIndex as number
                 : undefined;
         }
+
+        // Slot-aligned vizSpec: only the targeted slot carries a value;
+        // openViewerWith's fold leaves `undefined` slots untouched (so other
+        // viewers' viz selections are preserved) and writes the new value
+        // onto the slot's background entry AFTER previousSnapshot capture —
+        // mutating live config here would clobber the diff and short-circuit
+        // the rebuild as historyMode="skip".
+        let vizSpec: Array<number | undefined | null> | undefined = undefined;
         if (selection.visualizationIndex !== undefined) {
-            activeVisualization[viewerIndex] = Number.isInteger(selection.visualizationIndex)
+            vizSpec = new Array(activeBackground.length).fill(undefined);
+            vizSpec[viewerIndex] = Number.isInteger(selection.visualizationIndex)
                 ? selection.visualizationIndex as number
-                : undefined;
+                : null;
         }
 
         return this.openViewerWith(
@@ -136,7 +139,7 @@ export class ViewerOpenPipeline {
             undefined,
             undefined,
             activeBackground,
-            activeVisualization,
+            vizSpec as any,
             opts
         );
     }
@@ -145,8 +148,8 @@ export class ViewerOpenPipeline {
         data = undefined,
         background: BackgroundItem[] | undefined = undefined,
         visualizations: VisualizationItem[] | undefined = undefined,
-        bgSpec: number | number[] | undefined | null = undefined,
-        vizSpec: number | number[] | undefined | null = undefined,
+        bgSpec: number | Array<number | undefined> | undefined | null = undefined,
+        vizSpec: number | Array<number | undefined> | undefined | null = undefined,
         opts: OpenViewerWithOptions = {}
     ) {
         const { appContext, env, viewerManager, cloneRuntimeState, safeStringify, visualizationRuntime, stateBindings } = this.deps;
@@ -188,9 +191,9 @@ export class ViewerOpenPipeline {
         const cloneForMerge = <T>(value: T): T => cloneRuntimeState(value);
         const sameMergedDataEntry = (a: any, b: any) => safeStringify(a) === safeStringify(b);
         const remapSelectionByIndexMap = (
-            value: number | number[] | undefined | null,
+            value: number | Array<number | undefined> | undefined | null,
             indexMap: Map<number, number>
-        ): number | number[] | undefined | null => {
+        ): number | Array<number | undefined> | undefined | null => {
             if (value == null) return value;
             if (Array.isArray(value)) {
                 return value.map((entry: any) => Number.isInteger(entry) ? indexMap.get(entry) : entry);
@@ -356,10 +359,21 @@ export class ViewerOpenPipeline {
             activeBackgroundIndex: normalizeHistorySelection(
                 appContext.getOption("activeBackgroundIndex", undefined, true, true)
             ),
-            activeVisualizationIndex: normalizeHistorySelection(
-                appContext.getOption("activeVisualizationIndex", undefined, true, true)
-            ),
         });
+
+        // Viz index for slot `viewerIndex` is derived from the slot's bg entry
+        // in the snapshot: snapshot.background[activeBg[k]].visualizationIndex.
+        // Falls back to slot 0's bg if the slot is out of range (legacy
+        // broadcast behavior).
+        const vizIndexFromSnapshot = (snapshot: any, viewerIndex: number): number | undefined => {
+            const backgrounds = Array.isArray(snapshot?.background) ? snapshot.background : [];
+            const activeBg = normalizeHistorySelection(snapshot?.activeBackgroundIndex) || [];
+            const bgIdx = viewerIndex < activeBg.length ? activeBg[viewerIndex] : activeBg[0];
+            if (!Number.isInteger(bgIdx)) return undefined;
+            const bg: any = backgrounds[bgIdx as number];
+            const v = bg?.visualizationIndex;
+            return Number.isInteger(v) ? v as number : undefined;
+        };
 
         const selectedBackgroundIdsFromSnapshot = (snapshot: any): string[] => {
             const selected = normalizeHistorySelection(snapshot?.activeBackgroundIndex) || [];
@@ -371,11 +385,12 @@ export class ViewerOpenPipeline {
         };
 
         const selectedVisualizationConfigsFromSnapshot = (snapshot: any) => {
-            const selected = normalizeHistorySelection(snapshot?.activeVisualizationIndex) || [];
+            const activeBg = normalizeHistorySelection(snapshot?.activeBackgroundIndex) || [];
             const visualizationItems = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
-            return selected.map((index: number | undefined) =>
-                Number.isInteger(index) ? visualizationItems[index as number] : undefined
-            );
+            return activeBg.map((_: any, slot: number) => {
+                const v = vizIndexFromSnapshot(snapshot, slot);
+                return Number.isInteger(v) ? visualizationItems[v as number] : undefined;
+            });
         };
 
         const buildVisibleLoadFingerprint = (snapshot: any) => safeStringify({
@@ -437,7 +452,7 @@ export class ViewerOpenPipeline {
             const visualizationItems = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
             const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
             const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
-            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+            const vizIndex = vizIndexFromSnapshot(snapshot, viewerIndex);
             const refs = new Set<any>();
             const bgEntry = Number.isInteger(bgIndex) ? backgrounds[bgIndex as number] : undefined;
             const vizEntry = Number.isInteger(vizIndex) ? visualizationItems[vizIndex as number] : undefined;
@@ -468,7 +483,7 @@ export class ViewerOpenPipeline {
             const visualizationItems = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
             const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
             const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
-            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+            const vizIndex = vizIndexFromSnapshot(snapshot, viewerIndex);
             const bgEntry = Number.isInteger(bgIndex) ? backgrounds[bgIndex as number] : undefined;
             const vizEntry = Number.isInteger(vizIndex) ? visualizationItems[vizIndex as number] : undefined;
 
@@ -517,7 +532,7 @@ export class ViewerOpenPipeline {
             const visualizationItems = Array.isArray(snapshot?.visualizations) ? snapshot.visualizations : [];
             const dataSet = Array.isArray(snapshot?.data) ? snapshot.data : [];
             const bgIndex = selectionAt(snapshot?.activeBackgroundIndex, viewerIndex);
-            const vizIndex = selectionAt(snapshot?.activeVisualizationIndex, viewerIndex);
+            const vizIndex = vizIndexFromSnapshot(snapshot, viewerIndex);
 
             return safeStringify({
                 viewerIndex,
@@ -529,14 +544,15 @@ export class ViewerOpenPipeline {
 
         const restoreLoadSnapshot = async (snapshot: any) => {
             if (!snapshot) return false;
+            // Per-viewer viz lives on the cloned `background` array (each entry
+            // carries its `visualizationIndex`); no separate vizSpec needed.
             return await this.openViewerWith(
                 cloneForHistory(snapshot.data),
                 cloneForHistory(snapshot.background),
                 cloneForHistory(snapshot.visualizations),
                 cloneForHistory(snapshot.activeBackgroundIndex),
-                cloneForHistory(snapshot.activeVisualizationIndex),
+                undefined,
                 {
-                    deriveOverlayFromBackgroundGoals: false,
                     historyMode: "skip",
                     fromHistory: true,
                     warnOnHistoryBoundary: false,
@@ -626,47 +642,60 @@ export class ViewerOpenPipeline {
             config.background = config.background.map((bg: BackgroundItem | BackgroundConfig) => BackgroundConfig.from(bg, true, false));
         }
 
+        // Fold any legacy shape carried in the freshly merged config:
+        //   - `background[i].goalIndex` → `background[i].visualizationIndex`
+        //   - top-level `activeVisualizationIndex` → distributed onto bg entries
+        // BackgroundConfig.from already folded per-bg goalIndex on each entry
+        // it wrapped; this call additionally handles the top-level param.
+        BackgroundConfig.migrateLegacyConfig(appContext._dangerouslyAccessConfig());
+
         const cfg = appContext.config;
         const bgs: BackgroundConfig[] = Array.isArray(cfg.background) ? cfg.background : [];
         const vis = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
         const isSecureMode = !!appContext.secure;
 
-        const selectionStateChanged = !!UTILITIES.parseBackgroundAndGoal(effectiveBgSpec, vizSpec, {
-            deriveOverlayFromBackgroundGoals: !!opts.deriveOverlayFromBackgroundGoals
-        });
+        const selectionStateChanged = !!UTILITIES.parseBackgroundSelection(effectiveBgSpec);
 
         let activeBg = appContext.getOption("activeBackgroundIndex", undefined, true, true);
-        let activeViz = appContext.getOption("activeVisualizationIndex", undefined, true, true);
 
         // getOption falls back to `defaultParams.activeBackgroundIndex = 0` when
-        // a prior `setOption(..., undefined)` deleted the cache+params entry
-        // (see parse-input / parseBackgroundAndGoal close path). When the
-        // background array is genuinely empty we must NOT let that default
-        // resurrect an index — the selection was just cleared on purpose.
+        // a prior `setOption(..., undefined)` deleted the cache+params entry.
+        // When the background array is genuinely empty we must NOT let that
+        // default resurrect an index — the selection was just cleared on purpose.
         if (!Array.isArray(activeBg) && Number.isInteger(activeBg) && bgs.length === 0) {
             activeBg = undefined;
         }
-        if (!Array.isArray(activeViz) && Number.isInteger(activeViz) && vis.length === 0) {
-            activeViz = undefined;
-        }
 
-        const bgSpecWasUnset = activeBg === undefined;
-        const vizSpecWasUnset = activeViz === undefined;
-        if (bgSpecWasUnset && vizSpecWasUnset) {
-            if (bgs.length > 0) {
-                activeBg = 0;
-            } else if (vis.length > 0) {
-                activeViz = 0;
-            }
+        if (activeBg === undefined && bgs.length > 0) {
+            activeBg = 0;
         }
 
         if (typeof activeBg === "number") {
             activeBg = [activeBg];
             appContext.setOption("activeBackgroundIndex", activeBg);
         }
-        if (typeof activeViz === "number") {
-            activeViz = [activeViz];
-            appContext.setOption("activeVisualizationIndex", activeViz);
+
+        // Fold the `vizSpec` parameter (back-compat) into bg entries. Modern
+        // callers should mutate `background[i].visualizationIndex` directly;
+        // `vizSpec` remains accepted so existing scripting/session-restore
+        // callers keep working.
+        if (vizSpec !== undefined && Array.isArray(activeBg)) {
+            const vizArr = vizSpec === null
+                ? activeBg.map(() => null)
+                : (Array.isArray(vizSpec) ? vizSpec : [vizSpec]);
+            const broadcast = vizArr.length > 0 && Number.isInteger(vizArr[0])
+                ? vizArr[0] as number
+                : undefined;
+            for (let slot = 0; slot < activeBg.length; slot++) {
+                const bgIdx = activeBg[slot];
+                if (!Number.isInteger(bgIdx) || !bgs[bgIdx as number]) continue;
+                const value = slot < vizArr.length ? vizArr[slot] : broadcast;
+                if (Number.isInteger(value)) {
+                    (bgs[bgIdx as number] as any).visualizationIndex = value as number;
+                } else if (value === null) {
+                    (bgs[bgIdx as number] as any).visualizationIndex = null;
+                }
+            }
         }
 
         const nextSnapshot = captureLoadSnapshotFromConfig(config);
@@ -675,8 +704,7 @@ export class ViewerOpenPipeline {
         const backgroundChanged = hadOpenViewerState && JSON.stringify(selectedBackgroundsBefore) !== JSON.stringify(selectedBackgroundsAfter);
         const explicitSelectionUpdate =
             bgSpec !== undefined ||
-            vizSpec !== undefined ||
-            !!opts.deriveOverlayFromBackgroundGoals;
+            vizSpec !== undefined;
         const selectionChangedDuringParse = hadOpenViewerState && explicitSelectionUpdate && selectionStateChanged;
         const anythingVisibleChanged = hadOpenViewerState && (
             visibleLoadChanged(previousSnapshot, nextSnapshot) ||
@@ -925,9 +953,10 @@ export class ViewerOpenPipeline {
                 const entry = bgPlan[viewerIndex];
                 const viewer = viewerManager.viewers[viewerIndex];
                 let backgroundIndex = entry.bgIndices[0];
-                let visualizationIndex = Array.isArray(activeViz)
-                    ? activeViz[viewerIndex]
-                    : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
+                const bgEntry: any = Number.isInteger(backgroundIndex) ? config.background[backgroundIndex as number] : undefined;
+                let visualizationIndex = Number.isInteger(bgEntry?.visualizationIndex)
+                    ? bgEntry.visualizationIndex as number
+                    : undefined;
                 let dataIndexes = collectViewerDataIndexes(backgroundIndex, visualizationIndex);
 
                 const event = {
@@ -963,10 +992,11 @@ export class ViewerOpenPipeline {
                 if (Number.isInteger(event.visualizationIndex)) {
                     visualizationIndex = event.visualizationIndex as number;
                 }
-                if (Array.isArray(activeViz)) {
-                    activeViz[viewerIndex] = visualizationIndex;
-                } else if (Number.isInteger(visualizationIndex) && config.visualizations[visualizationIndex as number]) {
-                    activeViz = [visualizationIndex];
+                // Per-viewer viz state lives on the bg entry — write back any
+                // override produced by the `before-open` handler chain.
+                if (Number.isInteger(backgroundIndex) && config.background[backgroundIndex as number]) {
+                    (config.background[backgroundIndex as number] as any).visualizationIndex =
+                        Number.isInteger(visualizationIndex) ? visualizationIndex : null;
                 }
 
                 dataIndexes = Array.isArray(event.dataIndexes)
@@ -989,7 +1019,6 @@ export class ViewerOpenPipeline {
             }
 
             appContext.setOption("activeBackgroundIndex", activeBg);
-            appContext.setOption("activeVisualizationIndex", activeViz);
         };
 
         const openTile = async (viewer: OpenSeadragon.Viewer, source: any, kind: string, index: number, ctx: any) => {
@@ -1078,14 +1107,14 @@ export class ViewerOpenPipeline {
         await applyBeforeOpenMutations();
 
         const effectiveSnapshot = captureLoadSnapshotFromConfig(config);
-        // captureLoadSnapshotFromConfig reads activeBackgroundIndex /
-        // activeVisualizationIndex via getOption, which falls back to
-        // defaultParams.* (= 0) after a deliberate clear. Override with the
-        // locally-normalized selections so downstream consumers (per-viewer
-        // changeKind, state-binding controller, session sync) see the actual
-        // cleared state instead of a phantom [0] against empty arrays.
+        // captureLoadSnapshotFromConfig reads activeBackgroundIndex via
+        // getOption, which falls back to defaultParams (= 0) after a
+        // deliberate clear. Override with the locally-normalized selection so
+        // downstream consumers (per-viewer changeKind, state-binding
+        // controller, session sync) see the actual cleared state instead of a
+        // phantom [0] against an empty bg array. Viz selection lives on bg
+        // entries already cloned into the snapshot.
         (effectiveSnapshot as any).activeBackgroundIndex = normalizeHistorySelection(activeBg);
-        (effectiveSnapshot as any).activeVisualizationIndex = normalizeHistorySelection(activeViz);
         const viewerUpdatePlans = bgPlan.map((entry: any, viewerIndex: number) => {
             const viewer = viewerManager.viewers[viewerIndex];
             const previousNatureFingerprint = buildViewerNatureFingerprint(previousSnapshot, viewerIndex);
@@ -1094,8 +1123,8 @@ export class ViewerOpenPipeline {
             const nextRenderFingerprint = buildViewerRenderFingerprint(effectiveSnapshot, viewerIndex);
             const previousBgSelection = selectionAt(previousSnapshot?.activeBackgroundIndex, viewerIndex);
             const nextBgSelection = selectionAt(effectiveSnapshot?.activeBackgroundIndex, viewerIndex);
-            const previousVizSelection = selectionAt(previousSnapshot?.activeVisualizationIndex, viewerIndex);
-            const nextVizSelection = selectionAt(effectiveSnapshot?.activeVisualizationIndex, viewerIndex);
+            const previousVizSelection = vizIndexFromSnapshot(previousSnapshot, viewerIndex);
+            const nextVizSelection = vizIndexFromSnapshot(effectiveSnapshot, viewerIndex);
             const selectionChangedForViewer =
                 previousBgSelection !== nextBgSelection ||
                 previousVizSelection !== nextVizSelection;
@@ -1158,9 +1187,12 @@ export class ViewerOpenPipeline {
             const bgi = entry.bgIndices[0];
             if (Number.isInteger(bgi) && bgs[bgi]) openedBase.push(bgs[bgi]);
 
-            let visIndexForThis: number | undefined = Array.isArray(activeViz)
-                ? activeViz[viewerIndex]
-                : (Number.isInteger(activeViz) ? (activeViz as number) : undefined);
+            // Viz for this viewer is the slot's bg entry's `visualizationIndex`.
+            let visIndexForThis: number | undefined;
+            const bgForViewer: any = Number.isInteger(bgi) ? bgs[bgi] : undefined;
+            if (bgForViewer && Number.isInteger(bgForViewer.visualizationIndex)) {
+                visIndexForThis = bgForViewer.visualizationIndex as number;
+            }
 
             const renderingWithWebGL = viewerSupportsFlexRendering && renderingCapability.ok && Array.isArray(vis) && vis.length > 0 && Number.isInteger(visIndexForThis);
             const activeV = renderingWithWebGL ? vis[visIndexForThis as number] : undefined;

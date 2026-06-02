@@ -16,7 +16,7 @@ export class BackgroundConfig implements BackgroundItem {
     shaders?: VisualizationShaderGroupOrLayer[];
     protocol?: string;
     name?: string;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     options?: SlideSourceOptions;
     [key: string]: any;
 
@@ -81,6 +81,15 @@ export class BackgroundConfig implements BackgroundItem {
         } else {
             console.error("BackgroundConfig.from: dataReference is required!");
         }
+
+        // Legacy fold: old configs / sessions use `goalIndex` on the background entry
+        // for the same purpose as `visualizationIndex`. Honor it once and warn so old
+        // session JSONs round-trip cleanly until they are re-saved.
+        if ((config as any).goalIndex !== undefined && config.visualizationIndex === undefined) {
+            config.visualizationIndex = (config as any).goalIndex as number;
+            BackgroundConfig._warnLegacyGoalIndex();
+        }
+        delete (config as any).goalIndex;
 
         config.id = BackgroundConfig.processId(config.id, config);
         const exists = _CONF_REGISTRY.has(config.id);
@@ -177,8 +186,94 @@ export class BackgroundConfig implements BackgroundItem {
 
         delete out._raw;
         delete out._rawValue;
+        // Never emit the deprecated alias on write.
+        delete out.goalIndex;
 
         return out;
+    }
+
+    private static _legacyWarned = { goalIndex: false, activeVisualizationIndex: false };
+
+    private static _warnLegacyGoalIndex() {
+        if (BackgroundConfig._legacyWarned.goalIndex) return;
+        BackgroundConfig._legacyWarned.goalIndex = true;
+        console.warn(
+            "[BackgroundConfig] `background[i].goalIndex` is deprecated; use `visualizationIndex` instead. "
+            + "The legacy field has been folded for this run; re-save your config/session to migrate."
+        );
+    }
+
+    private static _warnLegacyActiveVisualizationIndex() {
+        if (BackgroundConfig._legacyWarned.activeVisualizationIndex) return;
+        BackgroundConfig._legacyWarned.activeVisualizationIndex = true;
+        console.warn(
+            "[BackgroundConfig] top-level `activeVisualizationIndex` is deprecated; visualization is now stored "
+            + "per background entry as `background[i].visualizationIndex`. The legacy value has been distributed "
+            + "onto bg entries for this run; re-save your config/session to migrate."
+        );
+    }
+
+    /**
+     * Fold legacy shape into the current model. Run at config-parse / session-restore
+     * before any code reads visualization state:
+     *   1. `background[i].goalIndex` → `background[i].visualizationIndex`
+     *   2. top-level `activeVisualizationIndex` (number | number[]) → distributed onto
+     *      `background[activeBackgroundIndex[k]].visualizationIndex` for slots that
+     *      don't already carry an explicit `visualizationIndex`.
+     *
+     * Mutates the passed config in place. Idempotent — running twice is safe.
+     */
+    static migrateLegacyConfig(config: any): void {
+        if (!config || typeof config !== "object") return;
+
+        const backgrounds: any[] = Array.isArray(config.background) ? config.background : [];
+        for (const bg of backgrounds) {
+            if (!bg || typeof bg !== "object") continue;
+            if (bg.goalIndex !== undefined && bg.visualizationIndex === undefined) {
+                bg.visualizationIndex = bg.goalIndex;
+                BackgroundConfig._warnLegacyGoalIndex();
+            }
+            delete bg.goalIndex;
+        }
+
+        const params: any = config.params || {};
+        const legacy = params.activeVisualizationIndex !== undefined
+            ? params.activeVisualizationIndex
+            : config.activeVisualizationIndex;
+        if (legacy === undefined || legacy === null) return;
+
+        const activeBg = Array.isArray(params.activeBackgroundIndex)
+            ? params.activeBackgroundIndex
+            : (Number.isInteger(params.activeBackgroundIndex) ? [params.activeBackgroundIndex] : []);
+
+        const asArray = Array.isArray(legacy) ? legacy : [legacy];
+        const broadcast = Number.isInteger(asArray[0]) ? asArray[0] : undefined;
+
+        const targetBgIndices = activeBg.length > 0
+            ? activeBg
+            : backgrounds.map((_, i) => i);
+
+        for (let slot = 0; slot < targetBgIndices.length; slot++) {
+            const bgIdx = targetBgIndices[slot];
+            if (!Number.isInteger(bgIdx)) continue;
+            const bg = backgrounds[bgIdx];
+            if (!bg || typeof bg !== "object") continue;
+            if (bg.visualizationIndex !== undefined) continue;
+            const slotValue = slot < asArray.length ? asArray[slot] : broadcast;
+            if (Number.isInteger(slotValue)) {
+                bg.visualizationIndex = slotValue;
+            } else if (slotValue === null) {
+                bg.visualizationIndex = null;
+            } else if (broadcast !== undefined) {
+                bg.visualizationIndex = broadcast;
+            }
+        }
+
+        BackgroundConfig._warnLegacyActiveVisualizationIndex();
+
+        // Consume — never re-emit. The pipeline / readers now go via bg entries.
+        if (params.activeVisualizationIndex !== undefined) delete params.activeVisualizationIndex;
+        if (config.activeVisualizationIndex !== undefined) delete config.activeVisualizationIndex;
     }
 }
 (window as any).BackgroundConfig = BackgroundConfig;

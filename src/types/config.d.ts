@@ -106,6 +106,12 @@ type XOpatSetup = {
     background?: string | null;
     viewport?: ViewportSetup | ViewportSetup[] | null;
     activeBackgroundIndex?: number | number[] | null;
+    /**
+     * @deprecated Per-viewer visualization is now a property of each background entry
+     * (`config.background[i].visualizationIndex`). Legacy input shape is still accepted —
+     * it is folded into bg entries at config-parse time — but no longer authoritative state
+     * and never emitted on serialization.
+     */
     activeVisualizationIndex?: number | number[] | null;
     grayscale?: boolean | null;
     tileCache?: boolean | null;

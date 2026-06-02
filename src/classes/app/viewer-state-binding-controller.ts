@@ -81,7 +81,7 @@ export class ViewerStateBindingController {
             if (this.appContext.config.visualizations.length > 0) {
                 viewer.getMenu().getShadersTab().updateVisualizationList(
                     this.appContext.config.visualizations,
-                    ViewerSelectionState.getViewerSelectionIndex(viewer, "activeVisualizationIndex", this.appContext)
+                    ViewerSelectionState.getViewerVisualizationIndex(viewer, this.appContext)
                 );
             }
         } catch (e) {

@@ -97,6 +97,13 @@ export class MainLayout extends BaseComponent {
         this._toolbarCollapseBtn = null;
 
         this._syncingDockRequestedState = false;
+        // `params.ui.globalMenu` (or `setup.ui.globalMenu` deployment default)
+        // decides the dock's first-boot state — handy for notebook embeddings
+        // that should not steal screen real estate until the user opts in.
+        // When the flag is unset we leave `visibleNow` undefined so the
+        // VisibilityManager falls back to its own AppCache key (= preserve
+        // user's last manual toggle).
+        const initialDockVisible = APPLICATION_CONTEXT?.getUiOption?.("globalMenu");
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
             () => {
                 if (!this._syncingDockRequestedState) {
@@ -112,10 +119,16 @@ export class MainLayout extends BaseComponent {
                     this._closeFullscreen();
                 }
                 this._applyDockVisibility();
-            }
+            },
+            initialDockVisible === false ? false : undefined
         );
 
-        this._dockRequestedOpen = !!this.visibilityManager?.is?.();
+        // `is()` reads from the v::id cache. When config explicitly hides the
+        // dock, win over a stale cache (e.g. the user toggled it open in a
+        // previous notebook session).
+        this._dockRequestedOpen = initialDockVisible === false
+            ? false
+            : !!this.visibilityManager?.is?.();
 
         if (Array.isArray(options.tabs)) {
             for (const tab of options.tabs) {

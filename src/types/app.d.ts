@@ -96,7 +96,10 @@ type TileSourceDisplayMetadata = TileSourceDisplaySection[];
  *    also be a raw backtick-template URL string (legacy compatibility, discouraged).
  * @property name custom tissue name, default the tissue path
  * @property sessionName overrides the global params.sessionName for this background
- * @property goalIndex preferred visualization index for this background, overrides `activeVisualizationIndex`
+ * @property visualizationIndex the per-background visualization selection — the index into `config.visualizations`
+ *    that this background renders. Authoritative source of truth for per-viewer viz binding; viewer slot k displays
+ *    `config.background[activeBackgroundIndex[k]].visualizationIndex`. `null` means "no overlay for this background".
+ *    Slot reordering / insertion / deletion preserves the bg→viz binding.
  * @property id unique ID for the background, created automatically from data path if not defined
  */
 interface BackgroundItem {
@@ -109,7 +112,7 @@ interface BackgroundItem {
     micronsY?: number;
     name?: string;
     sessionName?: string;
-    goalIndex?: number;
+    visualizationIndex?: number | null;
     id?: string;
     options?: SlideSourceOptions;
     [key: string]: any;
@@ -336,8 +339,8 @@ interface ApplicationContext {
         data?: DataID[],
         background?: BackgroundItem[],
         visualizations?: VisualizationItem[],
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
+        bgSpec?: number | Array<number | undefined> | null,
+        vizSpec?: number | Array<number | undefined> | null,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
     replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
@@ -398,8 +401,8 @@ interface ApplicationContext {
         data?: DataID[],
         background?: BackgroundItem[],
         visualizations?: VisualizationItem[],
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
+        bgSpec?: number | Array<number | undefined> | null,
+        vizSpec?: number | Array<number | undefined> | null,
         opts?: ViewerOpenOptions
     ): Promise<boolean>;
     replaceVisualizations(visualizations: VisualizationItem[], newData?: DataID[], activeVizIndex?: number | number[]): Promise<boolean>;
@@ -469,10 +472,8 @@ interface XOpatUtilities {
         name: string | undefined
     ): void;
 
-    parseBackgroundAndGoal(
-        bgSpec?: number | number[] | null,
-        vizSpec?: number | number[] | null,
-        opts?: { deriveOverlayFromBackgroundGoals?: boolean }
+    parseBackgroundSelection(
+        bgSpec?: number | Array<number | undefined> | null
     ): boolean;
 
     toggleVisualizationInspector(enabled?: boolean): boolean;

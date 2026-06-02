@@ -2836,20 +2836,20 @@ form.submit();
                 .map(({ bgIndex }: { bgIndex: number | undefined }) => bgIndex)
                 .filter((value: number | undefined) => Number.isInteger(value));
 
-            const activeVisualizationIndex = resolved.length > 0
-                ? resolved.map(({ vizIndex }: { vizIndex: number | undefined }) => vizIndex)
-                : undefined;
-
             APPLICATION_CONTEXT.setOption(
                 "activeBackgroundIndex",
                 activeBackgroundIndex.length > 0 ? activeBackgroundIndex : undefined,
             );
-            APPLICATION_CONTEXT.setOption(
-                "activeVisualizationIndex",
-                activeVisualizationIndex && activeVisualizationIndex.some(v => v !== undefined)
-                    ? activeVisualizationIndex
-                    : undefined,
-            );
+
+            // Per-viewer viz selection lives on each background entry as
+            // `visualizationIndex`. Write each slot's resolved viz index onto
+            // its corresponding bg entry; null clears it.
+            resolved.forEach(({ bgIndex, vizIndex }: { bgIndex: number | undefined, vizIndex: number | undefined }) => {
+                if (!Number.isInteger(bgIndex)) return;
+                const bg: any = backgrounds[bgIndex as number];
+                if (!bg) return;
+                bg.visualizationIndex = Number.isInteger(vizIndex) ? vizIndex as number : null;
+            });
         },
 
         getViewerIOContext: function (viewerOrUniqueId: any, stripSuffix = true) {
@@ -2863,7 +2863,7 @@ form.submit();
             }
             if (!viewer) return undefined;
 
-            const index = VIEWER_MANAGER.getViewerIndex?.(viewer.uniqueId || viewer.id || '', false);
+            const index = VIEWER_MANAGER.getViewerSlotIndex?.(viewer);
             const refItem = viewer.scalebar?.getReferencedTiledImage?.() || viewer.world?.getItemAt?.(0);
             const bgConfig = refItem?.getConfig?.('background') || {};
             const itemConfig = refItem?.getConfig?.() || {};
@@ -3421,6 +3421,13 @@ form.submit();
          * Get viewer by ID. This method is usable only when the viewer the viewer is already loaded.
          * Honors the documented contract that callers may pass a transient `undefined` —
          * see `getViewerContext` for the slide-switch / RAF-deferred case.
+         *
+         * Note: `uniqueId` is data-derived (from `BackgroundConfig.id`), so when
+         * multiple viewports are opened against the same slide they share the
+         * same `uniqueId` and this method returns the **first** match. Callers
+         * needing a specific viewport must keep the viewer reference directly,
+         * or pass the OSD cellId (e.g. `osd-1`) which routes via the `v.id`
+         * fallback.
          */
         getViewer(uniqueId: string | undefined, _warn = true): OpenSeadragon.Viewer | undefined {
             if (typeof uniqueId !== "string" || !uniqueId) return undefined;
@@ -3485,6 +3492,15 @@ form.submit();
             return undefined;
         }
 
+        /**
+         * String-id slot lookup. Returns the slot index of the FIRST viewer
+         * whose `uniqueId` (or `id`/cellId fallback) matches. Because
+         * `uniqueId` is data-derived (see `findViewerUniqueId`), two viewports
+         * opened against the same slide intentionally share `uniqueId` and
+         * therefore this method cannot distinguish them. For per-viewer-instance
+         * slot routing (selection slots, replay markers, per-viewer cursors),
+         * use {@link getViewerSlotIndex} with the viewer reference instead.
+         */
         getViewerIndex(uniqueId: string, _warn = true): number {
             let index = this.viewers.findIndex(v => v.uniqueId === uniqueId);
             if (index < 0) {
@@ -3495,6 +3511,19 @@ form.submit();
                 }
             }
             return index;
+        }
+
+        /**
+         * Slot index of a specific viewer instance. Unlike
+         * {@link getViewerIndex}, this is per-viewer-instance and is *not*
+         * fooled by viewers that share a data-derived `uniqueId` (i.e. multiple
+         * viewports opening the same slide). Always prefer this when routing
+         * per-viewer selection slots such as `activeBackgroundIndex` /
+         * `activeVisualizationIndex`.
+         */
+        getViewerSlotIndex(viewer: OpenSeadragon.Viewer | undefined | null): number {
+            if (!viewer) return -1;
+            return this.viewers.indexOf(viewer);
         }
 
         /**
@@ -3818,7 +3847,6 @@ form.submit();
             // Ctrl/Cmd so plain wheel falls through to the host page. Uses OSD's
             // canvas-scroll contract — preventDefaultAction skips the zoom,
             // preventDefault=false lets the browser propagate the wheel.
-            debugger;
             if (APPLICATION_CONTEXT.getOption('scrollRequiresCtrl')) {
                 let lastHintAt = 0;
                 viewer.addHandler('canvas-scroll', (e: any) => {

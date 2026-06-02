@@ -484,25 +484,20 @@ export class XOpatVisualizationScriptApi extends XOpatScriptingApi implements Vi
     }
 
     protected getActiveVisualizationSelection(): Array<number | undefined> | undefined {
-        const raw = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, true, true);
-        if (raw === undefined || raw === null) {
-            return undefined;
-        }
-
-        if (Array.isArray(raw)) {
-            return raw.map((entry: any) => {
-                if (Number.isInteger(entry)) {
-                    return entry;
-                }
-                return undefined;
-            });
-        }
-
-        if (Number.isInteger(raw)) {
-            return [raw];
-        }
-
-        return undefined;
+        // Derive per-slot viz from each active background entry's
+        // `visualizationIndex` field — the new single source of truth.
+        const activeBg = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+        const slots: Array<number | undefined> = Array.isArray(activeBg)
+            ? activeBg
+            : (Number.isInteger(activeBg) ? [activeBg] : []);
+        if (slots.length === 0) return undefined;
+        const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background)
+            ? APPLICATION_CONTEXT.config.background
+            : [];
+        return slots.map((bgIdx: any) => {
+            const v = Number.isInteger(bgIdx) ? backgrounds[bgIdx as number]?.visualizationIndex : undefined;
+            return Number.isInteger(v) ? v as number : undefined;
+        });
     }
 
     protected buildVisualizationStateSnapshot(): VisualizationStateSnapshot {

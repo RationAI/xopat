@@ -135,28 +135,14 @@ export class RightSideViewerMenu extends BaseComponent {
             onShaderChange: customShaderChange ? (value) => {
                 customShaderChange(value, { viewerPositionId: this.viewerPositionId });
             } : (value) => {
-                // Todo think of a better way of orchestrating this, e.g. open(...) method for a target viewer.
                 const parsedValue = Number.parseInt(value, 10);
                 const nextValue = Number.isInteger(parsedValue) ? parsedValue : null;
                 const index = VIEWER_MANAGER.getViewerIndex(this.viewerPositionId, false);
                 const targetViewerIndex = Number.isInteger(index) && index >= 0 ? index : 0;
 
-                if (typeof APPLICATION_CONTEXT.updateViewerSelection === "function") {
-                    APPLICATION_CONTEXT.updateViewerSelection(targetViewerIndex, {
-                        visualizationIndex: nextValue
-                    });
-                    return;
-                }
-
-                const storedActiveViz = APPLICATION_CONTEXT.getOption("activeVisualizationIndex", undefined, false, true);
-                let activeViz;
-                if (Array.isArray(storedActiveViz)) {
-                    activeViz = storedActiveViz.slice();
-                    activeViz[targetViewerIndex] = nextValue === null ? undefined : nextValue;
-                } else {
-                    activeViz = nextValue === null ? [undefined] : nextValue;
-                }
-                APPLICATION_CONTEXT.openViewerWith(undefined, undefined, undefined, undefined, activeViz);
+                APPLICATION_CONTEXT.updateViewerSelection(targetViewerIndex, {
+                    visualizationIndex: nextValue
+                });
             },
             onOpacityChange: customOpacityChange ? (value) => customOpacityChange(value) : (value) => {
                 Dialogs.show("Global layer opacity is not supported for now. Please raise an issue if you need this feature.", 5000, Dialogs.MSG_WARN);

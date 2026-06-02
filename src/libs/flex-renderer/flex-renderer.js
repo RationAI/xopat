@@ -1,5 +1,5 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
+//! Built on 2026-06-02
 //! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -775,6 +775,37 @@
          */
         getPresentationCanvas() {
             return this.presentationCanvas;
+        }
+
+        /**
+         * Convert a client-space point ({clientX, clientY}) into renderer
+         * framebuffer pixels. Returned coordinates are physical pixels with
+         * bottom-left origin, directly comparable to `gl_FragCoord.xy`, and
+         * are devicePixelRatio-aware.
+         *
+         * Forwards to the attached drawer when available (the drawer owns the
+         * on-page event target). Falls back to using the presentation canvas
+         * as both the framebuffer source and the bounding-rect source, which
+         * is correct when the presentation canvas is the DOM-attached canvas.
+         *
+         * @param {{clientX: number, clientY: number}} point
+         * @return {{x: number, y: number}}
+         */
+        clientPointToFramebufferPx(point) {
+            if (this.drawer && typeof this.drawer.clientPointToFramebufferPx === "function") {
+                return this.drawer.clientPointToFramebufferPx(point);
+            }
+            const canvas = this.presentationCanvas;
+            if (!canvas || typeof canvas.getBoundingClientRect !== "function") {
+                return { x: 0, y: 0 };
+            }
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = rect.width ? canvas.width / rect.width : 1;
+            const scaleY = rect.height ? canvas.height / rect.height : 1;
+            return {
+                x: (point.clientX - rect.left) * scaleX,
+                y: (rect.bottom - point.clientY) * scaleY,
+            };
         }
 
         /**
@@ -13816,16 +13847,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         }
 
         /**
-         * Convert a DOM pointer/mouse event into renderer framebuffer pixels.
+         * Convert a client-space point ({clientX, clientY} from a DOM event,
+         * or any object with those fields) into renderer framebuffer pixels.
          *
-         * Returned coordinates use physical framebuffer pixels with bottom-left origin,
-         * directly comparable to `gl_FragCoord.xy`.
+         * Returned coordinates use physical framebuffer pixels with bottom-left
+         * origin, directly comparable to `gl_FragCoord.xy`. The conversion is
+         * devicePixelRatio-aware because `canvas.width / rect.width` already
+         * folds DPR into the scale factor.
          *
-         * @private
-         * @param {PointerEvent|MouseEvent} event
+         * Intended for application code that drives `inspector.centerPx` from
+         * a pointer event. Returns `{x:0, y:0}` when no canvas or event target
+         * is available.
+         *
+         * @param {{clientX: number, clientY: number}} point
          * @return {{x: number, y: number}}
          */
-        _getInteractionPositionPx(event) {
+        clientPointToFramebufferPx(point) {
             const canvas = this.renderer && this.renderer.getPresentationCanvas();
             const target = this._getInteractionEventTarget();
 
@@ -13838,9 +13875,20 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const scaleY = rect.height ? canvas.height / rect.height : 1;
 
             return {
-                x: (event.clientX - rect.left) * scaleX,
-                y: (rect.bottom - event.clientY) * scaleY,
+                x: (point.clientX - rect.left) * scaleX,
+                y: (rect.bottom - point.clientY) * scaleY,
             };
+        }
+
+        /**
+         * Convert a DOM pointer/mouse event into renderer framebuffer pixels.
+         *
+         * @private
+         * @param {PointerEvent|MouseEvent} event
+         * @return {{x: number, y: number}}
+         */
+        _getInteractionPositionPx(event) {
+            return this.clientPointToFramebufferPx(event);
         }
 
         /**
@@ -15032,6 +15080,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     }
                 });
             this.renderer = new $.FlexRenderer(rendererOptions);
+            this.renderer.drawer = this;
 
             this.renderer.setDataBlendingEnabled(true); // enable alpha blending
             this.webGLVersion = this.renderer.webglVersion;
@@ -24869,7 +24918,7 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
+//! Built on 2026-06-02
 //! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -25489,7 +25538,7 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
+//! Built on 2026-06-02
 //! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
@@ -26198,7 +26247,7 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-01
+//! Built on 2026-06-02
 //! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/

@@ -96,7 +96,7 @@ export abstract class XOpatScriptingApi implements ScriptApiObject {
 
     protected get activeViewerIndex(): number {
         const viewer = this.activeViewer;
-        const viewerIndex = VIEWER_MANAGER?.getViewerIndex?.(viewer.uniqueId, false);
+        const viewerIndex = VIEWER_MANAGER?.getViewerSlotIndex?.(viewer);
 
         if (!Number.isInteger(viewerIndex) || viewerIndex < 0) {
             throw new Error("The active viewer is not registered in the viewer manager.");

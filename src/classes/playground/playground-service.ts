@@ -431,9 +431,18 @@ function buildUserDrivenViewerPageSeed(viewer: any) {
     const cfg = APP?.config || {};
     const visualizations: any[] = Array.isArray(cfg.visualizations) ? cfg.visualizations : [];
 
-    const rawIdx = APP?.getOption?.("activeVisualizationIndex", undefined, true, true);
-    const activeVisualizationIndex = normalizeActiveVisualizationIndex(rawIdx) ?? [0];
-    const activeIdx = pickActiveIndex(activeVisualizationIndex);
+    // Per-viewer viz lives on each active background entry as
+    // `visualizationIndex`. Derive slot-aligned array from the live config.
+    const rawActiveBg = APP?.getOption?.("activeBackgroundIndex", undefined, true, true);
+    const activeBgArr: number[] = Array.isArray(rawActiveBg)
+        ? rawActiveBg
+        : (Number.isInteger(rawActiveBg) ? [rawActiveBg] : []);
+    const bgArrCfg: any[] = Array.isArray(cfg.background) ? cfg.background : [];
+    const activeVisualizationIndex: Array<number | undefined> = activeBgArr.map((bgIdx: any) => {
+        const v = Number.isInteger(bgIdx) ? bgArrCfg[bgIdx as number]?.visualizationIndex : undefined;
+        return Number.isInteger(v) ? v as number : undefined;
+    });
+    const activeIdx = pickActiveIndex(activeVisualizationIndex.length ? activeVisualizationIndex : [0]);
     const cfgActiveViz = visualizations[activeIdx];
 
     const viewerBackgrounds = collectViewerBackgrounds(viewer);
@@ -617,11 +626,13 @@ function buildDefaultActions(pages: PlaygroundPageHandle[]): ModalAction[] {
                 const cfg = APP?.config || {};
                 const edited = page.getScene?.() ?? { background: undefined, visualization: undefined };
 
-                const activeIdx = pickActiveIndex(
-                    normalizeActiveVisualizationIndex(
-                        APP?.getOption?.("activeVisualizationIndex", undefined, true, true),
-                    ),
-                );
+                // Derive the active viz index from the slot-0 background entry's
+                // `visualizationIndex` (new per-bg model).
+                const rawActiveBg = APP?.getOption?.("activeBackgroundIndex", undefined, true, true);
+                const slot0Bg = Array.isArray(rawActiveBg) ? rawActiveBg[0] : rawActiveBg;
+                const bgArrCfg2: any[] = Array.isArray(cfg.background) ? cfg.background : [];
+                const slot0Viz = Number.isInteger(slot0Bg) ? bgArrCfg2[slot0Bg as number]?.visualizationIndex : undefined;
+                const activeIdx = Number.isInteger(slot0Viz) ? slot0Viz as number : 0;
                 const baseVis = Array.isArray(cfg.visualizations) ? cfg.visualizations.map((v: any) => v) : [];
                 if (edited.visualization) {
                     if (baseVis.length) baseVis[activeIdx] = edited.visualization;
@@ -638,7 +649,6 @@ function buildDefaultActions(pages: PlaygroundPageHandle[]): ModalAction[] {
                         : (Array.isArray(cfg.background) ? cfg.background : []),
                     visualizations: baseVis,
                     activeBackgroundIndex: undefined,
-                    activeVisualizationIndex: undefined,
                 };
 
                 try {
