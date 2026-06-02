@@ -12,6 +12,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
     pluginReady() {
         this._overlay = new JobResultsOverlay();
         this._empaiaConvertor = null;
+        UTILITIES.loadPlugin('gui_annotations');
 
         const tOr = (key, fallback) => {
             const translated = $.t(key);
@@ -266,7 +267,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
             }
 
             console.log('[analyze] rendering', allShapes.length, 'annotations from job', finalJob.id);
-            this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
+            await this._overlay.addJobResults(finalJob.id, allShapes, viewerId);
 
         } catch (e) {
             console.error('[analyze] _fetchAndRenderResults failed', e);
@@ -477,7 +478,7 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         status.textContent = tOr('analyze.jobReady', 'Ready');
 
         runBtn.addEventListener('click', async () => {
-            const viewerId = String(VIEWER.id);
+            const viewerId = String(VIEWER.uniqueId);
             try {
                 runBtn.disabled = true;
                 status.textContent = tOr('analyze.jobStarting', 'Starting...');
@@ -645,4 +646,5 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
 
         return row;
     }
+
 });
