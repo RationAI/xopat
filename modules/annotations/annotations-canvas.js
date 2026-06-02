@@ -21,6 +21,12 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             this.spatialIndex.attachTo(this.overlay.fabric);
         }
 
+        // Wire selection changes to the cluster cache. The cache key in
+        // `SpatialIndex.clusters` includes `selectionVersion` — without this
+        // bump, a newly-selected annotation that lives inside a cluster pill
+        // stays absorbed in the cache's stale suppression set and is invisible.
+        this._bindSelectionCacheInvalidation();
+
         this.__selectionSnapshot = [];
         this.__programmaticClear = false;   // to avoid firing clear selection events from fabric on empty clicks
 
@@ -390,19 +396,24 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const trackHistory = options.history !== false;
 
         let toImport;
-        try {
-            toImport = await OSDAnnotations.Convertor.decode(options, data, this);
-        } catch (e) {
-            const formats = OSDAnnotations.Convertor.formats;
-            const triedFormat = options.format;
-            console.log(`Failed to load annotations as ${options.format}: ${e}, attempt to parse some of the remaining supported formats:`, formats);
+        if (options.format === "auto") {
+            // Auto mode: try suffix-hinted format first, then fall back to every
+            // registered convertor in order. The first success wins and the
+            // resolved format is reported back to the caller via options.format.
+            const formats = OSDAnnotations.Convertor.formats.slice();
+            const hint = options.filename
+                ? OSDAnnotations.Convertor.detectFromFilename(options.filename)
+                : null;
+            if (hint) {
+                const i = formats.indexOf(hint);
+                if (i > 0) { formats.splice(i, 1); formats.unshift(hint); }
+            }
 
-            for (let format of formats) {
-                if (format === triedFormat) continue;
+            for (const format of formats) {
                 try {
                     options.format = format;
                     toImport = await OSDAnnotations.Convertor.decode(options, data, this);
-                    console.log("Successfully parsed as", format);
+                    console.log("Auto-detected annotation format:", format);
                     break;
                 } catch (_e) {
                     // pass
@@ -410,8 +421,15 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             if (!toImport) {
-                console.error("No supported format was able to parse provided annotations data!");
+                options.format = "auto";
+                throw new Error("Auto-detect failed: no registered convertor could parse the provided data.");
             }
+        } else {
+            // Strict mode: do not silently substitute formats. If the chosen
+            // convertor cannot parse the file, propagate the error so the UI
+            // can show a clear message instead of pretending success with the
+            // wrong format.
+            toImport = await OSDAnnotations.Convertor.decode(options, data, this);
         }
 
         let imported = false;
@@ -652,8 +670,19 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      * @return {OSDAnnotations.Layer} layer it belongs to
      */
     checkLayer(ofObject) {
-        if (!this._layers.hasOwnProperty(ofObject.layerID) && ofObject.hasOwnProperty("layerID") && String(ofObject.layerID)) {
-            this._createLayer({id: ofObject.layerID, _objects: []});
+        // Guard against undefined/null/empty layerID. JS gotcha: `String(undefined)`
+        // returns the string "undefined" (truthy), so the previous
+        // `String(ofObject.layerID)` test wasn't actually rejecting "no layer"
+        // objects — it was creating a phantom layer with id=undefined for
+        // every imported annotation that lacks an explicit layerID
+        // (e.g. DICOM SR imports). That phantom layer then appeared in the UI
+        // as "Layer 1" with an undefined .id, breaking move-to-layer (its
+        // undefined id round-trips back to setAnnotationLayer as null,
+        // triggering the `oldLayerId === target` early-exit).
+        const lid = ofObject?.layerID;
+        if (lid === undefined || lid === null || String(lid) === '') return;
+        if (!this._layers.hasOwnProperty(lid)) {
+            this._createLayer({id: lid, _objects: []});
         }
     }
 
@@ -986,166 +1015,6 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     }
 
     /**
-     * Move an annotation up or down by one position. For layered annotations
-     * the swap happens within the layer's `_objects`. For root annotations
-     * the swap happens within `_boardOrder` among other annotation entries.
-     * Single undoable history entry.
-     * @param {fabric.Object} annotation
-     * @param {'up'|'down'} direction
-     * @returns {boolean} true if order changed
-     */
-    moveAnnotation(annotation, direction) {
-        if (!annotation) return false;
-        const layer = annotation.layerID ? this.getLayer(String(annotation.layerID)) : null;
-        const layerId = layer ? String(layer.id) : null;
-        const notify = () => {
-            this.canvas.requestRenderAll();
-            try { this.raiseEvent('layer-objects-changed', { layerId }); } catch (e) { /* non-fatal */ }
-        };
-        const swap = () => {
-            if (layer) return layer.swapAnnotation(annotation, direction);
-            // root annotation: swap in _boardOrder among annotation entries
-            const order = this._boardOrder;
-            const id = String(annotation.incrementId);
-            const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
-            if (idx === -1) return false;
-            const step = direction === 'up' ? -1 : 1;
-            // find next neighbor that is also an annotation entry (skip layers)
-            let target = idx + step;
-            while (target >= 0 && target < order.length && order[target].type !== 'annotation') {
-                target += step;
-            }
-            if (target < 0 || target >= order.length) return false;
-            [order[idx], order[target]] = [order[target], order[idx]];
-            return true;
-        };
-        const reverseDir = direction === 'up' ? 'down' : 'up';
-        let changed = false;
-        APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(); if (changed) notify(); return changed; },
-            () => {
-                // undo: swap the other direction
-                if (layer) layer.swapAnnotation(annotation, reverseDir);
-                else {
-                    const order = this._boardOrder;
-                    const id = String(annotation.incrementId);
-                    const idx = order.findIndex(e => e.type === 'annotation' && e.id === id);
-                    if (idx !== -1) {
-                        const step = reverseDir === 'up' ? -1 : 1;
-                        let target = idx + step;
-                        while (target >= 0 && target < order.length && order[target].type !== 'annotation') target += step;
-                        if (target >= 0 && target < order.length) {
-                            [order[idx], order[target]] = [order[target], order[idx]];
-                        }
-                    }
-                }
-                notify();
-                return true;
-            },
-            { name: direction === 'up' ? 'Move annotation up' : 'Move annotation down' }
-        );
-        return changed;
-    }
-
-    /**
-     * Move a contiguous group of annotations up or down by one position as a
-     * unit. The block is shifted by taking the non-member annotation entry
-     * immediately past the block in the chosen direction and re-inserting it
-     * on the opposite side — equivalent to "the predecessor row jumps over
-     * the entire block". Cost is O(N) over the backing array regardless of
-     * block size.
-     *
-     * Members must all share the same level (root or one specific layer).
-     * Layer entries in `_boardOrder` are treated as transparent (skipped),
-     * matching the per-annotation `moveAnnotation` behaviour.
-     *
-     * @param {fabric.Object[]} annotations the block to move
-     * @param {'up'|'down'} direction
-     * @returns {boolean} true if order changed
-     */
-    moveAnnotationBlock(annotations, direction) {
-        if (!Array.isArray(annotations) || annotations.length === 0) return false;
-        if (annotations.length === 1) return this.moveAnnotation(annotations[0], direction);
-
-        const layer = annotations[0].layerID
-            ? this.getLayer(String(annotations[0].layerID))
-            : null;
-
-        // For layered blocks the backing array is the layer's _objects
-        // (homogeneous: all fabric objects). For root blocks it's _boardOrder
-        // (mixed annotation+layer entries), where layer entries are skipped.
-        const isLayered = !!layer;
-        const memberIds = new Set(annotations.map(a => String(a.incrementId)));
-
-        const findBoundaries = () => {
-            const arr = isLayered ? layer._objects : this._boardOrder;
-            let lo = -1, hi = -1;
-            for (let i = 0; i < arr.length; i++) {
-                const entry = arr[i];
-                const id = isLayered
-                    ? String(entry.incrementId)
-                    : (entry.type === 'annotation' ? String(entry.id) : null);
-                if (id !== null && memberIds.has(id)) {
-                    if (lo === -1) lo = i;
-                    hi = i;
-                }
-            }
-            return { arr, lo, hi };
-        };
-
-        const isAnnotationEntry = (entry) => isLayered || entry?.type === 'annotation';
-        const isMemberEntry = (entry) => {
-            const id = isLayered
-                ? String(entry?.incrementId)
-                : (entry?.type === 'annotation' ? String(entry?.id) : null);
-            return id !== null && memberIds.has(id);
-        };
-
-        const swap = (dir) => {
-            const { arr, lo, hi } = findBoundaries();
-            if (lo === -1) return false;
-
-            if (dir === 'up') {
-                // Predecessor: nearest non-member annotation entry before lo,
-                // skipping layer entries (root only).
-                let pi = lo - 1;
-                while (pi >= 0 && (!isAnnotationEntry(arr[pi]) || isMemberEntry(arr[pi]))) pi--;
-                if (pi < 0) return false;
-                const [predecessor] = arr.splice(pi, 1);
-                // Removing at pi (< hi) shifts hi down by 1. We want to land
-                // the predecessor immediately after the block, i.e. at the
-                // original hi index (which is the new hi+1).
-                arr.splice(hi, 0, predecessor);
-                return true;
-            } else {
-                // Successor: nearest non-member annotation entry after hi.
-                let pj = hi + 1;
-                while (pj < arr.length && (!isAnnotationEntry(arr[pj]) || isMemberEntry(arr[pj]))) pj++;
-                if (pj >= arr.length) return false;
-                const [successor] = arr.splice(pj, 1);
-                // Removing at pj (> hi) does not shift lo. Insert at lo so the
-                // successor lands immediately before the block.
-                arr.splice(lo, 0, successor);
-                return true;
-            }
-        };
-
-        const reverseDir = direction === 'up' ? 'down' : 'up';
-        const notifyLayerId = isLayered ? String(layer.id) : null;
-        const notify = () => {
-            this.canvas.requestRenderAll();
-            try { this.raiseEvent('layer-objects-changed', { layerId: notifyLayerId }); } catch (e) { /* non-fatal */ }
-        };
-        let changed = false;
-        APPLICATION_CONTEXT.history.push(
-            () => { changed = swap(direction); if (changed) notify(); return changed; },
-            () => { swap(reverseDir); notify(); return true; },
-            { name: direction === 'up' ? 'Move group up' : 'Move group down' }
-        );
-        return changed;
-    }
-
-    /**
      * Move a layer up or down in board order (only swaps with neighboring
      * layer entries, skipping any annotation entries in between).
      * @param {OSDAnnotations.Layer} layer
@@ -1369,13 +1238,199 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         // The source must always be in the resulting group — otherwise
         // "Group same X" on annotation Y would leave Y outside the group.
         if (!matching.includes(annotation)) matching = [annotation, ...matching];
-        if (matching.length === 0) return { moved: 0, targetLayerId: null };
+
+        const effectiveTarget = target.kind === 'new'
+            ? { ...target, name: target.name || this._defaultLayerNameForCriterion(criterion, sourceKey) }
+            : target;
+
+        return this._moveAnnotationsIntoLayer(
+            matching,
+            effectiveTarget,
+            'Group annotations by ' + criterion
+        );
+    }
+
+    /**
+     * Group an explicit list of annotations (typically the current selection)
+     * into a single layer — same semantics as `groupSiblingsByCriterion` but
+     * the membership is caller-supplied instead of criterion-derived.
+     *
+     * @param {fabric.Object[]} annotations annotations to move into the target layer
+     * @param {{kind:'new', name?:string}|{kind:'layer', layerId:string}} target
+     * @return {{moved:number, targetLayerId:string}|null}
+     */
+    groupAnnotationsIntoLayer(annotations, target) {
+        return this._moveAnnotationsIntoLayer(
+            Array.isArray(annotations) ? annotations.slice() : [],
+            target,
+            'Group selected annotations'
+        );
+    }
+
+    /**
+     * Find the nearest visible annotation vertex to (x, y) within
+     * `screenRadiusPx` screen pixels. Returns the snapped {x, y} in image
+     * coords, or null if no candidate is close enough.
+     *
+     * Candidate selection uses the rbush spatial index (no linear scan of
+     * canvas._objects). Point extraction delegates to each factory's
+     * `toPointArray` — external factories participate automatically.
+     */
+    findSnapTarget(x, y, screenRadiusPx) {
+        if (!this.spatialIndex) return null;
+
+        // Toggle in DevTools: `window.__SNAP_DEBUG = true` to enable logs.
+        const DBG = !!(typeof window !== 'undefined' && window.__SNAP_DEBUG);
+
+        // Screen-px → image-px conversion. scalebar is the cheap path; when
+        // it isn't yet wired up (slide-switch edge cases) fall back to OSD's
+        // viewport math so a freshly-opened slide still snaps.
+        const v = this.viewer;
+        let pxScale = v?.scalebar?.imagePixelSizeOnScreen?.();
+        if (!pxScale || !isFinite(pxScale) || pxScale <= 0) {
+            try {
+                const Pt = window.OpenSeadragon?.Point;
+                const tiledImage = v?.world?.getItemAt?.(0);
+                if (Pt && v?.viewport && tiledImage) {
+                    const dvp = v.viewport.deltaPointsFromPixels(new Pt(1, 0));
+                    const imgWidth = tiledImage.source?.dimensions?.x
+                        || tiledImage.getContentSize?.()?.x;
+                    if (dvp && imgWidth) pxScale = 1 / (dvp.x * imgWidth);
+                }
+            } catch (e) { /* keep pxScale falsy */ }
+        }
+        if (!pxScale || !isFinite(pxScale) || pxScale <= 0) return null;
+
+        // Floor the image radius: at deep zoom-in, screenRadiusPx / pxScale
+        // can be sub-pixel — a strict distance test would then fail even on
+        // a visually on-target click. Half an image px is plenty of slack.
+        let imageRadius = screenRadiusPx / pxScale;
+        if (imageRadius < 0.5) imageRadius = 0.5;
+        const r2 = imageRadius * imageRadius;
+
+        const searchBox = {
+            minX: x - imageRadius, minY: y - imageRadius,
+            maxX: x + imageRadius, maxY: y + imageRadius,
+        };
+        const hits = this.spatialIndex._tree.search(searchBox);
+
+        // SpatialIndex segregates oversized annotations into a separate array
+        // (bbox > oversizedAreaRatio * slide bbox — common for big WSIs).
+        // They never enter the rbush, so an rbush-only search would miss
+        // them even when the click is right on a vertex. Same story for the
+        // `_dirty` set during mid-drag. visibleObjects() merges all three;
+        // do the same here with a manual bbox-intersect (cheap, both are
+        // typically tiny).
+        const candidates = new Set();
+        for (let i = 0; i < hits.length; i++) candidates.add(hits[i]._obj);
+        const intersectsSearch = (b) =>
+            b && b.maxX >= searchBox.minX && b.minX <= searchBox.maxX
+              && b.maxY >= searchBox.minY && b.minY <= searchBox.maxY;
+        const overs = this.spatialIndex._oversized;
+        if (Array.isArray(overs)) {
+            for (let i = 0; i < overs.length; i++) {
+                if (intersectsSearch(overs[i]._idxBox)) candidates.add(overs[i]);
+            }
+        }
+        const dirty = this.spatialIndex._dirty;
+        if (dirty && dirty.size) {
+            for (const o of dirty) if (intersectsSearch(o._idxBox)) candidates.add(o);
+        }
+        if (!candidates.size) return null;
+
+        if (DBG) console.log('[snap] in | xy', x.toFixed(3), y.toFixed(3),
+            '| screenR', screenRadiusPx, '| pxScale', pxScale, '| imageR', imageRadius.toFixed(3),
+            '| tree', hits.length, '| oversized', overs?.length || 0,
+            '| dirty', dirty?.size || 0, '| candidates', candidates.size);
+
+        // Cluster-suppressed annotations don't render their vertices, so they
+        // shouldn't be snap targets. The clusters() call is cached per
+        // viewport inside SpatialIndex, so this is cheap.
+        let suppressed = null;
+        try {
+            const vpt = this.canvas?.vptCoords;
+            if (vpt) suppressed = this.spatialIndex.clusters(vpt, this.canvas)?.suppressed || null;
+        } catch (e) { /* non-fatal */ }
+
+        // The factory (not the mode) is what holds the in-progress reference.
+        // StateCustomCreate caches it as `_lastUsed`; the mode itself has no
+        // getCurrentObject method, so reading it off the mode directly was a
+        // dead path that always yielded undefined.
+        const inProgress = this.module?.mode?._lastUsed?.getCurrentObject?.() ?? null;
+
+        let best = null;
+        let bestD2 = r2;
+        for (const obj of candidates) {
+            if (!this._isSnapCandidate(obj, suppressed, inProgress)) continue;
+
+            const factory = this.module.getAnnotationObjectFactory?.(obj.factoryID);
+            if (!factory || typeof factory.getSnapVertices !== 'function') continue;
+
+            // getSnapVertices is the snap-canonical source — factories
+            // whose toPointArray is geometry-export-shaped (ellipse
+            // perimeter, text top-left) override it to return real visual
+            // vertices instead.
+            let pts;
+            try { pts = factory.getSnapVertices(obj); }
+            catch (e) { continue; }
+            if (!Array.isArray(pts) || pts.length === 0) continue;
+
+            if (DBG) {
+                const cp = typeof obj.getCenterPoint === 'function' ? obj.getCenterPoint() : null;
+                const br = typeof obj.getBoundingRect === 'function' ? obj.getBoundingRect(true, true) : null;
+                const sv = pts[0] || {};
+                console.log('[snap] cand', obj.factoryID,
+                    '| origin', obj.originX, obj.originY,
+                    '| L T', (obj.left ?? 0).toFixed(3), (obj.top ?? 0).toFixed(3),
+                    '| rx ry', (obj.rx ?? 0).toFixed(3), (obj.ry ?? 0).toFixed(3),
+                    '| W H', (obj.width ?? 0).toFixed(3), (obj.height ?? 0).toFixed(3),
+                    '| sX sY', obj.scaleX, obj.scaleY,
+                    '| snapVerts[0]', sv.x?.toFixed?.(3), sv.y?.toFixed?.(3),
+                    '| fabricCenter', cp?.x?.toFixed?.(3), cp?.y?.toFixed?.(3),
+                    '| bRect L T W H', br?.left?.toFixed?.(3), br?.top?.toFixed?.(3),
+                    br?.width?.toFixed?.(3), br?.height?.toFixed?.(3),
+                    '| pts.length', pts.length);
+            }
+
+            for (let j = 0; j < pts.length; j++) {
+                const p = pts[j];
+                if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') continue;
+                const dx = p.x - x, dy = p.y - y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 <= bestD2) {
+                    bestD2 = d2;
+                    best = p;
+                }
+            }
+        }
+        if (DBG) console.log('[snap] out', best?.x?.toFixed?.(3), best?.y?.toFixed?.(3));
+        return best ? { x: best.x, y: best.y } : null;
+    }
+
+    _isSnapCandidate(obj, suppressed, inProgress) {
+        if (!obj || obj === inProgress) return false;
+        if (obj.isHelperAnnotation) return false;
+        if (obj.isHighlight) return false;
+        if (obj.visible === false) return false;
+        if (suppressed && suppressed.has(obj)) return false;
+        if (obj.layerID) {
+            const layer = this.getLayer(String(obj.layerID));
+            if (layer && layer.visible === false) return false;
+        }
+        if (this.module.isAnnotationFilteredOut?.(obj)) return false;
+        return true;
+    }
+
+    _moveAnnotationsIntoLayer(matching, target, opName) {
+        if (!Array.isArray(matching) || matching.length === 0 || !target) {
+            return { moved: 0, targetLayerId: null };
+        }
 
         // Resolve / create the target layer.
         let targetLayerId;
         if (target.kind === 'new') {
-            const layerName = this._defaultLayerNameForCriterion(criterion, sourceKey);
             const newId = String(Date.now()) + '-grp';
+            const layerName = target.name || 'Group';
             // Hint the panel to collapse this layer on creation.
             this.collapsedLayerHints.add(newId);
             this._createLayer({ id: newId, name: layerName, visible: true, _objects: [] });
@@ -1384,15 +1439,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             targetLayerId = String(target.layerId);
             if (!this.getLayer(targetLayerId)) return null;
         }
-        if (sourceLayerId === targetLayerId) {
-            // Already in destination — nothing to do.
-            return { moved: 0, targetLayerId };
-        }
+
+        // Skip annotations already in the destination — undo would otherwise
+        // have to no-op them and the history step would be misleading.
+        const toMove = matching.filter(a => a && String(a.layerID ?? '') !== targetLayerId);
+        if (toMove.length === 0) return { moved: 0, targetLayerId };
 
         // Snapshot original state for undo. Capture old indices so undo can
         // restore them; oldBoardIndex is only meaningful for items currently
         // at root.
-        const snapshot = matching.map(obj => ({
+        const snapshot = toMove.map(obj => ({
             obj,
             oldLayerId: obj.layerID ? String(obj.layerID) : null,
             oldBoardIndex: !obj.layerID
@@ -1455,10 +1511,10 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         APPLICATION_CONTEXT.history.push(
             () => { moveTo(this.getLayer(targetLayerId)); return true; },
             () => { restore(); return true; },
-            { name: 'Group annotations by ' + criterion }
+            { name: opName }
         );
 
-        return { moved: matching.length, targetLayerId };
+        return { moved: toMove.length, targetLayerId };
     }
 
     /** Used by groupSiblingsByCriterion to name a freshly-created layer.
@@ -1530,9 +1586,18 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         }
         targetAnnots.sort((a, b) => (a._position ?? 0) - (b._position ?? 0));
 
+        // Clone each annot so the inverse can re-add a fresh, structurally
+        // independent copy of the pre-delete state — insulating undo from
+        // any later mutation/reuse of the deleted reference (e.g. paste
+        // pipeline calling factory.copy on it).
+        const restoreClones = targetAnnots.map(annot => {
+            const f = annot._factory?.();
+            return f && typeof f.copy === 'function' ? f.copy(annot) : annot;
+        });
+
         APPLICATION_CONTEXT.history.push(
             () => targetAnnots.forEach(annot => this._deleteAnnotation(annot, _raise)),
-            () => targetAnnots.forEach(annot => this._addAnnotation(annot, _raise)),
+            () => restoreClones.forEach(clone => this._addAnnotation(clone, _raise)),
             { name: 'Delete annotation' }
         )
 
@@ -1846,6 +1911,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     addHelperAnnotation(annotation) {
         annotation.excludeFromExport = true;
+        annotation.isHelperAnnotation = true;
         this.canvas.add(annotation);
     }
 
@@ -2064,19 +2130,26 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
     // and bypass the resource — by design.
     _deleteAnnotation (annotation, _raise = true){
         if (!annotation) return false;
+        // History-replay paths can hold a stale ref (e.g. delete was first
+        // applied to ref A, undone with a clone B added in A's place, redo
+        // now reaches us with the stale A). Resolve to the canonical canvas
+        // resident by incrementId so the remove actually fires.
+        const canonical = (annotation.canvas !== this.canvas && annotation.incrementId !== undefined)
+            ? (this.findObjectOnCanvasByIncrementId(annotation.incrementId) || annotation)
+            : annotation;
         // todo, fires event -> respect _raise flag?
-        if (this.isAnnotationSelected(annotation)) this.deselectAnnotation(annotation, true);
+        if (this.isAnnotationSelected(canonical)) this.deselectAnnotation(canonical, true);
 
-        this.canvas.remove(annotation);
-        this.removeAnnotationFromLayer(annotation);
-        if (!annotation.layerID) this.removeBoardItem('annotation', annotation.incrementId);
-        if (annotation.incrementId !== undefined && annotation.incrementId !== null) {
-            this._byIncrementId.delete(Number(annotation.incrementId));
+        this.canvas.remove(canonical);
+        this.removeAnnotationFromLayer(canonical);
+        if (!canonical.layerID) this.removeBoardItem('annotation', canonical.incrementId);
+        if (canonical.incrementId !== undefined && canonical.incrementId !== null) {
+            this._byIncrementId.delete(Number(canonical.incrementId));
         }
         this.canvas.requestRenderAll();
 
         if (_raise) {
-            this.raiseEvent('annotation-delete', {object: annotation});
+            this.raiseEvent('annotation-delete', {object: canonical});
         }
         return true;
     }
@@ -2087,6 +2160,7 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         if (Array.isArray(annotation._objects)) {
             for (let child of annotation._objects) delete child.excludeFromExport;
         }
+        delete annotation.isHelperAnnotation;
         annotation.sessionID = this.module.session;
         annotation.author = XOpatUser.instance().id;
         annotation.created = annotation.created || Date.now();
@@ -2139,6 +2213,16 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
     _replaceAnnotation(previous, next, updateUI) {
         let boardIndex = undefined;
+
+        // History-replay paths can hold a stale `previous` ref (e.g. the
+        // captured object was swapped out of the canvas by another history
+        // entry's apply/inverse, and a clone with the same incrementId
+        // landed in its place). Resolve to the canonical canvas resident
+        // so remove + cache update actually target the visible object.
+        if (previous && previous.canvas !== this.canvas && previous.incrementId !== undefined) {
+            const onCanvas = this.findObjectOnCanvasByIncrementId(previous.incrementId);
+            if (onCanvas) previous = onCanvas;
+        }
 
         const hadLayer =
             previous &&
@@ -2480,9 +2564,32 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     deleteAnnotation(annotation, _raise=true) {
         if (!annotation) return false;
+
+        // If a doppelganger stand-in is on canvas in place of `annotation`
+        // (FFT working copy, edit-mode preview, …), dismiss it first so the
+        // canvas transitions stand-in → empty without flashing the original.
+        const dop = annotation.internalID !== undefined
+            ? this._trackedDoppelGangers[annotation.internalID]
+            : undefined;
+        if (dop) this._dismissDoppelganger(dop, annotation);
+
+        // Clone so the inverse restores a structurally independent snapshot
+        // — see deleteObject for the rationale.
+        const f = annotation._factory?.();
+        const restoreClone = f && typeof f.copy === 'function' ? f.copy(annotation) : annotation;
+        // Preserve entity identity so subsequent undo/redo of *other* history
+        // entries that captured this annotation by reference can still find
+        // it on the canvas via incrementId/internalID after this entry's
+        // inverse re-adds the clone.
+        if (restoreClone !== annotation) {
+            if (annotation.internalID !== undefined) restoreClone.internalID = annotation.internalID;
+            if (annotation.incrementId !== undefined) restoreClone.incrementId = annotation.incrementId;
+            if (annotation.sessionID !== undefined) restoreClone.sessionID = annotation.sessionID;
+            if (annotation.id !== undefined) restoreClone.id = annotation.id;
+        }
         const result = this.module.annotationResource.delete(annotation.incrementId, {
             apply:        () => { this._deleteAnnotation(annotation, _raise); },
-            inverseApply: () => { this._addAnnotation(annotation, _raise); },
+            inverseApply: () => { this._addAnnotation(restoreClone, _raise); },
             meta: { kind: 'delete', object: annotation, viewerId: this.viewer?.uniqueId },
             rollbackOnAsyncRefuse: true,
         });
@@ -2660,6 +2767,31 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 console.error("Doppelganger annotation not consistently tracked!", id, original, doppelganger);
             }
         }
+    }
+
+    /**
+     * Tear down an active doppelganger stand-in without re-displaying the
+     * original. Untracks the entry, releases the shared `internalID`, and
+     * removes the stand-in from the canvas + its layer. Mirrors the
+     * bookkeeping side of `replaceAnnotation(...,true)`'s "full circle"
+     * branch but skips re-adding `original` to the canvas — used when the
+     * caller intends to delete the underlying annotation, not return to it.
+     * @param {fabric.Object} doppelganger
+     * @param {fabric.Object} original
+     * @private
+     */
+    _dismissDoppelganger(doppelganger, original) {
+        if (!doppelganger) return;
+        const id = doppelganger.internalID;
+        if (id !== undefined && this._trackedDoppelGangers[id] === doppelganger) {
+            this._trackDoppelganger(id, doppelganger, original, false);
+        }
+        delete doppelganger.internalID;
+        if (doppelganger.layerID !== undefined && doppelganger.layerID !== null
+            && String(doppelganger.layerID) !== '') {
+            this.removeAnnotationFromLayer(doppelganger);
+        }
+        this.canvas.remove(doppelganger);
     }
 
     _doppelgangerClear() {
@@ -3217,6 +3349,32 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
         });
 
+        // Double-click cycles selection through stacked overlaps —
+        // dig into the annotation immediately below the currently active
+        // one at the click point. Uses the precise (geometry) hit-test so
+        // it only steps to objects that GENUINELY contain the pointer,
+        // not just objects whose bbox happens to. Repeated double-clicks
+        // drill further down; a regular click elsewhere resets the cycle.
+        this.canvas.on('mouse:dblclick', function (o) {
+            if (_this.module.disabledInteraction) return;
+            const pointer = o.pointer || _this.canvas.getPointer(o.e);
+            const active = _this.canvas.getActiveObject();
+            const next = _this.canvas.findNextObjectUnderMousePrecise?.(pointer, active);
+            if (!next || next === active) return;
+            // Route through the same path a single click takes — preserves
+            // event emission (`annotation-selection-changed`), edit-mode
+            // sync, board-panel update. We don't honor ctrl/shift here
+            // (those would convert the cycle into a multi-select gesture);
+            // the synthetic event below carries no modifier state so
+            // _objectClicked takes its plain-click branch.
+            const syntheticEvent = {
+                target: next,
+                e: { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, preventDefault: () => {}, stopPropagation: () => {} },
+                pointer: pointer,
+            };
+            _this._objectClicked(syntheticEvent, undefined);
+        });
+
         this.canvas.on('mouse:wheel', function (o) {
             if (_this.module.disabledInteraction) return;
 
@@ -3233,6 +3391,65 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         this.canvas.on('selection:cleared', function(e) {
             if (!_this.__programmaticClear && e.deselected && e.deselected.length > 0) _this.canvas.setActiveObject(e.deselected[0]);
             _this.__programmaticClear = false;
+        });
+
+        // After fabric finishes a drag we follow the same clone-based pattern
+        // as edit-mode commit: revert `target` to its pre-drag state, build a
+        // clone that represents the post-drag state, and route through
+        // `replaceAnnotation(target, clone, false)`. That records one history
+        // entry via `annotationResource.update`; the inverse swaps `target`
+        // (pre-drag, untouched) back in. Doppelganger drags inside an edit
+        // session are excluded — the surrounding endSelectionEdit owns history.
+        this.canvas.on('object:modified', function (e) {
+            const target = e.target;
+            const action = e.transform?.action;
+            if (!target || action !== 'drag') return;
+
+            const original = e.transform?.original;
+            if (!original || original.left == null || original.top == null) {
+                target.setCoords();
+                return;
+            }
+            const deltaX = target.left - original.left;
+            const deltaY = target.top - original.top;
+            if (!deltaX && !deltaY) { target.setCoords(); return; }
+
+            const factory = target._factory?.();
+
+            // Doppelganger drag: sync internal points so the edit-target's
+            // geometry stays consistent for the upcoming recalculate; do
+            // NOT push history here — the edit-session commit handles it.
+            if (target._isDoppelganger) {
+                if (factory && typeof factory.move === 'function') {
+                    factory.move(target, deltaX, deltaY, true);
+                } else {
+                    target.setCoords();
+                }
+                return;
+            }
+
+            if (!factory || typeof factory.copy !== 'function' || typeof factory.move !== 'function') {
+                // Best-effort sync without history if the factory can't clone.
+                if (factory && typeof factory.move === 'function') {
+                    factory.move(target, deltaX, deltaY, true);
+                } else {
+                    target.setCoords();
+                }
+                return;
+            }
+
+            // Put `target` back to its pre-drag left/top so it can act as the
+            // "old version" inside the history entry. Fabric only mutated
+            // left/top during the drag — for point-based shapes `.points`
+            // were untouched, so a left/top revert is enough.
+            target.set({ left: original.left, top: original.top });
+            target.setCoords();
+
+            // Build the post-drag annotation as an independent clone.
+            const clone = factory.copy(target);
+            factory.move(clone, deltaX, deltaY);
+
+            _this.replaceAnnotation(target, clone, false);
         });
 
         /****** E V E N T  L I S T E N E R S: OSD  (called when navigating) **********/
@@ -3361,7 +3578,14 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
             }
 
             if (originalEvent.altKey) {
-                let nextObject = this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
+                // Cycle to the next-below annotation that GENUINELY contains
+                // the pointer (uses the same precise hit-test as the primary
+                // selection path). Falls back to the bbox-only cycle if the
+                // precise helper isn't on this prototype for any reason.
+                const findPrecise = this.canvas.findNextObjectUnderMousePrecise;
+                let nextObject = findPrecise
+                    ? findPrecise.call(this.canvas, event.pointer, clickedObject)
+                    : this.canvas.findNextObjectUnderMouse(event.pointer, clickedObject);
                 if (!nextObject) return;
                 clickedObject = nextObject;
             }
@@ -3403,6 +3627,9 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
      */
     highlightAnnotation(selectedObject) {
         this.removeHighlight();
+
+        // Do not highlight ein edit mode
+        if (this.isOngoingEditOf?.(selectedObject)) return;
 
         let factory = this.module.getAnnotationObjectFactory(selectedObject.factoryID);
         if (!factory) return;
@@ -3446,6 +3673,22 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
         const zoom = this.canvas.computeGraphicZoom(this.viewer.viewport);
         const graphicZoom = this.canvas.computeGraphicZoom(this.viewer.viewport) / zoom;
 
+        // Per-factory pre-enliven reconstruction. The native exporter trims
+        // each annotation down to the geometric primitives the factory owns
+        // (e.g. multipolygon stores `points` rings but not the SVG `path`
+        // string; ruler/angle store endpoints but not the centred-origin
+        // wrapper). fabric.util.enlivenObjects can't recover any of that on
+        // its own — initializeBeforeImport is the factory's chance to
+        // rebuild the blueprint so the enlivened object is renderable.
+        for (const raw of input.objects) {
+            if (!raw || typeof raw !== 'object') continue;
+            const factory = this.module.getAnnotationObjectFactory(raw.factoryID || raw.type);
+            if (factory && typeof factory.initializeBeforeImport === 'function') {
+                try { factory.initializeBeforeImport(raw); }
+                catch (e) { console.warn('initializeBeforeImport failed for', raw.factoryID || raw.type, e); }
+            }
+        }
+
         return new Promise((resolve, reject) => {
             fabric.util.enlivenObjects(input.objects, async (objects) => {
                 try {
@@ -3483,6 +3726,11 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
 
                         self.checkLayer(obj);
                         self.module.checkAnnotation(obj, zoom, graphicZoom);
+                        // Force coord recompute before insertion so the
+                        // spatial-index hook on _onObjectAdded sees a valid
+                        // bounding rect (otherwise group children with
+                        // post-configure origin flips can leave _idxBox: NaN).
+                        if (typeof obj.setCoords === 'function') obj.setCoords();
                         _this.insertAt(obj, insertion++);
 
                         const hasLayer =
@@ -3543,6 +3791,22 @@ OSDAnnotations.FabricWrapper = class OSDAnnotationsFabricWrapper extends XOpatVi
                 }
             });
         });
+    }
+
+    _bindSelectionCacheInvalidation() {
+        if (!this.canvas) return;
+        const set = this.canvas.setActiveObject.bind(this.canvas);
+        this.canvas.setActiveObject = (e, t) => {
+            const r = set(e, t);
+            this.spatialIndex?.bumpSelection?.();
+            return r;
+        };
+        const disc = this.canvas._discardActiveObject.bind(this.canvas);
+        this.canvas._discardActiveObject = (e, t) => {
+            const r = disc(e, t);
+            this.spatialIndex?.bumpSelection?.();
+            return r;
+        };
     }
 
     _debugActiveObjectBinder() {

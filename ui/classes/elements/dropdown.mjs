@@ -2,6 +2,7 @@ import van from "../../vanjs.mjs";
 import {BaseComponent, BaseSelectableComponent} from "../baseComponent.mjs";
 import {Button} from "./buttons.mjs";
 import {FAIcon} from "./fa-icon.mjs";
+import {PhIcon, iconComponentFor} from "./ph-icon.mjs";
 
 const { div, ul, li, a, span, i } = van.tags;
 
@@ -59,7 +60,7 @@ class Dropdown extends BaseSelectableComponent {
     createButton() {
         const inIcon = (this.icon instanceof BaseComponent)
             ? this.icon
-            : new FAIcon({ name: this.icon });
+            : iconComponentFor(this.icon);
 
         this._headerIconComp = inIcon;
         this._headerLabelSpan = span(this.title);
@@ -69,7 +70,7 @@ class Dropdown extends BaseSelectableComponent {
         if (this._useActiveSelection) {
             dropdownIcon = i(
                 { "data-dropdown-arrow": "1", class: "ml-0 pr-3 pl-1" },
-                new FAIcon({ name: "fa-caret-down" }).create()
+                new PhIcon({ name: "ph-caret-down" }).create()
             );
             buttonClasses['padding'] = 'pr-0';
             inIcon.setClass('dropdownPadding', 'pl-2')
@@ -203,11 +204,28 @@ class Dropdown extends BaseSelectableComponent {
             this._headerLabelSpan.textContent = item.label;
         }
         const btnEl = document.getElementById(this.headerButton.id);
-        if (btnEl && typeof item.label === "string") {
-            btnEl.title = item.label;
+        const headerTitle = (typeof item.title === "string" ? item.title
+            : (typeof item.label === "string" ? item.label : undefined));
+        if (btnEl && typeof headerTitle === "string") {
+            btnEl.title = headerTitle;
         }
-        if (this._headerIconComp instanceof FAIcon && typeof item.icon === "string") {
-            this._headerIconComp.changeIcon(item.icon);
+        if (typeof item.icon === "string") {
+            const wantsPh = item.icon.trim().startsWith('ph-');
+            const isPh = this._headerIconComp instanceof PhIcon;
+            const isFa = this._headerIconComp instanceof FAIcon;
+            // Same family: in-place glyph swap. Different family or unknown:
+            // rebuild the header icon component so the wrapper class flips
+            // between fa-auto and ph-light (otherwise the codepoint renders
+            // through the wrong font and produces tofu / unrelated glyphs).
+            if ((wantsPh && isPh) || (!wantsPh && isFa)) {
+                this._headerIconComp.changeIcon(item.icon);
+            } else {
+                const oldEl = document.getElementById(this._headerIconComp.id);
+                const newComp = iconComponentFor(item.icon);
+                const newEl = newComp.create();
+                if (oldEl && oldEl.parentNode) oldEl.parentNode.replaceChild(newEl, oldEl);
+                this._headerIconComp = newComp;
+            }
         }
     }
     _removeFocus() {}
@@ -346,11 +364,18 @@ class Dropdown extends BaseSelectableComponent {
             node.setAttribute("aria-current", isTarget ? "true" : "false");
 
             // 2. Toggle Background Highlight (ONLY if NOT check style)
+            // _renderItem bakes the initial selection in with `!`-prefixed
+            // Tailwind variants (e.g. `!bg-primary/100`). Toggling only the
+            // non-prefixed variant here would leave the original selection
+            // stuck purple. Mirror the variant set used by setItemSelected.
             if (!isCheckStyle) {
                 node.classList.toggle("bg-primary/100", isTarget);
+                node.classList.toggle("!bg-primary/100", isTarget);
                 node.classList.toggle("text-primary-content", isTarget);
                 node.classList.toggle("hover:bg-primary/200", isTarget);
+                node.classList.toggle("!hover:bg-primary/200", isTarget);
                 node.classList.toggle("focus:bg-primary/200", isTarget);
+                node.classList.toggle("!focus:bg-primary/200", isTarget);
             }
 
             // 3. Toggle Checkmark Visibility (ONLY if check style)
@@ -375,7 +400,7 @@ class Dropdown extends BaseSelectableComponent {
     /* ---------------- rendering ---------------- */
 
     _renderIcon(icon) {
-        return new FAIcon({name: icon}).create();
+        return iconComponentFor(icon).create();
     }
 
     _renderItem(item, styleOverride = null) {
@@ -393,6 +418,7 @@ class Dropdown extends BaseSelectableComponent {
             "aria-current": selected ? "true" : "false",
             tabindex: "-1",
             href: item.href || undefined,
+            title: item.title || (typeof item.label === "string" ? item.label : undefined),
             class: [
                 "flex items-center gap-3 rounded-md px-3 py-2",
                 // Highlight background ONLY if NOT in check mode
@@ -422,13 +448,15 @@ class Dropdown extends BaseSelectableComponent {
         let leftIconSlot;
         if (isCheckStyle) {
             // Always create check icon, toggle visibility via class
-            const checkIcon = new FAIcon({name: "fa-check"}).create();
+            const checkIcon = new PhIcon({name: "ph-check"}).create();
             checkIcon.classList.add("check-icon"); // Marker class for setSelected
             if (!selected) checkIcon.classList.add("invisible");
 
             leftIconSlot = div({class: "w-5 text-center text-primary"}, checkIcon);
-        } else {
+        } else if (item.icon) {
             leftIconSlot = this._renderIcon(item.icon);
+        } else {
+            leftIconSlot = null;
         }
 
         const labelBlock = div({ class: "flex-1 min-w-0" },
@@ -439,7 +467,7 @@ class Dropdown extends BaseSelectableComponent {
         // --- Right Side Slot ---
         let rightSide = null;
         if (hasChildren) {
-            const chevron = new FAIcon({ name: "fa-chevron-right" }).create();
+            const chevron = new PhIcon({ name: "ph-caret-right" }).create();
             if (isCheckStyle && item.icon) {
                 // Check mode: Icon + Chevron
                 rightSide = span({ class: "text-xs opacity-60 flex items-center gap-2" },

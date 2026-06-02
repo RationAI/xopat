@@ -6,8 +6,93 @@ if (!defined( 'ABSPATH' )) {
 global $MODULES;
 $MODULES = array();
 
+// Modules only participate in the "available" config-gate. The "whitelist"
+// mode is a plugin concept (modules are infrastructure pulled in by plugins;
+// dropping a required module surfaces as a plugin-level missing-dep error via
+// the existing dependency check).
+
 include_once PHP_INCLUDES . "comments.class.php";
 use Ahc\Json\Comment;
+
+/**
+ * Resolve a dot-path inside an element's own (merged) record. Returns null
+ * when any path segment is missing. Used by the "available" plugin-selection
+ * mode to test whether all `requiredConfig` paths are populated.
+ */
+function xopat_required_config_value(array $data, string $path) {
+    $segments = explode('.', $path);
+    $cursor = $data;
+    foreach ($segments as $segment) {
+        if (is_array($cursor) && array_key_exists($segment, $cursor)) {
+            $cursor = $cursor[$segment];
+        } else {
+            return null;
+        }
+    }
+    return $cursor;
+}
+
+/**
+ * "Configured" means present and not undefined/null/empty-string. Booleans
+ * `false` and the number `0` count as configured (intentional choices).
+ */
+function xopat_required_config_is_set($value): bool {
+    if ($value === null) return false;
+    if (is_string($value) && $value === '') return false;
+    return true;
+}
+
+/**
+ * True iff every dot-path in $paths resolves to a configured value in at
+ * least one of the supplied $records (variadic). A non-array / missing
+ * $paths list is treated as no gate (returns true). With no records, a
+ * non-empty $paths list returns false.
+ *
+ * Records are the deployment-supplied source-of-truth for the gate:
+ *   - first record: pre-merge ENV block ($ENV['plugins'][$id] / $ENV['modules'][$id]).
+ *   - second record: preserved server-secure block
+ *     ($GLOBALS['CORE_SECURE']['plugins'][$id] / ...['modules'][$id]) — set
+ *     by core.php before the strip. Pass an empty array when the secure
+ *     block is unavailable; the gate then degrades to ENV-only.
+ *
+ * Include.json defaults are intentionally NOT consulted — the merged
+ * record is never passed in.
+ */
+function xopat_required_config_satisfied($paths, ...$records): bool {
+    if (!is_array($paths)) return true;
+    foreach ($paths as $reqPath) {
+        if (!is_string($reqPath) || $reqPath === '') continue;
+        $satisfied = false;
+        foreach ($records as $rec) {
+            if (!is_array($rec)) continue;
+            $resolved = xopat_required_config_value($rec, $reqPath);
+            if (xopat_required_config_is_set($resolved)) {
+                $satisfied = true;
+                break;
+            }
+        }
+        if (!$satisfied) return false;
+    }
+    return true;
+}
+
+/**
+ * Resolve the active `pluginSelectionMode` from $CORE['client']. Falls back
+ * to "all" for unset/invalid values and warns once. Shared between
+ * modules.php and plugins.php.
+ */
+function xopat_resolve_plugin_selection_mode(): string {
+    global $CORE;
+    $valid = ['all', 'whitelist', 'available'];
+    if (is_array($CORE) && isset($CORE['client']) && is_array($CORE['client'])
+        && isset($CORE['client']['pluginSelectionMode'])
+        && is_string($CORE['client']['pluginSelectionMode'])) {
+        $mode = $CORE['client']['pluginSelectionMode'];
+        if (in_array($mode, $valid, true)) return $mode;
+        trigger_error("Unknown pluginSelectionMode '{$mode}' - falling back to 'all'.", E_USER_WARNING);
+    }
+    return 'all';
+}
 
 /**
  * Expands glob patterns within an array of includes.
@@ -33,6 +118,8 @@ function expand_include_globs($basePath, $includes) {
     }
     return $expanded;
 }
+
+$XOPAT_MODULE_SELECTION_MODE = xopat_resolve_plugin_selection_mode();
 
 foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
     $full_path = ABS_MODULES . "$dir/";
@@ -107,14 +194,48 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 $data['requires'] = [];
             }
 
+            // Author server manifest (server.json) — optional. See plugins.php
+            // for full semantics. Mirrors `requiredConfig` hoist + author-secure
+            // stash for modules.
+            $serverManifestPath = $full_path . "server.json";
+            if (file_exists($serverManifestPath)) {
+                $serverManifest = (new Comment)->decode(file_get_contents($serverManifestPath), true);
+                if (is_array($serverManifest)) {
+                    if (isset($serverManifest['requiredConfig']) && is_array($serverManifest['requiredConfig'])) {
+                        $existing = (isset($data['requiredConfig']) && is_array($data['requiredConfig']))
+                            ? $data['requiredConfig'] : [];
+                        $data['requiredConfig'] = array_values(array_unique(
+                            array_merge($existing, $serverManifest['requiredConfig'])));
+                    }
+                    $authorSecure = $serverManifest;
+                    unset($authorSecure['requiredConfig']);
+                    if (!empty($authorSecure) && !empty($data['id'])) {
+                        $GLOBALS['CORE_AUTHOR_SECURE']['modules'][$data['id']] = $authorSecure;
+                    }
+                }
+            }
+
+            // Pre-merge captures: deployment-ENV module block AND preserved
+            // server-secure module block. Include.json defaults must NOT
+            // pollute the gate input. The secure block is read from the
+            // pre-strip backup in $GLOBALS['CORE_SECURE'] (set by core.php)
+            // — $CORE['server']['secure'] is already gone by this point.
+            $envBlock = [];
+            $secBlock = [];
             try {
                 global $ENV, $MODULES;
                 if (is_array($ENV)) {
                     if (!isset($ENV["modules"]) || !is_array($ENV["modules"])) $ENV["modules"] = [];
                     $ENV_MOD = $ENV["modules"];
 
-                    if (isset($ENV_MOD[$data["id"]])) {
-                        $data = array_merge_recursive_distinct($data, $ENV_MOD[$data["id"]]);
+                    if (isset($ENV_MOD[$data["id"]]) && is_array($ENV_MOD[$data["id"]])) {
+                        $envBlock = $ENV_MOD[$data["id"]];
+                        $data = array_merge_recursive_distinct($data, $envBlock);
+                    }
+
+                    if (isset($GLOBALS['CORE_SECURE']['modules'][$data["id"]])
+                        && is_array($GLOBALS['CORE_SECURE']['modules'][$data["id"]])) {
+                        $secBlock = $GLOBALS['CORE_SECURE']['modules'][$data["id"]];
                     }
 
                     if (ENABLE_PERMA_LOAD && isset($data["permaLoad"]) && $data["permaLoad"]) {
@@ -127,7 +248,10 @@ foreach (array_diff(scandir(ABS_MODULES), array('..', '.')) as $_=>$dir) {
                 trigger_error($e, E_USER_WARNING);
             }
 
-            if (!isset($data["enabled"]) || $data["enabled"] != false) {
+            $enabledNotFalse = !isset($data["enabled"]) || $data["enabled"] != false;
+            $configSatisfied = $XOPAT_MODULE_SELECTION_MODE !== 'available'
+                || xopat_required_config_satisfied($data["requiredConfig"] ?? null, $envBlock, $secBlock);
+            if ($enabledNotFalse && $configSatisfied) {
                 $MODULES[$data["id"]] = $data;
             }
         }

@@ -6,6 +6,10 @@
   "buildEntry": "recorder-plugin.ts",
   "author": "Aiosa",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild recorder-plugin.ts --bundle --format=iife --sourcemap --minify --outfile=index.workspace.js --loader:.css=text"
+  },
+  "dependencies": {
+    "easymde": "^2.21.0"
   }
 }

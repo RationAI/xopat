@@ -1,63 +1,21 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-05-04
-//! Git commit: --168232c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
 (function($) {
     /**
-     * @typedef {Object} ShaderConfig
-     * @property {String} shaderConfig.id
-     * @property {String} shaderConfig.name
-     * @property {String} shaderConfig.type         equal to ShaderLayer.type(), e.g. "identity"
-     * @property {Number} shaderConfig.visible      1 = use for rendering, 0 = do not use for rendering
-     * @property {Boolean} shaderConfig.fixed
-     * @property {Object} shaderConfig.params          settings for the ShaderLayer
-     * @property {OpenSeadragon.TiledImage[]|number[]} tiledImages images that provide the data
-     * @property {Object} shaderConfig._controls       storage for the ShaderLayer's controls
-     * @property {Object} shaderConfig.cache          cache object used by the ShaderLayer's controls
-     */
-
-    /**
-     * @typedef {Object} FPRenderPackageItem
-     * @property {WebGLTexture[]} texture           [TEXTURE_2D]
-     * @property {Float32Array} textureCoords
-     * @property {Float32Array} transformMatrix
-     * //todo provide also opacity per tile?
-     */
-
-    /**
-     * @typedef {Object} FPRenderPackage
-     * @property {FPRenderPackageItem} tiles
-     * @property {Number[][]} stencilPolygons
-     */
-
-    /**
-     * @typedef {Object} SPRenderPackage
-     * @property {Number} zoom
-     * @property {Number} pixelsize
-     * @property {Number} opacity
-     * @property {ShaderLayer} shader
-     * @property {Uint8Array|undefined} iccLut  TODO also support error rendering by passing some icon texture & rendering where nothing was rendered but should be (-> use mask, but how we force tiles to come to render if they are failed?  )
-     */
-
-    /**
      * @typedef HTMLControlsHandler
      * Function that attaches HTML controls for ShaderLayer's controls to DOM.
      * @type function
      * @param {OpenSeadragon.FlexRenderer.ShaderLayer} [shaderLayer]
-     * @param {ShaderConfig} [shaderConfig]
+     * @param {ShaderLayerConfig} [shaderConfig]
      * @returns {String}
      */
 
     /**
-     * @typedef {Object} RenderOutput
-     * @property {Number} textureDepth
-     * @property {Number} stencilDepth
-     */
-
-    /**
-     * @typedef {Object} InspectorState
+     * @typedef {object} InspectorState
      * @property {boolean} enabled master switch for inspector logic
      * @property {"reveal-inside"|"reveal-outside"|"lens-zoom"} mode interaction mode
      * @property {{x: number, y: number}} centerPx inspector center in canvas pixel space
@@ -68,10 +26,39 @@
      */
 
     /**
-     * @typedef {Object} InspectorStateUpdateOptions
+     * @typedef {object} InspectorStateUpdateOptions
      * @property {boolean} [notify=true] emit the `inspector-change` event
      * @property {boolean} [redraw=true] request a redraw after the state change
      * @property {string} [reason="set-inspector-state"] semantic reason included in the emitted event
+     */
+
+    /**
+     * Renderer-owned interaction state exposed to generated GPU programs.
+     *
+     * Position fields use physical renderer framebuffer pixels with bottom-left origin,
+     * directly comparable to `gl_FragCoord.xy`.
+     *
+     * @typedef {object} InteractionState
+     * @property {boolean} enabled - Whether shader-visible interaction state is enabled.
+     * @property {boolean} pointerInside - Whether the pointer is currently inside the interaction target.
+     * @property {{x: number, y: number}} pointerPositionPx - Current pointer position.
+     * @property {number} activeButtons - Current MouseEvent.buttons-compatible button bitmask.
+     * @property {{x: number, y: number}} lastClickPositionPx - Last accepted click position.
+     * @property {number} lastClickButtons - MouseEvent.buttons-compatible bitmask for the last click.
+     * @property {number} clickSerial - Monotonic serial incremented for each accepted click.
+     * @property {boolean} dragActive - Whether a drag is currently active.
+     * @property {{x: number, y: number}} dragStartPositionPx - Start position of the current or last drag.
+     * @property {{x: number, y: number}} dragCurrentPositionPx - Current drag position.
+     * @property {{x: number, y: number}} dragEndPositionPx - End position of the last completed drag.
+     * @property {number} dragButtons - MouseEvent.buttons-compatible bitmask associated with the drag.
+     * @property {number} dragSerial - Monotonic serial incremented for each completed drag.
+     */
+
+    /**
+     * @typedef {Object} InteractionStateUpdateOptions
+     * @property {boolean} [notify=true] emit the `interaction-change` event
+     * @property {boolean} [redraw=true] request a redraw after the state change
+     * @property {string} [reason="set-interaction-state"] semantic reason included in the emitted event
      */
 
     /**
@@ -85,68 +72,340 @@
      */
 
     /**
+     * Renderer-ready first-pass raster tile data.
+     *
+     * @typedef {object} FPRenderRasterTile
+     * @property {WebGLTexture[]} texture           [TEXTURE_2D]
+     * @property {Float32Array} textureCoords
+     * @property {Float32Array} transformMatrix
+     * //todo provide also opacity per tile?
+     */
+
+    /**
+     * Texture preparation options shared by renderer backends.
+     *
+     * These options are renderer-neutral. They must not expose OpenSeadragon
+     * objects or backend constants.
+     *
+     * @typedef {object} RasterTileTextureOptions
+     * @property {boolean} [imageSmoothingEnabled=false] - Whether prepared textures should use linear filtering when supported.
+     */
+
+    /**
+     * Renderer-neutral bitmap tile preparation options.
+     *
+     * `data` may be a browser image-like source such as a Blob, ImageBitmap,
+     * HTMLImageElement, HTMLCanvasElement, CanvasRenderingContext2D, or
+     * OffscreenCanvas. Backends decide which concrete source types they support.
+     *
+     * @typedef {object} PrepareBitmapTileOptions
+     * @property {*} data - Bitmap-like source data to prepare.
+     * @property {RasterTileTextureOptions} [textureOptions] - Texture preparation options.
+     */
+
+    /**
+     * Typed array accepted as a GPU texture-set pack payload.
+     *
+     * @typedef {Uint8Array | Uint8ClampedArray | Uint16Array | Float32Array } GpuTextureSetPackData
+     */
+
+    /**
+     * One packed texture layer in a GPU texture-set tile payload.
+     *
+     * The current WebGL2 implementation supports `RGBA8` and `RGBA16F`.
+     * `RGBA8` data is uploaded as RGBA/UNSIGNED_BYTE. `RGBA16F` data is
+     * uploaded as RGBA/HALF_FLOAT.
+     *
+     * @typedef {object} GpuTextureSetPack
+     * @property {"RGBA8"|"RGBA16F"} [format="RGBA8"] - Pixel storage format for this pack.
+     * @property {GpuTextureSetPackData} data - Packed pixel data for one texture-array layer.
+     */
+
+    /**
+     * Packed GPU texture-set tile payload.
+     *
+     * This is not an OpenSeadragon-native data type. It is a FlexRenderer tile
+     * payload accepted through the `gpuTextureSet` cache format. Adapters may
+     * provide `getType()` for compatibility with FlexDrawer cache detection, but
+     * renderer preparation should validate the structural fields rather than
+     * require an OpenSeadragon-specific object instance.
+     *
+     * @typedef {object} GpuTextureSetTileData
+     * @property {function(): string} [getType] - Optional compatibility method returning `"gpuTextureSet"`.
+     * @property {number} width - Texture width in pixels.
+     * @property {number} height - Texture height in pixels.
+     * @property {GpuTextureSetPack[]} packs - Packed texture layers.
+     * @property {number} [channelCount] - Logical channel count represented by all packs.
+     */
+
+    /**
+     * Renderer-neutral GPU texture-set preparation options.
+     *
+     * `data` is a tile-source-provided packed texture payload. Backends decide
+     * which concrete payload shapes they support.
+     *
+     * @typedef {object} PrepareGpuTextureTileOptions
+     * @property {GpuTextureSetTileData} data - GPU texture-set payload to prepare.
+     * @property {RasterTileTextureOptions} [textureOptions] - Texture preparation options.
+     */
+
+    /**
+     * Successful prepared tile result.
+     *
+     * `resource` is backend-owned. Callers may store it, but must release it
+     * through `FlexRenderer#releasePreparedTileResource(...)`.
+     *
+     * `texture` is a compatibility alias for the current WebGL first-pass path.
+     *
+     * @typedef {object} PreparedRasterTileSuccess
+     * @property {true} ok - Whether preparation succeeded.
+     * @property {*} resource - Backend-owned prepared resource.
+     * @property {*} texture - Compatibility alias for the current WebGL texture resource.
+     * @property {number} width - Prepared source width in pixels.
+     * @property {number} height - Prepared source height in pixels.
+     * @property {number} textureDepth - Number of backend texture layers.
+     * @property {number} packCount - Number of source packs represented by the resource.
+     * @property {number} channelCount - Number of source channels represented by the resource.
+     */
+
+    /**
+     * Prepared tile result.
+     *
+     * @typedef {PreparedRasterTileSuccess | PreparedTileFailure} PreparedRasterTileResult
+     */
+
+    /**
+     * @typedef {object} FPRenderVectorTileBatch
+     * @property {WebGLBuffer} vboPos
+     * @property {WebGLBuffer} vboParam
+     * @property {WebGLBuffer} ibo
+     * @property {number} count
+     * @property {number} [lineWidth]
+     */
+
+    /**
+     * Renderer-ready first-pass vector tile data.
+     *
+     * Prepared vector tile batches, including fills, stroke-triangle lines, native line primitives with optional lineWidth, and points.
+     *
+     * @typedef {object} FPRenderVectorTile
+     * @property {FPRenderVectorTileBatch[]} [fills]
+     * @property {FPRenderVectorTileBatch[]} [lines]
+     * @property {FPRenderVectorTileBatch[]} [linePrimitives]
+     * @property {FPRenderVectorTileBatch[]} [points]
+     */
+
+    /**
+     * One raw vector mesh feature produced by a tile source.
+     *
+     * This is renderer-neutral source data. Backends prepare it into
+     * `FPRenderVectorTileBatch` objects.
+     *
+     * @typedef {object} VectorMeshFeature
+     * @property {Float32Array|number[]} vertices - Packed vertices as vec4(x, y, depth, textureId).
+     * @property {Uint32Array|number[]} indices - Indices into the vertex array.
+     * @property {number[]} [color] - Constant RGBA color used when parameters are absent.
+     * @property {Float32Array|number[]} [parameters] - Per-vertex payload. For icons: vec4(xStart, yStart, width, height).
+     * @property {number} [lineWidth=1] - Native line width in pixels. Used only for `linePrimitives`.
+     */
+
+    /**
+     * Renderer-neutral vector mesh tile payload.
+     *
+     * This is the raw tile-source payload. It does not contain backend resources.
+     *
+     * @typedef {object} VectorMeshTileData
+     * @property {VectorMeshFeature[]} [fills] - Polygon fill triangle meshes.
+     * @property {VectorMeshFeature[]} [lines] - Stroke triangle meshes rendered with triangles.
+     * @property {VectorMeshFeature[]} [linePrimitives] - Native line segment meshes rendered with backend line primitives.
+     * @property {VectorMeshFeature[]} [points] - Point marker and icon meshes.
+     */
+
+    /**
+     * Renderer-neutral vector tile preparation options.
+     *
+     * @typedef {object} PrepareVectorTileOptions
+     * @property {VectorMeshTileData} data - Vector mesh payload to prepare.
+     */
+
+    /**
+     * Successful prepared vector tile result.
+     *
+     * `resource` is backend-owned and must be released through
+     * `FlexRenderer#releasePreparedTileResource(...)`.
+     *
+     * @typedef {object} PreparedVectorTileSuccess
+     * @property {true} ok - Whether preparation succeeded.
+     * @property {*} resource - Backend-owned prepared vector resource.
+     * @property {FPRenderVectorTile} vectors - Renderer-ready vector batches.
+     */
+
+    /**
+     * Failed prepared tile result.
+     *
+     * @typedef {object} PreparedTileFailure
+     * @property {false} ok - Whether preparation succeeded.
+     * @property {"tainted-data" | "invalid-data" | "unsupported-data" | "webgl-upload-failed"} reason - Stable preparation failure reason.
+     * @property {*} [error] - Original backend/browser error, when available.
+     */
+
+    /**
+     * Prepared vector tile result.
+     *
+     * @typedef {PreparedVectorTileSuccess | PreparedTileFailure} PreparedVectorTileResult
+     */
+
+    /**
+     * Renderer-ready first-pass diagnostic tile data.
+     *
+     * Entries in `FPRenderPackage.diagnostics` represent tiles that could not
+     * be rendered as normal raster or vector data. The containing first-pass
+     * package supplies the target source and stencil layers.
+     *
+     * @typedef {object} FPRenderDiagnosticTile
+     * @property {string} [reason] - Optional machine-readable diagnostic reason.
+     * @property {Float32Array | number[]} transformMatrix - Region transform used by the first pass.
+     * @property {Float32Array | number[]} position - Region corner positions, matching raster tile geometry.
+     */
+
+    /**
+     * @typedef {object} FPRenderPackage
+     * @property {FPRenderRasterTile[]} tiles
+     * @property {FPRenderVectorTile[]} [vectors]
+     * @property {FPRenderDiagnosticTile[]} [diagnostics]
+     * @property {number[][]} stencilPolygons
+     */
+
+    /**
+     * @typedef {object} SPRenderPackage
+     * @property {number} zoom
+     * @property {number} pixelsize
+     * @property {number} opacity
+     * @property {ShaderLayer} shader
+     * @property {Uint8Array|undefined} iccLut  TODO also support error rendering by passing some icon texture & rendering where nothing was rendered but should be (-> use mask, but how we force tiles to come to render if they are failed?  )
+     */
+
+    /**
+     * Prepared two-pass renderer frame.
+     *
+     * This object is the main public boundary between `FlexDrawer` and
+     * `FlexRenderer` for the normal viewer draw path. It contains renderer-ready
+     * packages, not raw OpenSeadragon viewer, viewport, tile cache, or TiledImage
+     * control objects.
+     *
+     * `FlexDrawer` builds this object from OpenSeadragon state. `FlexRenderer`
+     * executes the render passes.
+     *
+     * @typedef {object} RenderFrame
+     * @property {FPRenderPackage[]} firstPass - First-pass render packages.
+     * @property {SPRenderPackage[]} secondPass - Second-pass render packages.
+     */
+
+    /**
+     * Options for `OpenSeadragon.FlexRenderer#render`.
+     *
+     * @typedef {object} RenderOptions
+     * @property {object} [secondPassOptions] - Backend-specific options forwarded to `renderSecondPass(...)`.
+     */
+
+    /**
+     * Descriptor returned by renderer pass methods.
+     *
+     * First-pass outputs may expose backend-owned intermediate textures and stencil
+     * textures. A second-pass render to the visible canvas usually does not expose
+     * a texture, but still returns a descriptor so callers can distinguish between
+     * submitted render work and a valid no-op.
+     *
+     * @typedef {object} RenderOutput
+     * @property {number} textureDepth - Number of color/intermediate texture layers exposed by this output.
+     * @property {number} stencilDepth - Number of stencil/source-mask texture layers exposed by this output.
+     * @property {WebGLTexture|undefined} [texture] - Backend-owned color/intermediate TEXTURE_2D_ARRAY texture, when exposed.
+     * @property {WebGLTexture|undefined} [stencil] - Backend-owned stencil/source-mask TEXTURE_2D_ARRAY texture, when exposed.
+     * @property {boolean} [rendered=true] - Whether this pass submitted render work.
+     * @property {string} [pass] - Pass that produced this descriptor, for example `'first-pass'` or `'second-pass'`.
+     * @property {string} [reason] - Diagnostic reason when `rendered` is false or when fallback output normalization was needed.
+     */
+
+    /**
+     * @typedef {object} FlexRendererOptions
+     *
+     * @property {string} uniqueId
+     *
+     * @property {string} webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
+     *
+     * @property {string} [sharedContextKey] optional page-global key used to share one WebGL context across renderer instances
+     *
+     * @property {"warn-skip"|"throw"} [sharedContextBusyPolicy="warn-skip"] internal policy used when a shared context is already rendering
+     *
+     * @property {boolean} debug                   debug mode on/off
+     *
+     * @property {boolean} [renderDiagnostics=true] if true, first-pass diagnostic regions are rendered when provided
+     *
+     * @property {string} [backgroundColor="#00000000"] #RGB or #RGBA hex, default undefined - transparent
+     *
+     * @property {boolean} interactive             if true (default), the layers are configured for interactive changes (not applied by default)
+     *
+     * @property {HTMLControlsHandler} htmlHandler function that ensures individual ShaderLayer's controls' HTML is properly present at DOM
+     * @property {function} htmlReset              callback called when a program is reset - html needs to be cleaned
+     *
+     * @property {Function} redrawCallback          function called when user input changed; triggers re-render of the viewport
+     * @property {Function} refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
+     *
+     * @property {object} canvasOptions
+     * @property {boolean} canvasOptions.alpha
+     * @property {boolean} canvasOptions.premultipliedAlpha
+     * @property {boolean} canvasOptions.stencil
+     */
+
+    /**
      * WebGL Renderer for OpenSeadragon.
+     *
+     * Manages ShaderLayers, their controls, and a WebGL context to allow rendering using WebGL.
      *
      * Renders in two passes:
      *  1st pass joins tiles and creates masks where we should draw
      *  2nd pass draws the actual data using shaders
      *
      * @property {RegExp} idPattern
-     * @property {Object} BLEND_MODE
+     * @property {string[]} SUPPORTED_BLEND_MODES
      *
-     * @class OpenSeadragon.FlexRenderer
-     * @classdesc class that manages ShaderLayers, their controls, and WebGLContext to allow rendering using WebGL
      * @memberof OpenSeadragon
      */
-    $.FlexRenderer = class extends $.EventSource {
-
+    class FlexRenderer extends $.EventSource {
         /**
-         * @param {Object} incomingOptions
-         *
-         * @param {String} incomingOptions.uniqueId
-         *
-         * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
-         *
-         * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
-         * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
-         * @param {Boolean} incomingOptions.debug                   debug mode on/off
-         * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
-         * @param {HTMLControlsHandler} incomingOptions.htmlHandler function that ensures individual ShaderLayer's controls' HTML is properly present at DOM
-         * @param {function} incomingOptions.htmlReset              callback called when a program is reset - html needs to be cleaned
-         * @param {string|undefined} incomingOptions.backgroundColor #RGB or #RGBA hex, default undefined - transparent
-         *
-         * @param {Object} incomingOptions.canvasOptions
-         * @param {Boolean} incomingOptions.canvasOptions.alpha
-         * @param {Boolean} incomingOptions.canvasOptions.premultipliedAlpha
-         * @param {Boolean} incomingOptions.canvasOptions.stencil
-         *
-         *
-         * @constructor
-         * @memberof FlexRenderer
+         * @param {FlexRendererOptions} options
          */
-        constructor(incomingOptions) {
+        constructor(options) {
             super();
 
-            if (!this.constructor.idPattern.test(incomingOptions.uniqueId)) {
-                throw new Error("$.FlexRenderer::constructor: invalid ID! Id can contain only letters, numbers and underscore. ID: " + incomingOptions.uniqueId);
+            if (!this.constructor.idPattern.test(options.uniqueId)) {
+                throw new Error("$.FlexRenderer::constructor: invalid ID! Id can contain only letters, numbers and underscore. ID: " + options.uniqueId);
             }
-            this.uniqueId = incomingOptions.uniqueId;
+            this.uniqueId = options.uniqueId;
+            this._rendererInstanceId = ++this.constructor._rendererInstanceIdSeed;
+            this._destroyed = false;
 
-            this.webGLPreferredVersion = incomingOptions.webGLPreferredVersion;
+            this.webGLPreferredVersion = options.webGLPreferredVersion;
 
-            this.redrawCallback = incomingOptions.redrawCallback;
-            this.refetchCallback = incomingOptions.refetchCallback;
-            this.debug = incomingOptions.debug;
-            this.interactive = incomingOptions.interactive === undefined ?
-                !!incomingOptions.htmlHandler : !!incomingOptions.interactive;
-            this.htmlHandler = this.interactive ? incomingOptions.htmlHandler : null;
-            this._background = incomingOptions.backgroundColor || '#00000000';
+            this.debug = options.debug;
+            this._sharedContextBusyPolicy = options.sharedContextBusyPolicy === "throw" ? "throw" : "warn-skip";
+            this._warningsEmitted = new Set();
+            this._warningCounts = {};
+
+            this._renderDiagnostics = options.renderDiagnostics !== false;
+
+            this._background = options.backgroundColor || "#00000000";
+
+            this.redrawCallback = options.redrawCallback;
+            this.refetchCallback = options.refetchCallback;
+            this.interactive = options.interactive === undefined ? !!options.htmlHandler : !!options.interactive;
+            this.htmlHandler = this.interactive ? options.htmlHandler : null;
 
             if (this.htmlHandler) {
-                if (!incomingOptions.htmlReset) {
+                if (!options.htmlReset) {
                     throw Error("$.FlexRenderer::constructor: htmlReset callback is required when htmlHandler is set!");
                 }
-                this.htmlReset = incomingOptions.htmlReset;
+                this.htmlReset = options.htmlReset;
             } else {
                 this.htmlReset = () => {};
             }
@@ -157,51 +416,291 @@
             this._shadersOrder = null;
             this._programImplementations = {};
             this.__firstPassResult = null;
+            this.__finalPassResult = null;
+            this._finalColorTarget = null;
+
+            this._renderX = 0;
+            this._renderY = 0;
+            this._renderWidth = 0;
+            this._renderHeight = 0;
+            this._renderLevels = 0;
+            this._renderTiledImageCount = 0;
+
             this._inspectorState = this.constructor.normalizeInspectorState();
+            this._interactionState = this.constructor.normalizeInteractionState();
 
-            this.canvasContextOptions = incomingOptions.canvasOptions;
-            const canvas = document.createElement("canvas");
-            const WebGLImplementation = this.constructor.determineContext(this.webGLPreferredVersion);
-            const webGLRenderingContext = $.FlexRenderer.WebGLImplementation.createWebglContext(canvas, this.webGLPreferredVersion, this.canvasContextOptions);
-            if (webGLRenderingContext) {
-                this.gl = webGLRenderingContext;                                            // WebGLRenderingContext|WebGL2RenderingContext
-                this.webglContext = new WebGLImplementation(this, webGLRenderingContext);   // $.FlexRenderer.WebGLImplementation
-                this.canvas = canvas;
+            this.canvasContextOptions = this.constructor.normalizeCanvasOptions(options.canvasOptions);
+            this._sharedContextKey = this.constructor.normalizeSharedContextKey(options.sharedContextKey);
+            this._sharedContextEntry = null;
+            this._contextLost = false;
 
-                // Should be last call of the constructor to make sure everything is initialized
-                this.webglContext.init();
+            let canvas = null;
+            let webGLRenderingContext = null;
+            const WebGLImplementationClass = this.constructor.determineBackend(this.webGLPreferredVersion);
+
+            if (this._sharedContextKey) {
+                let entry = this.constructor._sharedContexts.get(this._sharedContextKey);
+
+                if (entry) {
+                    if (entry.webGLPreferredVersion !== this.webGLPreferredVersion) {
+                        throw new Error(
+                            `$.FlexRenderer::constructor: shared context '${this._sharedContextKey}' already exists with ` +
+                            `WebGL version '${entry.webGLPreferredVersion}', but renderer '${this.uniqueId}' requested ` +
+                            `'${this.webGLPreferredVersion}'. Use the same webGLPreferredVersion or a different sharedContextKey.`
+                        );
+                    }
+
+                    const existingOptions = entry.canvasOptions || {};
+                    const requestedOptions = this.canvasContextOptions || {};
+                    const optionKeys = new Set(Object.keys(existingOptions).concat(Object.keys(requestedOptions)));
+                    let optionsMatch = true;
+
+                    for (const optionKey of optionKeys) {
+                        if (existingOptions[optionKey] !== requestedOptions[optionKey]) {
+                            optionsMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (!optionsMatch) {
+                        entry.ignoredReconfigurationCount++;
+                        this._warningCounts["shared-context-options-ignored"] =
+                            (this._warningCounts["shared-context-options-ignored"] || 0) + 1;
+
+                        if (!this._warningsEmitted.has("shared-context-options-ignored")) {
+                            this._warningsEmitted.add("shared-context-options-ignored");
+                            $.console.warn(
+                                `FlexRenderer shared context '${this._sharedContextKey}' already exists. ` +
+                                `Ignoring canvasOptions requested by renderer '${this.uniqueId}'. First owner wins.`,
+                                {
+                                    existing: existingOptions,
+                                    requested: requestedOptions
+                                }
+                            );
+                        }
+                    }
+                } else {
+                    canvas = document.createElement("canvas");
+                    webGLRenderingContext = $.FlexRenderer.WebGLImplementation.createWebglContext(
+                        canvas,
+                        this.webGLPreferredVersion,
+                        this.canvasContextOptions
+                    );
+
+                    if (webGLRenderingContext) {
+                        entry = {
+                            key: this._sharedContextKey,
+                            canvas: canvas,
+                            gl: webGLRenderingContext,
+                            webGLPreferredVersion: this.webGLPreferredVersion,
+                            canvasOptions: $.extend(true, {}, this.canvasContextOptions),
+                            refCount: 0,
+                            renderers: new Set(),
+                            lost: false,
+                            restored: false,
+                            busy: false,
+                            activeRenderer: null,
+                            ignoredReconfigurationCount: 0,
+                            busySkipCount: 0,
+                            contextLostSkipCount: 0
+                        };
+
+                        entry.handleContextLost = (event) => {
+                            if (event && typeof event.preventDefault === "function") {
+                                event.preventDefault();
+                            }
+
+                            entry.lost = true;
+                            entry.restored = false;
+
+                            for (const renderer of entry.renderers) {
+                                renderer._contextLost = true;
+                                renderer.__firstPassResult = null;
+                                renderer.__finalPassResult = null;
+
+                                renderer._warningCounts["shared-context-lost"] =
+                                    (renderer._warningCounts["shared-context-lost"] || 0) + 1;
+
+                                if (!renderer._warningsEmitted.has("shared-context-lost")) {
+                                    renderer._warningsEmitted.add("shared-context-lost");
+                                    $.console.warn(
+                                        `FlexRenderer shared context '${entry.key}' was lost. ` +
+                                        `Automatic restoration is not supported yet.`
+                                    );
+                                }
+                            }
+                        };
+
+                        entry.handleContextRestored = () => {
+                            entry.restored = true;
+
+                            for (const renderer of entry.renderers) {
+                                renderer._warningCounts["shared-context-restored"] =
+                                    (renderer._warningCounts["shared-context-restored"] || 0) + 1;
+
+                                if (!renderer._warningsEmitted.has("shared-context-restored")) {
+                                    renderer._warningsEmitted.add("shared-context-restored");
+                                    $.console.warn(
+                                        `FlexRenderer shared context '${entry.key}' was restored by the browser, ` +
+                                        `but automatic GPU resource rebuild is not supported yet. Recreate the renderer/viewer.`
+                                    );
+                                }
+                            }
+                        };
+
+                        canvas.addEventListener("webglcontextlost", entry.handleContextLost, false);
+                        canvas.addEventListener("webglcontextrestored", entry.handleContextRestored, false);
+
+                        this.constructor._sharedContexts.set(this._sharedContextKey, entry);
+                    }
+                }
+
+                if (entry) {
+                    entry.refCount++;
+                    entry.renderers.add(this);
+
+                    this._sharedContextEntry = entry;
+                    this.canvasContextOptions = entry.canvasOptions;
+
+                    canvas = entry.canvas;
+                    webGLRenderingContext = entry.gl;
+                }
             } else {
+                canvas = document.createElement("canvas");
+                webGLRenderingContext = $.FlexRenderer.WebGLImplementation.createWebglContext(
+                    canvas,
+                    this.webGLPreferredVersion,
+                    this.canvasContextOptions
+                );
+            }
+
+            if (!webGLRenderingContext) {
                 throw new Error("$.FlexRenderer::constructor: Could not create WebGLRenderingContext!");
             }
+
+            const presentationCanvas = this._sharedContextEntry ? document.createElement("canvas") : canvas;
+
+            /**
+             * @type {WebGLRenderingContext | WebGL2RenderingContext}
+             */
+            this.gl = webGLRenderingContext;
+
+            /**
+             * @type {WebGLImplementation}
+             */
+            this.backend = new WebGLImplementationClass(this, webGLRenderingContext);
+
+            this.webGLCanvas = canvas;
+            this.presentationCanvas = presentationCanvas;
+            this._renderWidth = presentationCanvas.width;
+            this._renderHeight = presentationCanvas.height;
+
+            this.canvas = this.presentationCanvas;
+
+            // Should be last call of the constructor to make sure everything is initialized
+            this.backend.init();
         }
 
         /**
-         * Search through all FlexRenderer properties to find one that extends WebGLImplementation and it's getVersion() method returns <version> input parameter.
-         * @param {String} version WebGL version, "1.0" or "2.0"
-         * @returns {WebGLImplementation}
+         * Search through all FlexRenderer properties to find one that extends WebGLImplementation and its getVersion() method returns <version> input parameter.
          *
-         * @instance
-         * @memberof FlexRenderer
+         * @param {String} version WebGL version, "1.0" or "2.0"
+         * @returns {typeof WebGLImplementation}
          */
-        static determineContext(version) {
+        static determineBackend(version) {
             const namespace = $.FlexRenderer;
+
             for (let property in namespace) {
-                const context = namespace[ property ],
-                    proto = context && context.prototype;
+                const backend = namespace[ property ];
+                const proto = backend && backend.prototype;
+
                 if (proto && proto instanceof namespace.WebGLImplementation &&
-                    $.isFunction( proto.getVersion ) && proto.getVersion.call( context ) === version) {
-                        return context;
+                    $.isFunction( proto.getVersion ) && proto.getVersion.call( backend ) === version) {
+                        return backend;
                 }
             }
 
-            throw new Error("$.FlexRenderer::determineContext: Could not find WebGLImplementation with version " + version);
+            throw new Error("$.FlexRenderer::determineBackend: Could not find WebGLImplementation with version " + version);
+        }
+
+        /**
+         * Normalize a shared WebGL context key.
+         *
+         * Empty, null, undefined, and false values disable shared-context mode.
+         *
+         * @param {*} value
+         * @return {string|null}
+         */
+        static normalizeSharedContextKey(value) {
+            if (value === undefined || value === null || value === false) {
+                return null;
+            }
+
+            const key = String(value).trim();
+            return key || null;
+        }
+
+        /**
+         * Normalize WebGL context creation options.
+         *
+         * These defaults mirror WebGLImplementation.createWebglContext(...), but are
+         * normalized before shared-context comparison so omitted default values compare
+         * consistently.
+         *
+         * @param {object|undefined} options
+         * @return {object}
+         */
+        static normalizeCanvasOptions(options = undefined) {
+            const normalized = $.extend(true, {}, options || {});
+
+            normalized.alpha = true;
+            normalized.premultipliedAlpha = true;
+            normalized.preserveDrawingBuffer = true;
+
+            return normalized;
+        }
+
+        /**
+         * Return JSON-safe diagnostic information for page-global shared WebGL contexts.
+         *
+         * This does not expose WebGL contexts, canvases, textures, framebuffers, backend
+         * instances, or mutable registry entries.
+         *
+         * @return {object[]}
+         */
+        static getSharedContextStatus() {
+            return Array.from(this._sharedContexts.values()).map(entry => ({
+                key: entry.key,
+                webGLPreferredVersion: entry.webGLPreferredVersion,
+                canvasOptions: $.extend(true, {}, entry.canvasOptions),
+                refCount: entry.refCount,
+                lost: !!entry.lost,
+                restored: !!entry.restored,
+                busy: !!entry.busy,
+                activeRendererInstanceId: entry.activeRenderer ? entry.activeRenderer._rendererInstanceId : null,
+                width: entry.canvas ? entry.canvas.width : 0,
+                height: entry.canvas ? entry.canvas.height : 0,
+                ignoredReconfigurationCount: entry.ignoredReconfigurationCount || 0,
+                busySkipCount: entry.busySkipCount || 0,
+                contextLostSkipCount: entry.contextLostSkipCount || 0,
+                renderers: Array.from(entry.renderers || []).map(renderer => {
+                    const viewer = renderer.viewer;
+                    const viewerId = viewer && viewer.element && viewer.element.id ? viewer.element.id : null;
+
+                    return {
+                        instanceId: renderer._rendererInstanceId,
+                        uniqueId: renderer.uniqueId || null,
+                        viewerId: viewerId,
+                    };
+                })
+            }));
         }
 
         /**
          * Pre-compilation shader configuration cleanup
-         * @param {ShaderConfig} config
+         * @param {ShaderLayerConfig} config
          * @param {NormalizationContext} context
-         * @return {ShaderConfig}
+         * @return {ShaderLayerConfig}
          */
         static normalizeShaderConfig(config, context = {}) {
             if (!config || typeof config !== "object") {
@@ -209,7 +708,7 @@
             }
 
             let normalized = config;
-            const Shader = normalized.type ? $.FlexRenderer.ShaderMediator.getClass(normalized.type) : null;
+            const Shader = normalized.type ? $.FlexRenderer.ShaderLayerRegistry.get(normalized.type) : null;
 
             if (Shader && typeof Shader.normalizeConfig === "function") {
                 const next = Shader.normalizeConfig(normalized, context);
@@ -230,9 +729,9 @@
 
         /**
          * Normalize shader configuration map - all shaders at once.
-         * @param {Record<string, ShaderConfig>} shaderMap
+         * @param {Record<string, ShaderLayerConfig>} shaderMap
          * @param {NormalizationContext} context
-         * @return {Record<string, ShaderConfig>}
+         * @return {Record<string, ShaderLayerConfig>}
          */
         static normalizeShaderMap(shaderMap, context = {}) {
             if (!shaderMap || typeof shaderMap !== "object" || Array.isArray(shaderMap)) {
@@ -255,7 +754,52 @@
          * @return {String|*}
          */
         get webglVersion() {
-            return this.webglContext.webGLVersion;
+            return this.backend.webGLVersion;
+        }
+
+        /**
+         * Return the backing canvas that owns the active WebGL context.
+         *
+         * @return {HTMLCanvasElement}
+         */
+        getWebGLCanvas() {
+            return this.webGLCanvas;
+        }
+
+        /**
+         * Return the renderer-local canvas that represents the latest presentable output.
+         *
+         * In private-context mode this is the same canvas as the WebGL backing canvas.
+         *
+         * @return {HTMLCanvasElement}
+         */
+        getPresentationCanvas() {
+            return this.presentationCanvas;
+        }
+
+        /**
+         * Return whether this renderer is attached to a page-global shared WebGL context.
+         *
+         * @return {boolean}
+         */
+        isSharedContext() {
+            return !!this._sharedContextEntry;
+        }
+
+        /**
+         * Return the last configured render dimensions in physical framebuffer pixels.
+         *
+         * @return {{x: number, y: number, width: number, height: number, levels: number, tiledImageCount: number}}
+         */
+        getRenderDimensions() {
+            return {
+                x: this._renderX || 0,
+                y: this._renderY || 0,
+                width: this._renderWidth || 0,
+                height: this._renderHeight || 0,
+                levels: this._renderLevels || 0,
+                tiledImageCount: this._renderTiledImageCount || 0,
+            };
         }
 
         /**
@@ -270,10 +814,39 @@
          * @memberof FlexRenderer
          */
         setDimensions(x, y, width, height, levels, tiledImageCount) {
-            this.canvas.width = width;
-            this.canvas.height = height;
+            this._renderX = x || 0;
+            this._renderY = y || 0;
+            this._renderWidth = width || 0;
+            this._renderHeight = height || 0;
+            this._renderLevels = levels || 0;
+            this._renderTiledImageCount = tiledImageCount || 0;
+
+            const webGLCanvas = this.getWebGLCanvas();
+            const presentationCanvas = this.getPresentationCanvas();
+
+            if (this._sharedContextEntry) {
+                const requiredWidth = Math.max(0, Math.ceil(Number(width) || 0));
+                const requiredHeight = Math.max(0, Math.ceil(Number(height) || 0));
+
+                if (webGLCanvas.width < requiredWidth) {
+                    webGLCanvas.width = requiredWidth;
+                }
+
+                if (webGLCanvas.height < requiredHeight) {
+                    webGLCanvas.height = requiredHeight;
+                }
+            } else {
+                webGLCanvas.width = width;
+                webGLCanvas.height = height;
+            }
+
+            if (presentationCanvas !== webGLCanvas) {
+                presentationCanvas.width = width;
+                presentationCanvas.height = height;
+            }
+
             this.gl.viewport(x, y, width, height);
-            this.webglContext.setDimensions(x, y, width, height, levels, tiledImageCount);
+            this.backend.setDimensions(x, y, width, height, levels, tiledImageCount);
         }
 
         /**
@@ -298,14 +871,151 @@
         }
 
         /**
-         * Call to first-pass draw using WebGLProgram.
-         * @param {FPRenderPackage[]} source
-         * @return {RenderOutput}
-         * @instance
-         * @memberof FlexRenderer
+         * Enable or disable rendering of first-pass diagnostic tiles.
+         *
+         * This controls only whether provided diagnostic tiles are drawn. It does
+         * not change first-pass package construction and does not rebuild WebGL
+         * programs.
+         *
+         * @param {boolean} enabled
+         * @param {object} [options={}]
+         * @param {boolean} [options.redraw=true] request a redraw after changing the setting
+         * @return {boolean} Current diagnostic rendering state.
          */
-        firstPassProcessData(source) {
-            const program = this._programImplementations[this.webglContext.firstPassProgramKey];
+        setRenderDiagnostics(enabled, options = {}) {
+            const current = enabled !== false;
+
+            if (this._renderDiagnostics === current) {
+                return this.getRenderDiagnostics();
+            }
+
+            this._renderDiagnostics = current;
+
+            if (options.redraw !== false && typeof this.redrawCallback === "function") {
+                this.redrawCallback();
+            }
+
+            return this.getRenderDiagnostics();
+        }
+
+        /**
+         * Return whether first-pass diagnostic tiles should be rendered when provided.
+         *
+         * @return {boolean}
+         */
+        getRenderDiagnostics() {
+            return this._renderDiagnostics !== false;
+        }
+
+        /**
+         * Prepare bitmap-like tile data as a backend-owned render resource.
+         *
+         * This method is renderer-neutral and does not inspect OpenSeadragon
+         * tiles, TiledImages, viewports, or tile caches. Concrete upload,
+         * decode, taint/security classification, and cleanup behavior are owned
+         * by the active backend.
+         *
+         * @param {PrepareBitmapTileOptions} options - Bitmap tile preparation options.
+         * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+         */
+        async prepareBitmapTile(options = {}) {
+            if (!this.backend || typeof this.backend.prepareBitmapTile !== "function") {
+                return {
+                    ok: false,
+                    reason: "unsupported-data",
+                    error: new Error("Active backend does not support bitmap tile preparation.")
+                };
+            }
+
+            return this.backend.prepareBitmapTile(options);
+        }
+
+        /**
+         * Prepare GPU texture-set tile data as a backend-owned render resource.
+         *
+         * This method is renderer-neutral and delegates concrete payload
+         * validation, upload, and cleanup behavior to the active backend.
+         *
+         * @param {PrepareGpuTextureTileOptions} options - GPU texture-set preparation options.
+         * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+         */
+        async prepareGpuTextureTile(options = {}) {
+            if (!this.backend || typeof this.backend.prepareGpuTextureTile !== "function") {
+                return {
+                    ok: false,
+                    reason: "unsupported-data",
+                    error: new Error("Active backend does not support GPU texture tile preparation.")
+                };
+            }
+
+            return this.backend.prepareGpuTextureTile(options);
+        }
+
+        /**
+         * Prepare vector mesh tile data as backend-owned render resources.
+         *
+         * This method is renderer-neutral and delegates concrete buffer/resource
+         * creation to the active backend.
+         *
+         * @param {PrepareVectorTileOptions} options - Vector tile preparation options.
+         * @returns {Promise<PreparedVectorTileResult>} Preparation result.
+         */
+        async prepareVectorTile(options = {}) {
+            if (!this.backend || typeof this.backend.prepareVectorTile !== "function") {
+                return {
+                    ok: false,
+                    reason: "unsupported-data",
+                    error: new Error("Active backend does not support vector tile preparation.")
+                };
+            }
+
+            return this.backend.prepareVectorTile(options);
+        }
+
+        /**
+         * Release a backend-owned prepared tile resource.
+         *
+         * Callers that store resources returned by `prepareBitmapTile(...)`,
+         * `prepareGpuTextureTile(...)`, or `prepareVectorTile(...)` must release
+         * them through this method rather than touching backend internals directly.
+         *
+         * @param {*} resource - Backend-owned prepared tile resource.
+         * @returns {void}
+         */
+        releasePreparedTileResource(resource) {
+            if (!resource || !this.backend || typeof this.backend.releasePreparedTileResource !== "function") {
+                return;
+            }
+
+            this.backend.releasePreparedTileResource(resource);
+        }
+
+        /**
+         * Render the first pass into renderer-owned intermediate output.
+         *
+         * The first pass consumes renderer-ready source packages, selects the
+         * backend first-pass program, loads it when required, renders source/tile
+         * data into intermediate color and stencil outputs, stores the result as
+         * renderer-owned first-pass state, and returns the render output descriptor.
+         *
+         * This method does not collect OpenSeadragon tiles. `FlexDrawer` is
+         * responsible for adapting OpenSeadragon tile/cache state into
+         * `FPRenderPackage` objects before calling this method directly or through
+         * `OpenSeadragon.FlexRenderer#render`.
+         *
+         * @param {Array<FPRenderPackage>} source - First-pass render packages.
+         * @returns {RenderOutput} Renderer-owned first-pass output descriptor.
+         * @throws {TypeError} Thrown when `source` is not an array.
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
+         */
+        renderFirstPass(source) {
+            if (!Array.isArray(source)) {
+                throw new TypeError("$.FlexRenderer::renderFirstPass: source must be an array.");
+            }
+
+            const program = this._programImplementations[this.backend.firstPassProgramKey];
 
             if (this.useProgram(program, "first-pass")) {
                 program.load();
@@ -322,33 +1032,272 @@
         }
 
         /**
-         * Execute the second pass for the already prepared first-pass result.
+         * Render the second pass from the current first-pass output.
+         *
+         * The second pass consumes renderer-ready ShaderLayer packages, selects the
+         * backend second-pass program, loads it when required, and renders the final
+         * composed output from the renderer-owned first-pass result.
+         *
+         * If `renderArray` is empty, there are no ShaderLayer packages to compose.
+         * In that case this method does not touch the active second-pass program and
+         * returns a no-op `RenderOutput` descriptor.
          *
          * Responsibility split:
-         * - the renderer owns inspector state and decides whether the active inspector mode
-         *   can be executed inline in the normal second pass
-         * - reveal modes stay in the normal second-pass program
-         * - lens mode may delegate to the backend-specific inspector compositor path
+         * - the renderer owns inspector state and decides whether the active
+         *   inspector mode can be executed inline in the normal second pass;
+         * - reveal modes stay in the normal second-pass program;
+         * - lens mode may delegate to the backend-specific inspector compositor path.
          *
-         * @param {SPRenderPackage[]} renderArray
-         * @param {RenderOptions|undefined} options
-         * @return {RenderOutput}
+         * @param {Array<SPRenderPackage>} renderArray - Second-pass render packages.
+         * @param {object|undefined} [options=undefined] - Optional backend-specific render options.
+         * @returns {RenderOutput} Second-pass render output descriptor. Empty render arrays return a no-op descriptor with `rendered: false`.
+         * @throws {TypeError} Thrown when `renderArray` is not an array.
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
          */
-        secondPassProcessData(renderArray, options = undefined) {
-            if (this.webglContext && typeof this.webglContext.processSecondPassWithInspector === "function") {
+        renderSecondPass(renderArray, options = undefined) {
+            if (!Array.isArray(renderArray)) {
+                throw new TypeError("$.FlexRenderer::renderSecondPass: renderArray must be an array.");
+            }
+
+            if (!renderArray.length) {
+                return {
+                    textureDepth: 0,
+                    stencilDepth: 0,
+                    texture: undefined,
+                    stencil: undefined,
+                    rendered: false,
+                    pass: "second-pass",
+                    reason: "empty-render-array"
+                };
+            }
+
+            if (this.backend && typeof this.backend.processSecondPassWithInspector === "function") {
                 const inspectorState = this.getInspectorState();
                 if (inspectorState && inspectorState.enabled && inspectorState.mode === "lens-zoom") {
-                    return this.webglContext.processSecondPassWithInspector(renderArray, options);
+                    const inspectorResult = this.backend.processSecondPassWithInspector(renderArray, options);
+
+                    return inspectorResult || {
+                        textureDepth: 0,
+                        stencilDepth: 0,
+                        texture: undefined,
+                        stencil: undefined,
+                        rendered: true,
+                        pass: "second-pass",
+                        reason: "inspector-compositor-returned-no-output"
+                    };
                 }
             }
 
-            const program = this._programImplementations[this.webglContext.secondPassProgramKey];
+            const program = this._programImplementations[this.backend.secondPassProgramKey];
 
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
 
-            return program.use(this.__firstPassResult, renderArray, options);
+            const result = program.use(this.__firstPassResult, renderArray, options);
+
+            return result || {
+                textureDepth: 0,
+                stencilDepth: 0,
+                texture: undefined,
+                stencil: undefined,
+                rendered: true,
+                pass: "second-pass",
+                reason: "second-pass-program-returned-no-output"
+            };
+        }
+
+        /**
+         * Render one prepared two-pass frame.
+         *
+         * This method accepts renderer-ready first-pass and second-pass packages and executes
+         * the normal render sequence. It does not inspect OpenSeadragon viewers,
+         * TiledImages, tile caches, or viewport objects.
+         *
+         * `FlexDrawer` remains responsible for adapting OpenSeadragon state into
+         * the prepared frame. `FlexRenderer` remains responsible for executing the
+         * render passes.
+         *
+         * The method deliberately returns nothing. Call `renderFirstPass(...)` or
+         * `renderSecondPass(...)` directly when a pass output descriptor is needed.
+         *
+         * @param {RenderFrame} frame - Prepared render frame.
+         * @param {RenderOptions} [options={}] - Render options.
+         * @returns {void}
+         * @throws {TypeError} Thrown when `frame`, `frame.firstPass`, or `frame.secondPass` has an invalid shape.
+         *
+         * @instance
+         * @memberof OpenSeadragon.FlexRenderer#
+         */
+        render(frame, options = {}) {
+            options = options || {};
+
+            if (!frame || typeof frame !== "object") {
+                throw new TypeError("$.FlexRenderer::render: frame must be an object.");
+            }
+
+            if (!Array.isArray(frame.firstPass)) {
+                throw new TypeError("$.FlexRenderer::render: frame.firstPass must be an array.");
+            }
+
+            if (!Array.isArray(frame.secondPass)) {
+                throw new TypeError("$.FlexRenderer::render: frame.secondPass must be an array.");
+            }
+
+            const sharedEntry = this._sharedContextEntry;
+
+            if (!sharedEntry) {
+                this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+                this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+
+                this.renderFirstPass(frame.firstPass);
+                this.__finalPassResult = this.renderSecondPass(frame.secondPass, options.secondPassOptions);
+
+                this.gl.finish();
+                return;
+            }
+
+            if (sharedEntry.lost || this._contextLost) {
+                sharedEntry.contextLostSkipCount++;
+                this._warningCounts["shared-context-lost-render-skip"] =
+                    (this._warningCounts["shared-context-lost-render-skip"] || 0) + 1;
+
+                if (!this._warningsEmitted.has("shared-context-lost-render-skip")) {
+                    this._warningsEmitted.add("shared-context-lost-render-skip");
+                    $.console.warn(
+                        `FlexRenderer shared context '${sharedEntry.key}' is lost; skipping renderer '${this.uniqueId}'.`
+                    );
+                }
+
+                this.__firstPassResult = null;
+                this.__finalPassResult = null;
+                return;
+            }
+
+            if (sharedEntry.busy) {
+                sharedEntry.busySkipCount++;
+                this._warningCounts["shared-context-busy-render-skip"] =
+                    (this._warningCounts["shared-context-busy-render-skip"] || 0) + 1;
+
+                const activeRenderer = sharedEntry.activeRenderer;
+                const message =
+                    `FlexRenderer shared context '${sharedEntry.key}' is already rendering ` +
+                    `'${activeRenderer ? activeRenderer.uniqueId : "unknown"}'; skipping renderer '${this.uniqueId}'.`;
+
+                if (this.debug || this._sharedContextBusyPolicy === "throw") {
+                    throw new Error(message);
+                }
+
+                if (!this._warningsEmitted.has("shared-context-busy-render-skip")) {
+                    this._warningsEmitted.add("shared-context-busy-render-skip");
+                    $.console.warn(message);
+                }
+
+                return;
+            }
+
+            sharedEntry.busy = true;
+            sharedEntry.activeRenderer = this;
+
+            try {
+                const width = Math.max(1, this._renderWidth || this.getPresentationCanvas().width || 1);
+                const height = Math.max(1, this._renderHeight || this.getPresentationCanvas().height || 1);
+
+                if (!this.backend || typeof this.backend.ensureColorTarget !== "function") {
+                    throw new Error("$.FlexRenderer::render: active backend does not support shared-context final color targets.");
+                }
+
+                if (!this.backend || typeof this.backend.presentColorTargetToCanvas !== "function") {
+                    throw new Error("$.FlexRenderer::render: active backend does not support shared-context presentation transfer.");
+                }
+
+                this._finalColorTarget = this.backend.ensureColorTarget(
+                    this._finalColorTarget,
+                    width,
+                    height,
+                    { filter: this.gl.LINEAR }
+                );
+
+                this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+                this.gl.viewport(this._renderX, this._renderY, width, height);
+                this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+                this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+
+                this.renderFirstPass(frame.firstPass);
+
+                if (typeof this.backend.clearColorTarget === "function") {
+                    this.backend.clearColorTarget(this._finalColorTarget, [0, 0, 0, 0]);
+                }
+
+                if (frame.secondPass.length) {
+                    this.renderSecondPass(frame.secondPass, $.extend(true, {}, options.secondPassOptions || {}, {
+                        framebuffer: this._finalColorTarget.framebuffer,
+                        width: width,
+                        height: height
+                    }));
+                }
+
+                this.__finalPassResult = this._finalColorTarget;
+
+                this.backend.presentColorTargetToCanvas(
+                    this._finalColorTarget,
+                    this.getPresentationCanvas(),
+                );
+
+                this.gl.finish();
+            } finally {
+                this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+
+                if (this.webglVersion === "2.0" && typeof this.gl.bindVertexArray === "function") {
+                    this.gl.bindVertexArray(null);
+                }
+
+                sharedEntry.activeRenderer = null;
+                sharedEntry.busy = false;
+            }
+        }
+
+        /**
+         * Clear the renderer-owned visible output.
+         *
+         * This is used when the owning drawer has no renderer-ready frame to submit,
+         * for example when the OpenSeadragon world is empty or when no ShaderLayer
+         * contributes a second-pass output.
+         *
+         * @returns {void}
+         */
+        clear() {
+            this.__firstPassResult = null;
+            this.__finalPassResult = null;
+
+            if (this._sharedContextEntry) {
+                const canvas = this.getPresentationCanvas();
+
+                if (!canvas || !canvas.width || !canvas.height) {
+                    return;
+                }
+
+                const context = canvas.getContext("2d");
+                if (context) {
+                    context.clearRect(0, 0, canvas.width, canvas.height);
+                }
+
+                return;
+            }
+
+            const canvas = this.getWebGLCanvas();
+
+            if (!this.gl || !canvas || !canvas.width || !canvas.height) {
+                return;
+            }
+
+            this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+            this.gl.viewport(0, 0, canvas.width, canvas.height);
+            this.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+            this.gl.finish();
         }
 
         /**
@@ -382,7 +1331,7 @@
                 const config = shader.getConfig();
                 // Check explicitly type of the config, if updated, recreate shader
                 if (shader.constructor.type() !== config.type) {
-                    const NewShader = $.FlexRenderer.ShaderMediator.getClass(config.type);
+                    const NewShader = $.FlexRenderer.ShaderLayerRegistry.get(config.type);
                     if (NewShader) {
                         // Drop orphan params from the previous shader type before re-instantiation,
                         // otherwise stale keys (color, threshold, connect, incompatible use_channelN, ...)
@@ -394,7 +1343,7 @@
             }
             // Needs reference early
             this._programImplementations[key] = program;
-            this.webglContext.setBackground(this._background);
+            this.backend.setBackground(this._background);
 
             program.build(this._shaders, this.getShaderLayerOrder());
             // Used also to re-compile, set requiresLoad to true
@@ -412,9 +1361,11 @@
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
                 this.gl.useProgram(webglProgram);
-                program.created(this.canvas.width, this.canvas.height);
+                const canvas = this.getWebGLCanvas();
+                program.created(canvas.width, canvas.height);
                 return key;
             }
+
             // else todo consider some cleanup
             return undefined;
         }
@@ -434,12 +1385,11 @@
 
             if (this._program) {
                 const reused = !program._justCreated;
+
                 if (this.running && this._program === program && reused) {
                     return false;
                 }
-                if (reused) {
-                    program._justCreated = false;
-                }
+
                 this._program.unload();
             }
 
@@ -504,9 +1454,12 @@
                 }
             }
 
+            program._justCreated = false;
+
             if (!this.running) {
                 this.running = true;
             }
+
             return needsUpdate;
         }
 
@@ -535,25 +1488,24 @@
             implementation.destroy();
             this.gl.deleteProgram(implementation._webGLProgram);
             this.__firstPassResult = null;
+            this.__finalPassResult = null;
             this._programImplementations[key] = null;
         }
 
         /**
          * Create and initialize new ShaderLayer instance and its controls.
-         * @param id
-         * @param {ShaderConfig} shaderConfig object bound to a concrete ShaderLayer instance
-         * @param {boolean} [copyConfig=false] if true, deep copy of the config is used to avoid modification of the parameter
-         * @returns {ShaderLayer} instance of the created shaderLayer
          *
-         * @instance
-         * @memberof FlexRenderer
+         * @param id
+         * @param {ShaderLayerConfig} config - object bound to a concrete ShaderLayer instance
+         * @param {boolean} [copyConfig=false] - if true, deep copy of the config is used to avoid modification of the parameter
+         * @returns {ShaderLayer} A new ShaderLayer instance.
          */
-        createShaderLayer(id, shaderConfig, copyConfig = false) {
+        createShaderLayer(id, config, copyConfig = false) {
             id = $.FlexRenderer.sanitizeKey(id);
 
-            const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
-            if (!Shader) {
-                throw new Error(`$.FlexRenderer::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
+            const ShaderLayerClass = $.FlexRenderer.ShaderLayerRegistry.get(config.type);
+            if (!ShaderLayerClass) {
+                throw new Error(`$.FlexRenderer::createShaderLayer: Unknown shader type '${config.type}'!`);
             }
 
             const defaultConfig = {
@@ -561,19 +1513,19 @@
                 name: "Layer",
                 type: "identity",
                 visible: 1,
-                fixed: false,
                 tiledImages: [],
                 params: {},
                 cache: {},
             };
+
             if (copyConfig) {
                 // Deep copy to avoid modification propagation
-                shaderConfig = $.extend(true, defaultConfig, shaderConfig);
+                config = $.extend(true, defaultConfig, config);
             } else {
                 // Ensure we keep references where possible -> this will make shader object within drawers (e.g. navigator VS main)
                 for (let propName in defaultConfig) {
-                    if (shaderConfig[propName] === undefined) {
-                        shaderConfig[propName] = defaultConfig[propName];
+                    if (config[propName] === undefined) {
+                        config[propName] = defaultConfig[propName];
                     }
                 }
             }
@@ -583,17 +1535,17 @@
             }
 
             // TODO a bit dirty approach, make the program key usable from outside
-            const shader = new Shader(id, {
-                shaderConfig: shaderConfig,
-                webglContext: this.webglContext,
-                params: shaderConfig.params,
+            const shader = new ShaderLayerClass(id, {
+                shaderConfig: config,
+                backend: this.backend,
+                params: config.params,
                 interactive: this.interactive,
 
                 // callback to re-render the viewport
                 invalidate: this.redrawCallback,
                 // callback to rebuild the WebGL program
                 rebuild: () => {
-                    this.registerProgram(null, this.webglContext.secondPassProgramKey);
+                    this.registerProgram(null, this.backend.secondPassProgramKey);
                 },
                 // callback to recreate the shader when control topology changes
                 refresh: () => {
@@ -609,7 +1561,7 @@
                 return shader;
             } catch (e) {
                 delete this._shaders[id];
-                console.error(`Failed to construct shader '${id}' (${shaderConfig.type}).`, e, shaderConfig);
+                console.error(`Failed to construct shader '${id}' (${config.type}).`, e, config);
                 return undefined;
             }
         }
@@ -646,7 +1598,7 @@
                 throw new Error(`$.FlexRenderer::changeShaderType: Unknown layer '${layerId}'.`);
             }
 
-            const NewShader = $.FlexRenderer.ShaderMediator.getClass(newType);
+            const NewShader = $.FlexRenderer.ShaderLayerRegistry.get(newType);
             if (!NewShader) {
                 throw new Error(`$.FlexRenderer::changeShaderType: Unknown shader type '${newType}'.`);
             }
@@ -658,7 +1610,7 @@
             config.type = newType;
             config.error = false;
             this._sanitizeShaderParams(config, NewShader);
-            this.registerProgram(null, this.webglContext.secondPassProgramKey);
+            this.registerProgram(null, this.backend.secondPassProgramKey);
         }
 
         /**
@@ -668,7 +1620,7 @@
          * channel values would otherwise cause parseChannel warnings or sample()-time
          * GLSL incompatibilities once the new shader is constructed.
          *
-         * @param {ShaderConfig} shaderConfig    config whose .params object will be mutated
+         * @param {ShaderLayerConfig} shaderConfig    config whose .params object will be mutated
          * @param {Function}     NewShaderClass  the target shader class
          * @private
          */
@@ -878,7 +1830,7 @@
             const shouldRebuild = options.rebuildProgram !== false;
 
             if (shouldRebuild) {
-                this.registerProgram(null, this.webglContext.secondPassProgramKey);
+                this.registerProgram(null, this.backend.secondPassProgramKey);
             }
 
             return rebuiltShader;
@@ -891,6 +1843,10 @@
             for (let sId in this._shaders) {
                 this.removeShader(sId);
             }
+            // _shadersOrder is a separate view over the same set; without this,
+            // getShaderLayerOrder() returns stale ids whose ShaderLayer instances
+            // were just destroyed, and consumers crash on shaderMap[id].getConfig().
+            this._shadersOrder = null;
         }
 
         /**
@@ -917,7 +1873,7 @@
          *
          * @returns {{
          *   order: string[],
-         *   shaders: Object<string, ShaderConfig>
+         *   shaders: Object<string, ShaderLayerConfig>
          * }}
          */
         getVisualizationSnapshot() {
@@ -937,7 +1893,7 @@
 
         /**
          * Alias that makes intent explicit when used by application code.
-         * @returns {{order: string[], shaders: Object<string, ShaderConfig>}}
+         * @returns {{order: string[], shaders: Object<string, ShaderLayerConfig>}}
          */
         exportVisualization() {
             return this.getVisualizationSnapshot();
@@ -1054,6 +2010,197 @@
         }
 
         /**
+         * Normalize a non-negative integer value used by interaction state.
+         *
+         * @private
+         * @param {*} value
+         * @return {number}
+         */
+        static _normalizeInteractionInteger(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0;
+        }
+
+        /**
+         * Normalize an interaction position object.
+         *
+         * @private
+         * @param {*} position
+         * @return {{x: number, y: number}}
+         */
+        static _normalizeInteractionPosition(position) {
+            position = position || {};
+
+            return {
+                x: Number.isFinite(position.x) ? position.x : 0,
+                y: Number.isFinite(position.y) ? position.y : 0,
+            };
+        }
+
+        /**
+         * Check whether two normalized interaction position objects are equal.
+         *
+         * @private
+         * @param {{x: number, y: number}} a
+         * @param {{x: number, y: number}} b
+         * @return {boolean}
+         */
+        static _interactionPositionsEqual(a, b) {
+            return a.x === b.x && a.y === b.y;
+        }
+
+        /**
+         * Check whether two normalized interaction states are equal.
+         *
+         * @private
+         * @param {InteractionState} a
+         * @param {InteractionState} b
+         * @return {boolean}
+         */
+        static _interactionStatesEqual(a, b) {
+            return a.enabled === b.enabled &&
+                a.pointerInside === b.pointerInside &&
+                this._interactionPositionsEqual(a.pointerPositionPx, b.pointerPositionPx) &&
+                a.activeButtons === b.activeButtons &&
+                this._interactionPositionsEqual(a.lastClickPositionPx, b.lastClickPositionPx) &&
+                a.lastClickButtons === b.lastClickButtons &&
+                a.clickSerial === b.clickSerial &&
+                a.dragActive === b.dragActive &&
+                this._interactionPositionsEqual(a.dragStartPositionPx, b.dragStartPositionPx) &&
+                this._interactionPositionsEqual(a.dragCurrentPositionPx, b.dragCurrentPositionPx) &&
+                this._interactionPositionsEqual(a.dragEndPositionPx, b.dragEndPositionPx) &&
+                a.dragButtons === b.dragButtons &&
+                a.dragSerial === b.dragSerial;
+        }
+
+        /**
+         * Normalize interaction state to the canonical backend-agnostic shape.
+         *
+         * Missing fields are filled with defaults. Position fields preserve floating-point
+         * framebuffer pixels and use bottom-left origin, directly comparable to `gl_FragCoord.xy`.
+         *
+         * @param {Partial<InteractionState>|undefined} state
+         * @return {InteractionState}
+         */
+        static normalizeInteractionState(state = undefined) {
+            const defaults = {
+                enabled: false,
+                pointerInside: false,
+                pointerPositionPx: { x: 0, y: 0 },
+                activeButtons: 0,
+                lastClickPositionPx: { x: 0, y: 0 },
+                lastClickButtons: 0,
+                clickSerial: 0,
+                dragActive: false,
+                dragStartPositionPx: { x: 0, y: 0 },
+                dragCurrentPositionPx: { x: 0, y: 0 },
+                dragEndPositionPx: { x: 0, y: 0 },
+                dragButtons: 0,
+                dragSerial: 0,
+            };
+
+            const merged = state && typeof state === "object" ?
+                $.extend(true, {}, defaults, state) :
+                $.extend(true, {}, defaults);
+
+            return {
+                enabled: !!merged.enabled,
+                pointerInside: !!merged.pointerInside,
+                pointerPositionPx: this._normalizeInteractionPosition(merged.pointerPositionPx),
+                activeButtons: this._normalizeInteractionInteger(merged.activeButtons),
+                lastClickPositionPx: this._normalizeInteractionPosition(merged.lastClickPositionPx),
+                lastClickButtons: this._normalizeInteractionInteger(merged.lastClickButtons),
+                clickSerial: this._normalizeInteractionInteger(merged.clickSerial),
+                dragActive: !!merged.dragActive,
+                dragStartPositionPx: this._normalizeInteractionPosition(merged.dragStartPositionPx),
+                dragCurrentPositionPx: this._normalizeInteractionPosition(merged.dragCurrentPositionPx),
+                dragEndPositionPx: this._normalizeInteractionPosition(merged.dragEndPositionPx),
+                dragButtons: this._normalizeInteractionInteger(merged.dragButtons),
+                dragSerial: this._normalizeInteractionInteger(merged.dragSerial),
+            };
+        }
+
+        /**
+         * Patch-update the renderer-owned interaction state.
+         *
+         * This method stores normalized state, optionally emits `interaction-change`,
+         * and optionally requests a redraw so the active backend can consume the new
+         * state during the next second pass.
+         *
+         * @param {Partial<InteractionState>|undefined} state
+         * @param {InteractionStateUpdateOptions} [options={}]
+         * @return {InteractionState}
+         */
+        setInteractionState(state = undefined, options = {}) {
+            const previous = this.getInteractionState();
+            const patch = state && typeof state === "object" ? state : {};
+            const current = this.constructor.normalizeInteractionState($.extend(true, {}, previous, patch));
+            const changed = !this.constructor._interactionStatesEqual(previous, current);
+
+            if (changed) {
+                this._interactionState = current;
+            }
+
+            if (options.notify !== false) {
+                this.raiseEvent('interaction-change', {
+                    previous: previous,
+                    current: this.getInteractionState(),
+                    reason: options.reason || 'set-interaction-state',
+                    changed: changed
+                });
+            }
+
+            if (changed && options.redraw !== false && typeof this.redrawCallback === 'function') {
+                this.redrawCallback();
+            }
+
+            return this.getInteractionState();
+        }
+
+        /**
+         * Return a defensive copy of the current canonical interaction state.
+         * Backends should read interaction state through this method instead of caching mutable references.
+         *
+         * @return {InteractionState}
+         */
+        getInteractionState() {
+            return $.extend(true, {}, this._interactionState || this.constructor.normalizeInteractionState());
+        }
+
+        /**
+         * Reset interaction state to the normalized disabled state.
+         *
+         * Unlike `setInteractionState(...)`, this is a full reset rather than a patch update.
+         *
+         * @param {InteractionStateUpdateOptions} [options={}]
+         * @return {InteractionState}
+         */
+        clearInteractionState(options = {}) {
+            const previous = this.getInteractionState();
+            const current = this.constructor.normalizeInteractionState();
+            const changed = !this.constructor._interactionStatesEqual(previous, current);
+
+            if (changed) {
+                this._interactionState = current;
+            }
+
+            if (options.notify !== false) {
+                this.raiseEvent('interaction-change', {
+                    previous: previous,
+                    current: this.getInteractionState(),
+                    reason: options.reason || 'clear-interaction-state',
+                    changed: changed
+                });
+            }
+
+            if (changed && options.redraw !== false && typeof this.redrawCallback === 'function') {
+                this.redrawCallback();
+            }
+
+            return this.getInteractionState();
+        }
+
+        /**
          * Reuse the current first-pass result and render the second pass into an offscreen target.
          *
          * This is the public contract used by features that need a texture copy of the composed
@@ -1064,32 +2211,82 @@
          * @return {Object}
          */
         renderSecondPassToTexture(renderArray, options = {}) {
-            if (!this.webglContext || typeof this.webglContext.renderSecondPassToTexture !== 'function') {
+            if (!this.backend || typeof this.backend.renderSecondPassToTexture !== 'function') {
                 throw new Error('Active WebGL implementation does not support second-pass texture targets.');
             }
-            return this.webglContext.renderSecondPassToTexture(renderArray, options);
+            return this.backend.renderSecondPassToTexture(renderArray, options);
         }
 
         destroy() {
-            this.htmlReset();
-            this.deleteShaders();
-            for (let pId in this._programImplementations) {
-                this.deleteProgram(pId);
+            if (this._destroyed) {
+                return;
             }
-            if (this._extractionFB) {
-                this.gl.deleteFramebuffer(this._extractionFB);
-                this._extractionFB = null;
+
+            this._destroyed = true;
+
+            try {
+                this.htmlReset();
+                this.deleteShaders();
+
+                for (let pId in this._programImplementations) {
+                    this.deleteProgram(pId);
+                }
+
+                if (this._extractionFB) {
+                    this.gl.deleteFramebuffer(this._extractionFB);
+                    this._extractionFB = null;
+                }
+
+                if (this._debugPreviewFB) {
+                    this.gl.deleteFramebuffer(this._debugPreviewFB);
+                    this._debugPreviewFB = null;
+                }
+
+                if (this._debugPreviewColorRB) {
+                    this.gl.deleteRenderbuffer(this._debugPreviewColorRB);
+                    this._debugPreviewColorRB = null;
+                }
+
+                if (this._finalColorTarget && this.backend && typeof this.backend.destroyColorTarget === "function") {
+                    this.backend.destroyColorTarget(this._finalColorTarget);
+                    this._finalColorTarget = null;
+                }
+
+                this.backend.destroy();
+                this._programImplementations = {};
+            } finally {
+                const entry = this._sharedContextEntry;
+
+                if (entry) {
+                    entry.renderers.delete(this);
+                    entry.refCount = Math.max(0, entry.refCount - 1);
+
+                    if (entry.activeRenderer === this) {
+                        entry.activeRenderer = null;
+                        entry.busy = false;
+                    }
+
+                    if (entry.refCount === 0) {
+                        if (entry.canvas && entry.handleContextLost) {
+                            entry.canvas.removeEventListener("webglcontextlost", entry.handleContextLost, false);
+                        }
+
+                        if (entry.canvas && entry.handleContextRestored) {
+                            entry.canvas.removeEventListener("webglcontextrestored", entry.handleContextRestored, false);
+                        }
+
+                        const ext = entry.gl.getExtension('WEBGL_lose_context');
+                        if (ext) {
+                            ext.loseContext();
+                        }
+
+                        this.constructor._sharedContexts.delete(entry.key);
+                    }
+                }
+
+                this._sharedContextEntry = null;
+                this._sharedContextKey = null;
             }
-            if (this._debugPreviewFB) {
-                this.gl.deleteFramebuffer(this._debugPreviewFB);
-                this._debugPreviewFB = null;
-            }
-            if (this._debugPreviewColorRB) {
-                this.gl.deleteRenderbuffer(this._debugPreviewColorRB);
-                this._debugPreviewColorRB = null;
-            }
-            this.webglContext.destroy();
-            this._programImplementations = {};
         }
 
         static sanitizeKey(key) {
@@ -1171,7 +2368,7 @@
                 }, true);
                 renderer.setShaderLayerOrder([shaderId]);
                 renderer.setDimensions(0, 0, width, height, 1, 1);
-                renderer.registerProgram(null, renderer.webglContext.secondPassProgramKey);
+                renderer.registerProgram(null, renderer.backend.secondPassProgramKey);
 
                 const gl = renderer.gl;
                 const colorPixels = $.FlexRenderer._buildSelfTestColorData(width, height, expected);
@@ -1186,7 +2383,7 @@
                     stencilDepth: 1,
                 };
 
-                renderer.secondPassProcessData([{
+                renderer.renderSecondPass([{
                     zoom: 1,
                     pixelSize: 1,
                     opacity: 1,
@@ -1397,15 +2594,20 @@
             // Use provided width/height, or fall back to drawingBuffer/canvas
             if (!width || !height) {
                 // try drawingBufferSize first (more correct for FBOs)
+                const dimensions = this.getRenderDimensions();
+                const canvas = this.getWebGLCanvas();
+
                 width =
                     width ||
+                    dimensions.width ||
                     srcGL.drawingBufferWidth ||
-                    (this.canvas && this.canvas.width) ||
+                    (canvas && canvas.width) ||
                     0;
                 height =
                     height ||
+                    dimensions.height ||
                     srcGL.drawingBufferHeight ||
-                    (this.canvas && this.canvas.height) ||
+                    (canvas && canvas.height) ||
                     0;
             }
 
@@ -1541,8 +2743,9 @@
             const rawRows = Math.max(colorLayers, stencilLayers);
             const mappedRows = tiCount;
 
-            const width = Math.max(1, Math.floor(this.canvas.width));
-            const height = Math.max(1, Math.floor(this.canvas.height));
+            const dimensions = this.getRenderDimensions();
+            const width = Math.max(1, Math.floor(dimensions.width));
+            const height = Math.max(1, Math.floor(dimensions.height));
             const scaledCellW = Math.max(1, Math.floor(width * scale));
             const scaledCellH = Math.max(1, Math.floor(height * scale));
             const cellScale = Math.min(1, maxCellSize / Math.max(scaledCellW, scaledCellH));
@@ -1824,8 +3027,7 @@
             w.document.body.appendChild(cnv);
             w.__debugCtx = cnv.getContext('2d');
         }
-    };
-
+    }
 
     // STATIC PROPERTIES
     /**
@@ -1834,10 +3036,14 @@
      * @type {RegExp}
      * @memberof FlexRenderer
      */
-    $.FlexRenderer.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
-    $.FlexRenderer.__runtimeSupportCache = null;
+    FlexRenderer.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
 
-    $.FlexRenderer.BLEND_MODE = [
+    FlexRenderer.__runtimeSupportCache = null;
+
+    FlexRenderer._sharedContexts = new Map();
+    FlexRenderer._rendererInstanceIdSeed = 0;
+
+    FlexRenderer.SUPPORTED_BLEND_MODES = [
         'mask',
         'source-over',
         'source-in',
@@ -1866,7 +3072,7 @@
         'luminosity',
     ];
 
-    $.FlexRenderer.jsonReplacer = function (key, value) {
+    FlexRenderer.jsonReplacer = function (key, value) {
         return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     };
 
@@ -1874,7 +3080,7 @@
      * Generic computational program interface
      * @type {{new(*): $.FlexRenderer.Program, context: *, _requiresLoad: boolean, prototype: Program}}
      */
-    $.FlexRenderer.Program = class {
+     class Program {
         constructor(context) {
             this.context = context;
             this._requiresLoad = true;
@@ -1952,39 +3158,42 @@
          * Destroy program. No arguments.
          */
         destroy() {}
-    };
+    }
+
+    FlexRenderer.Program = Program;
+
+    $.FlexRenderer = FlexRenderer;
+
 
     /**
      * Blank layer that takes almost no memory and current renderer skips it.
-     * @type {OpenSeadragon.BlankTileSource}
      */
-    $.BlankTileSource = class extends $.TileSource {
+     class BlankTileSource extends $.TileSource {
         supports(data, url) {
             return (data && data.type === "_blank") || (url && url.type === "_blank");
         }
-        configure(options, dataUrl, postData) {
+
+        configure(options, _dataUrl, _postData) {
             return $.extend(options, {
                 width: 512,
                 height: 512,
-                _tileWidth: 512,
-                _tileHeight: 512,
                 tileSize: 512,
                 tileOverlap: 0,
                 minLevel: 0,
                 maxLevel: 0,
-                dimensions: new $.Point(512, 512),
             });
         }
-        downloadTileStart(context) {
-            return context.finish("_blank", undefined, "undefined");
-        }
-        getMetadata() {
-            return this;
-        }
+
         getTileUrl(level, x, y) {
             return "_blank";
         }
-    };
+
+        downloadTileStart(context) {
+            return context.finish("_blank", undefined, "undefined");
+        }
+    }
+
+    $.BlankTileSource = BlankTileSource;
 
 })(OpenSeadragon);
 
@@ -2399,87 +3608,36 @@
 
 (function($) {
     /**
-     * Organizer of ShaderLayers.
+     * Determines how a shader layer participates in stack composition.
      *
-     * @property {object} _layers           storage of ShaderLayers, {ShaderLayer.type(): ShaderLayer}
-     * @property {Boolean} _acceptsShaders  allow new ShaderLayer registrations
-     *
-     * @class OpenSeadragon.FlexRenderer.ShaderMediator
-     * @memberOf OpenSeadragon.FlexRenderer
+     * @typedef {"show" | "blend" | "clip"} ShaderLayerCompositionMode
      */
-    $.FlexRenderer.ShaderMediator = class {
-        /**
-         * Register ShaderLayer.
-         * @param {typeof OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
-         */
-        static registerLayer(shaderLayer) {
-            if (this._acceptsShaders) {
-                if (this._layers[shaderLayer.type()]) {
-                    console.warn(`OpenSeadragon.FlexRenderer.ShaderMediator::registerLayer: ShaderLayer ${shaderLayer.type()} already registered, overwriting the content!`);
-                }
-                this._layers[shaderLayer.type()] = shaderLayer;
-            } else {
-                console.warn("OpenSeadragon.FlexRenderer.ShaderMediator::registerLayer: ShaderMediator is set to not accept new ShaderLayers!");
-            }
-        }
-
-        /**
-         * Enable or disable ShaderLayer registrations.
-         * @param {Boolean} accepts
-         */
-        static setAcceptsRegistrations(accepts) {
-            if (accepts === true || accepts === false) {
-                this._acceptsShaders = accepts;
-            } else {
-                console.warn("OpenSeadragon.FlexRenderer.ShaderMediator::setAcceptsRegistrations: Accepts parameter must be either true or false!");
-            }
-        }
-
-        /**
-         * Get the ShaderLayer implementation.
-         * @param {String} shaderType equals to a wanted ShaderLayers.type()'s return value
-         * @return {typeof OpenSeadragon.FlexRenderer.ShaderLayer}
-         */
-        static getClass(shaderType) {
-            return this._layers[shaderType];
-        }
-
-        /**
-         * Get all available ShaderLayers.
-         * @return {[typeof OpenSeadragon.FlexRenderer.ShaderLayer]}
-         */
-        static availableShaders() {
-            return Object.values(this._layers);
-        }
-
-        /**
-         * Get all available ShaderLayer types.
-         * @return {[String]}
-         */
-        static availableTypes() {
-            return Object.keys(this._layers);
-        }
-    };
-    // STATIC PROPERTIES
-    $.FlexRenderer.ShaderMediator._acceptsShaders = true;
-    $.FlexRenderer.ShaderMediator._layers = {};
-
-
 
     /**
-     * Interface for classes that implement any rendering logic and are part of the final WebGLProgram.
-     *
-     * @property {Object} defaultControls default controls for the ShaderLayer
-     * @property {Object} customParams
-     * @property {Object} modes
-     * @property {Object} filters
-     * @property {Object} filterNames
-     * @property {Object} __globalIncludes
-     *
-     * @interface OpenSeadragon.FlexRenderer.ShaderLayer
-     * @memberOf OpenSeadragon.FlexRenderer
+     * @typedef {object} ShaderLayerConfig
+     * @property {string} id
+     * @property {string} name
+     * @property {string} type         equal to ShaderLayer.type(), e.g. "identity"
+     * @property {number} visible      1 = use for rendering, 0 = do not use for rendering
+     * @property {OpenSeadragon.TiledImage[] | number[]} tiledImages images that provide the data
+     * @property {object} params          settings for the ShaderLayer
+     * @property {object} _controls       storage for the ShaderLayer's controls
+     * @property {object} cache          cache object used by the ShaderLayer's controls
      */
-    $.FlexRenderer.ShaderLayer = class {
+
+    /**
+     * Abstract base class for classes that implement any rendering logic and are part of the final WebGLProgram.
+     *
+     * @property {object} defaultControls default controls for the ShaderLayer
+     * @property {object} customParams
+     * @property {object} filters
+     * @property {object} filterNames
+     * @property {object} __globalIncludes
+     *
+     * @abstract
+     * @memberof OpenSeadragon.FlexRenderer
+     */
+    class ShaderLayer {
         /**
          * @typedef channelSettings
          * @type {Object}
@@ -2491,47 +3649,63 @@
          * @param {String} id unique identifier
          * @param {Object} privateOptions
          * @param {Object} privateOptions.shaderConfig              object bind with this ShaderLayer
-         * @param {WebGLImplementation} privateOptions.webglContext
+         * @param {WebGLImplementation} privateOptions.backend
          * @param {Object} privateOptions.cache
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
          * @param {Function} privateOptions.refresh     // callback to recreate the ShaderLayer when control layout changes
          * @param {Function} privateOptions.refetch     // callback to request source/config refetch work from the owning drawer
-         *
-         * @constructor
-         * @memberOf FlexRenderer.ShaderLayer
          */
         constructor(id, privateOptions) {
-            // unique identifier of this ShaderLayer for FlexRenderer
+            /**
+             * Unique identifier of this ShaderLayer for FlexRenderer.
+             *
+             * @type {string}
+             */
             this.id = id;
-            // unique identifier of this ShaderLayer for WebGLProgram
+
+            /**
+             * Unique identifier of this ShaderLayer for WebGLProgram.
+             *
+             * @type {string}
+             */
             this.uid = this.constructor.type().replaceAll('-', '_') + '_' + id;
+
             if (!$.FlexRenderer.idPattern.test(this.uid)) {
                 console.error(`Invalid ID for the shader: ${id} does not match to the pattern`, $.FlexRenderer.idPattern);
             }
 
             this.__shaderConfig = privateOptions.shaderConfig;
-            this.webglContext = privateOptions.webglContext;
+
+            this.backend = privateOptions.backend;
+
             this._interactive = privateOptions.interactive;
-            this._customControls = privateOptions.params ? privateOptions.params : {};
+            this._controls = {};
+            this._params = privateOptions.params ? privateOptions.params : {};
 
 
             this.invalidate = privateOptions.invalidate;
             this._rebuild = privateOptions.rebuild;
             this._refresh = privateOptions.refresh;
             this._refetch = privateOptions.refetch;
-            this._controls = {};
 
             // channels used for sampling data from the texture
             this.__channels = null;
             // channel offset
             this.__baseChannels = null;
 
+            /**
+             * @private
+             * @type {ShaderLayerCompositionMode | null}
+             */
+            this._compositionMode = null;
+
             // which blend mode is being used
-            this._mode = null;
+            this._blendMode = null;
+
             // parameters used for applying filters
-            this.__scalePrefix = null;
-            this.__scaleSuffix = null;
+            this.__filterPrefix = null;
+            this.__filterSuffix = null;
         }
 
         /**
@@ -2541,11 +3715,12 @@
             // Default init respects cached value, manual usage overrides.
 
             // set up the color channel(s) for texture sampling
-            this.resetChannel(this._customControls, false, false);
+            this.resetChannel(this._params, false, false);
             // set up the blending mode
-            this.resetMode(this._customControls, false, false);
+            this.resetMode(this._params, false, false);
             // set up the filters to be applied to sampled data from the texture
-            this.resetFilters(this._customControls, false, false);
+            this.resetFilters(this._params, false, false);
+
             // build the ShaderLayer's controls
             this._buildControls();
         }
@@ -2553,50 +3728,54 @@
         // STATIC METHODS
         /**
          * Parses value to a float string representation with given precision (length after decimal)
+         *
          * @param {number} value value to convert
          * @param {number} defaultValue default value on failure
-         * @param {number} precisionLen number of decimals
+         * @param {number} precision number of decimals
          * @return {string}
          */
-        static toShaderFloatString(value, defaultValue, precisionLen = 5) {
-            if (!Number.isInteger(precisionLen) || precisionLen < 0 || precisionLen > 9) {
-                precisionLen = 5;
+        static toShaderFloatString(value, defaultValue, precision = 5) {
+            if (!Number.isInteger(precision) || precision < 0 || precision > 9) {
+                precision = 5;
             }
+
             try {
-                return value.toFixed(precisionLen);
+                return value.toFixed(precision);
             } catch (e) {
-                return defaultValue.toFixed(precisionLen);
+                return defaultValue.toFixed(precision);
             }
         }
 
         // METHODS TO (re)IMPLEMENT WHEN EXTENDING
         /**
-         * @returns {String} key under which is the shader registered, should be unique!
+         * @returns {string} - Key under which the shader is registered, should be unique.
          */
         static type() {
             throw "ShaderLayer::type() must be implemented!";
         }
 
         /**
-         * @returns {String} name of the ShaderLayer (user-friendly)
+         * @returns {string} - A user-friendly name for the ShaderLayer type.
          */
         static name() {
             throw "ShaderLayer::name() must be implemented!";
         }
 
         /**
-         * @returns {String} optional description
+         * @returns {string} - An optional technical description for the ShaderLayer.
          */
         static description() {
-            return "No description of the ShaderLayer.";
+            return "This ShaderLayer has no description.";
         }
 
         /**
          * Optional machine-readable documentation descriptor.
+         *
          * External shader registrations can override this as either:
          *  - static docs() { return {...}; }
          *  - static docs = {...}
-         * @returns {object|null}
+         *
+         * @returns {object | null}
          */
         static docs() {
             return null;
@@ -2609,10 +3788,10 @@
          * Read by hosts (e.g. xOpat scripting / LLM driven layer construction) when picking
          * a shader for a given dataset. Keep it generic — no use-case-specific recipes.
          *
-         * Override per shader; the default returns `undefined`, in which case hosts treat
+         * Override per ShaderLayer; the default returns `undefined`, in which case hosts treat
          * "no info" as a safe fallback.
          *
-         * @returns {String|undefined}
+         * @returns {string | undefined}
          */
         static intent() {
             return undefined;
@@ -2630,9 +3809,9 @@
          *   requiresThreshold?: boolean  // true when behavior depends on threshold breaks
          * }
          *
-         * Override per shader; the default returns `undefined`.
+         * Override per ShaderLayer; the default returns `undefined`.
          *
-         * @returns {{dataKind?: string, channels?: number|string, requiresThreshold?: boolean}|undefined}
+         * @returns {{dataKind?: string, channels?: number|string, requiresThreshold?: boolean} | undefined}
          */
         static expects() {
             return undefined;
@@ -2645,9 +3824,9 @@
          * something sensible. If the shader declares `controlCouplings`, the returned
          * object MUST satisfy them (it doubles as the canonical example).
          *
-         * Override per shader; the default returns `undefined`.
+         * Override per ShaderLayer; the default returns `undefined`.
          *
-         * @returns {object|undefined}
+         * @returns {object | undefined}
          */
         static exampleParams() {
             return undefined;
@@ -2678,7 +3857,7 @@
          * Override per shader when controls are coupled; the default returns `undefined`.
          * Returning `[]` is also accepted ("declared, but no couplings").
          *
-         * @returns {Array<{name: string, summary: string, controls: string[], validate: Function}>|undefined}
+         * @returns {Array<{name: string, summary: string, controls: string[], validate: Function}> | undefined}
          */
         static controlCouplings() {
             return undefined;
@@ -2686,7 +3865,7 @@
 
         /**
          * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
-         * @returns {[channelSettings]}
+         * @returns {channelSettings[]}
          */
         static sources() {
             throw "ShaderLayer::sources() must be implemented!";
@@ -2759,9 +3938,9 @@
 
         /**
          * Modification of the configuration object before it is used.
-         * @param {ShaderConfig} config
+         * @param {ShaderLayerConfig} config
          * @param {NormalizationContext} context
-         * @returns {ShaderConfig}
+         * @returns {ShaderLayerConfig}
          */
         static normalizeConfig(config, context = {}) {
             return config;
@@ -2851,7 +4030,7 @@
                     continue;
                 }
 
-                const control = $.FlexRenderer.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._customControls[controlName]);
+                const control = $.FlexRenderer.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._params[controlName]);
                 // enables iterating over the owned controls
                 this._controls[controlName] = control;
                 // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
@@ -3026,7 +4205,7 @@
          */
         resetChannel(options = {}, force = true, evented = true) {
             if (Object.keys(options) === 0) {
-                options = this._customControls;
+                options = this._params;
             }
 
             // regex to compare with value used with use_channel, to check its correctness
@@ -3111,7 +4290,7 @@
             }
 
             if (evented) {
-                this.webglContext.renderer.notifyVisualizationChanged({
+                this.backend.renderer.notifyVisualizationChanged({
                     reason: "channel-change",
                     shaderId: this.id,
                     shaderType: this.constructor.type()
@@ -3183,7 +4362,7 @@
                 return 4;
             }
             const worldIndex = cfg.tiledImages[sourceIndex];
-            const drawer = this.webglContext.renderer.drawer;
+            const drawer = this.backend.renderer.drawer;
             if (!drawer || worldIndex == null) {  // eslint-disable-line eqeqeq
                 return 4;
             }
@@ -3202,7 +4381,7 @@
             }
 
             const worldIndex = cfg.tiledImages[sourceIndex];
-            const drawer = this.webglContext.renderer.drawer;
+            const drawer = this.backend.renderer.drawer;
             const world = drawer && drawer.viewer ? drawer.viewer.world : null;
             if (!world || worldIndex == null) {  // eslint-disable-line eqeqeq
                 return null;
@@ -3222,7 +4401,7 @@
                 return 1;
             }
             const worldIndex = cfg.tiledImages[sourceIndex];
-            const drawer = this.webglContext.renderer.drawer;
+            const drawer = this.backend.renderer.drawer;
             if (!drawer || worldIndex == null) {  // eslint-disable-line eqeqeq
                 return 1;
             }
@@ -3346,7 +4525,7 @@
          * @return {never}
          */
         getTextureSize(otherDataIndex = 0) {
-            return this.webglContext.getTextureSize(otherDataIndex);
+            return this.backend.getTextureSize(otherDataIndex);
         }
 
         // BLENDING LOGIC
@@ -3358,16 +4537,16 @@
          * @param {boolean} [force=true] when false, cached values are prioritized
          */
         resetMode(options = {}, force = true, evented = true) {
-            this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options, force);
-            this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options, force);
+            this._compositionMode = this._resetOption("use_mode", this.backend.supportedUseModes, options, force);
+            this._blendMode = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.SUPPORTED_BLEND_MODES, options, force);
 
             if (evented) {
-                this.webglContext.renderer.notifyVisualizationChanged({
+                this.backend.renderer.notifyVisualizationChanged({
                     reason: "mode-change",
                     shaderId: this.id,
                     shaderType: this.constructor.type(),
-                    mode: this._mode,
-                    blend: this._blend
+                    mode: this._compositionMode,
+                    blend: this._blendMode
                 });
             }
         }
@@ -3410,7 +4589,7 @@
 
             if (contiguous) {
                 // Use the old fast path: osd_texture + swizzle
-                return `${this.webglContext.sampleTexture(sourceIndex, uv)}.${pattern}`;
+                return `${this.backend.sampleTexture(sourceIndex, uv)}.${pattern}`;
             }
 
             // TODO: we should call here API of the underlying engine to get sampling method, not hardcoding it here!
@@ -3437,7 +4616,7 @@
         _resetOption(name, supportedValueList, options = {}, force = true) {
             let result;
             if (!options) {
-                options = this._customControls;
+                options = this._params;
             }
 
             const predefined = this.constructor.defaultControls[name];
@@ -3483,12 +4662,12 @@
          * TODO configurable...
          */
         getCustomBlendFunction(functionName) {
-            let code = this.webglContext.getBlendingFunction(this._blend);
+            let code = this.backend.getBlendingFunction(this._blendMode);
             if (!code) {
-                $.console.warn("Invalid blending - using default", this._blend, this);
+                $.console.warn("Invalid blending - using default", this._blendMode, this);
                 // Set to mask, typical wanted value if mode is not show. If mode=show, there is a hardcoded blend function.
-                this._blend = 'mask';
-                code = this.webglContext.getBlendingFunction(this._blend);
+                this._blendMode = 'mask';
+                code = this.backend.getBlendingFunction(this._blendMode);
             }
             return `vec4 ${functionName}(vec4 fg, vec4 bg) {
 ${code}
@@ -3497,7 +4676,7 @@ ${code}
 
         /**
          * Get JSON configuration
-         * @return {ShaderConfig}
+         * @return {ShaderLayerConfig}
          */
         getConfig() {
             return this.__shaderConfig;
@@ -3561,11 +4740,11 @@ ${code}
          */
         resetFilters(options = {}, force = true, evented = true) {
             if (Object.keys(options) === 0) {
-                options = this._customControls;
+                options = this._params;
             }
 
-            this.__scalePrefix = [];
-            this.__scaleSuffix = [];
+            this.__filterPrefix = [];
+            this.__filterSuffix = [];
             for (let key in this.constructor.filters) {
                 const predefined = this.constructor.defaultControls[key];
                 let value = predefined ? predefined.required : undefined;
@@ -3579,15 +4758,15 @@ ${code}
 
                 if (value !== undefined) {
                     let filter = this.constructor.filters[key](value);
-                    this.__scalePrefix.push(filter[0]);
-                    this.__scaleSuffix.push(filter[1]);
+                    this.__filterPrefix.push(filter[0]);
+                    this.__filterSuffix.push(filter[1]);
                 }
             }
-            this.__scalePrefix = this.__scalePrefix.join("");
-            this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
+            this.__filterPrefix = this.__filterPrefix.join("");
+            this.__filterSuffix = this.__filterSuffix.reverse().join("");
 
             if (evented) {
-                this.webglContext.renderer.notifyVisualizationChanged({
+                this.backend.renderer.notifyVisualizationChanged({
                     reason: "filter-change",
                     shaderId: this.id,
                     shaderType: this.constructor.type()
@@ -3601,7 +4780,7 @@ ${code}
          * @return {String} filtered value (GLSL oneliner without ';')
          */
         filter(value) {
-            return `${this.__scalePrefix}${value}${this.__scaleSuffix}`;
+            return `${this.__filterPrefix}${value}${this.__filterSuffix}`;
         }
 
         /**
@@ -3626,7 +4805,6 @@ ${code}
         getFilterValue(filter, defaultValue) {
             return this.loadProperty(filter, defaultValue);
         }
-
 
 
         // UTILITIES
@@ -3659,9 +4837,9 @@ ${code}
          * @return {String}
          */
         get mode() {
-            return this._mode;
+            return this._compositionMode;
         }
-    };
+    }
 
     /**
      * Declare custom parameters for documentation purposes.
@@ -3680,12 +4858,12 @@ ${code}
      * }
      * @type {any}
      */
-    $.FlexRenderer.ShaderLayer.customParams = {};
+    ShaderLayer.customParams = {};
 
     /**
      * Parameter to save shaderLayer's functionality that can be shared and reused between ShaderLayer instantions.
      */
-    $.FlexRenderer.ShaderLayer.__globalIncludes = {};
+    ShaderLayer.__globalIncludes = {};
 
 
     //not really modular
@@ -3696,18 +4874,110 @@ ${code}
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
     //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
     // TODO: implement filters as shader nodes instead!
-    $.FlexRenderer.ShaderLayer.filters = {};
-    $.FlexRenderer.ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${$.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1)})`];
-    $.FlexRenderer.ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${$.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1)}))`];
-    $.FlexRenderer.ShaderLayer.filters["use_logscale"] = (x) => {
-        x = $.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1);
+    ShaderLayer.filters = {};
+    ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${ShaderLayer.toShaderFloatString(x, 1)})`];
+    ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${ShaderLayer.toShaderFloatString(x, 1)}))`];
+    ShaderLayer.filters["use_logscale"] = (x) => {
+        x = ShaderLayer.toShaderFloatString(x, 1);
         return [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`];
     };
 
-    $.FlexRenderer.ShaderLayer.filterNames = {};
-    $.FlexRenderer.ShaderLayer.filterNames["use_gamma"] = "Gamma";
-    $.FlexRenderer.ShaderLayer.filterNames["use_exposure"] = "Exposure";
-    $.FlexRenderer.ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
+    ShaderLayer.filterNames = {};
+    ShaderLayer.filterNames["use_gamma"] = "Gamma";
+    ShaderLayer.filterNames["use_exposure"] = "Exposure";
+    ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
+
+
+    $.FlexRenderer.ShaderLayer = ShaderLayer;
+
+
+    /**
+     * A registry of ShaderLayers.
+     *
+     * @property {boolean} _acceptsShaderLayers - Whether the mediator allows new ShaderLayer registrations.
+     * @property {Record<string, ShaderLayer>} _ShaderLayers - Registered ShaderLayers keyed by their type() output, { ShaderLayer.type(): ShaderLayer }.
+     *
+     * @memberof OpenSeadragon.FlexRenderer
+     */
+    class ShaderLayerRegistry {
+        /**
+         * Enable or disable ShaderLayer registrations.
+         *
+         * @param {boolean} accepts
+         */
+        static setAcceptsRegistrations(accepts) {
+            if (accepts === true || accepts === false) {
+                this._acceptsShaderLayers = accepts;
+            } else {
+                console.warn("OpenSeadragon.FlexRenderer.ShaderLayerRegistry::setAcceptsRegistrations: accepts parameter must be either true or false!");
+            }
+        }
+
+        /**
+         * Registers a ShaderLayer.
+         *
+         * @param {typeof ShaderLayer} ShaderLayerClass - The ShaderLayer to be registered.
+         */
+        static register(ShaderLayerClass) {
+            if (this._acceptsShaderLayers) {
+                if (this._ShaderLayers[ShaderLayerClass.type()]) {
+                    console.warn(`OpenSeadragon.FlexRenderer.ShaderLayerRegistry::register: ShaderLayer ${ShaderLayerClass.type()} already registered, overwriting the content!`);
+                }
+
+                this._ShaderLayers[ShaderLayerClass.type()] = ShaderLayerClass;
+            } else {
+                console.warn("OpenSeadragon.FlexRenderer.ShaderLayerRegistry::register: ShaderLayerRegistry is set to not accept new ShaderLayers!");
+            }
+        }
+
+        /**
+         * Gets the specified ShaderLayer.
+         *
+         * @param {string} shaderLayerType - The output of type() of the desired ShaderLayer.
+         * @returns {typeof ShaderLayer}
+         */
+        static get(shaderLayerType) {
+            return this._ShaderLayers[shaderLayerType];
+        }
+
+        /**
+         * Gets all available ShaderLayer types.
+         *
+         * @returns {string[]}
+         */
+        static availableTypes() {
+            return Object.keys(this._ShaderLayers);
+        }
+
+        /**
+         * Gets all available ShaderLayers.
+         *
+         * @returns {(typeof ShaderLayer)[]}
+         */
+        static availableShaderLayers() {
+            return Object.values(this._ShaderLayers);
+        }
+    }
+
+    /**
+     * Whether the mediator allows new ShaderLayer registrations.
+     *
+     * @type {boolean}
+     * @private
+     */
+    ShaderLayerRegistry._acceptsShaderLayers = true;
+
+    /**
+     * Registered ShaderLayers keyed by their type() output, { ShaderLayer.type(): ShaderLayer }.
+     *
+     * @type {Record<string, (typeof ShaderLayer)>}
+     * @private
+     */
+    ShaderLayerRegistry._ShaderLayers = {};
+
+
+    $.FlexRenderer.ShaderLayerRegistry = ShaderLayerRegistry;
+
 })(OpenSeadragon);
 
 (function($) {
@@ -4579,7 +5849,7 @@ $.FlexRenderer.UIControls.IControl = class IControl {
             return;
         }
 
-        this.owner.webglContext.renderer.notifyVisualizationChanged({
+        this.owner.backend.renderer.notifyVisualizationChanged({
             reason: "control-change",
             shaderId: this.owner.id,
             shaderType: this.owner.constructor.type(),
@@ -5993,7 +7263,7 @@ $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Butt
 $.FlexRenderer.IAtlasTextureControl = class IAtlasTextureControl extends $.FlexRenderer.UIControls.IControl {
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
-        this.atlas = owner.webglContext ? owner.webglContext.secondAtlas : null;
+        this.atlas = owner.backend ? owner.backend.secondAtlas : null;
         this._params = this.getParams(params);
         this.textureId = -1;
         this.encodedValue = this.params.default;
@@ -7143,7 +8413,7 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
             (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
             size * 0.7
         );
-        const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight);
+        const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight, 1.0);
         const fontSize = Math.max(8, Math.floor(size * fitScale));
         metrics = measureAt(fontSize);
 
@@ -7515,7 +8785,7 @@ $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
          * Reuse the current first-pass result and render the normal second pass into an offscreen target.
          *
          * Contract:
-         * - consumes the same `renderArray` that would be passed to `secondPassProcessData(...)`
+         * - consumes the same `renderArray` that would be passed to `renderSecondPass(...)`
          * - must not mutate renderer-owned inspector state
          * - should render the normal second-pass composition, not apply special lens logic here
          * - returns a backend-owned target object that can later be consumed by compositor logic
@@ -7531,6 +8801,54 @@ $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
          */
         renderSecondPassToTexture(renderArray, options = {}) {
             throw("$.FlexRenderer.WebGLImplementation::renderSecondPassToTexture() must be implemented!");
+        }
+
+        /**
+         * Ensure a reusable backend-owned color target.
+         *
+         * @param {object|null} target existing target slot, or null to allocate
+         * @param {number} width target width in physical pixels
+         * @param {number} height target height in physical pixels
+         * @param {object} [options={}]
+         * @return {object}
+         */
+        ensureColorTarget(target, width, height, options = {}) {
+            throw("$.FlexRenderer.WebGLImplementation::ensureColorTarget() must be implemented!");
+        }
+
+        /**
+         * Clear a backend-owned color target.
+         *
+         * @param {object} target
+         * @param {number[]} [rgba]
+         * @return {void}
+         */
+        clearColorTarget(target, rgba = [0, 0, 0, 0]) {
+            throw("$.FlexRenderer.WebGLImplementation::clearColorTarget() must be implemented!");
+        }
+
+        /**
+         * Destroy a backend-owned color target.
+         *
+         * @param {object|null} target
+         * @return {void}
+         */
+        destroyColorTarget(target) {
+            throw("$.FlexRenderer.WebGLImplementation::destroyColorTarget() must be implemented!");
+        }
+
+        /**
+         * Copy a backend-owned color target into a presentation canvas.
+         *
+         * The presentation canvas size is owned by FlexRenderer#setDimensions().
+         * Implementations must not resize it.
+         *
+         * @param {object} target
+         * @param {HTMLCanvasElement} canvas
+         * @returns {string} Transfer mode used.
+         */
+        presentColorTargetToCanvas(target, canvas) {
+            throw("$.FlexRenderer.WebGLImplementation::presentColorTargetToCanvas() must be implemented!");
         }
 
         /**
@@ -7566,6 +8884,69 @@ $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
          */
         getBlendingFunction(name) {
             throw("$.FlexRenderer.WebGLImplementation::blendingFunction must be implemented!");
+        }
+
+        /**
+         * Prepare bitmap-like tile data as a backend-owned render resource.
+         *
+         * Concrete backends should override this method. The base implementation
+         * returns a structured unsupported result rather than throwing, because
+         * tile preparation failures are expected recoverable values.
+         *
+         * @param {PrepareBitmapTileOptions} options - Bitmap tile preparation options.
+         * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+         */
+        async prepareBitmapTile(options = {}) {
+            return {
+                ok: false,
+                reason: "unsupported-data",
+                error: new Error(`${this.constructor.name || "Backend"} does not support bitmap tile preparation.`)
+            };
+        }
+
+        /**
+         * Prepare GPU texture-set tile data as a backend-owned render resource.
+         *
+         * Concrete backends should override this method.
+         *
+         * @param {PrepareGpuTextureTileOptions} options - GPU texture-set preparation options.
+         * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+         */
+        async prepareGpuTextureTile(options = {}) {
+            return {
+                ok: false,
+                reason: "unsupported-data",
+                error: new Error(`${this.constructor.name || "Backend"} does not support GPU texture tile preparation.`)
+            };
+        }
+
+        /**
+         * Prepare vector mesh tile data as backend-owned render resources.
+         *
+         * Concrete backends should override this method.
+         *
+         * @param {PrepareVectorTileOptions} options - Vector tile preparation options.
+         * @returns {Promise<PreparedVectorTileResult>} Preparation result.
+         */
+        async prepareVectorTile(options = {}) {
+            return {
+                ok: false,
+                reason: "unsupported-data",
+                error: new Error(`${this.constructor.name || "Backend"} does not support vector tile preparation.`)
+            };
+        }
+
+        /**
+         * Release a backend-owned prepared tile resource.
+         *
+         * Concrete backends should override this method when they return
+         * resources from preparation methods.
+         *
+         * @param {*} resource - Backend-owned prepared tile resource.
+         * @returns {void}
+         */
+        releasePreparedTileResource(resource) {
+            // no-op in the abstract backend
         }
     };
 
@@ -7781,7 +9162,7 @@ $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
 
 (function($) {
 
-$.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
+class WebGL2 extends $.FlexRenderer.WebGLImplementation {
     /**
      * Create a WebGL 2.0 rendering implementation.
      * @param {OpenSeadragon.FlexRenderer} renderer
@@ -7790,7 +9171,10 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     constructor(renderer, gl) {
         // sets this.renderer, this.gl, this.webGLVersion
         super(renderer, gl, "2.0");
+
         $.console.info("WebGl 2.0 renderer.");
+
+        this._preparedTileResources = new Set();
     }
 
     get firstPassProgramKey() {
@@ -7830,6 +9214,13 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
 
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
         this._namedColorTargets = {};
+        this._presentationTransferScratch = {
+            canvas: null,
+            ctx: null,
+            pixels: null,
+            flippedPixels: null,
+            imageData: null
+        };
 
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
@@ -7851,6 +9242,344 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
 
     getTextureSize(index) {
         return `osd_texture_size(${index})`;
+    }
+
+    /**
+     * Return the backend-owned GLSL function name used to compute one ShaderLayer.
+     *
+     * This keeps generated layer execution functions namespaced to FlexRenderer
+     * while still preserving the stable shader uid suffix.
+     *
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
+     * @returns {string}
+     */
+    getShaderLayerComputeName(shaderLayer) {
+        return `fr_compute_${shaderLayer.uid}`;
+    }
+
+    /**
+     * Return the backend-owned GLSL function name used to compute a ShaderLayer stack.
+     *
+     * Root stacks use a stable root name. Group stacks use the group layer uid,
+     * so nested stack functions remain deterministic without WebGL20 special-casing
+     * the group shader type.
+     *
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer|null} [ownerShader=null]
+     * @returns {string}
+     */
+    getShaderLayerStackComputeName(ownerShader = null) {
+        return ownerShader ? `fr_compute_${ownerShader.uid}_stack` : "fr_compute_root_stack";
+    }
+
+    /**
+     * Emit a safe placeholder compute function for a disabled or failed ShaderLayer.
+     *
+     * Disabled layers are still represented by a valid compute function, but stack
+     * execution skips them. This prevents missing-function failures if future
+     * composition code accidentally references a disabled layer.
+     *
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
+     * @param {string} reason
+     * @returns {string}
+     */
+    getShaderLayerPlaceholderDefinition(shaderLayer, reason) {
+        return `
+// ${shaderLayer.uid} - ${reason}
+vec4 ${this.getShaderLayerComputeName(shaderLayer)}() {
+    return vec4(0.0);
+}
+`;
+    }
+
+    /**
+     * Emit the GLSL definitions needed to compute one ShaderLayer.
+     *
+     * Invisible, "none", and error layers intentionally receive placeholder
+     * functions rather than full shader bodies. Their execution remains a no-op
+     * in stack composition.
+     *
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
+     * @returns {string}
+     */
+    getShaderLayerComputeDefinition(shaderLayer) {
+        let shaderConfig = null;
+
+        try {
+            shaderConfig = shaderLayer.getConfig();
+        } catch (e) {
+            $.console.error(`Failed to read shader config for '${shaderLayer.id}'. Emitting placeholder.`, e);
+            return this.getShaderLayerPlaceholderDefinition(shaderLayer, "Config read failed placeholder");
+        }
+
+        if (!shaderConfig || shaderConfig.type === "none" || shaderConfig.error || !shaderConfig.visible) {
+            return this.getShaderLayerPlaceholderDefinition(
+                shaderLayer,
+                "Disabled, hidden, or error placeholder"
+            );
+        }
+
+        try {
+            return `
+// ${shaderLayer.uid} - Definition
+${shaderLayer.getFragmentShaderDefinition()}
+
+// ${shaderLayer.uid} - Custom blending function for a given shader
+${shaderLayer.getCustomBlendFunction(shaderLayer.uid + "_blend_func")}
+
+// ${shaderLayer.uid} - Shader code execution
+vec4 ${this.getShaderLayerComputeName(shaderLayer)}() {
+${shaderLayer.getFragmentShaderExecution()}
+}
+`;
+        } catch (e) {
+            $.console.error(`Failed to assemble shader '${shaderLayer.id}' (${shaderConfig.type}). Emitting placeholder.`, e);
+            shaderConfig.error = true;
+            return this.getShaderLayerPlaceholderDefinition(shaderLayer, "Assembly error placeholder");
+        }
+    }
+
+    /**
+     * Emit the stencil-pass setup code for a ShaderLayer.
+     *
+     * Layers without tiled-image sources are treated as always passing stencil.
+     *
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
+     * @returns {string}
+     */
+    getShaderLayerStencilPassCode(shaderLayer) {
+        const shaderConfig = shaderLayer.getConfig();
+        const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
+
+        if (!hasSources) {
+            return "    stencilPasses = true;";
+        }
+
+        return `    stencilPasses = osd_stencil_texture(${shaderLayer.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
+    }
+
+    /**
+     * Emit GLSL definitions for a complete ShaderLayer stack, including:
+     * - one compute function for each child layer;
+     * - one named stack compute function returning the composed vec4.
+     *
+     * @param {Object<string, OpenSeadragon.FlexRenderer.ShaderLayer>} shaderMap
+     * @param {string[]} keyOrder
+     * @param {Object} [options={}]
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer|null} [options.ownerShader=null]
+     * @param {string} [options.stackName] explicit GLSL stack function name
+     * @param {string} [options.initialColor="vec4(0.0)"] initial stack color expression
+     * @param {boolean} [options.useInspectorAlpha=false] apply root inspector alpha to layer opacity
+     * @returns {string}
+     */
+    getShaderLayerStackDefinition(shaderMap, keyOrder, options = {}) {
+        let definition = "";
+
+        for (const shaderLayerId of keyOrder || []) {
+            const shaderLayer = shaderMap && shaderMap[shaderLayerId];
+            if (!shaderLayer) {
+                continue;
+            }
+
+            definition += this.getShaderLayerComputeDefinition(shaderLayer);
+        }
+
+        const stackName = options.stackName || this.getShaderLayerStackComputeName(options.ownerShader || null);
+
+        definition += `
+// ${stackName} - ShaderLayer stack composition
+vec4 ${stackName}() {
+${this._getShaderLayerStackFunctionBody(shaderMap, keyOrder, options)}
+}
+`;
+
+        return definition;
+    }
+
+    /**
+     * Return the GLSL expression that invokes a generated ShaderLayer stack.
+     *
+     * The stack body itself is emitted by getShaderLayerStackDefinition(...).
+     *
+     * @param {Object<string, OpenSeadragon.FlexRenderer.ShaderLayer>} shaderMap
+     * @param {string[]} keyOrder
+     * @param {Object} [options={}]
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer|null} [options.ownerShader=null]
+     * @param {string} [options.stackName] explicit GLSL stack function name
+     * @returns {string}
+     */
+    getShaderLayerStackExecution(shaderMap, keyOrder, options = {}) {
+        const stackName = options.stackName || this.getShaderLayerStackComputeName(options.ownerShader || null);
+        return `${stackName}()`;
+    }
+
+    /**
+     * Convenience wrapper returning both stack definition source and the stack call expression.
+     *
+     * @param {Object<string, OpenSeadragon.FlexRenderer.ShaderLayer>} shaderMap
+     * @param {string[]} keyOrder
+     * @param {Object} [options={}]
+     * @returns {{definition: string, execution: string}}
+     */
+    composeShaderLayerStack(shaderMap, keyOrder, options = {}) {
+        return {
+            definition: this.getShaderLayerStackDefinition(shaderMap, keyOrder, options),
+            execution: this.getShaderLayerStackExecution(shaderMap, keyOrder, options)
+        };
+    }
+
+    /**
+     * Emit the body of a named returning ShaderLayer stack function.
+     *
+     * This is the single source of truth for WebGL2 GLSL stack composition:
+     * hidden layers are no-ops, hidden non-clip layers break the clip target,
+     * and visible clip layers only affect the nearest visible non-clip target.
+     *
+     * @private
+     * @param {Object<string, OpenSeadragon.FlexRenderer.ShaderLayer>} shaderMap
+     * @param {string[]} keyOrder
+     * @param {Object} [options={}]
+     * @param {string} [options.initialColor="vec4(0.0)"]
+     * @param {boolean} [options.useInspectorAlpha=false]
+     * @returns {string}
+     */
+    _getShaderLayerStackFunctionBody(shaderMap, keyOrder, options = {}) {
+        const initialColor = options.initialColor || "vec4(0.0)";
+        const useInspectorAlpha = options.useInspectorAlpha === true;
+
+        let execution = `
+    vec4 intermediate_color = ${initialColor};
+    vec4 overall_color = intermediate_color;
+    vec4 clip_color = vec4(.0);
+    vec4 attrs;
+`;
+
+        let remainingBlendShader = null;
+        let clipTargetAvailable = false;
+
+        const getRemainingBlending = () => {
+            if (!remainingBlendShader) {
+                return "";
+            }
+
+            return `
+${this.getShaderLayerStencilPassCode(remainingBlendShader)}
+    overall_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(intermediate_color, overall_color);
+`;
+        };
+
+        for (const shaderLayerId of keyOrder || []) {
+            const shaderLayer = shaderMap && shaderMap[shaderLayerId];
+            if (!shaderLayer) {
+                continue;
+            }
+
+            const executionSnapshot = execution;
+            const remainingBlendSnapshot = remainingBlendShader;
+            const clipTargetAvailableSnapshot = clipTargetAvailable;
+
+            let shaderLayerConfig = null;
+            let isClipLayer = false;
+
+            try {
+                shaderLayerConfig = shaderLayer.getConfig();
+                isClipLayer = shaderLayer._mode === "clip";
+
+                const slot = shaderLayer.__renderSlot;
+                const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+                const opacityModifier = useInspectorAlpha ?
+                    `(${opacityModifierBase}) * inspector_layer_alpha(${slot})` :
+                    opacityModifierBase;
+
+                execution += `\n    // ${shaderLayer.uid}\n`;
+
+                if (!shaderLayerConfig || shaderLayerConfig.type === "none" || shaderLayerConfig.error || !shaderLayerConfig.visible) {
+                    if (!isClipLayer) {
+                        // A hidden non-clip layer breaks the clip chain. Clip layers above it
+                        // must not accidentally modify the previous visible non-clip layer.
+                        clipTargetAvailable = false;
+                    }
+
+                    execution += `
+    // ${shaderLayer.uid} - Disabled (type none, error, or visible = false)
+    // Intentionally skipped. Disabled layers do not emit blending,
+    // clipping, or composition-boundary code.
+`;
+
+                    continue;
+                }
+
+                if (isClipLayer && !clipTargetAvailable) {
+                    execution += `
+    // ${shaderLayer.uid} - Clip skipped because there is no visible non-clip layer to clip.
+`;
+
+                    continue;
+                }
+
+                execution += `
+    instance_id = ${slot};
+${this.getShaderLayerStencilPassCode(shaderLayer)}
+    attrs = u_shaderVariables[${slot}];
+    opacity = attrs.x;
+    pixelSize = attrs.y;
+    imageOriginPx = attrs.zw;
+    zoom = u_zoom;
+`;
+
+                if (!isClipLayer) {
+                    execution += `${getRemainingBlending()}
+    // ${shaderLayer.uid} - blending
+    intermediate_color = ${this.getShaderLayerComputeName(shaderLayer)}();
+    intermediate_color.a = intermediate_color.a * ${opacityModifier};
+`;
+
+                    remainingBlendShader = shaderLayer;
+                    clipTargetAvailable = true;
+                } else {
+                    execution += `
+    // ${shaderLayer.uid} - clipping
+    clip_color = ${this.getShaderLayerComputeName(shaderLayer)}();
+    clip_color.a = clip_color.a * ${opacityModifier};
+    intermediate_color = ${shaderLayer.uid}_blend_func(clip_color, intermediate_color);
+`;
+                }
+            } catch (e) {
+                $.console.error(
+                    `Failed to assemble shader '${shaderLayer.id}' (${shaderLayerConfig ? shaderLayerConfig.type : "unknown"}). Hiding layer.`,
+                    e
+                );
+
+                if (shaderLayerConfig) {
+                    shaderLayerConfig.error = true;
+                }
+
+                execution = executionSnapshot;
+                remainingBlendShader = remainingBlendSnapshot;
+                clipTargetAvailable = clipTargetAvailableSnapshot;
+
+                if (!isClipLayer) {
+                    // Treat a failed non-clip layer like a hidden non-clip layer.
+                    // Following clip layers must not retarget the previous visible layer.
+                    clipTargetAvailable = false;
+                }
+
+                execution += `
+    // ${shaderLayer.uid} - Disabled after assembly error
+    // Intentionally skipped. Failed layers do not emit blending,
+    // clipping, or composition-boundary code.
+`;
+            }
+        }
+
+        if (remainingBlendShader) {
+            execution += getRemainingBlending();
+        }
+
+        execution += `
+    return overall_color;
+`;
+
+        return execution;
     }
 
     setDimensions(x, y, width, height, levels, tiledImageCount) {
@@ -7885,14 +9614,36 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     }
 
     destroy() {
+        if (this._preparedTileResources) {
+            for (const resource of Array.from(this._preparedTileResources)) {
+                this.releasePreparedTileResource(resource);
+            }
+
+            this._preparedTileResources.clear();
+        }
+
         if (this._namedColorTargets) {
             for (const key of Object.keys(this._namedColorTargets)) {
                 this._destroyColorTarget(this._namedColorTargets[key]);
             }
+
             this._namedColorTargets = {};
         }
+
         this.firstAtlas.destroy();
         this.secondAtlas.destroy();
+
+        // clean all texture units; adapted from https://stackoverflow.com/a/23606581/1214731
+        const numTextureUnits = this.gl.getParameter(this.gl.MAX_TEXTURE_IMAGE_UNITS);
+
+        for (let unit = 0; unit < numTextureUnits; ++unit) {
+            this.gl.activeTexture(this.gl.TEXTURE0 + unit);
+            this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+            this.gl.bindTexture(this.gl.TEXTURE_2D_ARRAY, null);
+        }
+
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, null);
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     }
 
     _createColorTarget(width, height, options = {}) {
@@ -7916,6 +9667,11 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         target.framebuffer = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
+
+        // Make the single color attachment explicitly drawable. This matters for
+        // shared-context final targets because the second pass renders into this FBO,
+        // not into the WebGL default framebuffer.
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
 
         const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
         if (status !== gl.FRAMEBUFFER_COMPLETE) {
@@ -7970,9 +9726,129 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         }
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
         gl.clearColor(rgba[0], rgba[1], rgba[2], rgba[3]);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    /**
+     * Ensure a renderer-owned color target.
+     *
+     * @param {object | null} target
+     * @param {number} width
+     * @param {number} height
+     * @param {object} [options={}]
+     * @returns {object}
+     */
+    ensureColorTarget(target, width, height, options = {}) {
+        return this._ensureColorTarget(target, width, height, options);
+    }
+
+    /**
+     * Clear a renderer-owned color target.
+     *
+     * @param {object} target
+     * @param {number[]} [rgba=[0, 0, 0, 0]]
+     * @returns {void}
+     */
+    clearColorTarget(target, rgba = [0, 0, 0, 0]) {
+        this._clearColorTarget(target, rgba);
+    }
+
+    /**
+     * Destroy a renderer-owned color target.
+     *
+     * @param {object|null} target
+     * @returns {void}
+     */
+    destroyColorTarget(target) {
+        this._destroyColorTarget(target);
+    }
+
+    /**
+     * Copy a color target into a renderer-local presentation canvas.
+     *
+     * Shared-context presentation uses readPixels because the WebGL default
+     * framebuffer is not a reliable intermediate transfer target across browsers
+     * and context configurations.
+     *
+     * @param {object} target
+     * @param {HTMLCanvasElement} canvas
+     * @returns {string} Transfer mode used.
+     */
+    presentColorTargetToCanvas(target, canvas) {
+        if (!target || !target.framebuffer || !canvas) {
+            return "none";
+        }
+
+        return this._readColorTargetToCanvas(target, canvas);
+    }
+
+    /**
+     * Copy a color target into a presentation canvas through readPixels.
+     *
+     * @private
+     * @param {object} target
+     * @param {HTMLCanvasElement} canvas
+     * @returns {string} Always "read-pixels".
+     */
+    _readColorTargetToCanvas(target, canvas) {
+        const gl = this.gl;
+        const targetWidth = target.width || 0;
+        const targetHeight = target.height || 0;
+        const canvasWidth = canvas.width || 0;
+        const canvasHeight = canvas.height || 0;
+        const width = Math.min(targetWidth, canvasWidth);
+        const height = Math.min(targetHeight, canvasHeight);
+        const scratch = this._presentationTransferScratch;
+
+        if (!width || !height) {
+            return "read-pixels";
+        }
+
+        const length = width * height * 4;
+        const rowLength = width * 4;
+
+        if (!scratch.pixels || scratch.pixels.length !== length) {
+            scratch.pixels = new Uint8Array(length);
+        }
+
+        if (!scratch.flippedPixels || scratch.flippedPixels.length !== length) {
+            scratch.flippedPixels = new Uint8ClampedArray(length);
+        }
+
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+            return "read-pixels";
+        }
+
+        if (canvasWidth !== targetWidth || canvasHeight !== targetHeight) {
+            context.clearRect(0, 0, canvasWidth, canvasHeight);
+        }
+
+        if (!scratch.imageData || scratch.imageData.width !== width || scratch.imageData.height !== height) {
+            scratch.imageData = context.createImageData(width, height);
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, scratch.pixels);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        for (let y = 0; y < height; y++) {
+            const srcStart = (height - 1 - y) * rowLength;
+            const dstStart = y * rowLength;
+            scratch.flippedPixels.set(
+                scratch.pixels.subarray(srcStart, srcStart + rowLength),
+                dstStart
+            );
+        }
+
+        scratch.imageData.data.set(scratch.flippedPixels);
+        context.putImageData(scratch.imageData, 0, 0);
+
+        return "read-pixels";
     }
 
     /**
@@ -7981,8 +9857,9 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
      * but into a reusable color target.
      */
     renderSecondPassToTexture(renderArray, options = {}) {
-        const width = options.width || this.renderer.canvas.width || this.gl.drawingBufferWidth;
-        const height = options.height || this.renderer.canvas.height || this.gl.drawingBufferHeight;
+        const dimensions = this.renderer.getRenderDimensions();
+        const width = options.width || dimensions.width || this.gl.drawingBufferWidth;
+        const height = options.height || dimensions.height || this.gl.drawingBufferHeight;
         const target = options.target ?
             this._ensureColorTarget(options.target, width, height, options) :
             this._ensureColorTarget(options.targetKey || '__second_pass_texture', width, height, options);
@@ -8008,8 +9885,9 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
      * stays inside the normal second-pass shader.
      */
     processSecondPassWithInspector(renderArray, options = undefined) {
-        const width = this.renderer.canvas.width || this.gl.drawingBufferWidth;
-        const height = this.renderer.canvas.height || this.gl.drawingBufferHeight;
+        const dimensions = this.renderer.getRenderDimensions();
+        const width = dimensions.width || this.gl.drawingBufferWidth;
+        const height = dimensions.height || this.gl.drawingBufferHeight;
 
         const fullTarget = this._ensureColorTarget("__inspector_full", width, height, { filter: this.gl.LINEAR });
 
@@ -8177,7 +10055,650 @@ if (!stencilPasses) return bg;
 return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         }[name];
     }
-};
+
+    /**
+     * Prepare bitmap-like tile data as a WebGL2 texture array resource.
+     *
+     * @param {PrepareBitmapTileOptions} options - Bitmap tile preparation options.
+     * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+     */
+    async prepareBitmapTile(options = {}) {
+        const gl = this.gl;
+        const source = this._normalizeBitmapTileSource(options.data);
+        const textureOptions = options.textureOptions || {};
+
+        if (!source) {
+            return this._makePreparedTileFailure(
+                "unsupported-data",
+                new TypeError("Bitmap tile preparation requires bitmap-like source data.")
+            );
+        }
+
+        let bitmap = null;
+        let ownsBitmap = false;
+
+        try {
+            if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+                bitmap = source;
+            } else {
+                bitmap = await createImageBitmap(source);
+                ownsBitmap = true;
+            }
+        } catch (error) {
+            return this._makePreparedTileFailure(
+                this._classifyTilePreparationError(error, "invalid-data"),
+                error
+            );
+        }
+
+        const width = (bitmap && Number(bitmap.width)) || 0;
+        const height = (bitmap && Number(bitmap.height)) || 0;
+
+        if (!width || !height) {
+            if (ownsBitmap && bitmap && typeof bitmap.close === "function") {
+                bitmap.close();
+            }
+
+            return this._makePreparedTileFailure(
+                "invalid-data",
+                new Error("Bitmap tile preparation produced empty or invalid dimensions.")
+            );
+        }
+
+        let texture = null;
+
+        try {
+            texture = gl.createTexture();
+
+            if (!texture) {
+                throw new Error("WebGL2 failed to create a bitmap tile texture.");
+            }
+
+            this._clearWebGLErrors();
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, 1);
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+
+            const filter = textureOptions.imageSmoothingEnabled ? gl.LINEAR : gl.NEAREST;
+
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            this._throwIfWebGLError("Bitmap tile texture upload");
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            this._preparedTileResources.add(texture);
+
+            return {
+                ok: true,
+                resource: texture,
+                texture: texture,
+                width: width,
+                height: height,
+                textureDepth: 1,
+                packCount: 1,
+                channelCount: 4
+            };
+        } catch (error) {
+            if (texture) {
+                gl.deleteTexture(texture);
+            }
+
+            return this._makePreparedTileFailure(
+                this._classifyTilePreparationError(error, "webgl-upload-failed"),
+                error
+            );
+        } finally {
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            if (ownsBitmap && bitmap && typeof bitmap.close === "function") {
+                bitmap.close();
+            }
+        }
+    }
+
+    /**
+     * Prepare packed GPU texture-set tile data as a WebGL2 texture array resource.
+     *
+     * @param {PrepareGpuTextureTileOptions} options - GPU texture-set preparation options.
+     * @returns {Promise<PreparedRasterTileResult>} Preparation result.
+     */
+    async prepareGpuTextureTile(options = {}) {
+        const gl = this.gl;
+        const gpu = options.data;
+        const textureOptions = options.textureOptions || {};
+
+        if (!gpu || typeof gpu !== "object") {
+            return this._makePreparedTileFailure(
+                "unsupported-data",
+                new TypeError("GPU texture tile preparation requires a texture-set object.")
+            );
+        }
+
+        const width = Number(gpu.width) || 0;
+        const height = Number(gpu.height) || 0;
+        const packs = Array.isArray(gpu.packs) ? gpu.packs : [];
+
+        if (!width || !height) {
+            return this._makePreparedTileFailure(
+                "invalid-data",
+                new Error("GPU texture tile preparation requires positive width and height.")
+            );
+        }
+
+        if (!packs.length) {
+            return this._makePreparedTileFailure(
+                "unsupported-data",
+                new Error("GPU texture tile preparation requires at least one texture pack.")
+            );
+        }
+
+        const firstFormatName = (packs[0] && packs[0].format) || "RGBA8";
+
+        let formatInfo;
+        switch (firstFormatName) {
+            case "RGBA8":
+                formatInfo = {
+                    internalFormat: gl.RGBA8,
+                    format: gl.RGBA,
+                    type: gl.UNSIGNED_BYTE
+                };
+                break;
+
+            case "RGBA16F":
+                formatInfo = {
+                    internalFormat: gl.RGBA16F,
+                    format: gl.RGBA,
+                    type: gl.HALF_FLOAT
+                };
+                break;
+
+            default:
+                formatInfo = null;
+        }
+
+        if (!formatInfo) {
+            return this._makePreparedTileFailure(
+                "unsupported-data",
+                new Error(`Unsupported GPU texture pack format '${firstFormatName}'.`)
+            );
+        }
+
+        for (let layer = 0; layer < packs.length; layer++) {
+            const pack = packs[layer];
+            const packFormatName = (pack && pack.format) || firstFormatName;
+
+            if (!pack || !pack.data) {
+                return this._makePreparedTileFailure(
+                    "invalid-data",
+                    new Error(`GPU texture pack ${layer} is missing pixel data.`)
+                );
+            }
+
+            if (packFormatName !== firstFormatName) {
+                return this._makePreparedTileFailure(
+                    "unsupported-data",
+                    new Error("Mixed GPU texture pack formats are not supported.")
+                );
+            }
+
+            if (!ArrayBuffer.isView(pack.data)) {
+                return this._makePreparedTileFailure(
+                    "unsupported-data",
+                    new TypeError(`GPU texture pack ${layer} data must be a typed array.`)
+                );
+            }
+        }
+
+        const packCount = packs.length;
+        const channelCount = Number(gpu.channelCount) || packCount * 4;
+        let texture = null;
+
+        try {
+            texture = gl.createTexture();
+
+            if (!texture) {
+                throw new Error("WebGL2 failed to create a GPU texture-set tile texture.");
+            }
+
+            this._clearWebGLErrors();
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, formatInfo.internalFormat, width, height, packCount);
+
+            for (let layer = 0; layer < packCount; layer++) {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, width, height, 1, formatInfo.format, formatInfo.type, packs[layer].data);
+            }
+
+            const filter = textureOptions.imageSmoothingEnabled ? gl.LINEAR : gl.NEAREST;
+
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            this._throwIfWebGLError("GPU texture-set tile upload");
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+            this._preparedTileResources.add(texture);
+
+            return {
+                ok: true,
+                resource: texture,
+                texture: texture,
+                width: width,
+                height: height,
+                textureDepth: packCount,
+                packCount: packCount,
+                channelCount: channelCount
+            };
+        } catch (error) {
+            if (texture) {
+                gl.deleteTexture(texture);
+            }
+
+            return this._makePreparedTileFailure(
+                this._classifyTilePreparationError(error, "webgl-upload-failed"),
+                error
+            );
+        } finally {
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        }
+    }
+
+    /**
+     * Prepare vector mesh tile data as WebGL2 buffer resources.
+     *
+     * @param {PrepareVectorTileOptions} options - Vector tile preparation options.
+     * @returns {Promise<PreparedVectorTileResult>} Preparation result.
+     */
+    async prepareVectorTile(options = {}) {
+        const data = options.data;
+
+        if (!data || typeof data !== "object") {
+            return this._makePreparedTileFailure(
+                "unsupported-data",
+                new TypeError("Vector tile preparation requires a vector mesh object.")
+            );
+        }
+
+        const vectors = {};
+
+        try {
+            const hasNativeLines = data.linePrimitives && data.linePrimitives.length;
+            const hasMeshLines = !hasNativeLines && data.lines && data.lines.length;
+
+            if (data.fills && data.fills.length) {
+                vectors.fills = this._prepareVectorTileBatch(data.fills);
+            }
+
+            if (hasMeshLines) {
+                vectors.lines = this._prepareVectorTileBatch(data.lines);
+            }
+
+            if (hasNativeLines) {
+                const linePrimitiveGroups = new Map();
+
+                for (const mesh of data.linePrimitives) {
+                    const lineWidth = Number.isFinite(mesh.lineWidth) && mesh.lineWidth > 0
+                        ? mesh.lineWidth
+                        : 1;
+                    const key = String(lineWidth);
+
+                    if (!linePrimitiveGroups.has(key)) {
+                        linePrimitiveGroups.set(key, []);
+                    }
+
+                    linePrimitiveGroups.get(key).push(mesh);
+                }
+
+                vectors.linePrimitives = Array.from(linePrimitiveGroups.values()).map((meshes) => {
+                    return this._prepareVectorTileBatch(meshes);
+                });
+            }
+
+            if (data.points && data.points.length) {
+                vectors.points = this._prepareVectorTileBatch(data.points);
+            }
+
+            this._preparedTileResources.add(vectors);
+
+            return {
+                ok: true,
+                resource: vectors,
+                vectors: vectors
+            };
+        } catch (error) {
+            this._releasePreparedVectorTileResource(vectors);
+
+            return this._makePreparedTileFailure(
+                "webgl-upload-failed",
+                error
+            );
+        }
+    }
+
+    _prepareVectorTileBatch(meshes) {
+        const gl = this.gl;
+
+        if (!Array.isArray(meshes) || !meshes.length) {
+            throw new TypeError("Vector tile batch requires at least one mesh.");
+        }
+
+        let vCount = 0;
+        let iCount = 0;
+
+        for (const mesh of meshes) {
+            if (!mesh || !mesh.vertices || !mesh.indices) {
+                throw new TypeError("Vector mesh requires vertices and indices.");
+            }
+
+            vCount += mesh.vertices.length / 4;
+            iCount += mesh.indices.length;
+        }
+
+        const positions = new Float32Array(vCount * 4);
+        const parameters = new Float32Array(vCount * 4);
+        const indices = new Uint32Array(iCount);
+
+        let vOfs = 0;
+        let iOfs = 0;
+        let baseVertex = 0;
+
+        for (const mesh of meshes) {
+            positions.set(mesh.vertices, vOfs * 4);
+
+            const rgba = mesh.color ? mesh.color : [0, 0, 0, 1];
+            const r = Math.max(0.0, Math.min(1.0, rgba[0]));
+            const g = Math.max(0.0, Math.min(1.0, rgba[1]));
+            const b = Math.max(0.0, Math.min(1.0, rgba[2]));
+            const a = Math.max(0.0, Math.min(1.0, rgba[3]));
+
+            for (let k = 0; k < mesh.vertices.length / 4; k++) {
+                const pOfs = (vOfs + k) * 4;
+                parameters[pOfs + 0] = r;
+                parameters[pOfs + 1] = g;
+                parameters[pOfs + 2] = b;
+                parameters[pOfs + 3] = a;
+            }
+
+            if (mesh.parameters) {
+                parameters.set(mesh.parameters, vOfs * 4);
+            }
+
+            for (let k = 0; k < mesh.indices.length; k++) {
+                indices[iOfs + k] = baseVertex + mesh.indices[k];
+            }
+
+            vOfs += mesh.vertices.length / 4;
+            iOfs += mesh.indices.length;
+            baseVertex += mesh.vertices.length / 4;
+        }
+
+        const batch = {
+            vboPos: null,
+            vboParam: null,
+            ibo: null,
+            count: indices.length,
+            lineWidth: 1
+        };
+
+        try {
+            batch.vboPos = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+            batch.vboParam = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboParam);
+            gl.bufferData(gl.ARRAY_BUFFER, parameters, gl.STATIC_DRAW);
+
+            batch.ibo = gl.createBuffer();
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+            gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+            const firstMesh = meshes[0] || {};
+            batch.lineWidth = Number.isFinite(firstMesh.lineWidth) && firstMesh.lineWidth > 0
+                ? firstMesh.lineWidth
+                : 1;
+
+            return batch;
+        } catch (error) {
+            this._releasePreparedVectorTileBatch(batch);
+            throw error;
+        } finally {
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        }
+    }
+
+    _isPreparedVectorTileResource(resource) {
+        return !!(
+            resource &&
+            typeof resource === "object" &&
+            (
+                resource.fills ||
+                resource.lines ||
+                resource.linePrimitives ||
+                resource.points
+            )
+        );
+    }
+
+    _releasePreparedVectorTileResource(resource) {
+        if (!resource || typeof resource !== "object") {
+            return;
+        }
+
+        if (resource.fills) {
+            this._releasePreparedVectorTileBatch(resource.fills);
+            resource.fills = null;
+        }
+
+        if (resource.lines) {
+            this._releasePreparedVectorTileBatch(resource.lines);
+            resource.lines = null;
+        }
+
+        if (Array.isArray(resource.linePrimitives)) {
+            for (const lineBatch of resource.linePrimitives) {
+                this._releasePreparedVectorTileBatch(lineBatch);
+            }
+            resource.linePrimitives = null;
+        }
+
+        if (resource.points) {
+            this._releasePreparedVectorTileBatch(resource.points);
+            resource.points = null;
+        }
+    }
+
+    _releasePreparedVectorTileBatch(batch) {
+        if (!batch) {
+            return;
+        }
+
+        const gl = this.gl;
+
+        if (batch.vboPos) {
+            gl.deleteBuffer(batch.vboPos);
+            batch.vboPos = null;
+        }
+
+        if (batch.vboParam) {
+            gl.deleteBuffer(batch.vboParam);
+            batch.vboParam = null;
+        }
+
+        if (batch.ibo) {
+            gl.deleteBuffer(batch.ibo);
+            batch.ibo = null;
+        }
+
+        batch.count = 0;
+    }
+
+    /**
+     * Release a WebGL2 prepared tile resource.
+     *
+     * @param {*} resource - Backend-owned resource returned by a preparation method.
+     * @returns {void}
+     */
+    releasePreparedTileResource(resource) {
+        if (!resource) {
+            return;
+        }
+
+        if (this._isPreparedVectorTileResource(resource)) {
+            this._releasePreparedVectorTileResource(resource);
+
+            if (this._preparedTileResources) {
+                this._preparedTileResources.delete(resource);
+            }
+
+            return;
+        }
+
+        const texture = resource && resource.texture ? resource.texture : resource;
+
+        if (!texture) {
+            return;
+        }
+
+        this.gl.deleteTexture(texture);
+
+        if (this._preparedTileResources) {
+            this._preparedTileResources.delete(texture);
+        }
+
+        if (resource && resource.texture) {
+            resource.texture = null;
+        }
+    }
+
+    _normalizeBitmapTileSource(data) {
+        if (!data) {
+            return null;
+        }
+
+        if (typeof CanvasRenderingContext2D !== "undefined" && data instanceof CanvasRenderingContext2D) {
+            return data.canvas || null;
+        }
+
+        return data;
+    }
+
+    _makePreparedTileFailure(reason, error) {
+        return {
+            ok: false,
+            reason: reason,
+            error: error
+        };
+    }
+
+    _classifyTilePreparationError(error, fallbackReason) {
+        if (this._isTaintOrSecurityError(error)) {
+            return "tainted-data";
+        }
+
+        return fallbackReason;
+    }
+
+    _isTaintOrSecurityError(error) {
+        if (!error) {
+            return false;
+        }
+
+        const name = error.name ? String(error.name) : "";
+        const code = Number(error.code);
+        const message = error.message ? String(error.message) : String(error);
+
+        if (name === "SecurityError") {
+            return true;
+        }
+
+        // DOMException.SECURITY_ERR is historically 18. Some browsers still expose
+        // numeric codes, though modern code should prefer .name.
+        if (code === 18) {
+            return true;
+        }
+
+        // Firefox/internal DOM security names may appear in some browser errors.
+        if (name === "NS_ERROR_DOM_SECURITY_ERR") {
+            return true;
+        }
+
+        return /tainted canvas|origin-clean|cross-origin|cross origin|cors/i.test(message);
+    }
+
+    _clearWebGLErrors() {
+        const gl = this.gl;
+
+        // cap the amount of errors to avoid an infinite loop
+        for (let i = 0; i < 16; i++) {
+            if (gl.getError() === gl.NO_ERROR) {
+                return;
+            }
+        }
+    }
+
+    _throwIfWebGLError(operation) {
+        const gl = this.gl;
+        const errors = [];
+
+        // cap the amount of errors to avoid an infinite loop
+        for (let i = 0; i < 16; i++) {
+            const error = gl.getError();
+
+            if (error === gl.NO_ERROR) {
+                break;
+            }
+
+            errors.push(error);
+        }
+
+        if (!errors.length) {
+            return;
+        }
+
+        const message = errors.map(error => this._formatWebGLError(error)).join(", ");
+
+        const uploadError = new Error(`${operation} failed with WebGL error(s): ${message}`);
+        uploadError.webglErrors = errors;
+        throw uploadError;
+    }
+
+    _formatWebGLError(error) {
+        const gl = this.gl;
+
+        if (error === gl.INVALID_ENUM) {
+            return "INVALID_ENUM";
+        }
+        if (error === gl.INVALID_VALUE) {
+            return "INVALID_VALUE";
+        }
+        if (error === gl.INVALID_OPERATION) {
+            return "INVALID_OPERATION";
+        }
+        if (error === gl.INVALID_FRAMEBUFFER_OPERATION) {
+            return "INVALID_FRAMEBUFFER_OPERATION";
+        }
+        if (error === gl.OUT_OF_MEMORY) {
+            return "OUT_OF_MEMORY";
+        }
+        if (error === gl.CONTEXT_LOST_WEBGL) {
+            return "CONTEXT_LOST_WEBGL";
+        }
+
+        return `0x${error.toString(16)}`;
+    }
+}
+
+$.FlexRenderer.WebGL20 = WebGL2;
 
 
 $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgram {
@@ -8275,6 +10796,56 @@ uniform sampler2DArray u_stencilTextures;
 //   - 3 lens-zoom
 uniform vec4 u_inspectorA;
 uniform vec4 u_inspectorB;
+
+// Packed renderer-owned interaction state.
+//
+// u_interactionPointer:
+//   xy = pointerPositionPx
+//   zw = lastClickPositionPx
+//
+// u_interactionDragStartCurrent:
+//   xy = dragStartPositionPx
+//   zw = dragCurrentPositionPx
+//
+// u_interactionDragEnd:
+//   xy = dragEndPositionPx
+//   zw = reserved
+//
+// u_interactionState:
+//   x = enabled ? 1 : 0
+//   y = pointerInside ? 1 : 0
+//   z = activeButtons
+//   w = lastClickButtons
+//
+// u_interactionDragState:
+//   x = dragActive ? 1 : 0
+//   y = dragButtons
+//   z = clickSerial
+//   w = dragSerial
+//
+// Button fields use the browser MouseEvent.buttons / PointerEvent.buttons bitmask:
+//   0  = no button active
+//   1  = primary button, usually left mouse button
+//   2  = secondary button, usually right mouse button
+//   4  = auxiliary button, usually middle mouse button
+//   8  = fourth button, usually browser back
+//   16 = fifth button, usually browser forward
+//
+// Multiple pressed buttons are represented by bitwise OR, e.g.
+//   3 = primary | secondary
+//   5 = primary | auxiliary
+//
+// Test button state in GLSL through:
+//   fr_interaction_button_active(buttonMask)
+
+uniform vec4 u_interactionPointer;
+uniform vec4 u_interactionDragStartCurrent;
+uniform vec4 u_interactionDragEnd;
+uniform ivec4 u_interactionState;
+uniform ivec4 u_interactionDragState;
+
+
+// INPUT VARIABLES
 
 
 // INPUT VARIABLES
@@ -8394,6 +10965,62 @@ float inspector_layer_alpha(int shaderSlot) {
     return mode == 1 ? mask : (1.0 - mask);
 }
 
+bool fr_interaction_enabled() {
+    return u_interactionState.x != 0;
+}
+
+bool fr_interaction_pointer_inside() {
+    return u_interactionState.y != 0;
+}
+
+vec2 fr_interaction_pointer_position_px() {
+    return u_interactionPointer.xy;
+}
+
+int fr_interaction_active_buttons() {
+    return u_interactionState.z;
+}
+
+bool fr_interaction_button_active(int buttonMask) {
+    return (fr_interaction_active_buttons() & buttonMask) != 0;
+}
+
+vec2 fr_interaction_last_click_position_px() {
+    return u_interactionPointer.zw;
+}
+
+int fr_interaction_last_click_buttons() {
+    return u_interactionState.w;
+}
+
+int fr_interaction_click_serial() {
+    return u_interactionDragState.z;
+}
+
+bool fr_interaction_drag_active() {
+    return u_interactionDragState.x != 0;
+}
+
+vec2 fr_interaction_drag_start_position_px() {
+    return u_interactionDragStartCurrent.xy;
+}
+
+vec2 fr_interaction_drag_current_position_px() {
+    return u_interactionDragStartCurrent.zw;
+}
+
+vec2 fr_interaction_drag_end_position_px() {
+    return u_interactionDragEnd.xy;
+}
+
+int fr_interaction_drag_buttons() {
+    return u_interactionDragState.y;
+}
+
+int fr_interaction_drag_serial() {
+    return u_interactionDragState.w;
+}
+
 
 // BLEND FUNCTIONS
 
@@ -8452,153 +11079,19 @@ ${execution}
             flatShaders[slot].__renderSlot = slot;
         }
 
-        let definition = "";
-        let execution = `
-    vec4 intermediate_color = ${this._bgColor};
-    vec4 overall_color = intermediate_color;
-    vec4 clip_color = vec4(.0);
+        const stackSource = this.context.composeShaderLayerStack(shaderMap, keyOrder, {
+            ownerShader: null,
+            initialColor: this._bgColor,
+            useInspectorAlpha: true
+        });
 
-    vec4 attrs;
-`;
-        let customBlendFunctions = "";
-
-        const addShaderDefinition = shader => {
-            definition += `
-// ${shader.uid} - Definition
-${shader.getFragmentShaderDefinition()}
-
-// ${shader.uid} - Custom blending function for a given shader
-${shader.getCustomBlendFunction(shader.uid + "_blend_func")}
-
-// ${shader.uid} - Shader code execution
-vec4 ${shader.uid}_execution() {
-${shader.getFragmentShaderExecution()}
-}
-`;
-        };
-
-        const getStencilPassCode = shader => {
-            const shaderConfig = shader.getConfig();
-            const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
-
-            if (!hasSources) {
-                return "    stencilPasses = true;";
-            }
-
-            return `    stencilPasses = osd_stencil_texture(${shader.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
-        };
-
-        let remainingBlendShader = null;
-        const getRemainingBlending = () => {
-            if (!remainingBlendShader) {
-                return "";
-            }
-
-            return `
-${getStencilPassCode(remainingBlendShader)}
-    overall_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(intermediate_color, overall_color);
-`;
-        };
-
-        for (const shaderLayerId of keyOrder) {
-            const shaderLayer = shaderMap[shaderLayerId];
-            const shaderLayerConfig = shaderLayer.getConfig();
-
-            // Snapshot mutable assembly state so a throw mid-iteration (e.g. an
-            // incompatible control's sample() throws from getFragmentShaderExecution)
-            // can be rolled back cleanly and the offending layer emitted as disabled
-            // instead of corrupting the GLSL source.
-            const definitionSnapshot = definition;
-            const executionSnapshot = execution;
-            const customBlendSnapshot = customBlendFunctions;
-            const remainingBlendSnapshot = remainingBlendShader;
-
-            try {
-                const slot = shaderLayer.__renderSlot;
-                const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
-                const opacityModifier = `(${opacityModifierBase}) * inspector_layer_alpha(${slot})`;
-
-            execution += `\n    // ${shaderLayer.uid}\n`;
-
-            if (shaderLayerConfig.type === "none" || shaderLayerConfig.error || !shaderLayerConfig.visible) {
-                if (shaderLayer._mode !== "clip") {
-                    execution += `${getRemainingBlending()}
-    // ${shaderLayer.uid} - Disabled (error or visible = false)
-    intermediate_color = vec4(0.0);
-`;
-                    remainingBlendShader = shaderLayer;
-                } else {
-                    execution += `
-    // ${shaderLayer.uid} - Disabled with Clipmask (error or visible = false)
-    intermediate_color = ${shaderLayer.uid}_blend_func(vec4(0.0), intermediate_color);
-`;
-                }
-
-                continue;
-            }
-
-            addShaderDefinition(shaderLayer);
-
-            execution += `
-    instance_id = ${slot};
-${getStencilPassCode(shaderLayer)}
-    attrs = u_shaderVariables[${slot}];
-    opacity = attrs.x;
-    pixelSize = attrs.y;
-    imageOriginPx = attrs.zw;
-    zoom = u_zoom;
-`;
-
-            if (shaderLayer._mode !== "clip") {
-                execution += `${getRemainingBlending()}
-    // ${shaderLayer.uid} - blending
-    intermediate_color = ${shaderLayer.uid}_execution();
-    intermediate_color.a = intermediate_color.a * ${opacityModifier};
-`;
-                remainingBlendShader = shaderLayer;
-            } else {
-                execution += `
-    // ${shaderLayer.uid} - clipping
-    clip_color = ${shaderLayer.uid}_execution();
-    clip_color.a = clip_color.a * ${opacityModifier};
-    intermediate_color = ${shaderLayer.uid}_blend_func(clip_color, intermediate_color);
-`;
-                }
-            } catch (e) {
-                $.console.error(`Failed to assemble shader '${shaderLayer.id}' (${shaderLayerConfig.type}). Hiding layer.`, e);
-                shaderLayerConfig.error = true;
-                definition = definitionSnapshot;
-                execution = executionSnapshot;
-                customBlendFunctions = customBlendSnapshot;
-                remainingBlendShader = remainingBlendSnapshot;
-
-                execution += `\n    // ${shaderLayer.uid}\n`;
-                if (shaderLayer._mode !== "clip") {
-                    execution += `${getRemainingBlending()}
-    // ${shaderLayer.uid} - Disabled (assembly error)
-    intermediate_color = vec4(0.0);
-`;
-                    remainingBlendShader = shaderLayer;
-                } else {
-                    execution += `
-    // ${shaderLayer.uid} - Disabled with Clipmask (assembly error)
-    intermediate_color = vec4(0.0);
-`;
-                }
-            }
-        }
-
-        if (remainingBlendShader) {
-            execution += getRemainingBlending();
-        }
-
-        execution += "\n    final_color = overall_color;\n";
+        const execution = `final_color = ${stackSource.execution};`;
 
         this.vertexShader = this._getVertexShaderSource();
         this.fragmentShader = this._getFragmentShaderSource(
-            definition,
+            stackSource.definition,
             execution,
-            customBlendFunctions,
+            "",
             $.FlexRenderer.ShaderLayer.__globalIncludes
         );
     }
@@ -8624,6 +11117,13 @@ ${getStencilPassCode(shaderLayer)}
         this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
         this._inspectorALocation = gl.getUniformLocation(program, "u_inspectorA");
         this._inspectorBLocation = gl.getUniformLocation(program, "u_inspectorB");
+
+        this._interactionPointerLocation = gl.getUniformLocation(program, "u_interactionPointer");
+        this._interactionDragStartCurrentLocation = gl.getUniformLocation(program, "u_interactionDragStartCurrent");
+        this._interactionDragEndLocation = gl.getUniformLocation(program, "u_interactionDragEnd");
+        this._interactionStateLocation = gl.getUniformLocation(program, "u_interactionState");
+        this._interactionDragStateLocation = gl.getUniformLocation(program, "u_interactionDragState");
+
         this.vao = gl.createVertexArray();
 
         // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
@@ -8646,9 +11146,20 @@ ${getStencilPassCode(shaderLayer)}
     /**
      * Use program. Arbitrary arguments.
      */
-    use(renderOutput, renderArray, options) {
+    use(renderOutput, renderArray, options = undefined) {
         const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
+        const framebuffer = options && options.framebuffer !== undefined ? options.framebuffer : null;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+
+        if (framebuffer) {
+            gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        }
+
+        if (options && options.width && options.height) {
+            gl.viewport(0, 0, options.width, options.height);
+        }
+
         gl.bindVertexArray(this.vao);
 
         // TODO: is refreshing necessary here?
@@ -8700,6 +11211,8 @@ ${getStencilPassCode(shaderLayer)}
             "lens-zoom": 3
         }[inspectorState.mode] || 0;
 
+        // TODO: Possibly send inspector and interaction data only on an actual change.
+
         gl.uniform4f(
             this._inspectorALocation,
             inspectorState.centerPx.x,
@@ -8714,6 +11227,48 @@ ${getStencilPassCode(shaderLayer)}
             inspectorMode,
             inspectorState.shaderSplitIndex,
             inspectorState.lensZoom
+        );
+
+        const interactionState = this.context.renderer.getInteractionState();
+
+        gl.uniform4f(
+            this._interactionPointerLocation,
+            interactionState.pointerPositionPx.x,
+            interactionState.pointerPositionPx.y,
+            interactionState.lastClickPositionPx.x,
+            interactionState.lastClickPositionPx.y
+        );
+
+        gl.uniform4f(
+            this._interactionDragStartCurrentLocation,
+            interactionState.dragStartPositionPx.x,
+            interactionState.dragStartPositionPx.y,
+            interactionState.dragCurrentPositionPx.x,
+            interactionState.dragCurrentPositionPx.y
+        );
+
+        gl.uniform4f(
+            this._interactionDragEndLocation,
+            interactionState.dragEndPositionPx.x,
+            interactionState.dragEndPositionPx.y,
+            0,
+            0
+        );
+
+        gl.uniform4i(
+            this._interactionStateLocation,
+            interactionState.enabled ? 1 : 0,
+            interactionState.pointerInside ? 1 : 0,
+            interactionState.activeButtons,
+            interactionState.lastClickButtons
+        );
+
+        gl.uniform4i(
+            this._interactionDragStateLocation,
+            interactionState.dragActive ? 1 : 0,
+            interactionState.dragButtons,
+            interactionState.clickSerial,
+            interactionState.dragSerial
         );
 
         this.atlas.bind(gl.TEXTURE2, 2);
@@ -8965,7 +11520,7 @@ const vec3 viewport[4] = vec3[4] (
 );
 
 void main() {
-    if (u_renderClippingParams.y > 0.5) {
+    if (u_renderClippingParams.x > 0.5 && u_renderClippingParams.y > 0.0) {  // true for vector rendering
         v_texture_coords = vec2((a_payload0.x - a_payload1.x) / a_payload1.z, (a_payload0.y - a_payload1.y) / a_payload1.w);
     } else {
         int vid = gl_VertexID & 3;
@@ -8974,11 +11529,9 @@ void main() {
                 (vid == 2) ? a_payload1.xy : a_payload1.zw;
     }
 
-    mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
+    mat3 matrix = (u_renderClippingParams.x > 0.5 && u_renderClippingParams.y > 0.0) ? u_geomMatrix : a_transform_matrix;  // true for vector rendering
 
-    vec3 space_2d = u_renderClippingParams.x > 0.5 ?
-        matrix * vec3(a_payload0.xy, 1.0) :
-        matrix * viewport[gl_VertexID];
+    vec3 space_2d = (u_renderClippingParams.x > 0.5) ? matrix * vec3(a_payload0.xy, 1.0) : matrix * viewport[gl_VertexID];  // true for vector and clip rendering
 
     v_vecDepth = a_payload0.z;
     v_textureId = int(a_payload0.w);
@@ -8988,6 +11541,7 @@ void main() {
     instance_id = gl_InstanceID;
 }
 `;
+
         this.fragmentShader = `#version 300 es
 precision mediump int;
 precision mediump float;
@@ -9010,8 +11564,41 @@ ${this.atlas.getFragmentShaderDefinition()}
 layout(location=0) out vec4 outputColor;
 layout(location=1) out vec4 outputStencil;
 
+float fr_segment_distance(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float denom = max(dot(ba, ba), 0.000001);
+    float h = clamp(dot(pa, ba) / denom, 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+bool fr_diagnostic_pixel(vec2 p) {
+    const float border = 0.035;
+    const float lineWidth = 0.022;
+
+    bool borderPixel = p.x <= border || p.x >= 1.0 - border || p.y <= border || p.y >= 1.0 - border;
+
+    vec2 top = vec2(0.5, 0.76);
+    vec2 left = vec2(0.28, 0.31);
+    vec2 right = vec2(0.72, 0.31);
+
+    float triangleDistance = min(
+        fr_segment_distance(p, top, left),
+        min(
+            fr_segment_distance(p, left, right),
+            fr_segment_distance(p, right, top)
+        )
+    );
+
+    bool trianglePixel = triangleDistance <= lineWidth;
+    bool exclamationBar = abs(p.x - 0.5) <= 0.018 && p.y >= 0.43 && p.y <= 0.61;
+    bool exclamationDot = distance(p, vec2(0.5, 0.36)) <= 0.026;
+
+    return borderPixel || trianglePixel || exclamationBar || exclamationDot;
+}
+
 void main() {
-    if (u_renderClippingParams.x < 0.5) {
+    if (u_renderClippingParams.x < 0.5 && u_renderClippingParams.y == 0.0) {  // true for raster rendering
         for (int i = 0; i < ${this._maxTextures}; i++) {
             if (i == instance_id) {
                  switch (i) {
@@ -9025,7 +11612,7 @@ void main() {
 
         outputStencil = vec4(1.0);
         gl_FragDepth = gl_FragCoord.z;
-    } else if (u_renderClippingParams.y > 0.5) {
+    } else if (u_renderClippingParams.x > 0.5 && u_renderClippingParams.y > 0.0) {  // true for vector rendering
         // Vector geometry draw path (per-vertex color)
 
         vec4 stencil = vec4(1.0);
@@ -9045,8 +11632,22 @@ void main() {
 
         outputStencil = stencil;
         gl_FragDepth = depth;
+    } else if (u_renderClippingParams.x < 0.5 && u_renderClippingParams.y < 0.0) {  // true for diagnostic rendering mode
+        vec2 diagnosticCoords = clamp(v_texture_coords, vec2(0.0), vec2(1.0));
+        diagnosticCoords.y = 1.0 - diagnosticCoords.y;
+
+        if (!fr_diagnostic_pixel(diagnosticCoords)) {
+            discard;
+        }
+
+        outputColor = vec4(1.0, 0.74, 0.05, 1.0);
+        outputStencil = vec4(1.0);
+        gl_FragDepth = gl_FragCoord.z;
     } else {
-        // Pure clipping path: write only to stencil (color target value is undefined)
+        // Pure clipping path. Color writes are disabled during this draw,
+        // but keep outputs defined to avoid undefined MRT behavior if the
+        // path is reused incorrectly later.
+        outputColor = vec4(0.0);
         outputStencil = vec4(0.0);
         gl_FragDepth = 0.0;
     }
@@ -9100,6 +11701,7 @@ void main() {
         gl.enableVertexAttribArray(this._positionsBuffer);
         gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
         this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
+        this._nativeLineWidthRange = gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE) || [1, 1];
 
         /*
          * Rendering vector tiles. Positions of tiles are always rectangular (stretched and moved by the matrix),
@@ -9209,6 +11811,8 @@ void main() {
 
         let wasClipping = true; // force first init (~ as if was clipping was true)
 
+        let diagnosticRegionCount = 0;
+
         for (const renderInfo of sourceArray) {
             const rasterTiles = renderInfo.tiles;
 
@@ -9245,7 +11849,6 @@ void main() {
                 gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
                 gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
 
-                // Note: second param unused for now...
                 gl.uniform2f(this._renderClipping, 1, 0);
                 gl.bindVertexArray(this.firstPassVaoClip);
 
@@ -9354,41 +11957,54 @@ void main() {
                         gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
                     }
 
-                    batch = vectorTile.points;
-                    if (batch) {
-                        if (!vectorTile.fills && !vectorTile.lines) {
-                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                    const linePrimitiveBatches = vectorTile.linePrimitives;
+                    if (linePrimitiveBatches && linePrimitiveBatches.length) {
+                        for (const lineBatch of linePrimitiveBatches) {
+                            if (!vectorTile.fills && !vectorTile.lines) {
+                                gl.uniformMatrix3fv(this._geomSingleMatrix, false, lineBatch.matrix);
+                            }
+
+                            const lineWidth = Number.isFinite(lineBatch.lineWidth) && lineBatch.lineWidth > 0
+                                ? lineBatch.lineWidth
+                                : 1;
+                            const minLineWidth = this._nativeLineWidthRange[0] || 1;
+                            const maxLineWidth = this._nativeLineWidthRange[1] || 1;
+
+                            gl.lineWidth(Math.max(minLineWidth, Math.min(maxLineWidth, lineWidth)));
+
+                            // Bind positions. payload0 is vec4(x, y, depth, textureId).
+                            gl.bindBuffer(gl.ARRAY_BUFFER, lineBatch.vboPos);
+                            gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
+
+                            // Bind per-vertex colors.
+                            gl.bindBuffer(gl.ARRAY_BUFFER, lineBatch.vboParam);
+                            gl.vertexAttribPointer(this._colorAttrib, 4, gl.FLOAT, false, 0, 0);
+
+                            // Bind indices and draw native line segments.
+                            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lineBatch.ibo);
+                            gl.drawElementsInstanced(gl.LINES, lineBatch.count, gl.UNSIGNED_INT, 0, 1);
                         }
 
-                        // Bind positions
-                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
-
-                        // Bind per-vertex colors (normalized u8 → float 0..1)
-                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboParam);
-                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.FLOAT, false, 0, 0);
-
-                        // Bind indices and draw one instance
-                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
-                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                        gl.lineWidth(1);
                     }
 
-                    // TODO: find out if we can somehow combine points and icons
-                    batch = vectorTile.icons;
+                    batch = vectorTile.points;
                     if (batch) {
-                        if (!vectorTile.fills && !vectorTile.lines && !vectorTile.points) {
+                        if (!vectorTile.fills && !vectorTile.lines && !(vectorTile.linePrimitives && vectorTile.linePrimitives.length)) {
                             gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
                         }
 
-                        // Bind positions
+                        // Bind positions. payload0 is vec4(x, y, depth, textureId).
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
                         gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
-                        // Bind per-vertex icon parameters
+                        // Bind per-vertex colors (normalized u8 → float 0..1).
+                        // For colored point meshes: vec4(r, g, b, a).
+                        // For icon point meshes: vec4(xStart, yStart, width, height).
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboParam);
                         gl.vertexAttribPointer(this._colorAttrib, 4, gl.FLOAT, false, 0, 0);
 
-                        // Bind indices and draw one instance
+                        // Bind indices and draw one instance.
                         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
                         gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
                     }
@@ -9396,6 +12012,47 @@ void main() {
 
                 gl.uniform2f(this._renderClipping, 0, 0);
             }
+
+            const diagnostics = renderInfo.diagnostics;
+            if (this.context.renderer.getRenderDiagnostics() && Array.isArray(diagnostics) && diagnostics.length) {
+                const gl = this.gl;
+
+                let currentIndex = 0;
+
+                gl.disable(gl.BLEND);
+                gl.uniform2f(this._renderClipping, 0, -1);
+                gl.bindVertexArray(this.firstPassVao);
+
+                while (currentIndex < diagnostics.length) {
+                    const batchSize = Math.min(this._maxTextures, diagnostics.length - currentIndex);
+
+                    for (let i = 0; i < batchSize; i++) {
+                        const diagnostic = diagnostics[currentIndex + i];
+
+                        this._tempMatrixData.set(diagnostic.transformMatrix, i * 9);
+                        this._tempTexCoords.set(diagnostic.position, i * 8);
+                    }
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
+
+                    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
+                    currentIndex += batchSize;
+                }
+
+                gl.uniform2f(this._renderClipping, 0, 0);
+
+                diagnosticRegionCount += diagnostics.length;
+
+                isBlend = false;
+            }
+        }
+
+        if (this.context.renderer.debug && diagnosticRegionCount > 0) {
+            $.console.warn(`[flex-renderer] first-pass diagnostics: ${diagnosticRegionCount} invalid region(s)`);
         }
 
         gl.disable(gl.DEPTH_TEST);
@@ -9909,12 +12566,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement);
 
             if (isDomImageSource) {
-                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-                try {
-                    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, physicalLayer, w, h, 1, this.format, this.type, source);
-                } finally {
-                    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-                }
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, physicalLayer, w, h, 1, this.format, this.type, source);
                 return;
             }
 
@@ -9993,8 +12646,6 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 })(OpenSeadragon);
 
 (function( $ ){
-    const OpenSeadragon = $;
-
     /**
      * @typedef {Object} TiledImageInfo
      * @property {Number} TiledImageInfo.id
@@ -10004,12 +12655,54 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
      */
 
     /**
+     * One vector mesh.
+     *
+     * @typedef {object} VectorMesh
+     * @property {Float32Array} vertices - Packed vertices as vec4(x, y, depth, textureId).
+     * @property {Uint32Array} indices - Indices into the vertex array.
+     * @property {number[]} [color] - Constant RGBA color used when parameters are absent.
+     * @property {Float32Array} [parameters] - Per-vertex payload. For icons: vec4(xStart, yStart, width, height).
+     * @property {number} [lineWidth=1] - Native line width in pixels. Used only for `linePrimitives`.
+     */
+
+    /**
+     * Tessellated vector payload for one tile.
+     *
+     * Icons are represented as point meshes. A point mesh is rendered as an icon
+     * when its vertex textureId component is >= 0 and its `parameters` array
+     * contains per-vertex atlas placement data.
+     *
+     * @typedef {object} VectorMeshTile
+     * @property {VectorMesh[]} [fills] - Polygon fill triangle meshes.
+     * @property {VectorMesh[]} [lines] - Stroke triangle meshes rendered with gl.TRIANGLES. Mutually exclusive with linePrimitives.
+     * @property {VectorMesh[]} [linePrimitives] - Native line segment meshes rendered with gl.LINES. Mutually exclusive with lines.
+     * @property {VectorMesh[]} [points] - Point marker and icon quad meshes.
+     */
+
+    /**
+     * Host-supplied HTTP transport used by FlexDrawer-owned workers (MVT, GeoJSON).
+     *
+     * The adapter is a fetch-compatible shim: when supplied, every network request
+     * the library would otherwise issue with `fetch(url)` is routed through it.
+     * Implementations must support method, headers, body, signal, Range headers,
+     * and binary responses (.arrayBuffer / .blob / .body).
+     *
+     * Adapters are resolved in this order:
+     *   1. explicit `httpAdapter` constructor option on the tile source,
+     *   2. drawer-level `httpAdapter` captured into `FlexDrawer._defaultHttpAdapter`,
+     *   3. null — the library falls back to native `fetch`.
+     *
+     * @typedef {object} HttpAdapter
+     * @property {(url: string, init?: RequestInit) => Promise<Response>} fetch
+     */
+
+    /**
      * @property {Number} idGenerator unique ID getter
      *
      * @class OpenSeadragon.FlexDrawer
      * @classdesc implementation of WebGL renderer for an {@link OpenSeadragon.Viewer}
      */
-    OpenSeadragon.FlexDrawer = class extends OpenSeadragon.DrawerBase {
+    class FlexDrawer extends OpenSeadragon.DrawerBase {
         /**
          * @param {Object} options options for this Drawer
          * @param {OpenSeadragon.Viewer} options.viewer the Viewer that owns this Drawer
@@ -10017,9 +12710,6 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @param {HTMLElement} options.element parent element
          * @param {[String]} options.debugGridColor see debugGridColor in {@link OpenSeadragon.Options} for details
          * @param {Object} options.options optional
-         *
-         * @constructor
-         * @memberof OpenSeadragon.FlexDrawer
          */
         constructor(options){
             super(options);
@@ -10033,9 +12723,25 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
 
+            // Capture the host-supplied HttpAdapter as a process-wide fallback so tile sources
+            // instantiated outside the drawer (OSD-managed paths) can still pick it up.
+            // Explicit per-tile-source `httpAdapter` options take precedence.
+            if (this.options.httpAdapter) {
+                FlexDrawer._defaultHttpAdapter = this.options.httpAdapter;
+            }
+
             this._suspendRenderingDepth = 0;
             this._pendingRebuildRequest = null;
             this._drawReady = false;
+
+            this._interactionOptions = this._normalizeInteractionOptions(this.options.interaction);
+            this._interactionEnabled = false;
+            this._interactionListeners = null;
+            this._interactionDragActive = false;
+            this._interactionMouseNavCaptured = false;
+            this._interactionPreviousMouseNavEnabled = null;
+            this._interactionGestureSettingsCaptured = false;
+            this._interactionPreviousGestureSettings = null;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
             this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
@@ -10087,6 +12793,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 copyShaderConfig: false,
                 handleNavigator: true,
                 shaderSourceResolver: null,
+                httpAdapter: null,
+                sharedContextKey: null,
+                interaction: false,
                 // hex bg color, by default transparent
                 backgroundColor: undefined
             };
@@ -10096,7 +12805,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * Override the default configuration: the renderer will use given shaders,
          * supplied with data from collection of TiledImages, to render.
          * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
-         * @param {Object.<string, ShaderConfig>} shaders map of id -> shader config value
+         * @param {Object.<string, ShaderLayerConfig>} shaders map of id -> shader config value
          * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
          * @param {Object} [options]
          * @param {Boolean} [options.immediate=false] if true, run the rebuild synchronously
@@ -10157,7 +12866,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * Retrieve shader config by its key. Shader IDs are known only
          * when overrideConfigureAll() called
          * @param key
-         * @return {ShaderConfig|*|undefined}
+         * @return {ShaderLayerConfig|*|undefined}
          */
         getOverriddenShaderConfig(key) {
             const shaderLayer = this.renderer.getAllShaders()[key];
@@ -10168,8 +12877,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * If shaders are managed internally, tiled image can be configured a single custom
          * shader if desired. This shader is ignored if overrideConfigureAll({...}) used.
          * @param {OpenSeadragon.TiledImage} tiledImage
-         * @param {ShaderConfig} shader
-         * @return {ShaderConfig} shader config used, a copy if options.copyShaderConfig is true, otherwise a modified argument
+         * @param {ShaderLayerConfig} shader
+         * @return {ShaderLayerConfig} shader config used, a copy if options.copyShaderConfig is true, otherwise a modified argument
          */
         configureTiledImage(tiledImage, shader) {
             if (this.options.copyShaderConfig) {
@@ -10251,7 +12960,12 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     for (let i = 0; i < parent.world.getItemCount(); i++) {
                         const tiledImageParent = parent.world.getItemAt(i);
                         if (tiledImageParent.source === tiledImage.source) {
-                            config.id = tiledImageParent.__shaderConfig.id;
+                            // Parent's __shaderConfig may be missing during a reset window
+                            // (tiledImageCreated deletes it when _configuredExternally is true).
+                            // Fall through to idGenerator in that case.
+                            if (tiledImageParent.__shaderConfig) {
+                                config.id = tiledImageParent.__shaderConfig.id;
+                            }
                             break;
                         }
                     }
@@ -10350,7 +13064,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (refreshShader) {
                 this.renderer.refreshShaderLayer(shaderId, { rebuildProgram });
             } else if (rebuildProgram) {
-                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
             }
 
             this.renderer.notifyVisualizationChanged({
@@ -10754,29 +13468,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (this._destroyed) {
                 return;
             }
-            const gl = this._gl;
 
-            // clean all texture units; adapted from https://stackoverflow.com/a/23606581/1214731
-            var numTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
-            for (let unit = 0; unit < numTextureUnits; ++unit) {
-                gl.activeTexture(gl.TEXTURE0 + unit);
-                gl.bindTexture(gl.TEXTURE_2D, null);
-
-                if (this.webGLVersion === "2.0") {
-                    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-                }
+            if (this._interactionEnabled) {
+                this.setInteractionOptions({
+                    enabled: false
+                }, {
+                    notify: false,
+                    redraw: false,
+                    reason: "drawer-destroy"
+                });
+            } else {
+                this._detachInteractionListeners();
+                this._resetInteractionTracking();
+                this._releaseInteractionViewerInputCapture();
             }
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-
-            // this._renderingCanvas = null;
-            let ext = gl.getExtension('WEBGL_lose_context');
-            if (ext) {
-                ext.loseContext();
-            }
-            // set our webgl context reference to null to enable garbage collection
-            this._gl = null;
+            // WebGL resource cleanup is owned by FlexRenderer and the active backend.
 
             // unbind our event listeners from the viewer
             this.viewer.removeHandler("resize", this._resizeHandler);
@@ -10786,6 +13493,11 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 if (this.viewer.drawer === this){
                     this.viewer.drawer = null;
                 }
+            }
+
+            if (this._rebuildHandle) {
+                clearTimeout(this._rebuildHandle);
+                this._rebuildHandle = null;
             }
 
             this.renderer.destroy();
@@ -10886,13 +13598,16 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     this.viewer.world.getItemCount()
                 );
                 this._updatePackLayout();
-                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
                 this.rebuildCounter++;
                 this._rebuildHandle = null;
                 this._refreshDrawReadyState();
 
                 if (!immediate) {
                     setTimeout(() => {
+                        if (this._destroyed) {
+                            return;
+                        }
                         if (!this._isRenderingSuspended()) {
                             this.viewer.forceRedraw();
                         }
@@ -10949,6 +13664,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 this._size = viewportSize;
                 this._refreshDrawReadyState();
             };
+
             this.viewer.addHandler("resize", this._resizeHandler);
         }
 
@@ -10968,7 +13684,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
         /**
          * Build the current second-pass uniform payload for a set of shaders.
-         * The returned array is backend-neutral input for `renderer.secondPassProcessData(...)`
+         * The returned array is backend-neutral input for `renderer.renderSecondPass(...)`
          * and `renderer.renderSecondPassToTexture(...)`.
          * @param {Object} [view=undefined]
          * @param {Object.<string, ShaderLayer>} [shaderMap=this.renderer.getAllShaders()]
@@ -11025,53 +13741,887 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             return this.setInspectorState(undefined);
         }
 
-        // DRAWING METHODS
         /**
-         * Draw using FlexRenderer.
-         * @param {[TiledImage]} tiledImages array of TiledImage objects to draw
-         * @param {Object} [view=undefined] custom view position if desired
-         * @param view.bounds {OpenSeadragon.Rect} bounds of the viewport
-         * @param view.center {OpenSeadragon.Point} center of the viewport
-         * @param view.rotation {Number} rotation of the viewport
-         * @param view.zoom {Number} zoom of the viewport
+         * Drawer-level interaction observer configuration.
+         *
+         * This controls whether `FlexDrawer` observes pointer/mouse events and how it
+         * forwards those events to the renderer-owned interaction state. These options
+         * are drawer configuration options, not `FlexRenderer` interaction-state update
+         * options.
+         *
+         * @typedef {Object} FlexDrawerInteractionOptions
+         * @property {boolean} [enabled=false] - Whether FlexDrawer observes pointer/mouse events and forwards interaction state.
+         * @property {boolean} [preventContextMenu=false] - Prevent the browser context menu on interaction right-click/contextmenu events.
+         * @property {boolean} [notifyOnMove=false] - Emit `interaction-change` notifications for high-frequency pointermove updates.
+         * @property {"all"|"drag"|"none"} [viewerInputCaptureMode="none"] - Viewer input suppression mode. `"none"` leaves OpenSeadragon viewer input unchanged. `"all"` disables OpenSeadragon mouse navigation. `"drag"` disables drag/click/flick gestures but leaves wheel zoom enabled.
          */
-        draw(tiledImages, view = undefined) {
-            if (!this._drawReady && !this._refreshDrawReadyState()) {
-                this.viewer.forceRedraw();
+
+        /**
+         * Normalize viewer input capture mode.
+         *
+         * @private
+         * @param {*} mode
+         * @return {"all"|"drag"|"none"}
+         */
+        _normalizeViewerInputCaptureMode(mode) {
+            return mode === "all" || mode === "drag" ? mode : "none";
+        }
+
+        /**
+         * Normalize drawer-level interaction configuration.
+         *
+         * @private
+         * @param {boolean|Partial<FlexDrawerInteractionOptions>|undefined} interaction
+         * @return {FlexDrawerInteractionOptions}
+         */
+        _normalizeInteractionOptions(interaction = false) {
+            if (interaction === true) {
+                return {
+                    enabled: true,
+                    preventContextMenu: false,
+                    notifyOnMove: false,
+                    viewerInputCaptureMode: "none",
+                };
+            }
+
+            if (!interaction || typeof interaction !== "object") {
+                return {
+                    enabled: false,
+                    preventContextMenu: false,
+                    notifyOnMove: false,
+                    viewerInputCaptureMode: "none",
+                };
+            }
+
+            const viewerInputCaptureMode = this._normalizeViewerInputCaptureMode(
+                interaction.viewerInputCaptureMode
+            );
+
+            return {
+                enabled: !!interaction.enabled,
+                preventContextMenu: !!interaction.preventContextMenu,
+                notifyOnMove: !!interaction.notifyOnMove,
+                viewerInputCaptureMode: viewerInputCaptureMode,
+            };
+        }
+
+        /**
+         * Return the DOM element used for interaction event observation.
+         *
+         * @private
+         * @return {HTMLElement|HTMLCanvasElement|null}
+         */
+        _getInteractionEventTarget() {
+            return this.canvas || this.container || this.element || (this.viewer && this.viewer.element) || null;
+        }
+
+        /**
+         * Convert a DOM pointer/mouse event into renderer framebuffer pixels.
+         *
+         * Returned coordinates use physical framebuffer pixels with bottom-left origin,
+         * directly comparable to `gl_FragCoord.xy`.
+         *
+         * @private
+         * @param {PointerEvent|MouseEvent} event
+         * @return {{x: number, y: number}}
+         */
+        _getInteractionPositionPx(event) {
+            const canvas = this.renderer && this.renderer.getPresentationCanvas();
+            const target = this._getInteractionEventTarget();
+
+            if (!canvas || !target || typeof target.getBoundingClientRect !== "function") {
+                return { x: 0, y: 0 };
+            }
+
+            const rect = target.getBoundingClientRect();
+            const scaleX = rect.width ? canvas.width / rect.width : 1;
+            const scaleY = rect.height ? canvas.height / rect.height : 1;
+
+            return {
+                x: (event.clientX - rect.left) * scaleX,
+                y: (rect.bottom - event.clientY) * scaleY,
+            };
+        }
+
+        /**
+         * Convert a MouseEvent.button value into a MouseEvent.buttons-compatible bitmask.
+         *
+         * @private
+         * @param {number} button
+         * @return {number}
+         */
+        _buttonToButtonsMask(button) {
+            if (button === 0) {
+                return 1;
+            }
+            if (button === 1) {
+                return 4;
+            }
+            if (button === 2) {
+                return 2;
+            }
+            if (button === 3) {
+                return 8;
+            }
+            if (button === 4) {
+                return 16;
+            }
+            return 0;
+        }
+
+        /**
+         * Return the current button bitmask from an interaction event.
+         *
+         * @private
+         * @param {PointerEvent|MouseEvent} event
+         * @return {number}
+         */
+        _getInteractionButtons(event) {
+            if (typeof event.buttons === "number") {
+                return event.buttons;
+            }
+
+            return this._buttonToButtonsMask(event.button);
+        }
+
+        /**
+         * Return whether this event should be ignored by the initial mouse-focused implementation.
+         *
+         * @private
+         * @param {PointerEvent|MouseEvent} event
+         * @return {boolean}
+         */
+        _shouldIgnoreInteractionEvent(event) {
+            if (!this._interactionEnabled) {
+                return true;
+            }
+
+            return !!(event.pointerType && event.pointerType !== "mouse");
+        }
+
+        /**
+         * Reset drawer-local interaction tracking fields.
+         *
+         * @private
+         * @return {void}
+         */
+        _resetInteractionTracking() {
+            this._interactionDragActive = false;
+        }
+
+        /**
+         * Attach pointer or mouse observers used to forward interaction state to FlexRenderer.
+         *
+         * @private
+         * @return {void}
+         */
+        _attachInteractionListeners() {
+            if (this._interactionListeners) {
                 return;
             }
 
-            const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
-            view = view || {
-                bounds: bounds,
-                center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-                rotation: this.viewport.getRotation(true) * Math.PI / 180,
-                zoom: this.viewport.getZoom(true)
+            const target = this._getInteractionEventTarget();
+            if (!target) {
+                return;
+            }
+
+            const supportsPointerEvents = typeof window !== "undefined" && !!window.PointerEvent;
+            const listeners = [];
+
+            const add = (type, handler) => {
+                target.addEventListener(type, handler, false);
+                listeners.push({ type, handler });
             };
 
-            // TODO consider sending data and computing on GPU
+            const handleEnter = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                this.setInteractionState({
+                    enabled: true,
+                    pointerInside: true,
+                    pointerPositionPx: this._getInteractionPositionPx(event),
+                    activeButtons: this._getInteractionButtons(event),
+                }, {
+                    notify: true,
+                    reason: "drawer-pointerenter"
+                });
+            };
+
+            const handleMove = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                const pointerPositionPx = this._getInteractionPositionPx(event);
+                const patch = {
+                    enabled: true,
+                    pointerInside: true,
+                    pointerPositionPx: pointerPositionPx,
+                    activeButtons: this._getInteractionButtons(event),
+                };
+
+                if (this._interactionDragActive) {
+                    patch.dragCurrentPositionPx = pointerPositionPx;
+                }
+
+                this.setInteractionState(patch, {
+                    notify: this._interactionOptions.notifyOnMove,
+                    reason: "drawer-pointermove"
+                });
+            };
+
+            const handleDown = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                const pointerPositionPx = this._getInteractionPositionPx(event);
+                const activeButtons = this._getInteractionButtons(event);
+
+                this._interactionDragActive = true;
+
+                this.setInteractionState({
+                    enabled: true,
+                    pointerInside: true,
+                    pointerPositionPx: pointerPositionPx,
+                    activeButtons: activeButtons,
+                    dragActive: true,
+                    dragStartPositionPx: pointerPositionPx,
+                    dragCurrentPositionPx: pointerPositionPx,
+                    dragButtons: activeButtons,
+                }, {
+                    notify: true,
+                    reason: "drawer-pointerdown"
+                });
+            };
+
+            const handleUp = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                const previous = this.getInteractionState();
+                const pointerPositionPx = this._getInteractionPositionPx(event);
+                const activeButtons = this._getInteractionButtons(event);
+                const completedDrag = this._interactionDragActive || previous.dragActive;
+
+                this._resetInteractionTracking();
+
+                this.setInteractionState({
+                    enabled: true,
+                    pointerInside: true,
+                    pointerPositionPx: pointerPositionPx,
+                    activeButtons: activeButtons,
+                    dragActive: false,
+                    dragCurrentPositionPx: pointerPositionPx,
+                    dragEndPositionPx: pointerPositionPx,
+                    dragSerial: completedDrag ? previous.dragSerial + 1 : previous.dragSerial,
+                }, {
+                    notify: true,
+                    reason: completedDrag ? "drawer-drag-end" : "drawer-pointerup"
+                });
+            };
+
+            const handleLeave = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                this._resetInteractionTracking();
+
+                this.setInteractionState({
+                    pointerInside: false,
+                    activeButtons: 0,
+                    dragActive: false,
+                }, {
+                    notify: true,
+                    reason: "drawer-pointerleave"
+                });
+            };
+
+            const handleCancel = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                this._resetInteractionTracking();
+
+                this.setInteractionState({
+                    pointerInside: false,
+                    activeButtons: 0,
+                    dragActive: false,
+                }, {
+                    notify: true,
+                    reason: "drawer-pointercancel"
+                });
+            };
+
+            const handleClick = (event) => {
+                if (this._shouldIgnoreInteractionEvent(event)) {
+                    return;
+                }
+
+                const previous = this.getInteractionState();
+                const pointerPositionPx = this._getInteractionPositionPx(event);
+
+                this.setInteractionState({
+                    enabled: true,
+                    pointerInside: true,
+                    pointerPositionPx: pointerPositionPx,
+                    lastClickPositionPx: pointerPositionPx,
+                    lastClickButtons: this._buttonToButtonsMask(event.button),
+                    clickSerial: previous.clickSerial + 1,
+                }, {
+                    notify: true,
+                    reason: "drawer-click"
+                });
+            };
+
+            const handleContextMenu = (event) => {
+                if (this._interactionEnabled && this._interactionOptions.preventContextMenu) {
+                    event.preventDefault();
+                }
+            };
+
+            if (supportsPointerEvents) {
+                add("pointerenter", handleEnter);
+                add("pointermove", handleMove);
+                add("pointerdown", handleDown);
+                add("pointerup", handleUp);
+                add("pointercancel", handleCancel);
+                add("pointerleave", handleLeave);
+                add("click", handleClick);
+            } else {
+                add("mouseenter", handleEnter);
+                add("mousemove", handleMove);
+                add("mousedown", handleDown);
+                add("mouseup", handleUp);
+                add("mouseleave", handleLeave);
+                add("click", handleClick);
+            }
+
+            add("contextmenu", handleContextMenu);
+
+            this._interactionListeners = {
+                target,
+                listeners
+            };
+        }
+
+        /**
+         * Detach pointer or mouse observers used for interaction forwarding.
+         *
+         * @private
+         * @return {void}
+         */
+        _detachInteractionListeners() {
+            if (!this._interactionListeners) {
+                return;
+            }
+
+            const target = this._interactionListeners.target;
+            for (const listener of this._interactionListeners.listeners) {
+                target.removeEventListener(listener.type, listener.handler, false);
+            }
+
+            this._interactionListeners = null;
+        }
+
+        /**
+         * Return whether OpenSeadragon mouse navigation is currently enabled.
+         *
+         * @private
+         * @return {boolean}
+         */
+        _getViewerMouseNavEnabled() {
+            if (!this.viewer) {
+                return true;
+            }
+
+            if (
+                this.viewer.innerTracker &&
+                typeof this.viewer.innerTracker.isTracking === "function"
+            ) {
+                const tracking = this.viewer.innerTracker.isTracking();
+
+                if (typeof tracking === "boolean") {
+                    return tracking;
+                }
+            }
+
+            if (typeof this.viewer.isMouseNavEnabled === "function") {
+                const enabled = this.viewer.isMouseNavEnabled();
+
+                if (typeof enabled === "boolean") {
+                    return enabled;
+                }
+            }
+
+            if (typeof this.viewer.mouseNavEnabled === "boolean") {
+                return this.viewer.mouseNavEnabled;
+            }
+
+            return true;
+        }
+
+        /**
+         * Disable OpenSeadragon mouse navigation while interaction forwarding is active.
+         *
+         * This is the `"all"` capture mode. It disables the OpenSeadragon mouse
+         * tracker as a whole and restores its previous tracking state on release.
+         *
+         * @private
+         * @return {void}
+         */
+        _captureInteractionMouseNavigation() {
+            if (this._interactionMouseNavCaptured || !this.viewer) {
+                return;
+            }
+
+            // Mark as captured before mutating OpenSeadragon state. This prevents a
+            // synchronous re-entrant capture path from overwriting the saved previous
+            // value after setMouseNavEnabled(false) has already disabled navigation.
+            this._interactionPreviousMouseNavEnabled = this._getViewerMouseNavEnabled();
+            this._interactionMouseNavCaptured = true;
+
+            if (typeof this.viewer.setMouseNavEnabled === "function") {
+                this.viewer.setMouseNavEnabled(false);
+                return;
+            }
+
+            if (typeof this.viewer.mouseNavEnabled === "boolean") {
+                this.viewer.mouseNavEnabled = false;
+                return;
+            }
+
+            this._interactionMouseNavCaptured = false;
+            this._interactionPreviousMouseNavEnabled = null;
+        }
+
+        /**
+         * Restore OpenSeadragon mouse navigation after `"all"` input capture.
+         *
+         * @private
+         * @param {boolean} [force=false] - Attempt restoration even if the local capture flag is stale.
+         * @param {boolean|null} [forceEnabled=null] - Explicit restored mouse-navigation state.
+         * @return {void}
+         */
+        _releaseInteractionMouseNavigationCapture(force = false, forceEnabled = null) {
+            if ((!this._interactionMouseNavCaptured && !force) || !this.viewer) {
+                this._interactionMouseNavCaptured = false;
+                this._interactionPreviousMouseNavEnabled = null;
+                return;
+            }
+
+            const restoreEnabled = typeof forceEnabled === "boolean" ?
+                forceEnabled :
+                this._interactionPreviousMouseNavEnabled !== false;
+
+            this._interactionMouseNavCaptured = false;
+            this._interactionPreviousMouseNavEnabled = null;
+
+            if (typeof this.viewer.setMouseNavEnabled === "function") {
+                this.viewer.setMouseNavEnabled(restoreEnabled);
+            } else if (typeof this.viewer.mouseNavEnabled === "boolean") {
+                this.viewer.mouseNavEnabled = restoreEnabled;
+            }
+        }
+
+        /**
+         * Disable drag/click OpenSeadragon gestures while keeping wheel zoom available.
+         *
+         * This is the `"drag"` capture mode. It keeps the OpenSeadragon mouse tracker
+         * active, but temporarily disables mouse gesture settings that would conflict
+         * with shader interaction tools.
+         *
+         * @private
+         * @return {void}
+         */
+        _captureInteractionGestureSettings() {
+            if (this._interactionGestureSettingsCaptured || !this.viewer) {
+                return;
+            }
+
+            const settings = this.viewer.gestureSettingsMouse;
+
+            if (!settings || typeof settings !== "object") {
+                return;
+            }
+
+            this._interactionPreviousGestureSettings = {
+                dragToPan: settings.dragToPan,
+                clickToZoom: settings.clickToZoom,
+                dblClickToZoom: settings.dblClickToZoom,
+                dblClickDragToZoom: settings.dblClickDragToZoom,
+                flickEnabled: settings.flickEnabled,
+            };
+            this._interactionGestureSettingsCaptured = true;
+
+            settings.dragToPan = false;
+            settings.clickToZoom = false;
+            settings.dblClickToZoom = false;
+
+            if ("dblClickDragToZoom" in settings) {
+                settings.dblClickDragToZoom = false;
+            }
+
+            if ("flickEnabled" in settings) {
+                settings.flickEnabled = false;
+            }
+        }
+
+        /**
+         * Restore OpenSeadragon gesture settings after `"drag"` input capture.
+         *
+         * @private
+         * @param {boolean} [force=false] - Attempt restoration even if the local capture flag is stale.
+         * @param {Object|null} [forceSettings=null] - Explicit gesture settings to restore.
+         * @return {void}
+         */
+        _releaseInteractionGestureSettingsCapture(force = false, forceSettings = null) {
+            if ((!this._interactionGestureSettingsCaptured && !force) || !this.viewer) {
+                this._interactionGestureSettingsCaptured = false;
+                this._interactionPreviousGestureSettings = null;
+                return;
+            }
+
+            const settings = this.viewer.gestureSettingsMouse;
+            const previous = forceSettings || this._interactionPreviousGestureSettings || {};
+
+            this._interactionGestureSettingsCaptured = false;
+            this._interactionPreviousGestureSettings = null;
+
+            if (!settings || typeof settings !== "object") {
+                return;
+            }
+
+            for (const key of Object.keys(previous)) {
+                if (previous[key] !== undefined) {
+                    settings[key] = previous[key];
+                }
+            }
+        }
+
+        /**
+         * Suppress OpenSeadragon viewer input according to current interaction options.
+         *
+         * @private
+         * @return {void}
+         */
+        _captureInteractionViewerInput() {
+            if (!this._interactionOptions) {
+                this._restoreInteractionViewerInputDefaults();
+                return;
+            }
+
+            const mode = this._interactionOptions.viewerInputCaptureMode || "none";
+
+            if (mode === "drag") {
+                this._releaseInteractionMouseNavigationCapture();
+                this._captureInteractionGestureSettings();
+                return;
+            }
+
+            if (mode === "all") {
+                this._releaseInteractionGestureSettingsCapture();
+                this._captureInteractionMouseNavigation();
+                return;
+            }
+
+            this._restoreInteractionViewerInputDefaults();
+        }
+
+        /**
+         * Restore all OpenSeadragon viewer input modified by interaction capture.
+         *
+         * @private
+         * @return {void}
+         */
+        _releaseInteractionViewerInputCapture() {
+            this._releaseInteractionMouseNavigationCapture();
+            this._releaseInteractionGestureSettingsCapture();
+        }
+
+        /**
+         * Restore normal OpenSeadragon mouse input after viewer input capture is
+         * explicitly set to `"none"`.
+         *
+         * This is intentionally stronger than restoring only the saved capture
+         * snapshot. It prevents stale or already-mutated gesture snapshots from
+         * leaving the viewer unable to pan or click-zoom after capture is turned off.
+         *
+         * @private
+         * @return {void}
+         */
+        _restoreInteractionViewerInputDefaults() {
+            this._releaseInteractionMouseNavigationCapture(true, true);
+
+            this._releaseInteractionGestureSettingsCapture(true, {
+                dragToPan: true,
+                clickToZoom: true,
+                dblClickToZoom: true,
+                dblClickDragToZoom: true,
+                flickEnabled: true,
+            });
+        }
+
+        /**
+         * Synchronize OpenSeadragon input capture with current drawer interaction options.
+         *
+         * @private
+         * @return {void}
+         */
+        _syncInteractionViewerInputCapture() {
+            if (
+                this._interactionEnabled &&
+                this._interactionOptions
+            ) {
+                this._captureInteractionViewerInput();
+                return;
+            }
+
+            this._releaseInteractionViewerInputCapture();
+        }
+
+        /**
+         * Update drawer-level interaction observer options.
+         *
+         * This is the main implementation for drawer-side interaction configuration.
+         * It controls whether FlexDrawer observes pointer/mouse events and how those
+         * events are forwarded to the renderer-owned interaction state.
+         *
+         * The second argument is forwarded only when this method needs to mutate
+         * renderer-owned interaction state because `enabled` changed.
+         *
+         * @param {boolean|Partial<FlexDrawerInteractionOptions>} interaction
+         * @param {InteractionStateUpdateOptions} [stateOptions={}] - Renderer state update options used only when enabling/disabling forwarding.
+         * @return {FlexDrawerInteractionOptions}
+         */
+        setInteractionOptions(interaction, stateOptions = {}) {
+            const previousEnabled = this._interactionEnabled;
+            const previousOptions = this.getInteractionOptions();
+            const previousViewerInputCaptureMode = previousOptions.viewerInputCaptureMode || "none";
+
+            const nextOptions = this._normalizeInteractionOptions(
+                interaction && typeof interaction === "object" ?
+                    $.extend(true, {}, this._interactionOptions, interaction) :
+                    interaction
+            );
+
+            this._interactionOptions = nextOptions;
+
+            if (nextOptions.enabled) {
+                if (!this._interactionListeners) {
+                    this._attachInteractionListeners();
+                }
+
+                if (!this._interactionListeners) {
+                    this._interactionEnabled = false;
+                    this._interactionOptions.enabled = false;
+                    return this.getInteractionOptions();
+                }
+
+                this._interactionEnabled = true;
+                this._interactionOptions.enabled = true;
+
+                if (
+                    previousViewerInputCaptureMode !== "none" &&
+                    this._interactionOptions.viewerInputCaptureMode === "none"
+                ) {
+                    this._restoreInteractionViewerInputDefaults();
+                } else {
+                    this._syncInteractionViewerInputCapture();
+                }
+
+                if (!previousEnabled) {
+                    this.setInteractionState({
+                        enabled: true
+                    }, $.extend(true, {
+                        reason: "drawer-enable-interaction"
+                    }, stateOptions));
+                }
+
+                return this.getInteractionOptions();
+            }
+
+            this._interactionEnabled = false;
+            this._interactionOptions.enabled = false;
+            this._detachInteractionListeners();
+            this._resetInteractionTracking();
+            this._releaseInteractionViewerInputCapture();
+
+            this.clearInteractionState($.extend(true, {
+                reason: "drawer-disable-interaction"
+            }, stateOptions));
+
+            return this.getInteractionOptions();
+        }
+
+        /**
+         * Return drawer-level interaction observer options.
+         *
+         * @return {FlexDrawerInteractionOptions}
+         */
+        getInteractionOptions() {
+            return $.extend(true, {}, this._interactionOptions);
+        }
+
+        /**
+         * Enable or disable drawer-side interaction observation and forwarding.
+         *
+         * On FlexDrawer, "interaction enabled" means the drawer observes pointer/mouse
+         * events and forwards normalized interaction state to FlexRenderer.
+         *
+         * This is a convenience wrapper around `setInteractionOptions(...)`.
+         *
+         * @param {boolean} enabled
+         * @param {InteractionStateUpdateOptions} [stateOptions={}] - Renderer state update options used only for the enable/disable state mutation.
+         * @return {FlexDrawerInteractionOptions}
+         */
+        setInteractionEnabled(enabled, stateOptions = {}) {
+            return this.setInteractionOptions({
+                enabled: !!enabled
+            }, stateOptions);
+        }
+
+        /**
+         * Return whether drawer-side interaction observation and forwarding is enabled.
+         *
+         * @return {boolean}
+         */
+        isInteractionEnabled() {
+            return !!this.getInteractionOptions().enabled;
+        }
+
+        /**
+         * Forward an interaction-state patch to the renderer-owned interaction API.
+         *
+         * @param {Partial<InteractionState>|undefined} state
+         * @param {InteractionStateUpdateOptions} [options={}]
+         * @return {InteractionState}
+         */
+        setInteractionState(state = undefined, options = {}) {
+            if (!this.renderer || typeof this.renderer.setInteractionState !== "function") {
+                return OpenSeadragon.FlexRenderer.normalizeInteractionState();
+            }
+
+            return this.renderer.setInteractionState(state, $.extend(true, {
+                reason: "drawer-set-interaction-state"
+            }, options));
+        }
+
+        /**
+         * Return the renderer-owned canonical interaction state.
+         *
+         * @return {InteractionState}
+         */
+        getInteractionState() {
+            if (!this.renderer || typeof this.renderer.getInteractionState !== "function") {
+                return OpenSeadragon.FlexRenderer.normalizeInteractionState();
+            }
+
+            return this.renderer.getInteractionState();
+        }
+
+        /**
+         * Clear drawer-local interaction tracking and renderer-owned interaction state.
+         *
+         * @param {InteractionStateUpdateOptions} [options={}]
+         * @return {InteractionState}
+         */
+        clearInteractionState(options = {}) {
+            this._resetInteractionTracking();
+
+            if (!this.renderer || typeof this.renderer.clearInteractionState !== "function") {
+                return OpenSeadragon.FlexRenderer.normalizeInteractionState();
+            }
+
+            return this.renderer.clearInteractionState($.extend(true, {
+                reason: "drawer-clear-interaction-state"
+            }, options));
+        }
+
+        // DRAWING METHODS
+        /**
+         * Draw using `FlexRenderer`.
+         *
+         * This method is the OpenSeadragon `DrawerBase` draw entry point. It remains
+         * responsible for OpenSeadragon-specific adaptation: resolving the current
+         * viewport, building the viewport matrix, collecting tile data, and collecting
+         * ShaderLayer render uniforms that depend on TiledImage state.
+         *
+         * The actual two-pass render orchestration is delegated to
+         * `OpenSeadragon.FlexRenderer#render`.
+         *
+         * @override
+         * @param {Array<OpenSeadragon.TiledImage>} tiledImages - TiledImage objects to draw.
+         * @param {object} [view=undefined] - Optional custom view state.
+         * @param {OpenSeadragon.Rect} view.bounds - Viewport bounds.
+         * @param {OpenSeadragon.Point} view.center - Viewport center.
+         * @param {number} view.rotation - Viewport rotation in radians.
+         * @param {number} view.zoom - Viewport zoom.
+         * @returns {void}
+         *
+         * @memberof OpenSeadragon.FlexDrawer#
+         */
+        draw(tiledImages, view = undefined) {
+            if (!tiledImages || tiledImages.length === 0) {
+                this.renderer.clear();
+                return;
+            }
+
+            if (!this._drawReady && !this._refreshDrawReadyState()) {
+                return;
+            }
+
+            view = this._resolveRenderView(view);
+
+            // TODO consider sending data and computing on GPU.
             // calculate view matrix for viewer
-            let flipMultiplier = this.viewport.flipped ? -1 : 1;
-            let posMatrix = $.Mat3.makeTranslation(-view.center.x, -view.center.y);
-            let scaleMatrix = $.Mat3.makeScaling(2 / view.bounds.width * flipMultiplier, -2 / view.bounds.height);
-            let rotMatrix = $.Mat3.makeRotation(-view.rotation);
-            let viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
+            const flipMultiplier = this.viewport.flipped ? -1 : 1;
+            const posMatrix = $.Mat3.makeTranslation(-view.center.x, -view.center.y);
+            const scaleMatrix = $.Mat3.makeScaling(2 / view.bounds.width * flipMultiplier, -2 / view.bounds.height);
+            const rotMatrix = $.Mat3.makeRotation(-view.rotation);
+            const viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
 
             this._ensurePackLayout();
 
-            if (this._drawTwoPassFirst(tiledImages, view, viewMatrix)) {
-                this._drawTwoPassSecond(view);
-            }
+            const firstPass = this._collectFirstPassPayload(tiledImages, view, viewMatrix);
+            const secondPass = this._collectSecondPassPayload(view);
+
+            this.renderer.render({
+                firstPass: firstPass,
+                secondPass: secondPass
+            });
         } // end of function
 
         /**
-         * During the first-pass draw all tiles' data sources into the corresponding off-screen textures using identity rendering,
-         * excluding any image-processing operations or any rendering customizations.
-         * @param {OpenSeadragon.TiledImage[]} tiledImages array of TiledImage objects to draw
-         * @param {Object} viewport has bounds, center, rotation, zoom
-         * @param {OpenSeadragon.Mat3} viewMatrix
+         * Build first-pass render packages from OpenSeadragon TiledImage state.
+         *
+         * This method is the OpenSeadragon-to-renderer adaptation step for the first
+         * pass. It collects drawable tiles, extracts renderer-ready cache payloads,
+         * computes tile transform matrices, and converts crop/clip polygons into
+         * viewport-coordinate polygons consumed by the active backend.
+         *
+         * It intentionally does not clear WebGL state and does not execute the first
+         * pass. The normal draw path passes the returned packages to
+         * `OpenSeadragon.FlexRenderer#render`.
+         *
+         * @private
+         * @param {Array<OpenSeadragon.TiledImage>} tiledImages - TiledImage objects to draw.
+         * @param {object} viewport - Resolved viewport state.
+         * @param {OpenSeadragon.Rect} viewport.bounds - Viewport bounds.
+         * @param {OpenSeadragon.Point} viewport.center - Viewport center.
+         * @param {number} viewport.rotation - Viewport rotation in radians.
+         * @param {number} viewport.zoom - Viewport zoom.
+         * @param {OpenSeadragon.Mat3} viewMatrix - Matrix mapping viewport coordinates into renderer clip space.
+         * @returns {Array<FPRenderPackage>} First-pass render packages.
+         *
+         * @memberof OpenSeadragon.FlexDrawer#
          */
-        _drawTwoPassFirst(tiledImages, viewport, viewMatrix) {
+        _collectFirstPassPayload(tiledImages, viewport, viewMatrix) {
             // FIRST PASS (render things as they are into the corresponding off-screen textures)
             const TI_PAYLOAD = [];
 
@@ -11079,6 +14629,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
                 const vecPayload = [];
+                const diagnosticPayload = [];
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
@@ -11127,7 +14678,16 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
                         const tileInfo = this.getDataToDraw(tile);
                         if (!tileInfo) {
-                            //TODO consider drawing some error if the tile is in erroneous state
+                            continue;
+                        }
+
+                        if (this._isDiagnosticTileInfo(tileInfo)) {
+                            diagnosticPayload.push(this._makeTileDiagnosticRegion(
+                                tile,
+                                tiledImage,
+                                overallMatrix,
+                                tileInfo.reason || "invalid-data"
+                            ));
                             continue;
                         }
 
@@ -11143,7 +14703,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                                 tile: tile
                             });
                         } else if (tileInfo.vectors) {
-                            // Flatten fill + line meshes into a simple draw list
+                            // Flatten vector meshes into a simple draw list.
 
                             if (tileInfo.vectors.fills) {
                                 tileInfo.vectors.fills.matrix = transformMatrix;
@@ -11151,14 +14711,23 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                             if (tileInfo.vectors.lines) {
                                 tileInfo.vectors.lines.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.linePrimitives) {
+                                for (const lineBatch of tileInfo.vectors.linePrimitives) {
+                                    lineBatch.matrix = transformMatrix;
+                                }
+                            }
                             if (tileInfo.vectors.points) {
                                 tileInfo.vectors.points.matrix = transformMatrix;
                             }
-                            if (tileInfo.vectors.icons) {
-                                tileInfo.vectors.icons.matrix = transformMatrix;
-                            }
 
                             vecPayload.push(tileInfo.vectors);
+                        } else {
+                            diagnosticPayload.push(this._makeTileDiagnosticRegion(
+                                tile,
+                                tiledImage,
+                                overallMatrix,
+                                "invalid-data"
+                            ));
                         }
                     }
                 }
@@ -11196,6 +14765,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     TI_PAYLOAD.push({
                         tiles: payload,
                         vectors: vecPayload,
+                        diagnostics: diagnosticPayload,
                         polygons: polygons,
                         dataIndex: baseLayer + packIndex,
                         stencilIndex: tiledImageIndex,
@@ -11207,11 +14777,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
             // todo flatten render data
 
-            this.renderer.gl.clearColor(1.0, 1.0, 1.0, 1.0);
-            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
-
-            this.renderer.firstPassProcessData(TI_PAYLOAD);
-            return true;
+            return TI_PAYLOAD;
         }
 
         /**
@@ -11227,7 +14793,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             const sources = [];
             const flatShaders = this.renderer.getFlatShaderLayers(shaders, shaderOrder);
 
-            const canvas = this.renderer.canvas;
+            const canvas = this.renderer.getPresentationCanvas();
             const osdViewport = this.viewer.viewport;
             const inner = osdViewport && osdViewport._containerInnerSize;
             const sx = inner && inner.x ? canvas.width / inner.x : 1;
@@ -11261,21 +14827,25 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         }
 
         /**
-         * During the second-pass draw from the off-screen textures into the rendering canvas,
-         * applying the image-processing operations and rendering customizations.
-         * @param {Object} viewport has bounds, center, rotation, zoom
+         * Build the second-pass render package array from the renderer's current
+         * ShaderLayer graph and the resolved OpenSeadragon viewport state.
+         *
+         * This remains drawer-owned because pixel size and opacity are currently
+         * derived from OpenSeadragon `TiledImage` instances.
+         *
+         * @private
+         * @param {object} viewport - Resolved viewport state.
+         * @param {number} viewport.zoom - Viewport zoom.
+         * @returns {Array<SPRenderPackage>} Second-pass render packages.
+         *
+         * @memberof OpenSeadragon.FlexDrawer#
          */
-        _drawTwoPassSecond(viewport) {
-            const sources = this._collectShaderUniforms(this.renderer.getAllShaders(), this.renderer.getShaderLayerOrder(), viewport);
-
-            if (!sources.length) {
-                this.viewer.forceRedraw();
-                return false;
-            }
-
-            this.renderer.secondPassProcessData(sources);
-            this.renderer.gl.finish();
-            return true;
+        _collectSecondPassPayload(viewport) {
+            return this._collectShaderUniforms(
+                this.renderer.getAllShaders(),
+                this.renderer.getShaderLayerOrder(),
+                viewport
+            );
         }
 
         _getTileRenderMeta(tile, tiledImage) {
@@ -11442,6 +15012,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 {
                     debug: false,
                     webGLPreferredVersion: "2.0",
+                    sharedContextKey: null,
                 },
                 // User-defined
                 this.options,
@@ -11450,6 +15021,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     redrawCallback: () => this.viewer.forceRedraw(),
                     refetchCallback: (request) => this._handleRefetchRequest(request),
                     uniqueId: "osd_" + this._id,
+                    sharedContextKey: this.options.sharedContextKey,
                     // TODO: problem when navigator renders first
                     // Navigator must not have the handler since it would attempt to define the controls twice
                     htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,
@@ -11465,19 +15037,30 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this.webGLVersion = this.renderer.webglVersion;
             this.debug = rendererOptions.debug;
 
-            const canvas = this.renderer.canvas;
+            const canvas = this.renderer.getPresentationCanvas();
             let viewportSize = this._calculateCanvasSize();
 
             // SETUP CANVASES
-            this._gl = this.renderer.gl;
             this._setupCanvases();
 
             canvas.width = viewportSize.x;
             canvas.height = viewportSize.y;
             this._refreshDrawReadyState();
+
+            this._interactionOptions = this._normalizeInteractionOptions(
+                this._isNavigatorDrawer ? false : this.options.interaction
+            );
+
+            if (this._interactionOptions.enabled) {
+                this.setInteractionOptions(this._interactionOptions, {
+                    notify: true,
+                    redraw: false,
+                    reason: "drawer-init-interaction"
+                });
+            }
+
             return canvas;
         }
-
 
         /**
          * Sets whether image smoothing is enabled or disabled.
@@ -11500,28 +15083,179 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 type: normalized.type,
                 tile,
                 tiledImage
-            }).catch(e => {
-                $.console.error(`Unsupported data type! ${normalized.data}`, e);
+            }).catch(error => {
+                $.console.error(`Failed to prepare tile data.`, error, normalized.data);
+
+                return this._createDiagnosticTileInfo(
+                    error && error.reason ? error.reason : "invalid-data"
+                );
             });
         }
 
-        async createTileInfoFromSource({ data, type, tile, tiledImage }) {
-            const gl = this._gl;
+        /**
+         * Create an internal tile-info sentinel for tile data that was received but
+         * could not be converted into renderer-ready raster or vector data.
+         *
+         * @private
+         * @param {string} reason
+         * @return {{__flexDiagnostic: boolean, reason: string}}
+         */
+        _createDiagnosticTileInfo(reason = "invalid-data") {
+            return {
+                __flexDiagnostic: true,
+                reason: reason
+            };
+        }
 
+        /**
+         * Return whether tile info is an internal diagnostic sentinel.
+         *
+         * @private
+         * @param {*} tileInfo
+         * @return {boolean}
+         */
+        _isDiagnosticTileInfo(tileInfo) {
+            return !!(tileInfo && tileInfo.__flexDiagnostic === true);
+        }
+
+        /**
+         * Return renderer-neutral texture options for prepared tile resources.
+         *
+         * @private
+         * @returns {RasterTileTextureOptions}
+         */
+        _getPreparedTileTextureOptions() {
+            return {
+                imageSmoothingEnabled: !!this._imageSmoothingEnabled
+            };
+        }
+
+        /**
+         * Convert a successful renderer preparation result into FlexDrawer's
+         * internal raster tile-info shape.
+         *
+         * FlexDrawer owns OpenSeadragon tile placement. The renderer/backend owns
+         * the prepared resource.
+         *
+         * @private
+         * @param {PreparedRasterTileSuccess} result - Successful preparation result.
+         * @param {OpenSeadragon.Tile} tile - OpenSeadragon tile.
+         * @param {OpenSeadragon.TiledImage} tiledImage - Owning tiled image.
+         * @returns {{position: Float32Array, texture: *, resource: *, vectors: undefined}}
+         */
+        _createPreparedRasterTileInfo(result, tile, tiledImage) {
+            return {
+                position: this._computeTilePosition(tile, tiledImage, result.width, result.height),
+                texture: result.texture,
+                resource: result.resource,
+                vectors: undefined
+            };
+        }
+
+        /**
+         * Convert a preparation failure into the existing diagnostic tile sentinel.
+         *
+         * @private
+         * @param {PreparedTileFailure} result - Failed preparation result.
+         * @returns {{__flexDiagnostic: boolean, reason: string}}
+         */
+        _createDiagnosticTileInfoFromPreparationFailure(result) {
+            const reason = result && result.reason ? result.reason : "invalid-data";
+            return this._createDiagnosticTileInfo(reason);
+        }
+
+        /**
+         * Return whether OpenSeadragon/canvas preflight can already identify a
+         * bitmap-like tile source as tainted.
+         *
+         * This is an adapter-level optimization only. It does not replace renderer/backend upload classification.
+         *
+         * @private
+         * @param {*} data - Normalized tile data.
+         * @param {OpenSeadragon.TiledImage} tiledImage - Owning tiled image.
+         * @returns {boolean}
+         */
+        _isKnownTaintedBitmapTileData(data, tiledImage) {
+            if (tiledImage && typeof tiledImage.isTainted === "function" && tiledImage.isTainted()) {
+                return true;
+            }
+
+            const canvas = this._getCanvasFromBitmapTileData(data);
+
+            if (!canvas) {
+                return false;
+            }
+
+            // checks if the canvas is tainted by trying to read from it
+            return !!$.isCanvasTainted(canvas);
+        }
+
+        /**
+         * Extract a canvas from bitmap-like tile data when available.
+         *
+         * @private
+         * @param {*} data - Tile data.
+         * @returns {HTMLCanvasElement | OffscreenCanvas | null}
+         */
+        _getCanvasFromBitmapTileData(data) {
+            if (!data) {
+                return null;
+            }
+
+            if (typeof CanvasRenderingContext2D !== "undefined" && data instanceof CanvasRenderingContext2D) {
+                return data.canvas || null;
+            }
+
+            if (typeof HTMLCanvasElement !== "undefined" && data instanceof HTMLCanvasElement) {
+                return data;
+            }
+
+            if (typeof OffscreenCanvas !== "undefined" && data instanceof OffscreenCanvas) {
+                return data;
+            }
+
+            return null;
+        }
+
+        async createTileInfoFromSource({ data, type, tile, tiledImage }) {
             if (type === "undefined") {
                 return null;
             }
 
-            if (type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
-                return this._buildVectorTileInfo(data, gl);
+            if (type === "vector-mesh" || (data && (data.fills || data.lines || data.linePrimitives || data.points))) {
+                const result = await this.renderer.prepareVectorTile({
+                    data: data
+                });
+
+                if (!result.ok) {
+                    return this._createDiagnosticTileInfoFromPreparationFailure(result);
+                }
+
+                return {
+                    position: null,
+                    texture: null,
+                    resource: result.resource,
+                    vectors: result.vectors
+                };
             }
 
-            const isGpuTextureSet = data &&
-                typeof data.getType === "function" &&
-                data.getType() === "gpuTextureSet";
+            const isGpuTextureSet = type === "gpuTextureSet" || (data && typeof data.getType === "function" && data.getType() === "gpuTextureSet");
 
             if (isGpuTextureSet) {
-                const tileInfo = this._buildGpuTextureTileInfo(data, tile, tiledImage, gl);
+                const result = await this.renderer.prepareGpuTextureTile({
+                    data: data,
+                    textureOptions: this._getPreparedTileTextureOptions()
+                });
+
+                if (!result.ok) {
+                    return this._createDiagnosticTileInfoFromPreparationFailure(result);
+                }
+
+                this._updatePackMetadata(
+                    tiledImage,
+                    result.packCount || result.textureDepth || 1,
+                    result.channelCount || (result.packCount || result.textureDepth || 1) * 4
+                );
 
                 if (this._packLayoutDirty) {
                     // TODO: is this refreshing logic necessary?
@@ -11530,16 +15264,97 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     this._requestRebuild();
                 }
 
-                return tileInfo;
+                return this._createPreparedRasterTileInfo(result, tile, tiledImage);
             }
 
-            return this._buildBitmapTileInfo(data, tile, tiledImage, gl);
+            if (this._isKnownTaintedBitmapTileData(data, tiledImage)) {
+                return this._createDiagnosticTileInfo("tainted-data");
+            }
+
+            const result = await this.renderer.prepareBitmapTile({
+                data: data,
+                textureOptions: this._getPreparedTileTextureOptions()
+            });
+
+            if (!result.ok) {
+                return this._createDiagnosticTileInfoFromPreparationFailure(result);
+            }
+
+            this._updatePackMetadata(
+                tiledImage,
+                result.packCount || 1,
+                result.channelCount || 4
+            );
+
+            return this._createPreparedRasterTileInfo(result, tile, tiledImage);
         }
 
         // _refreshPackLayoutNow() {
         //     this._updatePackLayout();
         //     this._packLayoutDirty = false;
         // }
+
+        /**
+         * Compute fallback dimensions for a diagnostic tile region.
+         *
+         * Diagnostic entries have no decoded image/texture dimensions, so this uses
+         * source bounds when OpenSeadragon exposes them and falls back to the tile
+         * source's nominal tile dimensions.
+         *
+         * @private
+         * @param {OpenSeadragon.Tile} tile
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @return {{width: number, height: number}}
+         */
+        _getDiagnosticTileDimensions(tile, tiledImage) {
+            const source = tiledImage && tiledImage.source ? tiledImage.source : {};
+            const sourceBounds = tile && tile.sourceBounds ? tile.sourceBounds : null;
+            const width = sourceBounds && Number.isFinite(sourceBounds.width) && sourceBounds.width > 0 ?
+                sourceBounds.width :
+                source.tileWidth || source.tileSize || 1;
+            const height = sourceBounds && Number.isFinite(sourceBounds.height) && sourceBounds.height > 0 ?
+                sourceBounds.height :
+                source.tileHeight || source.tileSize || width;
+
+            return {
+                width: width,
+                height: height
+            };
+        }
+
+        /**
+         * Create a renderer-ready diagnostic first-pass region for a tile.
+         *
+         * @private
+         * @param {OpenSeadragon.Tile} tile
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @param {OpenSeadragon.Mat3} overallMatrix
+         * @param {string} [reason="invalid-data"]
+         * @return {FPRenderDiagnosticTile}
+         */
+        _makeTileDiagnosticRegion(tile, tiledImage, overallMatrix, reason = "invalid-data") {
+            const dimensions = this._getDiagnosticTileDimensions(tile, tiledImage);
+            const position = this._computeTilePosition(
+                tile,
+                tiledImage,
+                dimensions.width,
+                dimensions.height
+            );
+            const diagnosticTileInfo = {
+                position: position
+            };
+
+            return {
+                reason: reason,
+                transformMatrix: this._updateTileMatrix(
+                    diagnosticTileInfo,
+                    tile,
+                    tiledImage,
+                    overallMatrix
+                ),
+                position: position
+            };
+        }
 
         /**
          * Compute normalized tile texture coordinates (UVs) in source image space,
@@ -11608,34 +15423,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (!data) {
                 return;
             }
-            if (data.texture) {
-                this._gl.deleteTexture(data.texture);
-                data.texture = null;
+
+            if (data.resource) {
+                this.renderer.releasePreparedTileResource(data.resource);
+                data.resource = null;
+            } else {
+                if (data.texture) {
+                    this.renderer.releasePreparedTileResource(data.texture);
+                }
+
+                if (data.vectors) {
+                    this.renderer.releasePreparedTileResource(data.vectors);
+                }
             }
-            if (data.vectors) {
-                const gl = this._gl;
-                if (data.vectors.fills) {
-                    gl.deleteBuffer(data.vectors.fills.vboPos);
-                    gl.deleteBuffer(data.vectors.fills.vboCol);
-                    gl.deleteBuffer(data.vectors.fills.ibo);
-                }
-                if (data.vectors.lines) {
-                    gl.deleteBuffer(data.vectors.lines.vboPos);
-                    gl.deleteBuffer(data.vectors.lines.vboCol);
-                    gl.deleteBuffer(data.vectors.lines.ibo);
-                }
-                if (data.vectors.points) {
-                    gl.deleteBuffer(data.vectors.points.vboPos);
-                    gl.deleteBuffer(data.vectors.points.vboCol);
-                    gl.deleteBuffer(data.vectors.points.ibo);
-                }
-                if (data.vectors.icons) {
-                    gl.deleteBuffer(data.vectors.icons.vboPos);
-                    gl.deleteBuffer(data.vectors.icons.vboCol);
-                    gl.deleteBuffer(data.vectors.icons.ibo);
-                }
-                data.vectors = null;
-            }
+
+            data.texture = null;
+            data.vectors = null;
         }
 
         // inside OpenSeadragon.FlexDrawer
@@ -11725,202 +15528,183 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             this._requestRebuild(0, true);
         }
 
-        _buildVectorTileInfo(data, gl) {
-            const tileInfo = {
-                position: null,
-                texture: null,
-                vectors: {}
-            };
-
-            const buildBatch = (meshes) => {
-                let vCount = 0,
-                    iCount = 0;
-                for (const m of meshes) {
-                    vCount += (m.vertices.length / 4);
-                    iCount += m.indices.length;
-                }
-
-                const positions = new Float32Array(vCount * 4);
-                const parameters = new Float32Array(vCount * 4);
-                const indices = new Uint32Array(iCount);
-
-                let vOfs = 0,
-                    iOfs = 0,
-                    baseVertex = 0;
-
-                for (const m of meshes) {
-                    positions.set(m.vertices, vOfs * 4);
-
-                    // fill color per-vertex (constant per feature)
-                    const rgba = m.color ? m.color : [0, 0, 0, 1];
-                    const r = Math.max(0.0, Math.min(1.0, rgba[0]));
-                    const g = Math.max(0.0, Math.min(1.0, rgba[1]));
-                    const b = Math.max(0.0, Math.min(1.0, rgba[2]));
-                    const a = Math.max(0.0, Math.min(1.0, rgba[3]));
-                    for (let k = 0; k < (m.vertices.length / 4); k++) {
-                        const pOfs = (vOfs + k) * 4;
-                        parameters[pOfs + 0] = r;
-                        parameters[pOfs + 1] = g;
-                        parameters[pOfs + 2] = b;
-                        parameters[pOfs + 3] = a;
-                    }
-
-                    // if parameters are specified from mesh
-                    if (m.parameters) {
-                        parameters.set(m.parameters, vOfs * 4);
-                    }
-
-                    // rebase indices
-                    for (let k = 0; k < m.indices.length; k++) {
-                        indices[iOfs + k] = baseVertex + m.indices[k];
-                    }
-
-                    vOfs += (m.vertices.length / 4);
-                    iOfs += m.indices.length;
-                    baseVertex += (m.vertices.length / 4);
-                }
-
-                // Upload once
-                const vboPos = gl.createBuffer();
-                gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
-                gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-                const vboParam = gl.createBuffer();
-                gl.bindBuffer(gl.ARRAY_BUFFER, vboParam);
-                gl.bufferData(gl.ARRAY_BUFFER, parameters, gl.STATIC_DRAW);
-
-                const ibo = gl.createBuffer();
-                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
-                return { vboPos, vboParam, ibo, count: indices.length };
-            };
-
-            if (data.fills && data.fills.length) {
-                tileInfo.vectors.fills = buildBatch(data.fills);
-            }
-            if (data.lines && data.lines.length) {
-                tileInfo.vectors.lines = buildBatch(data.lines);
-            }
-            if (data.points && data.points.length) {
-                tileInfo.vectors.points = buildBatch(data.points);
-            }
-            if (data.icons && data.icons.length) {
-                tileInfo.vectors.icons = buildBatch(data.icons);
-            }
-
-            return tileInfo;
-        }
-
-        _buildGpuTextureTileInfo(gpu, tile, tiledImage, gl) {
-            const width = gpu.width;
-            const height = gpu.height;
-            const packs = gpu.packs || [];
-            const packCount = packs.length || 1;
-            const channelCount = gpu.channelCount || packCount * 4;
-
-            this._updatePackMetadata(tiledImage, packCount, channelCount);
-
-            const tileInfo = {
-                position: this._computeTilePosition(tile, tiledImage, width, height),
-                texture: null,
-                vectors: undefined,
-            };
-
-            const texture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
-
-            const firstFmt = (packs[0] && packs[0].format) || "RGBA8";
-            const internalFormat = (firstFmt === "RGBA16F") ? gl.RGBA16F : gl.RGBA8;
-            const format = gl.RGBA;
-            const type = (firstFmt === "RGBA16F") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
-
-            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat, width, height, packCount);
-
-            for (let layer = 0; layer < packCount; layer++) {
-                const pack = packs[layer];
-                if (!pack) {
-                    continue;
-                }
-
-                gl.texSubImage3D(
-                    gl.TEXTURE_2D_ARRAY,
-                    0,
-                    0, 0, layer,
-                    width, height, 1,
-                    format,
-                    type,
-                    pack.data
-                );
-            }
-
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-            tileInfo.texture = texture;
-            return tileInfo;
-        }
-
-        async _buildBitmapTileInfo(data, tile, tiledImage, gl) {
-            // if (!tiledImage.isTainted()) {
-            // todo tained data handle
-            // if((data instanceof CanvasRenderingContext2D) && $.isCanvasTainted(data.canvas)){
-            //     tiledImage.setTainted(true);
-            //     $.console.warn('WebGL cannot be used to draw this TiledImage because it has tainted data. Does crossOriginPolicy need to be set?');
-            //     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
-            //     this.setInternalCacheNeedsRefresh();
-            // } else {
-
-            const bitmap = await createImageBitmap(data);
-
-            const width = bitmap.width;
-            const height = bitmap.height;
-
-            this._updatePackMetadata(tiledImage, 1, 4);
-
-            const tileInfo = {
-                position: this._computeTilePosition(tile, tiledImage, width, height),
-                texture: null,
-                vectors: undefined,
-            };
-
-            const tex = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
-
-            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, 1);
-            gl.texSubImage3D(
-                gl.TEXTURE_2D_ARRAY,
-                0,
-                0, 0, 0,
-                width, height, 1,
-                gl.RGBA,
-                gl.UNSIGNED_BYTE,
-                bitmap
-            );
-
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-            tileInfo.texture = tex;
-            return tileInfo;
-        }
-
         _setClip(){
             // no-op: called, handled during rendering from tiledImage data
         }
-    };
+    }
 
-    OpenSeadragon.FlexDrawer._idGenerator = 0;
-    Object.defineProperty(OpenSeadragon.FlexDrawer, 'idGenerator', {
+    FlexDrawer._idGenerator = 0;
+    Object.defineProperty(FlexDrawer, 'idGenerator', {
         get: function() {
             return this._idGenerator++;
         }
     });
+
+    $.FlexDrawer = FlexDrawer;
+
 }( OpenSeadragon ));
+
+/**
+ * Main-thread half of the FlexDrawer HTTP bridge.
+ *
+ * Exposes `OpenSeadragon.FlexDrawer.installHttpBridge(worker, adapter)`.
+ *
+ * Call once per worker, immediately after Worker construction and BEFORE any
+ * application-level postMessage that the worker might respond to. The returned
+ * handle exposes `{ dispose() }`; call it when the worker is being terminated
+ * so any in-flight requests are aborted and the listener is removed.
+ *
+ * The installer:
+ *   - listens for `http:request` / `http:cancel` messages from the worker
+ *     (via `addEventListener` so it never collides with the tile source's
+ *     primary `onmessage` handler);
+ *   - delegates each `http:request` to `adapter.fetch(url, init)` with a fresh
+ *     `AbortController` so worker-side cancellations propagate downstream;
+ *   - replies with `{ type: 'http:response', id, status, ok, headers, body }`
+ *     transferring the response `ArrayBuffer` zero-copy;
+ *   - on rejection replies with `{ type: 'http:error', id, message, name }`
+ *     preserving the original error name (so `AbortError` round-trips);
+ *   - immediately posts `{ type: 'http:bridge-on' }` so the worker shim flips
+ *     into bridged mode before the tile source posts its `config` message.
+ */
+(function ($) {
+    function installHttpBridge(worker, adapter) {
+        if (!worker || !adapter || typeof adapter.fetch !== 'function') {
+            throw new TypeError('installHttpBridge: requires a Worker and an HttpAdapter');
+        }
+
+        const inflight = new Map(); // id -> AbortController
+        let disposed = false;
+
+        const onMessage = (event) => {
+            const msg = event && event.data;
+            if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+                return;
+            }
+
+            if (msg.type === 'http:request') {
+                handleRequest(msg);
+            } else if (msg.type === 'http:cancel') {
+                const ac = inflight.get(msg.id);
+                if (ac) {
+                    inflight.delete(msg.id);
+                    try {
+                        ac.abort();
+                    } catch (_) {
+                        // ignore
+                    }
+                }
+            }
+        };
+
+        worker.addEventListener('message', onMessage);
+
+        // Flip the worker into bridged mode as the first thing on the wire.
+        try {
+            worker.postMessage({ type: 'http:bridge-on' });
+        } catch (err) {
+            worker.removeEventListener('message', onMessage);
+            throw err;
+        }
+
+        async function handleRequest(msg) {
+            if (disposed) {
+                return;
+            }
+
+            const id = msg.id;
+            const ac = new AbortController();
+            inflight.set(id, ac);
+
+            const init = Object.assign({}, msg.init || {}, { signal: ac.signal });
+
+            try {
+                const resp = await adapter.fetch(msg.url, init);
+                const body = await resp.arrayBuffer();
+                const headers = flattenHeaders(resp.headers);
+
+                if (disposed) {
+                    return;
+                }
+
+                try {
+                    worker.postMessage(
+                        {
+                            type: 'http:response',
+                            id: id,
+                            status: resp.status,
+                            ok: resp.ok,
+                            headers: headers,
+                            body: body
+                        },
+                        body ? [body] : []
+                    );
+                } catch (err) {
+                    // postMessage failure (worker terminated, transfer error, …) — report locally.
+                    if (typeof console !== 'undefined' && console.warn) {
+                        console.warn('flex-renderer http bridge: postMessage failed', err);
+                    }
+                }
+            } catch (err) {
+                if (disposed) {
+                    return;
+                }
+                const name = (err && err.name) || 'Error';
+                const message = (err && err.message) || String(err);
+                try {
+                    worker.postMessage({ type: 'http:error', id: id, name: name, message: message });
+                } catch (_) { /* ignore */ }
+            } finally {
+                inflight.delete(id);
+            }
+        }
+
+        function dispose() {
+            if (disposed) {
+                return;
+            }
+            disposed = true;
+            try {
+                worker.removeEventListener('message', onMessage);
+            } catch (_) {
+                // ignore
+            }
+            for (const ac of inflight.values()) {
+                try {
+                    ac.abort();
+                } catch (_) {
+                    // ignore
+                }
+            }
+            inflight.clear();
+        }
+
+        return { dispose: dispose };
+    }
+
+    function flattenHeaders(headers) {
+        const out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function') {
+            headers.forEach((value, key) => {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (const key of Object.keys(headers)) {
+                out[key.toLowerCase()] = String(headers[key]);
+            }
+        }
+        return out;
+    }
+
+    if ($ && $.FlexDrawer) {
+        $.FlexDrawer.installHttpBridge = installHttpBridge;
+    }
+})(typeof OpenSeadragon !== 'undefined' ? OpenSeadragon : null);
 
 (function($) {
 
@@ -12033,8 +15817,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         };
 
         target._readTextureArrayLayer = function(texArray, layerIndex, {
-            width = renderer.canvas.width,
-            height = renderer.canvas.height,
+            width = renderer.getRenderDimensions().width,
+            height = renderer.getRenderDimensions().height,
             level = 0,
             format = null,
             type = null,
@@ -12336,7 +16120,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         /**
          * Draws the viewer with the given configuration.
          * @param {Array<OpenSeadragon.TiledImage>} tiledImages
-         * @param {Object.<string, ShaderConfig>} [configuration]
+         * @param {Object.<string, ShaderLayerConfig>} [configuration]
          * @param {object|OpenSeadragon.FlexDrawer} [view] draw desired viewport (full pass) or re-use last frame
          *    - The viewport to draw, see {@link OpenSeadragon.FlexDrawer#draw}
          *    - Or, the reference to the drawer to draw the same viewport as the previous one. By default, the
@@ -12401,7 +16185,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                         const ctx = canvas.getContext('2d');
                         canvas.width = size.x;
                         canvas.height = size.y;
-                        ctx.drawImage(this.renderer.canvas, 0, 0);
+                        ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
                         return ctx;
                     }).catch(e => {
                         console.error(e);
@@ -12451,15 +16235,22 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     this.renderer._showOffscreenMatrix(fp, {scale: 0.5, pad: 8});
                 }
 
-                this._drawTwoPassSecond({
+                const sources = this._collectSecondPassPayload({
                     zoom: this.viewport.getZoom(true)
                 });
+
+                if (!sources.length) {
+                    this.viewer.forceRedraw();
+                }
+
+                this.renderer.renderSecondPass(sources);
+                this.renderer.gl.finish();
 
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 canvas.width = size.x;
                 canvas.height = size.y;
-                ctx.drawImage(this.renderer.canvas, 0, 0);
+                ctx.drawImage(this.renderer.getPresentationCanvas(), 0, 0);
                 return ctx;
             } finally {
                 if (viewportBindings) {
@@ -12503,8 +16294,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 }
 
                 return this._readTextureArrayLayer(tex, layerIndex, {
-                    width: opts.width || this.renderer.canvas.width,
-                    height: opts.height || this.renderer.canvas.height,
+                    width: opts.width || this.renderer.getRenderDimensions().width,
+                    height: opts.height || this.renderer.getRenderDimensions().height,
                     level: opts.level || 0,
                     format: opts.format,
                     type: opts.type,
@@ -12592,7 +16383,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         });
         runtime.renderer.setDataBlendingEnabled(true);
         runtime.renderer.setDimensions(0, 0, width, height, 1, 1);
-        runtime.canvas = runtime.renderer.canvas;
+        runtime.canvas = runtime.renderer.getPresentationCanvas();
         runtime._inputState = {
             key: null,
             count: 0,
@@ -12601,7 +16392,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
         };
 
         installExtractionApi(runtime, runtime.renderer, function(result = "imageData") {
-            return this._readCurrentCanvas(this.renderer.canvas, result);
+            return this._readCurrentCanvas(this.renderer.getPresentationCanvas(), result);
         });
 
         runtime.setSize = function(nextWidth, nextHeight) {
@@ -12687,7 +16478,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             );
 
             const source = this._buildSyntheticFirstPassSource();
-            this.renderer.firstPassProcessData(source);
+            this.renderer.renderFirstPass(source);
             return this.renderer.__firstPassResult;
         };
 
@@ -12762,7 +16553,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
 
             this.renderer.setShaderLayerOrder(shaderOrder || Object.keys(normalized));
-            this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+            this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
         };
 
         runtime.getOverriddenShaderConfig = function(key) {
@@ -12815,14 +16606,15 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                     throw new Error("Standalone renderer has no configured shader layers.");
                 }
 
-                this.renderer.secondPassProcessData(renderArray);
+                this.renderer.renderSecondPass(renderArray);
                 this.renderer.gl.finish();
 
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
-                canvas.width = this.renderer.canvas.width;
-                canvas.height = this.renderer.canvas.height;
-                ctx.drawImage(this.renderer.canvas, 0, 0);
+                const presentationCanvas = this.renderer.getPresentationCanvas();
+                canvas.width = presentationCanvas.width;
+                canvas.height = presentationCanvas.height;
+                ctx.drawImage(presentationCanvas, 0, 0);
                 return ctx;
             } finally {
                 unlock();
@@ -12848,8 +16640,8 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
                 }
 
                 return this._readTextureArrayLayer(tex, layerIndex, {
-                    width: opts.width || this.renderer.canvas.width,
-                    height: opts.height || this.renderer.canvas.height,
+                    width: opts.width || this.renderer.getRenderDimensions().width,
+                    height: opts.height || this.renderer.getRenderDimensions().height,
                     level: opts.level || 0,
                     format: opts.format,
                     type: opts.type,
@@ -12913,8 +16705,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
 (function($) {
 
-    $.FlexRenderer.ShaderMediator.registerLayer(class AdaptiveThreshold extends $.FlexRenderer.ShaderLayer {
-
+    $.FlexRenderer.ShaderLayerRegistry.register(class AdaptiveThreshold extends $.FlexRenderer.ShaderLayer {
         static type() {
             return "adaptive_threshold";
         }
@@ -13122,7 +16913,7 @@ float ${fnWeight}(in float dx, in float dy, in float radius, in bool gaussianMod
  * the value itself is encoded in opacity (close to 1 if too low or too high), user can define two colors, for low and high values respectively
  */
 
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "bipolar-heatmap";
@@ -13233,7 +17024,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
  * supports thresholding - outputs color on areas above certain value
  * mapping html input slider 0-100 to .0-1.0
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "colormap";
@@ -13435,6 +17226,8 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             }
         };
 
+        this.color.init();
+
         if (this.connect) {
             this.connect.on('default', function() {
                 syncColor();
@@ -13448,8 +17241,6 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         this.threshold.init();
 
         syncColor();
-
-        this.color.init();
     }
 });
 })(OpenSeadragon);
@@ -13458,7 +17249,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 /**
  * Identity shader
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static get defaultControls() {
         return {
@@ -13530,7 +17321,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
  * A plain range behaves like a single threshold, while advanced controls can provide
  * more complex sampled behavior without this shader caring about their internals.
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "edge";
@@ -13671,6 +17462,328 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
 })(OpenSeadragon);
 
 (function($) {
+    /**
+     * Interactive fisheye lens shader.
+     *
+     * Samples one RGBA source through a screen-space fisheye/magnifier lens.
+     * The lens is active while the configured mouse button is held down and
+     * uses FlexRenderer interaction uniforms as its input state.
+     */
+    class FisheyeLens extends $.FlexRenderer.ShaderLayer {
+        static type() {
+            return "fisheye-lens";
+        }
+
+        static name() {
+            return "Fisheye Lens";
+        }
+
+        static description() {
+            return "Applies a click-and-hold screen-space fisheye lens to one RGBA source.";
+        }
+
+        static intent() {
+            return "Temporarily magnify image detail under the pointer while preserving surrounding context.";
+        }
+
+        static expects() {
+            return {
+                dataKind: "rgb",
+                channels: 4
+            };
+        }
+
+        static exampleParams() {
+            return {
+                use_mode: "show",  // eslint-disable-line camelcase
+                use_blend: "source-over",  // eslint-disable-line camelcase
+                radiusPx: 160,
+                zoom: 3,
+                featherPx: 40,
+                falloffPower: 1.5,
+                buttonMask: 1,
+                showGuides: false,
+                guideOpacity: 0.55,
+                guideWidthPx: 2,
+                guideColor: "#19bfff"
+            };
+        }
+
+        static docs() {
+            return {
+                summary: "Click-and-hold fisheye lens for RGBA sources.",
+                description: "Warps source texture coordinates around the current pointer position while the configured mouse button is held down. When no matching button is down, the shader returns the unwarped source image. Optional guide rings can visualize the active lens radius.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [4],
+                    description: "RGBA source image to magnify"
+                }],
+                controls: [
+                    { name: "use_channel0", required: "rgba" },
+                    { name: "radiusPx", ui: "range_input", valueType: "float", default: 160, min: 20, max: 800, step: 1 },
+                    { name: "zoom", ui: "range_input", valueType: "float", default: 3, min: 1, max: 8, step: 0.1 },
+                    { name: "featherPx", ui: "range_input", valueType: "float", default: 40, min: 0, max: 250, step: 1 },
+                    { name: "falloffPower", ui: "range_input", valueType: "float", default: 1.5, min: 0.25, max: 5, step: 0.05 },
+                    { name: "buttonMask", ui: "select", valueType: "int", default: 1 },
+                    { name: "showGuides", ui: "bool", valueType: "bool", default: false },
+                    { name: "guideOpacity", ui: "range_input", valueType: "float", default: 0.55, min: 0, max: 1, step: 0.05 },
+                    { name: "guideWidthPx", ui: "range_input", valueType: "float", default: 2, min: 1, max: 12, step: 1 },
+                    { name: "guideColor", ui: "color", valueType: "vec3", default: "#19bfff" }
+                ],
+                notes: [
+                    "Requires FlexDrawer interaction forwarding to be enabled.",
+                    "Interaction positions are physical framebuffer pixels with bottom-left origin.",
+                    "The first implementation supports a single active lens, not persistent multiple foci.",
+                    "The shader samples RGBA only."
+                ]
+            };
+        }
+
+        static sources() {
+            return [{
+                acceptsChannelCount: (channelCount) => channelCount === 4,
+                description: "RGBA source image to magnify"
+            }];
+        }
+
+        static get defaultControls() {
+            return {
+                use_channel0: {  // eslint-disable-line camelcase
+                    required: "rgba"
+                },
+                radiusPx: {
+                    default: {
+                        type: "range_input",
+                        default: 160,
+                        min: 20,
+                        max: 800,
+                        step: 1,
+                        title: "Radius px: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                zoom: {
+                    default: {
+                        type: "range_input",
+                        default: 3,
+                        min: 1,
+                        max: 8,
+                        step: 0.1,
+                        title: "Zoom: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                featherPx: {
+                    default: {
+                        type: "range_input",
+                        default: 40,
+                        min: 0,
+                        max: 250,
+                        step: 1,
+                        title: "Feather px: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                falloffPower: {
+                    default: {
+                        type: "range_input",
+                        default: 1.5,
+                        min: 0.25,
+                        max: 5,
+                        step: 0.05,
+                        title: "Falloff: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                buttonMask: {
+                    default: {
+                        type: "select",
+                        default: 1,
+                        title: "Button: ",
+                        options: [
+                            { value: 0, label: "Any" },
+                            { value: 1, label: "Primary" },
+                            { value: 2, label: "Secondary" },
+                            { value: 4, label: "Auxiliary" }
+                        ]
+                    },
+                    accepts: (type, instance) => type === "int"
+                },
+                showGuides: {
+                    default: {
+                        type: "bool",
+                        default: false,
+                        title: "Show guides: "
+                    },
+                    accepts: (type, instance) => type === "bool"
+                },
+                guideOpacity: {
+                    default: {
+                        type: "range_input",
+                        default: 0.55,
+                        min: 0,
+                        max: 1,
+                        step: 0.05,
+                        title: "Guide opacity: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                guideWidthPx: {
+                    default: {
+                        type: "range_input",
+                        default: 2,
+                        min: 1,
+                        max: 12,
+                        step: 1,
+                        title: "Guide width px: "
+                    },
+                    accepts: (type, instance) => type === "float"
+                },
+                guideColor: {
+                    default: {
+                        type: "color",
+                        default: "#19bfff",
+                        title: "Guide color: "
+                    },
+                    accepts: (type, instance) => type === "vec3"
+                }
+            };
+        }
+
+        getFragmentShaderDefinition() {
+            return `
+${super.getFragmentShaderDefinition()}
+
+float ${this.uid}_range_value(float normalizedValue, float minValue, float maxValue) {
+    return mix(minValue, maxValue, clamp(normalizedValue, 0.0, 1.0));
+}
+
+vec2 ${this.uid}_fisheye_uv(
+    vec2 sourceUv,
+    vec2 pointPx,
+    vec2 centerPx,
+    vec2 textureSizePx,
+    float radiusPx,
+    float zoomAmount,
+    float featherPx,
+    float falloffPower
+) {
+    float radius = max(radiusPx, 1.0);
+    float zoomSafe = max(zoomAmount, 1.0);
+    float falloffSafe = max(falloffPower, 0.01);
+    float feather = clamp(featherPx, 0.0, radius);
+
+    vec2 deltaPx = pointPx - centerPx;
+    float distancePx = length(deltaPx);
+
+    if (distancePx >= radius || zoomSafe <= 1.0001) {
+        return sourceUv;
+    }
+
+    float normalizedDistance = clamp(distancePx / radius, 0.0, 1.0);
+
+    // At the center, sample roughly 1 / zoomAmount as far from the center.
+    // At the edge, return to normal sampling so the lens remains continuous.
+    float localZoom = mix(zoomSafe, 1.0, pow(normalizedDistance, falloffSafe));
+    vec2 warpedPointPx = centerPx + (deltaPx / localZoom);
+
+    if (feather > 0.001) {
+        float edgeBlend = smoothstep(max(0.0, radius - feather), radius, distancePx);
+        warpedPointPx = mix(warpedPointPx, pointPx, edgeBlend);
+    }
+
+    vec2 safeTextureSize = max(textureSizePx, vec2(1.0));
+    vec2 uvOffset = (warpedPointPx - pointPx) / safeTextureSize;
+
+    return clamp(sourceUv + uvOffset, vec2(0.0), vec2(1.0));
+}
+
+float ${this.uid}_ring(
+    vec2 pointPx,
+    vec2 centerPx,
+    float radiusPx,
+    float thicknessPx,
+    float featherPx
+) {
+    float d = abs(length(pointPx - centerPx) - radiusPx);
+    return 1.0 - smoothstep(thicknessPx, thicknessPx + featherPx, d);
+}
+`;
+        }
+
+        getFragmentShaderExecution() {
+            return `
+    vec2 pointPx = gl_FragCoord.xy;
+    vec2 sourceUv = v_texture_coords;
+
+    float radiusPx = ${this.uid}_range_value(${this.radiusPx.sample()}, 20.0, 800.0);
+    float zoomAmount = ${this.uid}_range_value(${this.zoom.sample()}, 1.0, 8.0);
+    float featherPx = ${this.uid}_range_value(${this.featherPx.sample()}, 0.0, 250.0);
+    float falloffPower = ${this.uid}_range_value(${this.falloffPower.sample()}, 0.25, 5.0);
+    float guideWidthPx = ${this.uid}_range_value(${this.guideWidthPx.sample()}, 1.0, 12.0);
+    float guideOpacity = clamp(${this.guideOpacity.sample()}, 0.0, 1.0);
+
+    int activeButtons = fr_interaction_active_buttons();
+    int requiredButtonMask = ${this.buttonMask.sample()};
+
+    bool buttonMatches = requiredButtonMask == 0 ?
+        activeButtons != 0 :
+        ((activeButtons & requiredButtonMask) != 0);
+
+    bool lensActive =
+        fr_interaction_enabled() &&
+        fr_interaction_pointer_inside() &&
+        buttonMatches;
+
+    if (!lensActive) {
+        return ${this.sampleChannel("sourceUv")};
+    }
+
+    vec2 textureSizePx = vec2(
+        float(${this.getTextureSize()}.x),
+        float(${this.getTextureSize()}.y)
+    );
+
+    vec2 centerPx = fr_interaction_pointer_position_px();
+
+    vec2 fisheyeUv = ${this.uid}_fisheye_uv(
+        sourceUv,
+        pointPx,
+        centerPx,
+        textureSizePx,
+        radiusPx,
+        zoomAmount,
+        featherPx,
+        falloffPower
+    );
+
+    vec4 outColor = ${this.sampleChannel("fisheyeUv")};
+
+    if (${this.showGuides.sample()}) {
+        float guide = ${this.uid}_ring(
+            pointPx,
+            centerPx,
+            radiusPx,
+            guideWidthPx,
+            2.0
+        );
+
+        float guideAlpha = clamp(guide * guideOpacity, 0.0, 1.0);
+        outColor.rgb = mix(outColor.rgb, ${this.guideColor.sample()}, guideAlpha);
+        outColor.a = max(outColor.a, guideAlpha);
+    }
+
+    return outColor;
+`;
+        }
+    }
+
+    $.FlexRenderer.ShaderLayerRegistry.register(FisheyeLens);
+
+})(OpenSeadragon);
+
+(function($) {
 /**
  * Grid shader.
  *
@@ -13689,7 +17802,7 @@ float edge_crossing_${uid}(float neighborhoodMin, float neighborhoodMax, float s
  * configured size by snapping cellX/cellY to powers of two — merge when the
  * cell would drop below ½ original; subdivide when it would exceed 2×.
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "grid";
@@ -13713,7 +17826,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static exampleParams() {
         /* eslint-disable camelcase */
-        return { color: "#ffffff", cell_x: 256, cell_y: 256, line_width: 1, adaptive_lod: false };
+        return { color: "#ffffff", cell_x: 256, cell_y: 256, offset_x: 0, offset_y: 0, line_width: 1, adaptive_lod: false };
         /* eslint-enable camelcase */
     }
 
@@ -13731,6 +17844,8 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 { name: "color", ui: "color", valueType: "vec3", default: "#ffffff" },
                 { name: "cell_x", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
                 { name: "cell_y", ui: "range_input", valueType: "float", default: 256, min: 1, max: 8192, step: 1 },
+                { name: "offset_x", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
+                { name: "offset_y", ui: "range_input", valueType: "float", default: 0, min: -8192, max: 8192, step: 1 },
                 { name: "line_width", ui: "range_input", valueType: "float", default: 1, min: 0.5, max: 10, step: 0.5 },
                 { name: "adaptive_lod", ui: "bool", valueType: "bool", default: false }
             ],
@@ -13767,6 +17882,14 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 default: {type: "range_input", default: 256, min: 1, max: 8192, step: 1, title: "Cell height (image px): "},
                 accepts: (type, instance) => type === "float"
             },
+            offset_x: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset X (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
+            offset_y: {  // eslint-disable-line camelcase
+                default: {type: "range_input", default: 0, min: -8192, max: 8192, step: 1, title: "Offset Y (image px): "},
+                accepts: (type, instance) => type === "float"
+            },
             line_width: {  // eslint-disable-line camelcase
                 default: {type: "range_input", default: 1, min: 0.5, max: 10, step: 0.5, title: "Line width (screen px): "},
                 accepts: (type, instance) => type === "float"
@@ -13786,10 +17909,14 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         const f = (n) => $.FlexRenderer.ShaderLayer.toShaderFloatString(n, 0, 5);
         const cx = this.cell_x.params;
         const cy = this.cell_y.params;
+        const ox = this.offset_x.params;
+        const oy = this.offset_y.params;
         const lw = this.line_width.params;
         return `
     float cellX = max(mix(${f(cx.min)}, ${f(cx.max)}, ${this.cell_x.sample()}), 1.0);
     float cellY = max(mix(${f(cy.min)}, ${f(cy.max)}, ${this.cell_y.sample()}), 1.0);
+    float offsetX = mix(${f(ox.min)}, ${f(ox.max)}, ${this.offset_x.sample()});
+    float offsetY = mix(${f(oy.min)}, ${f(oy.max)}, ${this.offset_y.sample()});
     float scale = max(pixelSize, 1e-6);
 
     // Symmetric LOD: snap cell size to a power of two so on-screen cell stays
@@ -13800,7 +17927,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         cellY *= lodMult;
     }
 
-    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale;
+    vec2 imgCoord = (gl_FragCoord.xy - imageOriginPx) / scale - vec2(offsetX, offsetY);
 
     float modX = mod(imgCoord.x, cellX);
     float modY = mod(imgCoord.y, cellY);
@@ -13825,7 +17952,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
     /**
      * A shader layer grouping multiple shader layers and combining them into one output
      */
-    $.FlexRenderer.ShaderMediator.registerLayer(
+    $.FlexRenderer.ShaderLayerRegistry.register(
         class extends $.FlexRenderer.ShaderLayer {
             static type() {
                 return "group";
@@ -13867,7 +17994,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             createShaderLayer(id, config) {
                 id = $.FlexRenderer.sanitizeKey(id);
 
-                const ShaderLayer = $.FlexRenderer.ShaderMediator.getClass(config.type);
+                const ShaderLayer = $.FlexRenderer.ShaderLayerRegistry.get(config.type);
                 if (!ShaderLayer) {
                     throw new Error(`Unknown shader layer type '${config.type}'`);
                 }
@@ -13893,7 +18020,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                     id,
                     {
                         shaderConfig: config,
-                        webglContext: this.webglContext,
+                        backend: this.backend,
                         params: config.params,
                         interactive: this._interactive,
 
@@ -13961,114 +18088,19 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
                 }
             }
 
-            constructShaderLayerCode(shaderLayer) {
-                return `
-// ${shaderLayer.constructor.type()} - definitions
-${shaderLayer.getFragmentShaderDefinition()}
-// ${shaderLayer.constructor.type()} - blending function
-${shaderLayer.getCustomBlendFunction(shaderLayer.uid + "_blend_func")}
-// ${shaderLayer.constructor.type()} - final function definition
-vec4 compute_${shaderLayer.uid}() {
-    ${shaderLayer.getFragmentShaderExecution()}
-}
-`;
-            }
-
             getFragmentShaderDefinition() {
-                let definition = super.getFragmentShaderDefinition() + "\n";
-
-                for (let id of this.shaderLayerOrder) {
-                    let shaderLayer = this.shaderLayers[id];
-
-                    definition += this.constructShaderLayerCode(shaderLayer);
-                }
-
-                return definition;
+                return super.getFragmentShaderDefinition() + "\n" +
+                    this.backend.getShaderLayerStackDefinition(this.shaderLayers, this.shaderLayerOrder, {
+                        ownerShader: this,
+                        initialColor: "vec4(0.0)",
+                        useInspectorAlpha: false
+                    });
             }
 
-            // TODO: move the grouping logic into WebGLContext
             getFragmentShaderExecution() {
-                let execution = "vec4 new_color = vec4(0.0);\nvec4 combined_color = vec4(0.0);\nvec4 clip_color = vec4(0.0);";
-
-                const shaderMap = this.shaderLayers;
-                const keyOrder = this.shaderLayerOrder;
-
-                const getStencilPassCode = shader => {
-                    const shaderConfig = shader.getConfig();
-                    const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
-
-                    if (!hasSources) {
-                        return "    stencilPasses = true;";
-                    }
-
-                    return `    stencilPasses = osd_stencil_texture(${shader.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
-                };
-
-                let remainingBlendShader = null;
-                const getRemainingBlending = () => {
-                    if (!remainingBlendShader) {
-                        return "";
-                    }
-
-                    return `
-${getStencilPassCode(remainingBlendShader)}
-    combined_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(new_color, combined_color);
-`;
-                };
-
-                for (const shaderId of keyOrder) {
-                    const shaderLayer = shaderMap[shaderId];
-                    const shaderConf = shaderLayer.getConfig();
-                    const slot = shaderLayer.__renderSlot;
-                    const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
-
-                    if (shaderConf.type === "none" || shaderConf.error || !shaderConf.visible) {
-                        if (shaderLayer._mode !== "clip") {
-                            execution += `${getRemainingBlending()}
-// ${shaderLayer.constructor.type()} - Disabled (error or visible = false)
-new_color = vec4(0.0);`;
-                            remainingBlendShader = shaderLayer;
-                        } else {
-                            execution += `
-// ${shaderLayer.constructor.type()} - Disabled with Clipmask (error or visible = false)
-new_color = ${shaderLayer.uid}_blend_func(vec4(0.0), new_color);`;
-                        }
-
-                        continue;
-                    }
-
-                    execution += `
-    instance_id = ${slot};
-${getStencilPassCode(shaderLayer)}
-    vec4 attrs_${slot} = u_shaderVariables[${slot}];
-    opacity = attrs_${slot}.x;
-    pixelSize = attrs_${slot}.y;
-    imageOriginPx = attrs_${slot}.zw;
-    zoom = u_zoom;`;
-
-                    if (shaderLayer._mode !== "clip") {
-                        execution += `${getRemainingBlending()}
-// ${shaderLayer.constructor.type()} - Blending
-new_color = compute_${shaderLayer.uid}();
-new_color.a = new_color.a * ${opacityModifier};`;
-
-                        remainingBlendShader = shaderLayer;
-                    } else {
-                        execution += `
-// ${shaderLayer.constructor.type()} - Clipping
-clip_color = compute_${shaderLayer.uid}();
-clip_color.a = clip_color.a * ${opacityModifier};
-new_color = ${shaderLayer.uid}_blend_func(clip_color, new_color);`;
-                    }
-                }
-
-                if (remainingBlendShader) {
-                    execution += getRemainingBlending();
-                }
-
-                execution += "\nreturn combined_color;";
-
-                return execution;
+                return `return ${this.backend.getShaderLayerStackExecution(this.shaderLayers, this.shaderLayerOrder, {
+                    ownerShader: this
+                })};`;
             }
         }
     );
@@ -14079,7 +18111,7 @@ new_color = ${shaderLayer.uid}_blend_func(clip_color, new_color);`;
 /**
  * Heatmap Shader
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "heatmap";
@@ -14372,7 +18404,7 @@ return vec4(.0);
         }
 
         _getConfiguredThresholdBreaks() {
-            const configured = this._customControls && this._customControls.threshold;
+            const configured = this._params && this._params.threshold;
             if (!configured || typeof configured !== "object") {
                 return null;
             }
@@ -14503,7 +18535,7 @@ vec3 iconmap_gridUv_${uid}(vec2 fragCoord) {
         vec2 denom = max(vec2(1.0) - 2.0 * spacingVec, vec2(1e-5));
         vec2 paddedUv = clamp((local - spacingVec) / denom, 0.0, 1.0);
 
-        return vec3(paddedUv, inside);
+        return vec3(paddedUv.x, 1.0 - paddedUv.y, inside);
     }
 
 vec2 iconmap_cellCenterUv_${uid}(vec2 dataUv) {
@@ -14589,14 +18621,232 @@ return vec4(icon.rgb, icon.a * visible * grid.z);
         }
     }
 
-    $.FlexRenderer.ShaderMediator.registerLayer(IconMapShader);
+    $.FlexRenderer.ShaderLayerRegistry.register(IconMapShader);
+})(OpenSeadragon);
+
+(function($) {
+    /**
+     * Interaction debug shader.
+     *
+     * Visualizes FlexRenderer interaction uniforms exposed through the
+     * `fr_interaction_*` GLSL helper API.
+     */
+    class InteractionDebug extends $.FlexRenderer.ShaderLayer {
+        static type() {
+            return "interaction-debug";
+        }
+
+        static name() {
+            return "Interaction Debug";
+        }
+
+        static description() {
+            return "Visualizes pointer position, active buttons, click state, and drag state from FlexRenderer interaction uniforms.";
+        }
+
+        static intent() {
+            return "Use this layer to verify FlexRenderer interaction uniforms and GLSL helper functions visually.";
+        }
+
+        static expects() {
+            return { dataKind: "any", channels: "any" };
+        }
+
+        static exampleParams() {
+            return {
+                use_mode: "show",  // eslint-disable-line camelcase
+                use_blend: "source-over"  // eslint-disable-line camelcase
+            };
+        }
+
+        static docs() {
+            return {
+                summary: "Interaction-uniform diagnostic overlay.",
+                description: "Draws screen-space markers from fr_interaction_* GLSL helpers. It does not sample image data and is intended for validating pointer, click, button, and drag state.",
+                kind: "shader",
+                inputs: [],
+                controls: [],
+                notes: [
+                    "Requires FlexDrawer interaction to be enabled.",
+                    "All positions are interpreted in physical framebuffer pixels with bottom-left origin.",
+                    "The shader returns transparent output when interaction is disabled or the pointer is outside."
+                ]
+            };
+        }
+
+        static sources() {
+            return [];
+        }
+
+        static get defaultControls() {
+            return {
+                opacity: false
+            };
+        }
+
+        getFragmentShaderDefinition() {
+            return `
+float ${this.uid}_circle(vec2 pointPx, vec2 centerPx, float radiusPx, float featherPx) {
+    float d = distance(pointPx, centerPx);
+    return 1.0 - smoothstep(radiusPx, radiusPx + featherPx, d);
+}
+
+float ${this.uid}_ring(vec2 pointPx, vec2 centerPx, float radiusPx, float thicknessPx, float featherPx) {
+    float d = abs(distance(pointPx, centerPx) - radiusPx);
+    return 1.0 - smoothstep(thicknessPx, thicknessPx + featherPx, d);
+}
+
+float ${this.uid}_line_segment(vec2 pointPx, vec2 startPx, vec2 endPx, float thicknessPx, float featherPx) {
+    vec2 segment = endPx - startPx;
+    float segmentLengthSq = dot(segment, segment);
+
+    if (segmentLengthSq <= 0.0001) {
+        return ${this.uid}_circle(pointPx, startPx, thicknessPx, featherPx);
+    }
+
+    float t = clamp(dot(pointPx - startPx, segment) / segmentLengthSq, 0.0, 1.0);
+    vec2 closest = startPx + segment * t;
+    float d = distance(pointPx, closest);
+
+    return 1.0 - smoothstep(thicknessPx, thicknessPx + featherPx, d);
+}
+
+float ${this.uid}_rect_outline(vec2 pointPx, vec2 aPx, vec2 bPx, float thicknessPx, float featherPx) {
+    vec2 lo = min(aPx, bPx);
+    vec2 hi = max(aPx, bPx);
+
+    vec2 clampedPoint = clamp(pointPx, lo, hi);
+    float outsideDistance = distance(pointPx, clampedPoint);
+
+    vec2 distanceToEdges = min(abs(pointPx - lo), abs(pointPx - hi));
+    float insideEdgeDistance = min(distanceToEdges.x, distanceToEdges.y);
+
+    float outsideMask = 1.0 - smoothstep(thicknessPx, thicknessPx + featherPx, outsideDistance);
+    float insideMask = 1.0 - smoothstep(thicknessPx, thicknessPx + featherPx, insideEdgeDistance);
+
+    float insideBox =
+        step(lo.x, pointPx.x) *
+        step(pointPx.x, hi.x) *
+        step(lo.y, pointPx.y) *
+        step(pointPx.y, hi.y);
+
+    return max(outsideMask * (1.0 - insideBox), insideMask * insideBox);
+}
+
+vec3 ${this.uid}_serial_color(int serialValue, vec3 evenColor, vec3 oddColor) {
+    return (serialValue & 1) == 0 ? evenColor : oddColor;
+}
+`;
+        }
+
+        getFragmentShaderExecution() {
+            return `
+    if (!fr_interaction_enabled() || !fr_interaction_pointer_inside()) {
+        return vec4(0.0);
+    }
+
+    vec2 p = gl_FragCoord.xy;
+    vec4 outColor = vec4(0.0);
+
+    vec2 pointerPx = fr_interaction_pointer_position_px();
+    vec2 clickPx = fr_interaction_last_click_position_px();
+    vec2 dragStartPx = fr_interaction_drag_start_position_px();
+    vec2 dragCurrentPx = fr_interaction_drag_current_position_px();
+    vec2 dragEndPx = fr_interaction_drag_end_position_px();
+
+    bool primaryDown = fr_interaction_button_active(1);
+    bool secondaryDown = fr_interaction_button_active(2);
+    bool auxiliaryDown = fr_interaction_button_active(4);
+
+    vec3 pointerColor = vec3(0.10, 0.75, 1.00);
+    if (primaryDown) {
+        pointerColor = vec3(1.00, 0.25, 0.10);
+    } else if (secondaryDown) {
+        pointerColor = vec3(1.00, 0.10, 0.85);
+    } else if (auxiliaryDown) {
+        pointerColor = vec3(0.40, 1.00, 0.25);
+    }
+
+    // Current pointer marker.
+    float pointerDisk = ${this.uid}_circle(p, pointerPx, 13.0, 3.0);
+    float pointerRing = ${this.uid}_ring(p, pointerPx, 21.0, 2.0, 2.0);
+    outColor.rgb = mix(outColor.rgb, pointerColor, max(pointerDisk, pointerRing));
+    outColor.a = max(outColor.a, max(pointerDisk, pointerRing) * 0.95);
+
+    // Active button flags as small offset dots around the pointer.
+    float primaryDot = ${this.uid}_circle(p, pointerPx + vec2(-22.0, -28.0), 5.0, 2.0) * (primaryDown ? 1.0 : 0.0);
+    float secondaryDot = ${this.uid}_circle(p, pointerPx + vec2(0.0, -32.0), 5.0, 2.0) * (secondaryDown ? 1.0 : 0.0);
+    float auxiliaryDot = ${this.uid}_circle(p, pointerPx + vec2(22.0, -28.0), 5.0, 2.0) * (auxiliaryDown ? 1.0 : 0.0);
+
+    outColor.rgb += primaryDot * vec3(1.0, 0.1, 0.1);
+    outColor.rgb += secondaryDot * vec3(1.0, 0.1, 0.85);
+    outColor.rgb += auxiliaryDot * vec3(0.3, 1.0, 0.2);
+    outColor.a = max(outColor.a, max(primaryDot, max(secondaryDot, auxiliaryDot)));
+
+    // Last click marker. Alternates color by clickSerial so repeated clicks at the same
+    // coordinate are still visibly detectable.
+    if (fr_interaction_click_serial() > 0) {
+        vec3 clickColor = ${this.uid}_serial_color(
+            fr_interaction_click_serial(),
+            vec3(1.0, 0.95, 0.10),
+            vec3(1.0, 0.55, 0.05)
+        );
+
+        float clickRing = ${this.uid}_ring(p, clickPx, 32.0, 2.0, 2.0);
+        float clickCenter = ${this.uid}_circle(p, clickPx, 4.0, 2.0);
+
+        outColor.rgb = mix(outColor.rgb, clickColor, max(clickRing, clickCenter));
+        outColor.a = max(outColor.a, max(clickRing, clickCenter) * 0.90);
+    }
+
+    // Active drag visualization: green start, magenta current, cyan connecting line,
+    // and a rectangle outline between start/current.
+    if (fr_interaction_drag_active()) {
+        float dragLine = ${this.uid}_line_segment(p, dragStartPx, dragCurrentPx, 3.0, 2.0);
+        float dragRect = ${this.uid}_rect_outline(p, dragStartPx, dragCurrentPx, 2.0, 2.0);
+        float dragStart = ${this.uid}_circle(p, dragStartPx, 9.0, 2.0);
+        float dragCurrent = ${this.uid}_circle(p, dragCurrentPx, 9.0, 2.0);
+
+        outColor.rgb += dragLine * vec3(0.10, 1.00, 1.00);
+        outColor.rgb += dragRect * vec3(0.20, 0.80, 1.00);
+        outColor.rgb += dragStart * vec3(0.20, 1.00, 0.20);
+        outColor.rgb += dragCurrent * vec3(1.00, 0.20, 1.00);
+        outColor.a = max(outColor.a, max(max(dragLine, dragRect), max(dragStart, dragCurrent)) * 0.90);
+    }
+
+    // Last completed drag visualization. Alternates by dragSerial so repeated drags
+    // ending on the same coordinates can still be detected.
+    if (!fr_interaction_drag_active() && fr_interaction_drag_serial() > 0) {
+        vec3 completedDragColor = ${this.uid}_serial_color(
+            fr_interaction_drag_serial(),
+            vec3(0.20, 1.00, 0.65),
+            vec3(0.70, 0.55, 1.00)
+        );
+
+        float completedLine = ${this.uid}_line_segment(p, dragStartPx, dragEndPx, 2.0, 2.0);
+        float completedStart = ${this.uid}_ring(p, dragStartPx, 12.0, 2.0, 2.0);
+        float completedEnd = ${this.uid}_ring(p, dragEndPx, 12.0, 2.0, 2.0);
+
+        outColor.rgb += completedLine * completedDragColor;
+        outColor.rgb += completedStart * vec3(0.20, 1.00, 0.20);
+        outColor.rgb += completedEnd * completedDragColor;
+        outColor.a = max(outColor.a, max(completedLine, max(completedStart, completedEnd)) * 0.75);
+    }
+
+    return clamp(outColor, 0.0, 1.0);
+`;
+        }
+    }
+
+    $.FlexRenderer.ShaderLayerRegistry.register(InteractionDebug);
+
 })(OpenSeadragon);
 
 (function($) {
 /**
  * Sobel shader
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "sobel";
@@ -14850,7 +19100,7 @@ float stain_pick_${uid}(vec3 stains, int row) {
 `;
 }
 
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "stain-separation";
@@ -15037,7 +19287,7 @@ ${buildHelpersGlsl(this.uid)}
 /**
  * Shader that uses a texture via a texture atlas
  */
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
     static type() {
         return "texture";
     }
@@ -15102,7 +19352,7 @@ return blendAlpha(chan, tex, min(chan.rgb, tex.rgb));
 
 (function($) {
 
-    $.FlexRenderer.ShaderMediator.registerLayer(class Threshold extends $.FlexRenderer.ShaderLayer {
+    $.FlexRenderer.ShaderLayerRegistry.register(class Threshold extends $.FlexRenderer.ShaderLayer {
 
         static type() {
             return "threshold";
@@ -15270,7 +19520,7 @@ return blendAlpha(chan, tex, min(chan.rgb, tex.rgb));
 
 (function($) {
 
-$.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderLayer {
+$.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderLayer {
 
     static type() {
         return "time-series";
@@ -15493,8 +19743,10 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     construct() {
         const config = this.getConfig();
-        const series = this.constructor._readWrapperParam(config, "series", []) || [];
-        const timeline = (config.params && config.params.timeline) || {};
+        const params = config.params || (config.params = {});
+        const rawSeries = this.constructor._readWrapperParam(config, "series", []);
+        const series = Array.isArray(rawSeries) ? rawSeries : [];
+        const timeline = params.timeline || (params.timeline = {});
         const min = Number(timeline.min) || 0;
         const step = Number(timeline.step) || 1;
         const defaultValue = Number(timeline.default);
@@ -15503,7 +19755,10 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
         super.construct();
 
-        timeline.default = this.timeline.encoded || this.timeline.raw || config.params.timeline.default;
+        timeline.default =
+            this.timeline.encoded !== undefined ? this.timeline.encoded :
+                this.timeline.raw !== undefined ? this.timeline.raw :
+                    Number.isFinite(defaultValue) ? defaultValue : min;
 
         const delegateConfig = this._getDelegateShaderConfig(activeEntry);
 
@@ -15523,7 +19778,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
             delegateConfig.tiledImages = liveTiledImages;
         }
 
-        const DelegateShader = $.FlexRenderer.ShaderMediator.getClass(delegateConfig.type);
+        const DelegateShader = $.FlexRenderer.ShaderLayerRegistry.get(delegateConfig.type);
         if (!DelegateShader) {
             throw new Error(`time-series: unknown child shader type '${delegateConfig.type}'.`);
         }
@@ -15533,7 +19788,7 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
         this._renderer = new DelegateShader(`${this.id}_delegate`, {
             shaderConfig: delegateConfig,
-            webglContext: this.webglContext,
+            backend: this.backend,
             params: delegateConfig.params,
             interactive: this._interactive,
             invalidate: this.invalidate,
@@ -15637,7 +19892,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
      *      2) fallback: config.channelIndex (legacy),
      *      3) fallback: 0.
      */
-    $.FlexRenderer.ShaderMediator.registerLayer(class SingleChannel extends $.FlexRenderer.ShaderLayer {
+    $.FlexRenderer.ShaderLayerRegistry.register(class SingleChannel extends $.FlexRenderer.ShaderLayer {
 
         static type() {
             return "single_channel";
@@ -15731,7 +19986,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
 (function($) {
 
-    $.FlexRenderer.ShaderMediator.registerLayer(
+    $.FlexRenderer.ShaderLayerRegistry.register(
         class extends $.FlexRenderer.ShaderLayer {
             static type() {
                 return "channel-series";
@@ -15858,7 +20113,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
                 if (delegateType === this.constructor.type()) {
                     throw new Error("channel-series cannot recursively render itself.");
                 }
-                if (!$.FlexRenderer.ShaderMediator.getClass(delegateType)) {
+                if (!$.FlexRenderer.ShaderLayerRegistry.get(delegateType)) {
                     throw new Error(`channel-series: unknown child shader type '${delegateType}'.`);
                 }
 
@@ -15872,7 +20127,7 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
             _getDelegatedChannelPattern(settings = this._getDelegateSettings()) {
                 const params = settings.delegateConfig.params || {};
                 const controlName = `use_channel${settings.sourceIndex}`;
-                const predefined = $.FlexRenderer.ShaderMediator.getClass(settings.delegateType).defaultControls[controlName];
+                const predefined = $.FlexRenderer.ShaderLayerRegistry.get(settings.delegateType).defaultControls[controlName];
 
                 let pattern = params[controlName];
                 if (pattern == null && predefined) { // eslint-disable-line eqeqeq
@@ -15948,11 +20203,11 @@ ${this._renderer.htmlControls(wrapper, classes, css)}`;
 
                 const settings = this._getDelegateSettings();
                 const delegateConfig = this._buildDelegateShaderConfig(settings);
-                const DelegateShader = $.FlexRenderer.ShaderMediator.getClass(settings.delegateType);
+                const DelegateShader = $.FlexRenderer.ShaderLayerRegistry.get(settings.delegateType);
 
                 this._delegateShader = new DelegateShader(`${this.id}_delegate`, {
                     shaderConfig: delegateConfig,
-                    webglContext: this.webglContext,
+                    backend: this.backend,
                     params: delegateConfig.params,
                     interactive: this._interactive,
                     invalidate: this.invalidate,
@@ -16021,7 +20276,7 @@ ${this._delegateShader.htmlControls(wrapper, classes, css)}`;
  * ------------------
  * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
  * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
- * caches using the new `vector-mesh` format (fills + lines).
+ * caches using the `vector-mesh` format.
  *
  * Requirements:
  *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
@@ -16046,14 +20301,36 @@ ${this._delegateShader.htmlControls(wrapper, classes, css)}`;
  * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
  */
 $.MVTTileSource = class extends $.TileSource {
-    constructor({ template, scheme = 'xyz', tileSize = 512, minLevel = 0, maxLevel = 14, width, height, extent = 4096, style }) {
+    constructor({
+                    template,
+                    scheme = 'xyz',
+                    tileSize = 512,
+                    minLevel = 0,
+                    maxLevel = 14,
+                    width,
+                    height,
+                    extent = 4096,
+                    style,
+                    useNativeLines = false,
+                    httpAdapter = null
+                }) {
         super({ width, height, tileSize, minLevel, maxLevel });
         this.template = template;
         this.scheme = scheme;
         this.extent = extent;
         this.style = style || defaultStyle();
+        this.useNativeLines = useNativeLines === true;
+
+        // Resolve adapter: explicit option wins, fall back to the drawer-level default.
+        this._httpAdapter = httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null;
+
         this._worker = makeWorker();
         this._pending = new Map(); // key -> {resolve,reject}
+
+        // Install the HTTP bridge before any postMessage that may trigger fetches.
+        this._httpBridge = (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function')
+            ? $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter)
+            : null;
 
         // Wire worker responses
         this._worker.onmessage = (e) => {
@@ -16070,12 +20347,13 @@ $.MVTTileSource = class extends $.TileSource {
 
             if (msg.ok) {
                 const t = msg.data;
+
                 for (const ctx of waiters) {
                     ctx.finish({
-                        fills: t.fills.map(packMesh),
-                        lines: t.lines.map(packMesh),
-                        points: t.points.map(packMesh),
-                        icons: t.icons.map(packMesh),
+                        fills: (t.fills || []).map(packMesh),
+                        lines: (t.lines || []).map(packMesh),
+                        linePrimitives: (t.linePrimitives || []).map(packMesh),
+                        points: (t.points || []).map(packMesh),
                     }, undefined, 'vector-mesh');
                 }
             } else {
@@ -16086,7 +20364,12 @@ $.MVTTileSource = class extends $.TileSource {
         };
 
         // Send config once
-        this._worker.postMessage({ type: 'config', extent: this.extent, style: this.style });
+        this._worker.postMessage({
+            type: 'config',
+            extent: this.extent,
+            style: this.style,
+            useNativeLines: this.useNativeLines
+        });
     }
 
     /**
@@ -16097,8 +20380,42 @@ $.MVTTileSource = class extends $.TileSource {
      * @param {String} url - optional
      */
     supports(data, url) {
-        return data["tiles"] && data["format"] === "pbf" && url.endsWith(".json");
+        if (!isPlainObject(data)) {
+            return false;
+        }
+
+        if (!hasTileTemplate(data)) {
+            return false;
+        }
+
+        // Explicit opt-in for manually supplied sources.
+        // Useful for:
+        // {
+        //   type: "mvt",
+        //   tiles: ["http://localhost:3000/source/{z}/{x}/{y}"]
+        // }
+        if (data.type === "mvt" || data.type === "vector") {
+            return true;
+        }
+
+        // Common TileJSON / tileserver declarations.
+        if (data.format === "pbf" || data.format === "mvt") {
+            return true;
+        }
+
+        // Vector TileJSON commonly contains vector_layers.
+        // Martin/OpenMapTiles should generally expose this on the source endpoint,
+        // not on /catalog.
+        if (Array.isArray(data.vector_layers)) {
+            return true;
+        }
+
+        // Last safe fallback: the tile template itself clearly says MVT/PBF.
+        // This accepts e.g. ".../{z}/{x}/{y}.pbf" but avoids raster TileJSON
+        // such as png/jpg tiles.
+        return hasVectorTileTemplate(data);
     }
+
     /**
      *
      * @function
@@ -16111,17 +20428,26 @@ $.MVTTileSource = class extends $.TileSource {
     configure(data, dataUrl, postData) {
         const tj = data;
 
-        // Basic TileJSON fields
-        const tiles = (tj.tiles && tj.tiles.length) ? tj.tiles : (tj.tilesURL ? [tj.tilesURL] : null);
-        if (!tiles) {
-            throw new Error('TileJSON missing tiles template');
+        const tiles = getTileTemplates(tj);
+        if (!tiles.length) {
+            throw new Error("TileJSON missing tiles template");
         }
-        const template = tiles[0];
-        const tileSize = tj.tileSize || 512;  // many vector tile sets use 512
-        const minLevel = tj.minzoom ? tj.minzoom : 0;
-        const maxLevel = tj.maxzoom ? tj.maxzoom : 14;
-        const scheme = tj.scheme || 'xyz'; // 'xyz' or 'tms'
-        const extent = (tj.extent && Number.isFinite(tj.extent)) ? tj.extent : 4096;
+
+        const template = resolveTileTemplate(tiles[0], dataUrl);
+
+        const tileSize = Number.isFinite(tj.tileSize)
+            ? tj.tileSize
+            : Number.isFinite(tj.tile_size)
+                ? tj.tile_size
+                : 512;
+
+        const minLevel = Number.isFinite(tj.minzoom) ? tj.minzoom : 0;
+        const maxLevel = Number.isFinite(tj.maxzoom) ? tj.maxzoom : 14;
+
+        const scheme = tj.scheme === "tms" ? "tms" : "xyz";
+
+        // This is the internal vector-tile coordinate extent, not geographic bounds.
+        const extent = Number.isFinite(tj.extent) ? tj.extent : 4096;
 
         const width = Math.pow(2, maxLevel) * tileSize;
         const height = width;
@@ -16135,15 +20461,26 @@ $.MVTTileSource = class extends $.TileSource {
             width,
             height,
             extent,
-            style: defaultStyle(),  // todo style
+            style: tj.style || defaultStyle(),
+            useNativeLines: tj.useNativeLines === true
         };
     }
 
     getTileUrl(level, x, y) {
         const z = level;
         const n = 1 << z;
-        const ty = (this.scheme === 'tms') ? (n - 1 - y) : y;
-        return this.template.replace('{z}', z).replace('{x}', x).replace('{y}', ty);
+        const flippedY = n - 1 - y;
+        const yValue = this.scheme === "tms" ? flippedY : y;
+
+        return this.template
+            .replace(/\{-y\}/g, String(flippedY))
+            .replace(/\{z\}/g, String(z))
+            .replace(/\{x\}/g, String(x))
+            .replace(/\{y\}/g, String(yValue));
+    }
+
+    getTileHashKey(level, x, y) {
+        return `mvt:${this.useNativeLines ? 'native-lines' : 'stroke-lines'}:${this.getTileUrl(level, x, y)}`;
     }
 
     /**
@@ -16156,9 +20493,10 @@ $.MVTTileSource = class extends $.TileSource {
         const list = this._pending.get(key);
         if (list) {
             list.push(context);
-        } else {
-            this._pending.set(key, [ context ]);
+            return;
         }
+
+        this._pending.set(key, [ context ]);
 
         this._worker.postMessage({
             type: 'tile',
@@ -16179,27 +20517,28 @@ function packMesh(m) {
         indices: new Uint32Array(m.indices),
         color: m.color || [1, 0, 0, 1],
         parameters: m.parameters ? new Float32Array(m.parameters) : undefined,
+        lineWidth: Number.isFinite(m.lineWidth) && m.lineWidth > 0 ? m.lineWidth : undefined,
     };
 }
 
 // TODO: make icons dynamic
-const iconMapping = {
-    country: {
-        textureId: 0,
-        width: 256,
-        height: 256,
-    },
-    city: {
-        textureId: 1,
-        width: 256,
-        height: 256,
-    },
-    village: {
-        textureId: 2,
-        width: 256,
-        height: 256,
-    },
-};
+// const iconMapping = {
+//     country: {
+//         textureId: 0,
+//         width: 256,
+//         height: 256,
+//     },
+//     city: {
+//         textureId: 1,
+//         width: 256,
+//         height: 256,
+//     },
+//     village: {
+//         textureId: 2,
+//         width: 256,
+//         height: 256,
+//     },
+// };
 
 function defaultStyle() {
     // Super-minimal style mapping; replace as needed.
@@ -16218,12 +20557,12 @@ function defaultStyle() {
             aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
             poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
             housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
-            place:          {
-                type: 'icon',
-                color: [0.80, 0.10, 0.10, 1.00],
-                size: 1.2,
-                iconMapping: iconMapping, // TODO: somehow pass a function instead?
-            },
+            // place:          {
+            //     type: 'icon',
+            //     color: [0.80, 0.10, 0.10, 1.00],
+            //     size: 0.8,
+            //     iconMapping: iconMapping, // TODO: somehow pass a function instead?
+            // },
         },
         // Default if layer not listed
         fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
@@ -16239,6 +20578,79 @@ function makeWorker() {
     }
 
     throw new Error('No worker source available');
+}
+
+function isPlainObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getTileTemplates(data) {
+    if (!isPlainObject(data)) {
+        return [];
+    }
+
+    if (Array.isArray(data.tiles)) {
+        return data.tiles.filter(t => typeof t === "string");
+    }
+
+    if (typeof data.tilesURL === "string") {
+        return [data.tilesURL];
+    }
+
+    if (typeof data.template === "string") {
+        return [data.template];
+    }
+
+    return [];
+}
+
+function hasTileTemplate(data) {
+    return getTileTemplates(data).some(isZxyTemplate);
+}
+
+function isZxyTemplate(template) {
+    return /\{z\}/.test(template)
+        && /\{x\}/.test(template)
+        && (/\{y\}/.test(template) || /\{-y\}/.test(template));
+}
+
+function hasVectorTileTemplate(data) {
+    return getTileTemplates(data).some(template => {
+        const clean = template.split("?")[0].split("#")[0];
+
+        return /\.(pbf|mvt)$/i.test(clean)
+            || /[?&]format=(pbf|mvt)(?:&|$)/i.test(template);
+    });
+}
+
+function resolveTileTemplate(template, dataUrl) {
+    if (!dataUrl) {
+        return template;
+    }
+
+    const placeholders = [
+        ["{-y}", "__MVT_NEG_Y__"],
+        ["{z}", "__MVT_Z__"],
+        ["{x}", "__MVT_X__"],
+        ["{y}", "__MVT_Y__"],
+    ];
+
+    let protectedTemplate = template;
+    for (const [raw, token] of placeholders) {
+        protectedTemplate = protectedTemplate.replaceAll(raw, token);
+    }
+
+    try {
+        let resolved = new URL(protectedTemplate, dataUrl).toString();
+
+        for (const [raw, token] of placeholders) {
+            resolved = resolved.replaceAll(token, raw);
+        }
+
+        return resolved;
+    } catch (e) {
+        return template;
+    }
 }
 
 })(OpenSeadragon);
@@ -16430,11 +20842,31 @@ function makeWorker() {
                 if (!packed) {
                     return [];
                 }
+
                 const vertsBuf = packed.positions || packed.vertices;
                 const idxBuf = packed.indices;
+
+                const sourceVertices = new Float32Array(vertsBuf);
+                const sourceIndices = new Uint32Array(idxBuf);
+
+                // fabric worker emits vec2 vertices: [x, y]
+                // FlexDrawer vector-mesh path expects vec4 vertices
+                const vertexCount = sourceVertices.length / 2;
+                const vertices = new Float32Array(vertexCount * 4);
+
+                for (let i = 0; i < vertexCount; i++) {
+                    const sourceOffset = i * 2;
+                    const targetOffset = i * 4;
+
+                    vertices[targetOffset + 0] = sourceVertices[sourceOffset + 0];
+                    vertices[targetOffset + 1] = sourceVertices[sourceOffset + 1];
+                    vertices[targetOffset + 2] = 0;
+                    vertices[targetOffset + 3] = -1;
+                }
+
                 return [{
-                    vertices: new Float32Array(vertsBuf),
-                    indices: new Uint32Array(idxBuf),
+                    vertices: vertices,
+                    indices: sourceIndices,
                     color: Array.isArray(defaultColor) ? defaultColor : [ 1, 1, 1, 1 ]
                 }];
             };
@@ -16446,8 +20878,8 @@ function makeWorker() {
                 return;
             }
 
-            const fills = toMeshes(rec.fills, [ 1, 1, 1, 1 ]);
-            const lines = toMeshes(rec.lines, [ 1, 1, 1, 1 ]);
+            const fills = toMeshes(rec.fills, [ 1, 0, 0, 1 ]);
+            const lines = toMeshes(rec.lines, [ 0, 0, 1, 1 ]);
             for (const p of waiters) {
                 p.finish({ fills: fills, lines: lines }, undefined, 'vector-mesh');
             }
@@ -16566,6 +20998,808 @@ function makeWorker() {
         return [];
     }
 
+})(OpenSeadragon);
+
+(function($) {
+    /**
+     * Options controlling annotation style.
+     *
+     * @typedef {object} GeoJSONStyleOptions
+     * @property {number} [pointSize=4] - Point size in pixels.
+     * @property {number[]} [pointColor=[1, 0.2, 0.2, 1]] - Point color as [r, g, b, a].
+     * @property {number} [lineWidth=2] - Line width in pixels.
+     * @property {number[]} [lineColor=[0.2, 1, 0.2, 1]] - Line color as [r, g, b, a].
+     * @property {number[]} [fillColor=[0.2, 0.2, 1, 0.6]] - Fill color as [r, g, b, a].
+     */
+
+    /**
+     * Options controlling per-tile annotation aggregation.
+     *
+     * When enabled, non-max-level tiles with more than threshold visible
+     * annotations are rendered as one cluster badge instead of rendering every
+     * annotation mesh in that tile.
+     *
+     * @typedef {object} GeoJSONAggregationOptions
+     * @property {boolean} [enabled=false] - Whether tile-level aggregation is enabled.
+     * @property {number} [threshold=50] - Aggregate when visible annotation count is greater than this value.
+     * @property {number} [badgeSize=56] - Cluster badge diameter in level pixels.
+     * @property {number[]} [badgeColor=[1, 0.5, 0, 1]] - Badge color as [r, g, b, a].
+     * @property {number[]} [labelColor=[0, 0, 0, 1]] - Count label color as [r, g, b, a].
+     * @property {number} [labelSize=24] - Count label size in level pixels.
+     * @property {number} [labelStrokeWidth=3] - Count label stroke width in level pixels.
+     * @property {number} [maxLabelValue=9999] - Maximum visible label value before using a plus suffix.
+     */
+
+    /**
+     * Options used to construct a GeoJSON tile source.
+     *
+     * @typedef {object} GeoJSONTileSourceOptions
+     * @property {string} url - Source URL used to fetch or identify the GeoJSON.
+     * @property {number[]} [bbox] - Optional GeoJSON top-level bbox. This is the source
+     *     coordinate extent as [minX, minY, maxX, maxY] or a valid GeoJSON 3D bbox.
+     *     When supplied together with width and height, coordinates are mapped from bbox into
+     *     those destination dimensions.
+     * @property {number} [width] - Full-resolution overlay width in OpenSeadragon image coordinates.
+     *     If omitted, it is inferred from bbox as maxX - minX. When supplied together
+     *     with bbox, it is the destination width that the bbox coordinate range is
+     *     mapped onto.
+     * @property {number} [height] - Full-resolution overlay height in OpenSeadragon image coordinates.
+     *     If omitted, it is inferred from bbox as maxY - minY. When supplied together
+     *     with bbox, it is the destination height that the bbox coordinate range is
+     *     mapped onto.
+     * @property {number} [tileSize=512] - Logical tile size used by OpenSeadragon.
+     * @property {number} [minLevel=0] - Minimum pyramid level.
+     * @property {number} [maxLevel] - Maximum pyramid level. Defaults to ceil(log2(max(width, height))).
+     * @property {GeoJSONStyleOptions} [style] - Optional style descriptor.
+     * @property {boolean} [useNativeLines=false] - Whether LineString geometries are processed into gl.LINES primitives of stroke-triangle meshes.
+     * @property {GeoJSONAggregationOptions} [aggregation] - Optional per-tile aggregation settings.
+     * @property {HttpAdapter} [httpAdapter] - Optional host-supplied HTTP transport used by the GeoJSON worker.
+     *     When omitted, the drawer-level adapter (if any) is used; otherwise native `fetch` is used.
+     */
+
+    const GEOJSON_ROOT_TYPES = new Set([
+        'FeatureCollection',
+        'Feature',
+        'Point',
+        'MultiPoint',
+        'LineString',
+        'MultiLineString',
+        'Polygon',
+        'MultiPolygon',
+        'GeometryCollection'
+    ]);
+
+    /**
+     * Tile source for GeoJSON-backed vector tiles.
+     *
+     * This class is intentionally only the OpenSeadragon TileSource boundary.
+     * GeoJSON parsing, bbox normalization, clipping, simplification, and meshing should
+     * live in worker/helper code, not in FlexRenderer.
+     */
+    $.GeoJSONTileSource = class extends $.TileSource {
+        /**
+         * Create a GeoJSON tile source.
+         *
+         * @param {GeoJSONTileSourceOptions} options - Source options.
+         */
+        constructor(options = {}) {
+            const normalized = $.GeoJSONTileSource.normalizeOptions(options);
+
+            super({
+                width: normalized.width,
+                height: normalized.height,
+                tileSize: normalized.tileSize,
+                tileOverlap: 0,
+                minLevel: normalized.minLevel,
+                maxLevel: normalized.maxLevel
+            });
+
+            /**
+             * URL used to fetch or identify the source.
+             *
+             * @private
+             * @type {?string}
+             */
+            this._url = normalized.url;
+
+            /**
+             * GeoJSON source bbox used to infer dimensions, if supplied.
+             *
+             * The bbox is normalized to 2D [minX, minY, maxX, maxY] form even
+             * when the source uses a 3D GeoJSON bbox.
+             *
+             * @type {?number[]}
+             */
+            this.bbox = normalized.bbox;
+
+            /**
+             * The provided tile size, store because OpenSeadragon overwrites this.tileSize.
+             *
+             * @type {number}
+             * @private
+             */
+            this._tileSize = normalized.tileSize;
+
+            /**
+             * Optional source-level styling configuration.
+             *
+             * @type {?object}
+             */
+            this.style = normalized.style;
+
+            /**
+             * Whether LineString geometries are rendered with native gl.LINES.
+             *
+             * @type {boolean}
+             */
+            this.useNativeLines = normalized.useNativeLines;
+
+            /**
+             * Optional per-tile annotation aggregation settings.
+             *
+             * @type {GeoJSONAggregationOptions}
+             */
+            this.aggregation = normalized.aggregation;
+
+            /**
+             * Optional HttpAdapter routing the worker's outbound fetches.
+             *
+             * Explicit option wins; otherwise the drawer-level default is used.
+             *
+             * @private
+             * @type {?HttpAdapter}
+             */
+            this._httpAdapter = normalized.httpAdapter;
+
+            /**
+             * Handle returned by FlexDrawer.installHttpBridge when an adapter is wired.
+             *
+             * @private
+             * @type {?{dispose: function(): void}}
+             */
+            this._httpBridge = null;
+
+            /**
+             * Pending tile jobs keyed by tile id.
+             *
+             * @private
+             * @type {Map<string, OpenSeadragon.ImageJob[]>}
+             */
+            this._pending = new Map();
+
+            /**
+             * Worker instance used for GeoJSON normalization and meshing.
+             *
+             * @private
+             * @type {?Worker}
+             */
+            this._worker = null;
+
+            /**
+             * Object URL used to construct the inline Blob worker.
+             *
+             * This is revoked in destroy() after the worker is terminated.
+             *
+             * @private
+             * @type {?string}
+             */
+            this._workerObjectUrl = null;
+
+            /**
+             * Fatal worker setup or runtime error, if one has occurred.
+             *
+             * Once set, future tile jobs fail immediately instead of being sent to a
+             * worker that cannot produce valid tiles.
+             *
+             * @private
+             * @type {?string}
+             */
+            this._workerError = null;
+
+            this._worker = this._createWorker();
+
+            // Install the HTTP bridge before the worker's config postMessage so the bridge is
+            // already on when the worker performs its initial GeoJSON fetch.
+            if (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function') {
+                this._httpBridge = $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter);
+            }
+
+            this._configureWorker();
+        }
+
+        /**
+         * Normalize and validate constructor options before TileSource construction.
+         *
+         * @param {Partial<GeoJSONTileSourceOptions>} options - Raw options.
+         * @returns {GeoJSONTileSourceOptions} Normalized options.
+         * @throws {Error} Thrown when required coordinate or tiling options are invalid.
+         */
+        static normalizeOptions(options = {}) {
+            const bbox = options.bbox ? normalizeGeoJSONBBox(options.bbox) : null;
+            const inferredDimensions = bbox ? getBBoxDimensions(bbox) : null;
+            const hasExplicitWidth = options.width !== null && options.width !== undefined;
+            const hasExplicitHeight = options.height !== null && options.height !== undefined;
+            const hasExplicitDimensions = hasExplicitWidth && hasExplicitHeight;
+
+            const normalized = {
+                url: options.url,
+                bbox,
+                width: hasExplicitDimensions ? options.width : (inferredDimensions ? inferredDimensions.width : undefined),
+                height: hasExplicitDimensions ? options.height : (inferredDimensions ? inferredDimensions.height : undefined),
+                tileSize: (options.tileSize !== null && options.tileSize !== undefined) ? options.tileSize : 512,
+                minLevel: (options.minLevel !== null && options.minLevel !== undefined) ? options.minLevel : 0,
+                maxLevel: options.maxLevel,
+                style: normalizeStyleOptions(options.style),
+                useNativeLines: options.useNativeLines === true,
+                aggregation: normalizeAggregationOptions(options.aggregation),
+                httpAdapter: options.httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null
+            };
+
+            if (typeof normalized.url !== 'string' || !normalized.url.trim()) {
+                throw new Error('GeoJSONTileSource: url is required and must be a non-empty string.');
+            }
+
+            normalized.url = resolveUrl(normalized.url);
+
+            // we cannot fetch the GeoJSON itself here, if neither the bbox nor width and height are provided, we throw.
+
+            if (!Number.isFinite(normalized.width) || normalized.width <= 0) {
+                throw new Error(
+                    'GeoJSONTileSource: width must be a positive finite number, ' +
+                    'or a valid GeoJSON bbox must be provided so width can be inferred.'
+                );
+            }
+
+            if (!Number.isFinite(normalized.height) || normalized.height <= 0) {
+                throw new Error(
+                    'GeoJSONTileSource: height must be a positive finite number, ' +
+                    'or a valid GeoJSON bbox must be provided so height can be inferred.'
+                );
+            }
+
+            if (!Number.isFinite(normalized.tileSize) || normalized.tileSize <= 0) {
+                throw new Error('GeoJSONTileSource: tileSize must be a positive finite number.');
+            }
+
+            if (!Number.isInteger(normalized.minLevel) || normalized.minLevel < 0) {
+                throw new Error('GeoJSONTileSource: minLevel must be a non-negative integer.');
+            }
+
+            if (normalized.maxLevel === undefined || normalized.maxLevel === null) {
+                normalized.maxLevel = Math.ceil(Math.log2(Math.max(normalized.width, normalized.height)));
+            }
+
+            if (!Number.isInteger(normalized.maxLevel) || normalized.maxLevel < normalized.minLevel) {
+                throw new Error('GeoJSONTileSource: maxLevel must be an integer greater than or equal to minLevel.');
+            }
+
+            return normalized;
+        }
+
+        /**
+         * Determine whether the supplied metadata can configure a GeoJSON tile source.
+         *
+         * @param {object} data - Supplied metadata.
+         * @param {string} _url - URL the metadata was loaded from, if any.
+         * @returns {boolean} True when the metadata is likely to configure a GeoJSONTileSource.
+         */
+        supports(data, _url) {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                return false;
+            }
+
+            if (GEOJSON_ROOT_TYPES.has(data.type) && data.bbox) {
+                return true;
+            }
+
+            if (data.type === 'geojson') {
+                return true;
+            }
+
+            if (typeof data.url === 'string' && data.url.endsWith('.geojson')) {
+                return true;
+            }
+
+            return false;
+        }
+
+        /**
+         * Validate and convert supplied metadata into constructor options for a GeoJSONTileSource.
+         *
+         * @param {object} data - Supplied metadata.
+         * @param {string} url - URL the metadata was loaded from, if any.
+         * @param {string} _postData - POST data passed during metadata loading, if any.
+         * @returns {GeoJSONTileSourceOptions} Constructor options.
+         */
+        configure(data, url, _postData) {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                throw new Error(`GeoJSONTileSource: invalid metadata from ${url}.`);
+            }
+
+            if (data.type === 'geojson') {
+                return {
+                    url: resolveUrl(data.url, url),
+                    bbox: data.bbox,
+                    width: data.width,
+                    height: data.height,
+                    tileSize: data.tileSize,
+                    minLevel: data.minLevel,
+                    maxLevel: data.maxLevel,
+                    style: data.style,
+                    useNativeLines: data.useNativeLines,
+                    aggregation: data.aggregation
+                };
+            }
+
+            if (GEOJSON_ROOT_TYPES.has(data.type)) {
+                return {
+                    url: resolveUrl(url),
+                    bbox: data.bbox,
+                };
+            }
+
+            throw new Error(`GeoJSONTileSource: invalid metadata from ${url}.`);
+        }
+
+        /**
+         * Return a stable pseudo URL for OpenSeadragon tile identity.
+         *
+         * @param {number} level - Pyramid level.
+         * @param {number} x - Tile column.
+         * @param {number} y - Tile row.
+         * @returns {string} Stable tile identifier.
+         */
+        getTileUrl(level, x, y) {
+            return `geojson://${encodeURIComponent(this._url)}/${level}/${x}/${y}`;
+        }
+
+        /**
+         * Return a cache key that includes GeoJSON source identity and tile coordinates.
+         *
+         * @param {number} level - Pyramid level.
+         * @param {number} x - Tile column.
+         * @param {number} y - Tile row.
+         * @returns {string} Tile cache key.
+         */
+        getTileHashKey(level, x, y) {
+            const sourceId = this._url || 'inline';
+            return `geojson:${sourceId}:${level}:${x}:${y}`;
+        }
+
+        /**
+         * Start loading or generating one GeoJSON vector tile.
+         *
+         * @param {OpenSeadragon.ImageJob} job - OpenSeadragon image job.
+         * @returns {void}
+         */
+        downloadTileStart(job) {
+            if (this._workerError) {
+                job.fail(this._workerError);
+                return;
+            }
+
+            if (!this._worker) {
+                job.fail('GeoJSONTileSource: worker is not available.');
+                return;
+            }
+
+            const tile = job.tile;
+            if (!tile) {
+                job.fail('GeoJSONTileSource: tile job is missing tile coordinates.');
+                return;
+            }
+
+            const key = this.getTileHashKey(tile.level, tile.x, tile.y);
+            const jobs = this._pending.get(key);
+
+            if (jobs) {
+                jobs.push(job);
+                return;
+            }
+
+            this._pending.set(key, [ job ]);
+
+            this._worker.postMessage({
+                type: 'tile',
+                key,
+                level: tile.level,
+                x: tile.x,
+                y: tile.y
+            });
+        }
+
+        /**
+         * Abort a pending GeoJSON tile job.
+         *
+         * @param {OpenSeadragon.ImageJob} job - OpenSeadragon image job.
+         * @returns {void}
+         */
+        downloadTileAbort(job) {
+            const tile = job.tile;
+            if (!tile) {
+                return;
+            }
+
+            const key = this.getTileHashKey(tile.level, tile.x, tile.y);
+            const jobs = this._pending.get(key);
+
+            if (!jobs) {
+                return;
+            }
+
+            const index = jobs.indexOf(job);
+            if (index >= 0) {
+                jobs.splice(index, 1);
+            }
+
+            if (!jobs.length) {
+                this._pending.delete(key);
+
+                // TODO: implement cooperative cancellation in the worker and add a cancel call here as a possible optimization
+            }
+        }
+
+        /**
+         * Return source metadata for drawers or debugging tools.
+         *
+         * @returns {object} Metadata object.
+         */
+        getMetadata() {
+            return {
+                type: 'geojson',
+                url: this._url,
+                dimensions: {
+                    width: this.dimensions.x,
+                    height: this.dimensions.y
+                },
+                tileSize: this._tileSize,
+                minLevel: this.minLevel,
+                maxLevel: this.maxLevel,
+                bbox: this.bbox ? this.bbox.slice() : null,
+                style: this.style,
+                useNativeLines: this.useNativeLines,
+                aggregation: this.aggregation
+            };
+        }
+
+        /**
+         * Compare this source with another source.
+         *
+         * @param {*} otherSource - Candidate source.
+         * @returns {boolean} True when both sources represent the same GeoJSON input.
+         */
+        equals(otherSource) {
+            return !!(
+                otherSource &&
+                otherSource instanceof $.GeoJSONTileSource &&
+                otherSource._url === this._url
+            );
+        }
+
+        /**
+         * Release source-owned resources.
+         *
+         * @returns {void}
+         */
+        destroy() {
+            this._pending.clear();
+
+            if (this._httpBridge) {
+                this._httpBridge.dispose();
+                this._httpBridge = null;
+            }
+
+            if (this._worker) {
+                this._worker.terminate();
+                this._worker = null;
+            }
+
+            if (this._workerObjectUrl) {
+                (window.URL || window.webkitURL).revokeObjectURL(this._workerObjectUrl);
+                this._workerObjectUrl = null;
+            }
+
+            this._workerError = null;
+        }
+
+        /**
+         * Create the GeoJSON worker from the bundled inline worker source.
+         *
+         * @private
+         * @returns {Worker} Worker instance.
+         */
+        _createWorker() {
+            const inline = (OpenSeadragon && OpenSeadragon.__GEOJSON_WORKER_SOURCE__);
+
+            if (!inline) {
+                throw new Error('GeoJSONTileSource: no worker source available.');
+            }
+
+            const blob = new Blob([inline], { type: 'text/javascript' });
+            const URLConstructor = window.URL || window.webkitURL;
+
+            this._workerObjectUrl = URLConstructor.createObjectURL(blob);
+
+            return new Worker(this._workerObjectUrl);
+        }
+
+        /**
+         * Send initial source configuration to the worker.
+         *
+         * @private
+         * @returns {void}
+         */
+        _configureWorker() {
+            this._worker.onmessage = (event) => {
+                this._handleWorkerMessage(event.data || {});
+            };
+
+            this._worker.onerror = (event) => {
+                this._workerError = event.message || 'GeoJSON worker failed.';
+                this._failAllPending(this._workerError);
+            };
+
+            this._worker.onmessageerror = () => {
+                this._workerError = 'GeoJSON worker sent an unreadable message.';
+                this._failAllPending(this._workerError);
+            };
+
+            this._worker.postMessage({
+                type: 'config',
+                url: this._url,
+                tileSize: this._tileSize,
+                minLevel: this.minLevel,
+                maxLevel: this.maxLevel,
+                bbox: this.bbox,
+                width: this.dimensions.x,
+                height: this.dimensions.y,
+                style: this.style,
+                useNativeLines: this.useNativeLines,
+                aggregation: this.aggregation
+            });
+        }
+
+        /**
+         * Handle one worker response.
+         *
+         * @private
+         * @param {object} message - Worker message.
+         * @returns {void}
+         */
+        _handleWorkerMessage(message) {
+            if (message.type === 'error' && !message.key) {
+                this._workerError = message.error || 'GeoJSON worker failed.';
+                this._failAllPending(this._workerError);
+                return;
+            }
+
+            if (!message.key) {
+                return;
+            }
+
+            const jobs = this._pending.get(message.key);
+            if (!jobs) {
+                return;
+            }
+
+            this._pending.delete(message.key);
+
+            if (message.ok) {
+                const tile = message.data || {};
+
+                for (const job of jobs) {
+                    job.finish({
+                        fills: (tile.fills || []).map(packMesh),
+                        lines: (tile.lines || []).map(packMesh),
+                        linePrimitives: (tile.linePrimitives || []).map(packMesh),
+                        points: (tile.points || []).map(packMesh)
+                    }, undefined, 'vector-mesh');
+                }
+            } else {
+                for (const job of jobs) {
+                    job.fail(message.error || 'GeoJSON tile generation failed.');
+                }
+            }
+        }
+
+        /**
+         * Fail all currently pending tile jobs.
+         *
+         * @private
+         * @param {string} message - Error message.
+         * @returns {void}
+         */
+        _failAllPending(message) {
+            for (const jobs of this._pending.values()) {
+                for (const job of jobs) {
+                    job.fail(message);
+                }
+            }
+
+            this._pending.clear();
+        }
+    };
+
+    /**
+     * Normalize a GeoJSON bbox.
+     *
+     * GeoJSON bbox is [minX, minY, maxX, maxY] for 2D coordinates and
+     * [minX, minY, minZ, maxX, maxY, maxZ] for 3D coordinates. The renderer is
+     * 2D, so z bounds are ignored.
+     *
+     * @param {*} bbox - Candidate GeoJSON bbox.
+     * @returns {number[]} Bounds as [minX, minY, maxX, maxY].
+     * @throws {Error} Thrown when bbox is not a valid GeoJSON bbox.
+     */
+    function normalizeGeoJSONBBox(bbox) {
+        if (!Array.isArray(bbox) || !(bbox.length === 4 || bbox.length === 6) || !bbox.every(Number.isFinite)) {
+            throw new Error('GeoJSONTileSource: GeoJSON bbox must be an array with 4 (or 6) finite numeric values.');
+        }
+
+        const dimensions = bbox.length / 2;
+        const minX = bbox[0];
+        const minY = bbox[1];
+        const maxX = bbox[dimensions];
+        const maxY = bbox[dimensions + 1];
+
+        if (minX >= maxX) {
+            throw new Error(`GeoJSONTileSource: GeoJSON minX must be smaller than maxX.`);
+        }
+
+        if (minY >= maxY) {
+            throw new Error(`GeoJSONTileSource: GeoJSON minY must be smaller than maxY.`);
+        }
+
+        return [minX, minY, maxX, maxY];
+    }
+
+    /**
+     * Return 2D dimensions represented by normalized bounds.
+     *
+     * @param {number[]} bbox - Bounds as [minX, minY, maxX, maxY].
+     * @returns {{width: number, height: number}} Positive dimensions.
+     */
+    function getBBoxDimensions(bbox) {
+        return {
+            width: bbox[2] - bbox[0],
+            height: bbox[3] - bbox[1]
+        };
+    }
+
+    /**
+     * Normalize style options.
+     *
+     * @param {*} options - Candidate style options.
+     * @returns {GeoJSONStyleOptions} Normalized style options.
+     * @throws {Error} Thrown when style options are invalid.
+     */
+    function normalizeStyleOptions(options) {
+        const source = options || {};
+
+        const normalized = {
+            pointSize: (source.pointSize !== undefined && source.pointSize !== null) ? source.pointSize : 4,
+            pointColor: source.pointColor || [1, 0.2, 0.2, 1],
+            lineWidth: (source.lineWidth !== undefined && source.lineWidth !== null) ? source.lineWidth : 2,
+            lineColor: source.lineColor || [0.2, 1, 0.2, 1],
+            fillColor: source.fillColor || [0.2, 0.2, 1, 0.6],
+        };
+
+        if (!Number.isFinite(normalized.pointSize) || normalized.pointSize < 0) {
+            throw new Error('GeoJSONTileSource: style.pointSize must be a non-negative finite number.');
+        }
+
+        if (!Number.isFinite(normalized.lineWidth) || normalized.lineWidth < 0) {
+            throw new Error('GeoJSONTileSource: style.lineWidth must be a non-negative finite number.');
+        }
+
+        normalized.pointColor = normalizeColor(normalized.pointColor, 'GeoJSONTileSource: style.pointColor');
+        normalized.lineColor = normalizeColor(normalized.lineColor, 'GeoJSONTileSource: style.lineColor');
+        normalized.fillColor = normalizeColor(normalized.fillColor, 'GeoJSONTileSource: style.fillColor');
+
+        return normalized;
+    }
+
+    /**
+     * Normalize per-tile aggregation options.
+     *
+     * @param {*} options - Candidate aggregation options.
+     * @returns {GeoJSONAggregationOptions} Normalized aggregation options.
+     * @throws {Error} Thrown when aggregation options are invalid.
+     */
+    function normalizeAggregationOptions(options) {
+        const source = options || {};
+
+        const normalized = {
+            enabled: source.enabled === true,
+            threshold: (source.threshold !== undefined && source.threshold !== null) ? source.threshold : 50,
+            badgeSize: (source.badgeSize !== undefined && source.badgeSize !== null) ? source.badgeSize : 56,
+            badgeColor: source.badgeColor || [1, 0.65, 0.1, 0.85],
+            labelColor: source.labelColor || [0, 0, 0, 1],
+            labelSize: (source.labelSize !== undefined && source.labelSize !== null) ? source.labelSize : 24,
+            labelStrokeWidth: (source.labelStrokeWidth !== undefined && source.labelStrokeWidth !== null) ? source.labelStrokeWidth : 3,
+            maxLabelValue: (source.maxLabelValue !== undefined && source.maxLabelValue !== null) ? source.maxLabelValue : 9999
+        };
+
+        if (!Number.isFinite(normalized.threshold) || normalized.threshold < 0) {
+            throw new Error('GeoJSONTileSource: aggregation.threshold must be a non-negative finite number.');
+        }
+
+        if (!Number.isFinite(normalized.badgeSize) || normalized.badgeSize < 0) {
+            throw new Error('GeoJSONTileSource: aggregation.badgeSize must be a non-negative finite number.');
+        }
+
+        if (!Number.isFinite(normalized.labelSize) || normalized.labelSize < 0) {
+            throw new Error('GeoJSONTileSource: aggregation.labelSize must be a non-negative finite number.');
+        }
+
+        if (!Number.isFinite(normalized.labelStrokeWidth) || normalized.labelStrokeWidth < 0) {
+            throw new Error('GeoJSONTileSource: aggregation.labelStrokeWidth must be a non-negative finite number.');
+        }
+
+        if (!Number.isFinite(normalized.maxLabelValue) || normalized.maxLabelValue < 1) {
+            throw new Error('GeoJSONTileSource: aggregation.maxLabelValue must be at least 1.');
+        }
+
+        normalized.badgeColor = normalizeColor(normalized.badgeColor, 'GeoJSONTileSource: aggregation.badgeColor');
+        normalized.labelColor = normalizeColor(normalized.labelColor, 'GeoJSONTileSource: aggregation.labelColor');
+        normalized.threshold = Math.floor(normalized.threshold);
+        normalized.maxLabelValue = Math.floor(normalized.maxLabelValue);
+
+        return normalized;
+    }
+
+    /**
+     * Normalize an RGBA color.
+     *
+     * @param {*} color - Candidate color.
+     * @param {string} label - Error label.
+     * @returns {number[]} Color as [r, g, b, a].
+     * @throws {Error} Thrown when color is invalid.
+     */
+    function normalizeColor(color, label) {
+        if (!Array.isArray(color) || color.length !== 4 || !color.every(Number.isFinite)) {
+            throw new Error(`${label} must be [r, g, b, a].`);
+        }
+
+        return color;
+    }
+
+    /**
+     * Resolve a GeoJSON source URL before sending it to a Blob worker.
+     *
+     * Relative URLs passed directly in a tile source object are resolved against
+     * the document base URL. Relative URLs loaded from a metadata document are
+     * resolved against that metadata document URL.
+     *
+     * @param {string} url - Source URL, absolute or relative.
+     * @param {string} [baseUrl] - Optional metadata document URL.
+     * @returns {string} Absolute URL.
+     * @throws {Error} Thrown when the URL cannot be resolved.
+     */
+    function resolveUrl(url, baseUrl) {
+        try {
+            const base = baseUrl || (typeof document !== 'undefined' && document.baseURI) || (typeof window !== 'undefined' && window.location && window.location.href);
+            return new URL(url, base).href;
+        } catch (error) {
+            throw new Error(`GeoJSONTileSource: invalid url '${url}'.`);
+        }
+    }
+
+    /**
+     * Convert worker-transferred mesh buffers into runtime typed arrays.
+     *
+     * @param {object} mesh - Worker mesh payload.
+     * @returns {object} Runtime vector mesh.
+     */
+    function packMesh(mesh) {
+        return {
+            vertices: new Float32Array(mesh.vertices),
+            indices: new Uint32Array(mesh.indices),
+            color: mesh.color || [0, 1, 0, 1],
+            parameters: mesh.parameters ? new Float32Array(mesh.parameters) : undefined,
+            lineWidth: Number.isFinite(mesh.lineWidth) && mesh.lineWidth > 0 ? mesh.lineWidth : undefined
+        };
+    }
 })(OpenSeadragon);
 
 /**
@@ -16805,8 +22039,8 @@ function makeWorker() {
                 this.renderer.setShaderLayerOrder([shaderId]);
 
                 // Rebuild second-pass to regenerate controls and shader JS/GL state.
-                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
-                this.renderer.useProgram(this.renderer.getProgram(this.renderer.webglContext.secondPassProgramKey), "second-pass");
+                this.renderer.registerProgram(null, this.renderer.backend.secondPassProgramKey);
+                this.renderer.useProgram(this.renderer.getProgram(this.renderer.backend.secondPassProgramKey), "second-pass");
             } finally {
                 this._suspendVisualizationSync = false;
             }
@@ -16931,7 +22165,7 @@ function makeWorker() {
         },
 
         compileDocsModel() {
-            const shaders = $.FlexRenderer.ShaderMediator.availableShaders().map(Shader => {
+            const shaders = $.FlexRenderer.ShaderLayerRegistry.availableShaderLayers().map(Shader => {
                 const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
                 const controls = this._compileControlDescriptors(Shader);
                 const customParams = Shader.customParams || {};
@@ -16975,7 +22209,7 @@ function makeWorker() {
         },
 
         compileConfigSchemaModel() {
-            const availableShaders = $.FlexRenderer.ShaderMediator.availableShaders();
+            const availableShaders = $.FlexRenderer.ShaderLayerRegistry.availableShaderLayers();
             const uiControlEnvelopes = this._compileJsonSchemaUiControlEnvelopes();
             const shaderLayerRefs = availableShaders.map(Shader => ({
                 $ref: `#/$defs/shaderLayers/${Shader.type()}`
@@ -17255,11 +22489,11 @@ function makeWorker() {
          * The schema model only ships serialization-friendly entries (no functions).
          */
         getShaderCouplingValidators(shaderType) {
-            const Mediator = $.FlexRenderer.ShaderMediator;
+            const Mediator = $.FlexRenderer.ShaderLayerRegistry;
             const Shader = Mediator && (typeof Mediator.getShaderByType === "function"
                 ? Mediator.getShaderByType(shaderType)
-                : typeof Mediator.getClass === "function"
-                    ? Mediator.getClass(shaderType)
+                : typeof Mediator.get === "function"
+                    ? Mediator.get(shaderType)
                     : null);
             if (!Shader || typeof Shader.controlCouplings !== "function") {
                 return [];
@@ -17460,7 +22694,7 @@ function makeWorker() {
                 this._previewSession = null;
             }
 
-            const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderId);
+            const Shader = $.FlexRenderer.ShaderLayerRegistry.get(shaderId);
             if (!Shader) {
                 throw new Error(`Invalid shader: ${shaderId}. Not present.`);
             }
@@ -18449,8 +23683,8 @@ function makeWorker() {
                 kind: "built-in",
                 type: "string",
                 usage: "Blend function used when the current use_mode applies blending.",
-                allowedValues: deepClone($.FlexRenderer.BLEND_MODE || []),
-                default: firstDefined(spec.required, spec.default, ($.FlexRenderer.BLEND_MODE || [])[0], null),
+                allowedValues: deepClone($.FlexRenderer.SUPPORTED_BLEND_MODES || []),
+                default: firstDefined(spec.required, spec.default, ($.FlexRenderer.SUPPORTED_BLEND_MODES || [])[0], null),
                 required: firstDefined(spec.required, null)
             };
         },
@@ -19058,7 +24292,7 @@ function makeWorker() {
                 return;
             }
 
-            const Shader = $.FlexRenderer.ShaderMediator.getClass(this.setup.shader.type);
+            const Shader = $.FlexRenderer.ShaderLayerRegistry.get(this.setup.shader.type);
             if (!Shader) {
                 return;
             }
@@ -19449,7 +24683,7 @@ function makeWorker() {
             this.__uicontrols = {};
 
             const types = $.FlexRenderer.UIControls.types();
-            const ShaderClass = $.FlexRenderer.ShaderMediator.getClass("identity");
+            const ShaderClass = $.FlexRenderer.ShaderLayerRegistry.get("identity");
 
             const fallbackLayer = new ShaderClass("id", {
                 shaderConfig: {
@@ -19462,7 +24696,7 @@ function makeWorker() {
                     params: {},
                     cache: {}
                 },
-                webglContext: {
+                backend: {
                     supportedUseModes: ["show"],
                     includeGlobalCode: () => {}
                 },
@@ -19635,8 +24869,8 @@ function makeWorker() {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-05-04
-//! Git commit: --168232c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19644,6 +24878,248 @@ function makeWorker() {
   root.OpenSeadragon = root.OpenSeadragon || {};
   // Full inlined worker source (libs + core)
   root.OpenSeadragon.__MVT_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=void 0;const SHIFT_LEFT_32=(1<<16)*(1<<16);const SHIFT_RIGHT_32=1/SHIFT_LEFT_32;const TEXT_DECODER_MIN_LENGTH=12;const utf8TextDecoder=typeof TextDecoder==="undefined"?null:new TextDecoder("utf-8");const PBF_VARINT=0;const PBF_FIXED64=1;const PBF_BYTES=2;const PBF_FIXED32=5;class Pbf{constructor(buf=new Uint8Array(16)){this.buf=ArrayBuffer.isView(buf)?buf:new Uint8Array(buf);this.dataView=new DataView(this.buf.buffer);this.pos=0;this.type=0;this.length=this.buf.length}readFields(readField,result,end=this.length){while(this.pos<end){const val=this.readVarint(),tag=val>>3,startPos=this.pos;this.type=val&7;readField(tag,result,this);if(this.pos===startPos)this.skip(val)}return result}readMessage(readField,result){return this.readFields(readField,result,this.readVarint()+this.pos)}readFixed32(){const val=this.dataView.getUint32(this.pos,true);this.pos+=4;return val}readSFixed32(){const val=this.dataView.getInt32(this.pos,true);this.pos+=4;return val}readFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getUint32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readSFixed64(){const val=this.dataView.getUint32(this.pos,true)+this.dataView.getInt32(this.pos+4,true)*SHIFT_LEFT_32;this.pos+=8;return val}readFloat(){const val=this.dataView.getFloat32(this.pos,true);this.pos+=4;return val}readDouble(){const val=this.dataView.getFloat64(this.pos,true);this.pos+=8;return val}readVarint(isSigned){const buf=this.buf;let val,b;b=buf[this.pos++];val=b&127;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<7;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<14;if(b<128)return val;b=buf[this.pos++];val|=(b&127)<<21;if(b<128)return val;b=buf[this.pos];val|=(b&15)<<28;return readVarintRemainder(val,isSigned,this)}readVarint64(){return this.readVarint(true)}readSVarint(){const num=this.readVarint();return num%2===1?(num+1)/-2:num/2}readBoolean(){return Boolean(this.readVarint())}readString(){const end=this.readVarint()+this.pos;const pos=this.pos;this.pos=end;if(end-pos>=TEXT_DECODER_MIN_LENGTH&&utf8TextDecoder){return utf8TextDecoder.decode(this.buf.subarray(pos,end))}return readUtf8(this.buf,pos,end)}readBytes(){const end=this.readVarint()+this.pos,buffer=this.buf.subarray(this.pos,end);this.pos=end;return buffer}readPackedVarint(arr=[],isSigned){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readVarint(isSigned));return arr}readPackedSVarint(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSVarint());return arr}readPackedBoolean(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readBoolean());return arr}readPackedFloat(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFloat());return arr}readPackedDouble(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readDouble());return arr}readPackedFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed32());return arr}readPackedSFixed32(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed32());return arr}readPackedFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readFixed64());return arr}readPackedSFixed64(arr=[]){const end=this.readPackedEnd();while(this.pos<end)arr.push(this.readSFixed64());return arr}readPackedEnd(){return this.type===PBF_BYTES?this.readVarint()+this.pos:this.pos+1}skip(val){const type=val&7;if(type===PBF_VARINT)while(this.buf[this.pos++]>127){}else if(type===PBF_BYTES)this.pos=this.readVarint()+this.pos;else if(type===PBF_FIXED32)this.pos+=4;else if(type===PBF_FIXED64)this.pos+=8;else throw new Error(\`Unimplemented type: \${type}\`)}writeTag(tag,type){this.writeVarint(tag<<3|type)}realloc(min){let length=this.length||16;while(length<this.pos+min)length*=2;if(length!==this.length){const buf=new Uint8Array(length);buf.set(this.buf);this.buf=buf;this.dataView=new DataView(buf.buffer);this.length=length}}finish(){this.length=this.pos;this.pos=0;return this.buf.subarray(0,this.length)}writeFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeSFixed32(val){this.realloc(4);this.dataView.setInt32(this.pos,val,true);this.pos+=4}writeFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeSFixed64(val){this.realloc(8);this.dataView.setInt32(this.pos,val&-1,true);this.dataView.setInt32(this.pos+4,Math.floor(val*SHIFT_RIGHT_32),true);this.pos+=8}writeVarint(val){val=+val||0;if(val>268435455||val<0){writeBigVarint(val,this);return}this.realloc(4);this.buf[this.pos++]=val&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=(val>>>=7)&127|(val>127?128:0);if(val<=127)return;this.buf[this.pos++]=val>>>7&127}writeSVarint(val){this.writeVarint(val<0?-val*2-1:val*2)}writeBoolean(val){this.writeVarint(+val)}writeString(str){str=String(str);this.realloc(str.length*4);this.pos++;const startPos=this.pos;this.pos=writeUtf8(this.buf,str,this.pos);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeFloat(val){this.realloc(4);this.dataView.setFloat32(this.pos,val,true);this.pos+=4}writeDouble(val){this.realloc(8);this.dataView.setFloat64(this.pos,val,true);this.pos+=8}writeBytes(buffer){const len=buffer.length;this.writeVarint(len);this.realloc(len);for(let i=0;i<len;i++)this.buf[this.pos++]=buffer[i]}writeRawMessage(fn,obj){this.pos++;const startPos=this.pos;fn(obj,this);const len=this.pos-startPos;if(len>=128)makeRoomForExtraLength(startPos,len,this);this.pos=startPos-1;this.writeVarint(len);this.pos+=len}writeMessage(tag,fn,obj){this.writeTag(tag,PBF_BYTES);this.writeRawMessage(fn,obj)}writePackedVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedVarint,arr)}writePackedSVarint(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSVarint,arr)}writePackedBoolean(tag,arr){if(arr.length)this.writeMessage(tag,writePackedBoolean,arr)}writePackedFloat(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFloat,arr)}writePackedDouble(tag,arr){if(arr.length)this.writeMessage(tag,writePackedDouble,arr)}writePackedFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed32,arr)}writePackedSFixed32(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed32,arr)}writePackedFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedFixed64,arr)}writePackedSFixed64(tag,arr){if(arr.length)this.writeMessage(tag,writePackedSFixed64,arr)}writeBytesField(tag,buffer){this.writeTag(tag,PBF_BYTES);this.writeBytes(buffer)}writeFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFixed32(val)}writeSFixed32Field(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeSFixed32(val)}writeFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeFixed64(val)}writeSFixed64Field(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeSFixed64(val)}writeVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeVarint(val)}writeSVarintField(tag,val){this.writeTag(tag,PBF_VARINT);this.writeSVarint(val)}writeStringField(tag,str){this.writeTag(tag,PBF_BYTES);this.writeString(str)}writeFloatField(tag,val){this.writeTag(tag,PBF_FIXED32);this.writeFloat(val)}writeDoubleField(tag,val){this.writeTag(tag,PBF_FIXED64);this.writeDouble(val)}writeBooleanField(tag,val){this.writeVarintField(tag,+val)}}exports.default=Pbf;function readVarintRemainder(l,s,p){const buf=p.buf;let h,b;b=buf[p.pos++];h=(b&112)>>4;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<3;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<10;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<17;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&127)<<24;if(b<128)return toNum(l,h,s);b=buf[p.pos++];h|=(b&1)<<31;if(b<128)return toNum(l,h,s);throw new Error("Expected varint not more than 10 bytes")}function toNum(low,high,isSigned){return isSigned?high*4294967296+(low>>>0):(high>>>0)*4294967296+(low>>>0)}function writeBigVarint(val,pbf){let low,high;if(val>=0){low=val%4294967296|0;high=val/4294967296|0}else{low=~(-val%4294967296);high=~(-val/4294967296);if(low^4294967295){low=low+1|0}else{low=0;high=high+1|0}}if(val>=0x10000000000000000||val<-0x10000000000000000){throw new Error("Given varint doesn't fit into 10 bytes")}pbf.realloc(10);writeBigVarintLow(low,high,pbf);writeBigVarintHigh(high,pbf)}function writeBigVarintLow(low,high,pbf){pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos++]=low&127|128;low>>>=7;pbf.buf[pbf.pos]=low&127}function writeBigVarintHigh(high,pbf){const lsb=(high&7)<<4;pbf.buf[pbf.pos++]|=lsb|((high>>>=3)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127|((high>>>=7)?128:0);if(!high)return;pbf.buf[pbf.pos++]=high&127}function makeRoomForExtraLength(startPos,len,pbf){const extraLen=len<=16383?1:len<=2097151?2:len<=268435455?3:Math.floor(Math.log(len)/(Math.LN2*7));pbf.realloc(extraLen);for(let i=pbf.pos-1;i>=startPos;i--)pbf.buf[i+extraLen]=pbf.buf[i]}function writePackedVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeVarint(arr[i])}function writePackedSVarint(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSVarint(arr[i])}function writePackedFloat(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFloat(arr[i])}function writePackedDouble(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeDouble(arr[i])}function writePackedBoolean(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeBoolean(arr[i])}function writePackedFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed32(arr[i])}function writePackedSFixed32(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed32(arr[i])}function writePackedFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeFixed64(arr[i])}function writePackedSFixed64(arr,pbf){for(let i=0;i<arr.length;i++)pbf.writeSFixed64(arr[i])}function readUtf8(buf,pos,end){let str="";let i=pos;while(i<end){const b0=buf[i];let c=null;let bytesPerSequence=b0>239?4:b0>223?3:b0>191?2:1;if(i+bytesPerSequence>end)break;let b1,b2,b3;if(bytesPerSequence===1){if(b0<128){c=b0}}else if(bytesPerSequence===2){b1=buf[i+1];if((b1&192)===128){c=(b0&31)<<6|b1&63;if(c<=127){c=null}}}else if(bytesPerSequence===3){b1=buf[i+1];b2=buf[i+2];if((b1&192)===128&&(b2&192)===128){c=(b0&15)<<12|(b1&63)<<6|b2&63;if(c<=2047||c>=55296&&c<=57343){c=null}}}else if(bytesPerSequence===4){b1=buf[i+1];b2=buf[i+2];b3=buf[i+3];if((b1&192)===128&&(b2&192)===128&&(b3&192)===128){c=(b0&15)<<18|(b1&63)<<12|(b2&63)<<6|b3&63;if(c<=65535||c>=1114112){c=null}}}if(c===null){c=65533;bytesPerSequence=1}else if(c>65535){c-=65536;str+=String.fromCharCode(c>>>10&1023|55296);c=56320|c&1023}str+=String.fromCharCode(c);i+=bytesPerSequence}return str}function writeUtf8(buf,str,pos){for(let i=0,c,lead;i<str.length;i++){c=str.charCodeAt(i);if(c>55295&&c<57344){if(lead){if(c<56320){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=c;continue}else{c=lead-55296<<10|c-56320|65536;lead=null}}else{if(c>56319||i+1===str.length){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189}else{lead=c}continue}}else if(lead){buf[pos++]=239;buf[pos++]=191;buf[pos++]=189;lead=null}if(c<128){buf[pos++]=c}else{if(c<2048){buf[pos++]=c>>6|192}else{if(c<65536){buf[pos++]=c>>12|224}else{buf[pos++]=c>>18|240;buf[pos++]=c>>12&63|128}buf[pos++]=c>>6&63|128}buf[pos++]=c&63|128}}return pos}},{}],2:[function(require,module,exports){"use strict";var _pbf=_interopRequireDefault(require("pbf"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.Pbf=_pbf.default},{pbf:1}]},{},[2]);
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _vectorTile=require("@mapbox/vector-tile");self.vectorTile={VectorTile:_vectorTile.VectorTile}},{"@mapbox/vector-tile":3}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=Point;function Point(x,y){this.x=x;this.y=y}Point.prototype={clone(){return new Point(this.x,this.y)},add(p){return this.clone()._add(p)},sub(p){return this.clone()._sub(p)},multByPoint(p){return this.clone()._multByPoint(p)},divByPoint(p){return this.clone()._divByPoint(p)},mult(k){return this.clone()._mult(k)},div(k){return this.clone()._div(k)},rotate(a){return this.clone()._rotate(a)},rotateAround(a,p){return this.clone()._rotateAround(a,p)},matMult(m){return this.clone()._matMult(m)},unit(){return this.clone()._unit()},perp(){return this.clone()._perp()},round(){return this.clone()._round()},mag(){return Math.sqrt(this.x*this.x+this.y*this.y)},equals(other){return this.x===other.x&&this.y===other.y},dist(p){return Math.sqrt(this.distSqr(p))},distSqr(p){const dx=p.x-this.x,dy=p.y-this.y;return dx*dx+dy*dy},angle(){return Math.atan2(this.y,this.x)},angleTo(b){return Math.atan2(this.y-b.y,this.x-b.x)},angleWith(b){return this.angleWithSep(b.x,b.y)},angleWithSep(x,y){return Math.atan2(this.x*y-this.y*x,this.x*x+this.y*y)},_matMult(m){const x=m[0]*this.x+m[1]*this.y,y=m[2]*this.x+m[3]*this.y;this.x=x;this.y=y;return this},_add(p){this.x+=p.x;this.y+=p.y;return this},_sub(p){this.x-=p.x;this.y-=p.y;return this},_mult(k){this.x*=k;this.y*=k;return this},_div(k){this.x/=k;this.y/=k;return this},_multByPoint(p){this.x*=p.x;this.y*=p.y;return this},_divByPoint(p){this.x/=p.x;this.y/=p.y;return this},_unit(){this._div(this.mag());return this},_perp(){const y=this.y;this.y=this.x;this.x=-y;return this},_rotate(angle){const cos=Math.cos(angle),sin=Math.sin(angle),x=cos*this.x-sin*this.y,y=sin*this.x+cos*this.y;this.x=x;this.y=y;return this},_rotateAround(angle,p){const cos=Math.cos(angle),sin=Math.sin(angle),x=p.x+cos*(this.x-p.x)-sin*(this.y-p.y),y=p.y+sin*(this.x-p.x)+cos*(this.y-p.y);this.x=x;this.y=y;return this},_round(){this.x=Math.round(this.x);this.y=Math.round(this.y);return this},constructor:Point};Point.convert=function(p){if(p instanceof Point){return p}if(Array.isArray(p)){return new Point(+p[0],+p[1])}if(p.x!==undefined&&p.y!==undefined){return new Point(+p.x,+p.y)}throw new Error("Expected [x, y] or {x, y} point format")}},{}],3:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.VectorTileLayer=exports.VectorTileFeature=exports.VectorTile=void 0;exports.classifyRings=classifyRings;var _pointGeometry=_interopRequireDefault(require("@mapbox/point-geometry"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}class VectorTileFeature{constructor(pbf,end,extent,keys,values){this.properties={};this.extent=extent;this.type=0;this.id=undefined;this._pbf=pbf;this._geometry=-1;this._keys=keys;this._values=values;pbf.readFields(readFeature,this,end)}loadGeometry(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;const lines=[];let line;let cmd=1;let length=0;let x=0;let y=0;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(cmd===1){if(line)lines.push(line);line=[]}if(line)line.push(new _pointGeometry.default(x,y))}else if(cmd===7){if(line){line.push(line[0].clone())}}else{throw new Error(\`unknown command \${cmd}\`)}}if(line)lines.push(line);return lines}bbox(){const pbf=this._pbf;pbf.pos=this._geometry;const end=pbf.readVarint()+pbf.pos;let cmd=1,length=0,x=0,y=0,x1=Infinity,x2=-Infinity,y1=Infinity,y2=-Infinity;while(pbf.pos<end){if(length<=0){const cmdLen=pbf.readVarint();cmd=cmdLen&7;length=cmdLen>>3}length--;if(cmd===1||cmd===2){x+=pbf.readSVarint();y+=pbf.readSVarint();if(x<x1)x1=x;if(x>x2)x2=x;if(y<y1)y1=y;if(y>y2)y2=y}else if(cmd!==7){throw new Error(\`unknown command \${cmd}\`)}}return[x1,y1,x2,y2]}toGeoJSON(x,y,z){const size=this.extent*Math.pow(2,z),x0=this.extent*x,y0=this.extent*y,vtCoords=this.loadGeometry();function projectPoint(p){return[(p.x+x0)*360/size-180,360/Math.PI*Math.atan(Math.exp((1-(p.y+y0)*2/size)*Math.PI))-90]}function projectLine(line){return line.map(projectPoint)}let geometry;if(this.type===1){const points=[];for(const line of vtCoords){points.push(line[0])}const coordinates=projectLine(points);geometry=points.length===1?{type:"Point",coordinates:coordinates[0]}:{type:"MultiPoint",coordinates:coordinates}}else if(this.type===2){const coordinates=vtCoords.map(projectLine);geometry=coordinates.length===1?{type:"LineString",coordinates:coordinates[0]}:{type:"MultiLineString",coordinates:coordinates}}else if(this.type===3){const polygons=classifyRings(vtCoords);const coordinates=[];for(const polygon of polygons){coordinates.push(polygon.map(projectLine))}geometry=coordinates.length===1?{type:"Polygon",coordinates:coordinates[0]}:{type:"MultiPolygon",coordinates:coordinates}}else{throw new Error("unknown feature type")}const result={type:"Feature",geometry:geometry,properties:this.properties};if(this.id!=null){result.id=this.id}return result}}exports.VectorTileFeature=VectorTileFeature;VectorTileFeature.types=["Unknown","Point","LineString","Polygon"];function readFeature(tag,feature,pbf){if(tag===1)feature.id=pbf.readVarint();else if(tag===2)readTag(pbf,feature);else if(tag===3)feature.type=pbf.readVarint();else if(tag===4)feature._geometry=pbf.pos}function readTag(pbf,feature){const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const key=feature._keys[pbf.readVarint()];const value=feature._values[pbf.readVarint()];feature.properties[key]=value}}function classifyRings(rings){const len=rings.length;if(len<=1)return[rings];const polygons=[];let polygon,ccw;for(let i=0;i<len;i++){const area=signedArea(rings[i]);if(area===0)continue;if(ccw===undefined)ccw=area<0;if(ccw===area<0){if(polygon)polygons.push(polygon);polygon=[rings[i]]}else if(polygon){polygon.push(rings[i])}}if(polygon)polygons.push(polygon);return polygons}function signedArea(ring){let sum=0;for(let i=0,len=ring.length,j=len-1,p1,p2;i<len;j=i++){p1=ring[i];p2=ring[j];sum+=(p2.x-p1.x)*(p1.y+p2.y)}return sum}class VectorTileLayer{constructor(pbf,end){this.version=1;this.name="";this.extent=4096;this.length=0;this._pbf=pbf;this._keys=[];this._values=[];this._features=[];pbf.readFields(readLayer,this,end);this.length=this._features.length}feature(i){if(i<0||i>=this._features.length)throw new Error("feature index out of bounds");this._pbf.pos=this._features[i];const end=this._pbf.readVarint()+this._pbf.pos;return new VectorTileFeature(this._pbf,end,this.extent,this._keys,this._values)}}exports.VectorTileLayer=VectorTileLayer;function readLayer(tag,layer,pbf){if(tag===15)layer.version=pbf.readVarint();else if(tag===1)layer.name=pbf.readString();else if(tag===5)layer.extent=pbf.readVarint();else if(tag===2)layer._features.push(pbf.pos);else if(tag===3)layer._keys.push(pbf.readString());else if(tag===4)layer._values.push(readValueMessage(pbf))}function readValueMessage(pbf){let value=null;const end=pbf.readVarint()+pbf.pos;while(pbf.pos<end){const tag=pbf.readVarint()>>3;value=tag===1?pbf.readString():tag===2?pbf.readFloat():tag===3?pbf.readDouble():tag===4?pbf.readVarint64():tag===5?pbf.readVarint():tag===6?pbf.readSVarint():tag===7?pbf.readBoolean():null}if(value==null){throw new Error("unknown feature value")}return value}class VectorTile{constructor(pbf,end){this.layers=pbf.readFields(readTile,{},end)}}exports.VectorTile=VectorTile;function readTile(tag,layers,pbf){if(tag===3){const layer=new VectorTileLayer(pbf,pbf.readVarint()+pbf.pos);if(layer.length)layers[layer.name]=layer}}},{"@mapbox/point-geometry":2}]},{},[1]);
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
@@ -19655,6 +25131,8 @@ let STYLE = {
     fallback: { type: 'line', color: [0, 0, 0, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
 };
 
+let USE_NATIVE_LINES = false;
+
 self.onmessage = async (e) => {
     const msg = e.data;
 
@@ -19662,6 +25140,7 @@ self.onmessage = async (e) => {
         if (msg.type === 'config') {
             EXTENT = msg.extent || EXTENT;
             STYLE = msg.style || STYLE;
+            USE_NATIVE_LINES = msg.useNativeLines === true;
             return;
         }
 
@@ -19674,7 +25153,7 @@ self.onmessage = async (e) => {
             if (!self.Pbf || !self.vectorTile || !self.earcut) {
                 throw new Error('Missing libs');
             }
-            const resp = await fetch(url);
+            const resp = self.__hasHttpBridge ? await self.requestFetch(url) : await fetch(url);
 
             if (!resp.ok) {
                 throw new Error('HTTP ' + resp.status);
@@ -19685,8 +25164,8 @@ self.onmessage = async (e) => {
 
             const fills = [];
             const lines = [];
+            const linePrimitives = [];
             const points = [];
-            const icons = [];
 
             // Iterate layers
             for (const lname in vt.layers) {
@@ -19738,22 +25217,54 @@ self.onmessage = async (e) => {
                     }
 
                     if (feat.type === 2 && fstyle.type === 'line') {
-                        // Build stroke triangles (bevel joins + requested caps; miter threshold)
-                        const widthPx = fstyle.widthPx || 1.0;
-                        const widthTile = widthPx * (lyr.extent / (512)); // heuristic: px@512 tile
-                        for (let p = 0; p < geom.length; p++) {
-                            const pts = geom[p];
-                            const mesh = strokePoly(pts, widthTile, fstyle.join || 'bevel', fstyle.cap || 'butt', fstyle.miterLimit || 2.0);
-                            if (mesh && mesh.indices.length) {
-                                const vertCount = mesh.vertices.length / 2;
-                                const verts = new Float32Array(4 * vertCount);
-                                for (let v = 0; v < vertCount; v += 1) {
-                                    verts[4 * v + 0] = mesh.vertices[2 * v + 0] / lyr.extent;
-                                    verts[4 * v + 1] = mesh.vertices[2 * v + 1] / lyr.extent;
+                        if (USE_NATIVE_LINES) {
+                            for (let p = 0; p < geom.length; p++) {
+                                const pts = geom[p];
+
+                                if (!pts || pts.length < 2) {
+                                    continue;
+                                }
+
+                                const verts = new Float32Array(pts.length * 4);
+                                const idx = new Uint32Array((pts.length - 1) * 2);
+
+                                for (let v = 0; v < pts.length; v += 1) {
+                                    verts[4 * v + 0] = pts[v].x / lyr.extent;
+                                    verts[4 * v + 1] = pts[v].y / lyr.extent;
                                     verts[4 * v + 2] = tileDepth;
                                     verts[4 * v + 3] = -1;
+
+                                    if (v < pts.length - 1) {
+                                        idx[2 * v + 0] = v;
+                                        idx[2 * v + 1] = v + 1;
+                                    }
                                 }
-                                lines.push({ vertices: verts.buffer, indices: new Uint32Array(mesh.indices).buffer, color: fstyle.color });
+
+                                linePrimitives.push({
+                                    vertices: verts.buffer,
+                                    indices: idx.buffer,
+                                    color: fstyle.color,
+                                    lineWidth: Number.isFinite(fstyle.widthPx) && fstyle.widthPx > 0 ? fstyle.widthPx : 1.0
+                                });
+                            }
+                        } else {
+                            // Build stroke triangles (bevel joins + requested caps; miter threshold)
+                            const widthPx = fstyle.widthPx || 1.0;
+                            const widthTile = widthPx * (lyr.extent / (512)); // heuristic: px@512 tile
+                            for (let p = 0; p < geom.length; p++) {
+                                const pts = geom[p];
+                                const mesh = strokePoly(pts, widthTile, fstyle.join || 'bevel', fstyle.cap || 'butt', fstyle.miterLimit || 2.0);
+                                if (mesh && mesh.indices.length) {
+                                    const vertCount = mesh.vertices.length / 2;
+                                    const verts = new Float32Array(4 * vertCount);
+                                    for (let v = 0; v < vertCount; v += 1) {
+                                        verts[4 * v + 0] = mesh.vertices[2 * v + 0] / lyr.extent;
+                                        verts[4 * v + 1] = mesh.vertices[2 * v + 1] / lyr.extent;
+                                        verts[4 * v + 2] = tileDepth;
+                                        verts[4 * v + 3] = -1;
+                                    }
+                                    lines.push({ vertices: verts.buffer, indices: new Uint32Array(mesh.indices).buffer, color: fstyle.color });
+                                }
                             }
                         }
                     }
@@ -19761,30 +25272,51 @@ self.onmessage = async (e) => {
                     if (feat.type === 1 && fstyle.type === 'point') {
                         const size = (fstyle.size || 10.0) / 2.0;
                         const verts = [];
-                        const idx = [0, 1, 2, 0, 2, 3];
+                        const idx = [];
+
                         for (let p = 0; p < geom.length; p++) {
                             const pts = geom[p];
+
                             for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
-                                verts.push((pt.x + size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                const base = verts.length / 4;
+
                                 verts.push((pt.x - size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
                                 verts.push((pt.x - size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
                                 verts.push((pt.x + size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x + size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+
+                                idx.push(
+                                    base + 0, base + 1, base + 2,
+                                    base + 0, base + 2, base + 3
+                                );
                             }
                         }
-                        points.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
+
+                        if (idx.length) {
+                            points.push({
+                                vertices: new Float32Array(verts).buffer,
+                                indices: new Uint32Array(idx).buffer,
+                                color: fstyle.color
+                            });
+                        }
                     }
 
                     if (feat.type === 1 && fstyle.type === 'icon') {
                         const size = fstyle.size || 1.0;
-                        const icon = fstyle.iconMapping[feat.properties.class] || { textureId: -1, width: 16, height: 16 };
+                        const icon = fstyle.iconMapping[feat.properties.class] || {
+                            textureId: -1,
+                            width: 16,
+                            height: 16
+                        };
 
                         const verts = [];
-                        const idx = [0, 1, 3, 0, 2, 3];
+                        const idx = [];
                         const parameters = [];
 
                         for (let p = 0; p < geom.length; p++) {
                             const pts = geom[p];
+
                             for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
 
@@ -19796,18 +25328,36 @@ self.onmessage = async (e) => {
                                 const yStart = (pt.y - (height / 2.0)) / lyr.extent;
                                 const yEnd = (pt.y + (height / 2.0)) / lyr.extent;
 
+                                const base = verts.length / 4;
+
                                 verts.push(xStart, yStart, tileDepth, icon.textureId);
                                 verts.push(xEnd, yStart, tileDepth, icon.textureId);
                                 verts.push(xStart, yEnd, tileDepth, icon.textureId);
                                 verts.push(xEnd, yEnd, tileDepth, icon.textureId);
 
                                 for (let i = 0; i < 4; i += 1) {
-                                    parameters.push(xStart, yStart, width / lyr.extent, height / lyr.extent);
+                                    parameters.push(
+                                        xStart,
+                                        yStart,
+                                        width / lyr.extent,
+                                        height / lyr.extent
+                                    );
                                 }
+
+                                idx.push(
+                                    base + 0, base + 1, base + 3,
+                                    base + 0, base + 2, base + 3
+                                );
                             }
                         }
 
-                        icons.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, parameters: new Float32Array(parameters).buffer });
+                        if (idx.length) {
+                            points.push({
+                                vertices: new Float32Array(verts).buffer,
+                                indices: new Uint32Array(idx).buffer,
+                                parameters: new Float32Array(parameters).buffer
+                            });
+                        }
                     }
                 }
             }
@@ -19817,21 +25367,37 @@ self.onmessage = async (e) => {
 
             for (const a of fills) {
                 transfer.push(a.vertices, a.indices);
+
+                if (a.parameters) {
+                    transfer.push(a.parameters);
+                }
             }
 
             for (const a of lines) {
                 transfer.push(a.vertices, a.indices);
+
+                if (a.parameters) {
+                    transfer.push(a.parameters);
+                }
+            }
+
+            for (const a of linePrimitives) {
+                transfer.push(a.vertices, a.indices);
+
+                if (a.parameters) {
+                    transfer.push(a.parameters);
+                }
             }
 
             for (const a of points) {
                 transfer.push(a.vertices, a.indices);
+
+                if (a.parameters) {
+                    transfer.push(a.parameters);
+                }
             }
 
-            for (const a of icons) {
-                transfer.push(a.vertices, a.indices, a.parameters);
-            }
-
-            self.postMessage({ type: 'tile', key, ok: true, data: { fills, lines, points, icons } }, transfer);
+            self.postMessage({ type: 'tile', key, ok: true, data: { fills, lines, linePrimitives, points } }, transfer);
         }
     } catch (err) {
         self.postMessage({ type: 'tile', key: e.data && e.data.key, ok: false, error: String(err) });
@@ -19921,11 +25487,10 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
-
+})(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-05-04
-//! Git commit: --168232c-dirty
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -19933,6 +25498,248 @@ function strokePoly(points, width, join, cap, miterLimit){
   root.OpenSeadragon = root.OpenSeadragon || {};
   // Full inlined worker source (libs + core)
   root.OpenSeadragon.__FABRIC_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
 (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
 // fabric-geom.worker.js  (single-rectangular-tile, unit-normalized)
 /* global self */
@@ -20386,6 +26193,1914 @@ function computeAABB(f) {
     }
 
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+`;
+})(typeof self !== 'undefined' ? self : window);
+//! flex-renderer 0.0.1
+//! Built on 2026-06-01
+//! Git commit: --ad0aa5b-dirty
+//! http://openseadragon.github.io
+//! License: http://openseadragon.github.io/license/
+
+(function(root){
+  root.OpenSeadragon = root.OpenSeadragon || {};
+  // Full inlined worker source
+  root.OpenSeadragon.__GEOJSON_WORKER_SOURCE__ = `
+/**
+ * Worker-side half of the FlexDrawer HTTP bridge.
+ *
+ * This shim is concatenated into every FlexDrawer worker blob. It exposes
+ * \`self.requestFetch(url, init)\` for the worker's network call sites to use in
+ * place of \`fetch(...)\` when the main thread has wired an HttpAdapter via
+ * installHttpBridge() (see http-bridge.main.js).
+ *
+ * Routing is gated by \`self.__hasHttpBridge\`: it starts false and flips to true
+ * only after the main side posts \`{ type: 'http:bridge-on' }\`. When the flag is
+ * false, call sites must fall back to native fetch — so worker code stays
+ * usable standalone (no adapter wired) without any behavioral change.
+ *
+ * Protocol (worker ↔ main):
+ *   worker → main: { type: 'http:request', id, url, init }
+ *   main → worker: { type: 'http:response', id, status, ok, headers, body }
+ *                 ({ body } is a transferable ArrayBuffer; zero-copy)
+ *   main → worker: { type: 'http:error', id, message, name }
+ *   worker → main: { type: 'http:cancel', id }
+ *
+ * Response objects returned from \`requestFetch\` expose status / ok / headers
+ * plus async arrayBuffer() / json() / text() — the same surface the existing
+ * worker call sites already use on real \`Response\` instances.
+ */
+(function attachHttpBridge(scope) {
+    if (scope.requestFetch) {
+        // already attached — ignore double inclusion
+        return;
+    }
+
+    scope.__hasHttpBridge = false;
+
+    var nextId = 1;
+    var pending = new Map(); // id -> { resolve, reject, signal, abortListener }
+
+    scope.addEventListener('message', function (event) {
+        var msg = event.data;
+        if (!msg || typeof msg.type !== 'string' || msg.type.indexOf('http:') !== 0) {
+            return;
+        }
+
+        if (msg.type === 'http:bridge-on') {
+            scope.__hasHttpBridge = true;
+            return;
+        }
+
+        if (msg.type === 'http:bridge-off') {
+            scope.__hasHttpBridge = false;
+            return;
+        }
+
+        var waiter = pending.get(msg.id);
+        if (!waiter) {
+            return;
+        }
+
+        pending.delete(msg.id);
+        detachAbortListener(waiter);
+
+        if (msg.type === 'http:response') {
+            waiter.resolve(makeResponseShim(msg));
+        } else if (msg.type === 'http:error') {
+            var err = new Error(msg.message || 'flex-renderer http bridge: request failed');
+            if (msg.name) {
+                err.name = msg.name;
+            }
+            waiter.reject(err);
+        }
+    });
+
+    scope.requestFetch = function requestFetch(url, init) {
+        var id = nextId++;
+        var safeInit;
+        try {
+            safeInit = serializeInit(init);
+        } catch (err) {
+            return Promise.reject(err);
+        }
+
+        var signal = init && init.signal;
+        if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError(signal.reason));
+        }
+
+        return new Promise(function (resolve, reject) {
+            var waiter = {
+                resolve: resolve,
+                reject: reject,
+                signal: signal || null,
+                abortListener: null
+            };
+            pending.set(id, waiter);
+
+            try {
+                scope.postMessage({
+                    type: 'http:request',
+                    id: id,
+                    url: url,
+                    init: safeInit
+                });
+            } catch (err) {
+                pending.delete(id);
+                reject(err);
+                return;
+            }
+
+            if (signal) {
+                waiter.abortListener = function () {
+                    if (!pending.has(id)) {
+                        return;
+                    }
+                    pending.delete(id);
+                    try {
+                        scope.postMessage({ type: 'http:cancel', id: id });
+                    } catch (_) { /* ignore */ }
+                    reject(makeAbortError(signal.reason));
+                };
+                signal.addEventListener('abort', waiter.abortListener, { once: true });
+            }
+        });
+    };
+
+    function detachAbortListener(waiter) {
+        if (waiter.signal && waiter.abortListener) {
+            try {
+                waiter.signal.removeEventListener('abort', waiter.abortListener);
+            } catch (_) { /* ignore */ }
+            waiter.abortListener = null;
+        }
+    }
+
+    function makeResponseShim(message) {
+        var status = message.status;
+        var ok = message.ok;
+        var headers = message.headers || {};
+        var body = message.body;
+
+        return {
+            status: status,
+            ok: ok,
+            headers: headers,
+            arrayBuffer: function () { return Promise.resolve(body); },
+            json: function () {
+                try {
+                    return Promise.resolve(JSON.parse(decodeBody(body)));
+                } catch (err) {
+                    return Promise.reject(err);
+                }
+            },
+            text: function () {
+                return Promise.resolve(decodeBody(body));
+            }
+        };
+    }
+
+    function decodeBody(body) {
+        if (!body) {
+            return '';
+        }
+        // body is always an ArrayBuffer when present
+        return new TextDecoder('utf-8').decode(new Uint8Array(body));
+    }
+
+    function makeAbortError(reason) {
+        var message = typeof reason === 'string' ? reason : (reason && reason.message) || 'aborted';
+        // DOMException is available in workers in all targeted runtimes
+        try {
+            return new DOMException(message, 'AbortError');
+        } catch (_) {
+            var err = new Error(message);
+            err.name = 'AbortError';
+            return err;
+        }
+    }
+
+    function serializeInit(init) {
+        var out = {};
+        if (!init || typeof init !== 'object') {
+            return out;
+        }
+
+        if (init.method) {
+            out.method = String(init.method);
+        }
+
+        if (init.headers) {
+            out.headers = flattenHeaders(init.headers);
+        }
+
+        if (init.body !== undefined && init.body !== null) {
+            var body = init.body;
+            if (typeof body === 'string' || body instanceof ArrayBuffer) {
+                out.body = body;
+            } else if (ArrayBuffer.isView && ArrayBuffer.isView(body)) {
+                out.body = body;
+            } else {
+                throw new TypeError('flex-renderer http bridge: unsupported request body type');
+            }
+        }
+
+        if (init.credentials) {
+            out.credentials = init.credentials;
+        }
+        if (init.cache) {
+            out.cache = init.cache;
+        }
+
+        return out;
+    }
+
+    function flattenHeaders(headers) {
+        var out = {};
+        if (!headers) {
+            return out;
+        }
+        if (typeof headers.forEach === 'function' && !Array.isArray(headers)) {
+            // Headers instance or Map-like
+            headers.forEach(function (value, key) {
+                out[String(key).toLowerCase()] = String(value);
+            });
+            return out;
+        }
+        if (Array.isArray(headers)) {
+            for (var i = 0; i < headers.length; i++) {
+                var entry = headers[i];
+                if (Array.isArray(entry) && entry.length >= 2) {
+                    out[String(entry[0]).toLowerCase()] = String(entry[1]);
+                }
+            }
+            return out;
+        }
+        if (typeof headers === 'object') {
+            for (var key in headers) {
+                if (Object.prototype.hasOwnProperty.call(headers, key)) {
+                    out[key.toLowerCase()] = String(headers[key]);
+                }
+            }
+        }
+        return out;
+    }
+})(self);
+
+(function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){"use strict";var _earcut=_interopRequireDefault(require("earcut"));function _interopRequireDefault(e){return e&&e.__esModule?e:{default:e}}self.earcut=_earcut.default},{earcut:2}],2:[function(require,module,exports){"use strict";Object.defineProperty(exports,"__esModule",{value:true});exports.default=earcut;exports.deviation=deviation;exports.flatten=flatten;function earcut(data,holeIndices,dim=2){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let outerNode=linkedList(data,0,outerLen,dim,true);const triangles=[];if(!outerNode||outerNode.next===outerNode.prev)return triangles;let minX,minY,invSize;if(hasHoles)outerNode=eliminateHoles(data,holeIndices,outerNode,dim);if(data.length>80*dim){minX=data[0];minY=data[1];let maxX=minX;let maxY=minY;for(let i=dim;i<outerLen;i+=dim){const x=data[i];const y=data[i+1];if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y}invSize=Math.max(maxX-minX,maxY-minY);invSize=invSize!==0?32767/invSize:0}earcutLinked(outerNode,triangles,dim,minX,minY,invSize,0);return triangles}function linkedList(data,start,end,dim,clockwise){let last;if(clockwise===signedArea(data,start,end,dim)>0){for(let i=start;i<end;i+=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}else{for(let i=end-dim;i>=start;i-=dim)last=insertNode(i/dim|0,data[i],data[i+1],last)}if(last&&equals(last,last.next)){removeNode(last);last=last.next}return last}function filterPoints(start,end){if(!start)return start;if(!end)end=start;let p=start,again;do{again=false;if(!p.steiner&&(equals(p,p.next)||area(p.prev,p,p.next)===0)){removeNode(p);p=end=p.prev;if(p===p.next)break;again=true}else{p=p.next}}while(again||p!==end);return end}function earcutLinked(ear,triangles,dim,minX,minY,invSize,pass){if(!ear)return;if(!pass&&invSize)indexCurve(ear,minX,minY,invSize);let stop=ear;while(ear.prev!==ear.next){const prev=ear.prev;const next=ear.next;if(invSize?isEarHashed(ear,minX,minY,invSize):isEar(ear)){triangles.push(prev.i,ear.i,next.i);removeNode(ear);ear=next.next;stop=next.next;continue}ear=next;if(ear===stop){if(!pass){earcutLinked(filterPoints(ear),triangles,dim,minX,minY,invSize,1)}else if(pass===1){ear=cureLocalIntersections(filterPoints(ear),triangles);earcutLinked(ear,triangles,dim,minX,minY,invSize,2)}else if(pass===2){splitEarcut(ear,triangles,dim,minX,minY,invSize)}break}}}function isEar(ear){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);let p=c.next;while(p!==a){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.next}return true}function isEarHashed(ear,minX,minY,invSize){const a=ear.prev,b=ear,c=ear.next;if(area(a,b,c)>=0)return false;const ax=a.x,bx=b.x,cx=c.x,ay=a.y,by=b.y,cy=c.y;const x0=Math.min(ax,bx,cx),y0=Math.min(ay,by,cy),x1=Math.max(ax,bx,cx),y1=Math.max(ay,by,cy);const minZ=zOrder(x0,y0,minX,minY,invSize),maxZ=zOrder(x1,y1,minX,minY,invSize);let p=ear.prevZ,n=ear.nextZ;while(p&&p.z>=minZ&&n&&n.z<=maxZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ;if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}while(p&&p.z>=minZ){if(p.x>=x0&&p.x<=x1&&p.y>=y0&&p.y<=y1&&p!==a&&p!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,p.x,p.y)&&area(p.prev,p,p.next)>=0)return false;p=p.prevZ}while(n&&n.z<=maxZ){if(n.x>=x0&&n.x<=x1&&n.y>=y0&&n.y<=y1&&n!==a&&n!==c&&pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,n.x,n.y)&&area(n.prev,n,n.next)>=0)return false;n=n.nextZ}return true}function cureLocalIntersections(start,triangles){let p=start;do{const a=p.prev,b=p.next.next;if(!equals(a,b)&&intersects(a,p,p.next,b)&&locallyInside(a,b)&&locallyInside(b,a)){triangles.push(a.i,p.i,b.i);removeNode(p);removeNode(p.next);p=start=b}p=p.next}while(p!==start);return filterPoints(p)}function splitEarcut(start,triangles,dim,minX,minY,invSize){let a=start;do{let b=a.next.next;while(b!==a.prev){if(a.i!==b.i&&isValidDiagonal(a,b)){let c=splitPolygon(a,b);a=filterPoints(a,a.next);c=filterPoints(c,c.next);earcutLinked(a,triangles,dim,minX,minY,invSize,0);earcutLinked(c,triangles,dim,minX,minY,invSize,0);return}b=b.next}a=a.next}while(a!==start)}function eliminateHoles(data,holeIndices,outerNode,dim){const queue=[];for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;const list=linkedList(data,start,end,dim,false);if(list===list.next)list.steiner=true;queue.push(getLeftmost(list))}queue.sort(compareXYSlope);for(let i=0;i<queue.length;i++){outerNode=eliminateHole(queue[i],outerNode)}return outerNode}function compareXYSlope(a,b){let result=a.x-b.x;if(result===0){result=a.y-b.y;if(result===0){const aSlope=(a.next.y-a.y)/(a.next.x-a.x);const bSlope=(b.next.y-b.y)/(b.next.x-b.x);result=aSlope-bSlope}}return result}function eliminateHole(hole,outerNode){const bridge=findHoleBridge(hole,outerNode);if(!bridge){return outerNode}const bridgeReverse=splitPolygon(bridge,hole);filterPoints(bridgeReverse,bridgeReverse.next);return filterPoints(bridge,bridge.next)}function findHoleBridge(hole,outerNode){let p=outerNode;const hx=hole.x;const hy=hole.y;let qx=-Infinity;let m;if(equals(hole,p))return p;do{if(equals(hole,p.next))return p.next;else if(hy<=p.y&&hy>=p.next.y&&p.next.y!==p.y){const x=p.x+(hy-p.y)*(p.next.x-p.x)/(p.next.y-p.y);if(x<=hx&&x>qx){qx=x;m=p.x<p.next.x?p:p.next;if(x===hx)return m}}p=p.next}while(p!==outerNode);if(!m)return null;const stop=m;const mx=m.x;const my=m.y;let tanMin=Infinity;p=m;do{if(hx>=p.x&&p.x>=mx&&hx!==p.x&&pointInTriangle(hy<my?hx:qx,hy,mx,my,hy<my?qx:hx,hy,p.x,p.y)){const tan=Math.abs(hy-p.y)/(hx-p.x);if(locallyInside(p,hole)&&(tan<tanMin||tan===tanMin&&(p.x>m.x||p.x===m.x&&sectorContainsSector(m,p)))){m=p;tanMin=tan}}p=p.next}while(p!==stop);return m}function sectorContainsSector(m,p){return area(m.prev,m,p.prev)<0&&area(p.next,m,m.next)<0}function indexCurve(start,minX,minY,invSize){let p=start;do{if(p.z===0)p.z=zOrder(p.x,p.y,minX,minY,invSize);p.prevZ=p.prev;p.nextZ=p.next;p=p.next}while(p!==start);p.prevZ.nextZ=null;p.prevZ=null;sortLinked(p)}function sortLinked(list){let numMerges;let inSize=1;do{let p=list;let e;list=null;let tail=null;numMerges=0;while(p){numMerges++;let q=p;let pSize=0;for(let i=0;i<inSize;i++){pSize++;q=q.nextZ;if(!q)break}let qSize=inSize;while(pSize>0||qSize>0&&q){if(pSize!==0&&(qSize===0||!q||p.z<=q.z)){e=p;p=p.nextZ;pSize--}else{e=q;q=q.nextZ;qSize--}if(tail)tail.nextZ=e;else list=e;e.prevZ=tail;tail=e}p=q}tail.nextZ=null;inSize*=2}while(numMerges>1);return list}function zOrder(x,y,minX,minY,invSize){x=(x-minX)*invSize|0;y=(y-minY)*invSize|0;x=(x|x<<8)&16711935;x=(x|x<<4)&252645135;x=(x|x<<2)&858993459;x=(x|x<<1)&1431655765;y=(y|y<<8)&16711935;y=(y|y<<4)&252645135;y=(y|y<<2)&858993459;y=(y|y<<1)&1431655765;return x|y<<1}function getLeftmost(start){let p=start,leftmost=start;do{if(p.x<leftmost.x||p.x===leftmost.x&&p.y<leftmost.y)leftmost=p;p=p.next}while(p!==start);return leftmost}function pointInTriangle(ax,ay,bx,by,cx,cy,px,py){return(cx-px)*(ay-py)>=(ax-px)*(cy-py)&&(ax-px)*(by-py)>=(bx-px)*(ay-py)&&(bx-px)*(cy-py)>=(cx-px)*(by-py)}function pointInTriangleExceptFirst(ax,ay,bx,by,cx,cy,px,py){return!(ax===px&&ay===py)&&pointInTriangle(ax,ay,bx,by,cx,cy,px,py)}function isValidDiagonal(a,b){return a.next.i!==b.i&&a.prev.i!==b.i&&!intersectsPolygon(a,b)&&(locallyInside(a,b)&&locallyInside(b,a)&&middleInside(a,b)&&(area(a.prev,a,b.prev)||area(a,b.prev,b))||equals(a,b)&&area(a.prev,a,a.next)>0&&area(b.prev,b,b.next)>0)}function area(p,q,r){return(q.y-p.y)*(r.x-q.x)-(q.x-p.x)*(r.y-q.y)}function equals(p1,p2){return p1.x===p2.x&&p1.y===p2.y}function intersects(p1,q1,p2,q2){const o1=sign(area(p1,q1,p2));const o2=sign(area(p1,q1,q2));const o3=sign(area(p2,q2,p1));const o4=sign(area(p2,q2,q1));if(o1!==o2&&o3!==o4)return true;if(o1===0&&onSegment(p1,p2,q1))return true;if(o2===0&&onSegment(p1,q2,q1))return true;if(o3===0&&onSegment(p2,p1,q2))return true;if(o4===0&&onSegment(p2,q1,q2))return true;return false}function onSegment(p,q,r){return q.x<=Math.max(p.x,r.x)&&q.x>=Math.min(p.x,r.x)&&q.y<=Math.max(p.y,r.y)&&q.y>=Math.min(p.y,r.y)}function sign(num){return num>0?1:num<0?-1:0}function intersectsPolygon(a,b){let p=a;do{if(p.i!==a.i&&p.next.i!==a.i&&p.i!==b.i&&p.next.i!==b.i&&intersects(p,p.next,a,b))return true;p=p.next}while(p!==a);return false}function locallyInside(a,b){return area(a.prev,a,a.next)<0?area(a,b,a.next)>=0&&area(a,a.prev,b)>=0:area(a,b,a.prev)<0||area(a,a.next,b)<0}function middleInside(a,b){let p=a;let inside=false;const px=(a.x+b.x)/2;const py=(a.y+b.y)/2;do{if(p.y>py!==p.next.y>py&&p.next.y!==p.y&&px<(p.next.x-p.x)*(py-p.y)/(p.next.y-p.y)+p.x)inside=!inside;p=p.next}while(p!==a);return inside}function splitPolygon(a,b){const a2=createNode(a.i,a.x,a.y),b2=createNode(b.i,b.x,b.y),an=a.next,bp=b.prev;a.next=b;b.prev=a;a2.next=an;an.prev=a2;b2.next=a2;a2.prev=b2;bp.next=b2;b2.prev=bp;return b2}function insertNode(i,x,y,last){const p=createNode(i,x,y);if(!last){p.prev=p;p.next=p}else{p.next=last.next;p.prev=last;last.next.prev=p;last.next=p}return p}function removeNode(p){p.next.prev=p.prev;p.prev.next=p.next;if(p.prevZ)p.prevZ.nextZ=p.nextZ;if(p.nextZ)p.nextZ.prevZ=p.prevZ}function createNode(i,x,y){return{i:i,x:x,y:y,prev:null,next:null,z:0,prevZ:null,nextZ:null,steiner:false}}function deviation(data,holeIndices,dim,triangles){const hasHoles=holeIndices&&holeIndices.length;const outerLen=hasHoles?holeIndices[0]*dim:data.length;let polygonArea=Math.abs(signedArea(data,0,outerLen,dim));if(hasHoles){for(let i=0,len=holeIndices.length;i<len;i++){const start=holeIndices[i]*dim;const end=i<len-1?holeIndices[i+1]*dim:data.length;polygonArea-=Math.abs(signedArea(data,start,end,dim))}}let trianglesArea=0;for(let i=0;i<triangles.length;i+=3){const a=triangles[i]*dim;const b=triangles[i+1]*dim;const c=triangles[i+2]*dim;trianglesArea+=Math.abs((data[a]-data[c])*(data[b+1]-data[a+1])-(data[a]-data[b])*(data[c+1]-data[a+1]))}return polygonArea===0&&trianglesArea===0?0:Math.abs((trianglesArea-polygonArea)/polygonArea)}function signedArea(data,start,end,dim){let sum=0;for(let i=start,j=end-dim;i<end;i+=dim){sum+=(data[j]-data[i])*(data[i+1]+data[j+1]);j=i}return sum}function flatten(data){const vertices=[];const holes=[];const dimensions=data[0][0].length;let holeIndex=0;let prevLen=0;for(const ring of data){for(const p of ring){for(let d=0;d<dimensions;d++)vertices.push(p[d])}if(prevLen){holeIndex+=prevLen;holes.push(holeIndex)}prevLen=ring.length}return{vertices:vertices,holes:holes,dimensions:dimensions}}},{}]},{},[1]);
+/**
+ * GeoJSON worker for GeoJSONTileSource.
+ *
+ * Debug-first implementation:
+ * - accepts standard GeoJSON Feature, FeatureCollection, raw Geometry, and GeometryCollection objects;
+ * - explodes MultiPoint, MultiLineString, MultiPolygon, and GeometryCollection
+ *   into simple Point, LineString, and Polygon records before coordinate normalization;
+ * - meshes Point, LineString, and Polygon geometries;
+ * - can emit LineString geometries as native gl.LINES payloads;
+ * - triangulates Polygon rings with earcut, including holes;
+ * - uses a top-level GeoJSON bbox as the source coordinate extent;
+ * - performs geometry bbox filtering before exact per-tile clipping;
+ * - optionally aggregates dense non-max-level tiles into one count badge;
+ * - emits FlexDrawer-compatible vector-mesh payloads with vec4 vertices.
+ *
+ * Vertex format:
+ *   [x, y, depth, textureId]
+ *
+ * where x/y are normalized tile-local coordinates in [0, 1] when inside the
+ * tile, depth follows the MVT worker convention, and textureId is -1 for
+ * non-textured geometry.
+ */
+
+let STATE = {
+    configured: false,
+    configurePromise: null,
+    geometries: [],
+    spatialIndex: null,
+    tileSize: 512,
+    minLevel: 0,
+    maxLevel: 0,
+    bbox: null,
+    width: 1,
+    height: 1,
+    style: {},
+    useNativeLines: false,
+    aggregation: null
+};
+
+
+/**
+ * Seven-segment glyph definitions used for aggregate tile count labels.
+ *
+ * @type {object}
+ */
+const SEVEN_SEGMENT_GLYPHS = Object.freeze({
+    '0': ['top', 'upperRight', 'lowerRight', 'bottom', 'lowerLeft', 'upperLeft'],
+    '1': ['upperRight', 'lowerRight'],
+    '2': ['top', 'upperRight', 'middle', 'lowerLeft', 'bottom'],
+    '3': ['top', 'upperRight', 'middle', 'lowerRight', 'bottom'],
+    '4': ['upperLeft', 'middle', 'upperRight', 'lowerRight'],
+    '5': ['top', 'upperLeft', 'middle', 'lowerRight', 'bottom'],
+    '6': ['top', 'upperLeft', 'middle', 'lowerRight', 'lowerLeft', 'bottom'],
+    '7': ['top', 'upperRight', 'lowerRight'],
+    '8': ['top', 'upperRight', 'lowerRight', 'bottom', 'lowerLeft', 'upperLeft', 'middle'],
+    '9': ['top', 'upperRight', 'lowerRight', 'bottom', 'upperLeft', 'middle'],
+    '+': ['middle', 'verticalMiddle']
+});
+
+
+self.onmessage = function(event) {
+    const message = event.data || {};
+
+    switch (message.type) {
+        case 'config':
+            STATE.configurePromise = configure(message);
+            break;
+
+        case 'tile':
+            buildTileWhenReady(message);
+            break;
+
+        default:
+            self.postMessage({
+                type: 'error',
+                ok: false,
+                error: \`GeoJson worker: unsupported message type \${message.type}\`
+            });
+    }
+};
+
+
+/**
+ * Configure the worker from the tile source.
+ *
+ * @param {object} message - Configuration message.
+ * @returns {Promise<void>} Resolves when the source is ready.
+ */
+async function configure(message) {
+    try {
+        if (!self.earcut) {
+            throw new Error('GeoJSON worker: missing earcut library.');
+        }
+
+        const data = await fetchGeoJSON(message.url);
+
+        STATE = {
+            configured: true,
+            configurePromise: null,
+            geometries: [],
+            spatialIndex: null,
+            bbox: message.bbox || data.bbox,
+            width: message.width,
+            height: message.height,
+            tileSize: message.tileSize,
+            minLevel: message.minLevel,
+            maxLevel: message.maxLevel,
+            style: message.style,
+            useNativeLines: message.useNativeLines === true,
+            aggregation: message.aggregation
+        };
+
+        STATE.geometries = parseGeojson(data);
+        STATE.spatialIndex = createSpatialIndex(STATE.geometries);
+    } catch (error) {
+        self.postMessage({
+            type: 'error',
+            ok: false,
+            error: error.message || String(error)
+        });
+    }
+}
+
+
+/**
+ * Fetch a GeoJSON document.
+ *
+ * @param {string} url - GeoJSON URL.
+ * @returns {Promise<object>} Parsed GeoJSON.
+ */
+async function fetchGeoJSON(url) {
+    if (!url) {
+        throw new Error('GeoJSON worker: url is required.');
+    }
+
+    const response = self.__hasHttpBridge ? await self.requestFetch(url) : await fetch(url);
+    if (!response.ok) {
+        throw new Error(\`GeoJSON worker: failed to fetch \${url}: \${response.status}\`);
+    }
+
+    return response.json();
+}
+
+
+const GEOMETRY_TYPES = new Set([
+    "Point",
+    "MultiPoint",
+    "LineString",
+    "MultiLineString",
+    "Polygon",
+    "MultiPolygon",
+    "GeometryCollection"
+]);
+
+/**
+ * @typedef {object} SimpleGeoJSONGeometry
+ * @property {'Point'|'LineString'|'Polygon'} type - Simple geometry type.
+ * @property {*} coordinates - Geometry coordinates in full-resolution image coordinates.
+ * @property {number[]} bbox - The geometry's bbox in full-resolution image coordinates.
+ * @property {object|null|undefined} properties - Feature properties.
+ * @property {string|number|undefined} id - Feature id.
+ */
+
+/**
+ * Extract simple GeoJSON geometry records from a GeoJSON object.
+ *
+ * The renderer only consumes simple Point, LineString, and Polygon records.
+ * This reader accepts standard GeoJSON containers and explodes multi-geometries
+ * into those simple records while preserving feature properties and id.
+ *
+ * Supported standard GeoJSON inputs:
+ * - FeatureCollection
+ * - Feature
+ * - a simple geometry type or a GeometryCollection
+ *
+ * @param {object} geojson - GeoJSON object.
+ * @returns {SimpleGeoJSONGeometry[]} Simple geometry records.
+ * @throws {Error} Thrown when geojson is not a valid GeoJSON object.
+ */
+function parseGeojson(geojson) {
+    if (!geojson || typeof geojson !== 'object' || Array.isArray(geojson)) {
+        throw new Error('GeoJSON worker: root GeoJSON value must be a non-array object.');
+    }
+
+    if (geojson.type === 'FeatureCollection') {
+        return parseFeatureCollection(geojson);
+    }
+
+    if (geojson.type === 'Feature') {
+        return parseFeature(geojson);
+    }
+
+    if (GEOMETRY_TYPES.has(geojson.type)) {
+        return parseGeometry(geojson);
+    }
+
+    throw new Error('GeoJSON worker: root GeoJSON type must be FeatureCollection, Feature, or a supported geometry type.');
+}
+
+/**
+ * Parse a standard GeoJSON FeatureCollection.
+ *
+ * @param {object} collection - FeatureCollection object.
+ * @returns {SimpleGeoJSONGeometry[]} Simple geometry records.
+ * @throws {Error} Thrown when collection is not a valid GeoJSON FeatureCollection.
+ */
+function parseFeatureCollection(collection) {
+    if (!collection || typeof collection !== 'object' || Array.isArray(collection)) {
+        throw new Error('GeoJSON worker: FeatureCollection must be a non-array object.');
+    }
+
+    if (collection.type !== 'FeatureCollection') {
+        throw new Error('GeoJSON worker: FeatureCollection.type must be "FeatureCollection".');
+    }
+
+    if (!Array.isArray(collection.features)) {
+        throw new Error('GeoJSON worker: FeatureCollection.features must be an array of Feature objects.');
+    }
+
+    return collection.features.flatMap(feature => parseFeature(feature));
+}
+
+/**
+ * Parse a standard GeoJSON Feature.
+ *
+ * @param {object} feature - Feature object.
+ * @returns {SimpleGeoJSONGeometry[]} Simple feature records.
+ * @throws {Error} Thrown when feature is not a valid GeoJSON Feature.
+ */
+function parseFeature(feature) {
+    if (!feature || typeof feature !== 'object' || Array.isArray(feature)) {
+        throw new Error('GeoJSON worker: Feature must be a non-array object.');
+    }
+
+    if (feature.type !== 'Feature') {
+        throw new Error('GeoJSON worker: Feature.type must be "Feature".');
+    }
+
+    // the GeoJSON standard specifies properties as required,
+    // but they are not strictly necessary for rendering so we will be permissive and allow them to be undefined
+    if (!(feature.properties === undefined || (typeof feature.properties === 'object' && !Array.isArray(feature.properties)) || feature.properties === null)) {
+        throw new Error('GeoJSON worker: Feature.properties must be an object, null, or undefined.');
+    }
+
+    if (!(feature.id === undefined || typeof feature.id === 'string' || typeof feature.id === 'number')) {
+        throw new Error('GeoJSON worker: Feature.id must be a string, number, or undefined.');
+    }
+
+    return parseGeometry(feature.geometry, feature.properties, feature.id);
+}
+
+/**
+ * Convert a supported standard GeoJSON geometry into internal simple geometry records.
+ *
+ * Multi* geometries and GeometryCollection are exploded into simple records.
+ * Polygon holes are preserved in the coordinate structure for now, but the
+ * current mesher still consumes only the exterior ring.
+ *
+ * @param {object} geometry - GeoJSON geometry.
+ * @param {object|null|undefined} properties - Feature properties.
+ * @param {string|number|undefined} id - Feature id.
+ * @returns {SimpleGeoJSONGeometry[]} Internal simple geometry records.
+ * @throws {Error} Thrown when geometry is not a valid GeoJSON geometry object.
+ */
+function parseGeometry(geometry, properties = undefined, id = undefined) {
+    if (!geometry || typeof geometry !== 'object' || Array.isArray(geometry)) {
+        throw new Error('GeoJSON worker: geometry must be a non-array GeoJSON geometry object.');
+    }
+
+    switch (geometry.type) {
+        case 'Point':
+            validatePointCoordinates(geometry.coordinates);
+            return [ createGeometryRecord('Point', geometry.coordinates, properties, id) ].filter(Boolean);
+
+        case 'LineString':
+            validateLineStringCoordinates(geometry.coordinates);
+            return [ createGeometryRecord('LineString', geometry.coordinates, properties, id) ].filter(Boolean);
+
+        case 'Polygon':
+            validatePolygonCoordinates(geometry.coordinates);
+            return [ createGeometryRecord('Polygon', geometry.coordinates, properties, id) ].filter(Boolean);
+
+        case 'MultiPoint':
+            if (!Array.isArray(geometry.coordinates)) {
+                throw new Error('GeoJSON worker: MultiPoint.coordinates must be an array of Point positions.');
+            }
+
+            geometry.coordinates.forEach(validatePointCoordinates);
+
+            return geometry.coordinates.map(coordinate => createGeometryRecord('Point', coordinate, properties, id)).filter(Boolean);
+
+        case 'MultiLineString':
+            if (!Array.isArray(geometry.coordinates)) {
+                throw new Error('GeoJSON worker: MultiLineString.coordinates must be an array of LineString coordinate arrays.');
+            }
+
+            geometry.coordinates.forEach(validateLineStringCoordinates);
+
+            return geometry.coordinates.map(line => createGeometryRecord('LineString', line, properties, id)).filter(Boolean);
+
+        case 'MultiPolygon':
+            if (!Array.isArray(geometry.coordinates)) {
+                throw new Error('GeoJSON worker: MultiPolygon.coordinates must be an array of Polygon coordinate arrays.');
+            }
+
+            geometry.coordinates.forEach(validatePolygonCoordinates);
+
+            return geometry.coordinates.map(polygon => createGeometryRecord('Polygon', polygon, properties, id)).filter(Boolean);
+
+        case 'GeometryCollection':
+            if (!Array.isArray(geometry.geometries)) {
+                throw new Error('GeoJSON worker: GeometryCollection.geometries must be an array of geometry objects.');
+            }
+
+            return geometry.geometries.flatMap(child => parseGeometry(child, properties, id)).filter(Boolean);
+
+        default:
+            throw new Error('GeoJSON worker: unsupported or missing GeoJSON geometry type.');
+    }
+}
+
+/**
+ * Validate a GeoJSON Point coordinate array.
+ *
+ * A Point coordinate must be one GeoJSON position: an array of at least two
+ * finite numbers. Extra dimensions are allowed by GeoJSON but are ignored by
+ * the current 2D renderer.
+ *
+ * @param {*} coordinates - Candidate Point coordinates.
+ * @returns {void}
+ * @throws {Error} Thrown when coordinates are not valid GeoJSON Point coordinates.
+ */
+function validatePointCoordinates(coordinates) {
+    if (!isCoordinates(coordinates)) {
+        throw new Error('GeoJSON worker: Point.coordinates must be a GeoJSON position: an array of at least two finite numbers.');
+    }
+}
+
+/**
+ * Validate a GeoJSON LineString coordinate array.
+ *
+ * A LineString coordinate array must contain at least two valid GeoJSON
+ * positions.
+ *
+ * @param {*} coordinates - Candidate LineString coordinates.
+ * @returns {void}
+ * @throws {Error} Thrown when coordinates are not valid GeoJSON LineString coordinates.
+ */
+function validateLineStringCoordinates(coordinates) {
+    if (!Array.isArray(coordinates) || coordinates.length < 2 || !coordinates.every(isCoordinates)) {
+        throw new Error('GeoJSON worker: LineString.coordinates must be an array containing at least two GeoJSON positions.');
+    }
+}
+
+/**
+ * Validate a GeoJSON Polygon coordinate array.
+ *
+ * A Polygon coordinate array contains linear rings.
+ *
+ * @param {*} coordinates - Candidate Polygon coordinates.
+ * @returns {void}
+ * @throws {Error} Thrown when coordinates are not valid GeoJSON Polygon coordinates.
+ */
+function validatePolygonCoordinates(coordinates) {
+    if (!Array.isArray(coordinates) || !coordinates.every(isLinearRing)) {
+        throw new Error('GeoJSON worker: Polygon.coordinates must be an array.');
+    }
+}
+
+/**
+ * Create one simple internal geometry record in full-resolution image coordinates.
+ *
+ * The geometry record's coordinates are projected into full-resolution image space
+ * and the bbox is calculated to save on extra processing time.
+ *
+ * @param {'Point'|'LineString'|'Polygon'} type - Simple geometry type.
+ * @param {*} coordinates - Geometry coordinates.
+ * @param {object|null|undefined} properties - Feature properties.
+ * @param {string|number|undefined} id - Feature id.
+ * @returns {SimpleGeoJSONGeometry|null} Internal geometry record.
+ */
+function createGeometryRecord(type, coordinates, properties, id) {
+    switch (type) {
+        case 'Point':
+            coordinates = projectCoordinates(coordinates);
+            break;
+        case 'LineString':
+            coordinates = coordinates.map(projectCoordinates);
+            break;
+        case 'Polygon':
+            coordinates = coordinates.map(ring => ring.map(projectCoordinates));
+            break;
+        default:
+            return null;
+    }
+
+    const bbox = computeImageSpaceBbox(coordinates);
+
+    return {
+        type,
+        coordinates,
+        bbox,
+        properties,
+        id
+    };
+}
+
+/**
+ * Convert one source coordinates into full-resolution image coordinates.
+ *
+ * Source coordinates are linearly mapped from the GeoJSON bbox into the
+ * tile source width and height. With bbox [0, 0, width, height], coordinates
+ * are preserved. With explicit width and height, the bbox coordinates range is
+ * rescaled into those destination dimensions.
+ *
+ * @param {number[]} coordinates - Raw source coordinates.
+ * @returns {number[]} Image coordinates.
+ */
+function projectCoordinates(coordinates) {
+    // GeoJSON coordinates may contain z or other extra dimensions. Rendering is 2D.
+    const [x, y] = coordinates;
+    const [minX, minY, maxX, maxY] = STATE.bbox;
+
+    const u = (x - minX) / (maxX - minX);
+    const v = (y - minY) / (maxY - minY);
+
+    return [
+        u * STATE.width,
+        v * STATE.height
+    ];
+}
+
+/**
+ * Compute image-space bbox for coordinates.
+ *
+ * @param {*} coordinates - Point, line, or polygon coordinates.
+ * @returns {number[]} Bbox as [minX, minY, maxX, maxY].
+ */
+function computeImageSpaceBbox(coordinates) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    forEachCoordinates(coordinates, (coordinate) => {
+        minX = Math.min(minX, coordinate[0]);
+        minY = Math.min(minY, coordinate[1]);
+        maxX = Math.max(maxX, coordinate[0]);
+        maxY = Math.max(maxY, coordinate[1]);
+    });
+
+    return [minX, minY, maxX, maxY];
+}
+
+/**
+ * Visit every coordinates in a supported coordinates structure.
+ *
+ * @param {*} coordinates - Coordinates structure.
+ * @param {function(number[]): void} visitor - Coordinates visitor.
+ * @returns {void}
+ */
+function forEachCoordinates(coordinates, visitor) {
+    if (!Array.isArray(coordinates)) {
+        return;
+    }
+
+    if (isCoordinates(coordinates)) {
+        visitor(coordinates);
+        return;
+    }
+
+    for (const child of coordinates) {
+        forEachCoordinates(child, visitor);
+    }
+}
+
+/**
+ * Test whether a value is a valid GeoJSON linear ring.
+ *
+ * A linear ring is an array of at least four positions whose first and last
+ * positions are equivalent. This check compares only x/y values because the
+ * current renderer is 2D.
+ *
+ * @param {*} coordinates - Candidate linear-ring coordinates.
+ * @returns {boolean} True when coordinates form a valid linear ring.
+ */
+function isLinearRing(coordinates) {
+    if (Array.isArray(coordinates) && coordinates.length >= 4 && coordinates.every(isCoordinates)) {
+        const first = coordinates[0];
+        const last = coordinates[coordinates.length - 1];
+
+        return first[0] === last[0] && first[1] === last[1];
+    }
+
+    return false;
+}
+
+/**
+ * Test whether a value is a valid GeoJSON position.
+ *
+ * A position is an array of at least two finite numbers. The first two values
+ * are interpreted as x/y by the current renderer; additional dimensions are
+ * accepted but not rendered.
+ *
+ * @param {*} coordinate - Candidate position.
+ * @returns {boolean} True when coordinate is a valid position.
+ */
+function isCoordinates(coordinate) {
+    return Array.isArray(coordinate) && coordinate.length >= 2 && coordinate.every(Number.isFinite);
+}
+
+
+/**
+ * Minimum projected geometry count before a spatial index is built.
+ *
+ * Small sources are usually faster to scan directly because the quadtree has
+ * build cost and adds extra traversal during tile generation.
+ *
+ * @type {number}
+ */
+const SPATIAL_INDEX_MIN_GEOMETRIES = 256;
+
+/**
+ * Maximum number of geometries stored in one quadtree node before subdivision.
+ *
+ * @type {number}
+ */
+const QUADTREE_NODE_CAPACITY = 32;
+
+/**
+ * Maximum quadtree depth.
+ *
+ * This prevents excessive subdivision for highly clustered or nearly identical
+ * bboxes.
+ *
+ * @type {number}
+ */
+const QUADTREE_MAX_DEPTH = 16;
+
+/**
+ * @typedef {object} QuadtreeNode
+ * @property {number} depth - The depth of the quadtree node.
+ * @property {number[]} bounds - The bounds of the quadtree node as [minX, minY, maxX, maxY].
+ * @property {SimpleGeoJSONGeometry[]} geometries - The geometries assigned to this node.
+ * @property {QuadtreeNode[]|null} children - The children nodes of this node or null if it is a leaf node.
+ */
+
+/**
+ * Create a static quadtree spatial index for projected geometries.
+ *
+ * The quadtree is built in full-resolution image coordinates. It stores
+ * references to projected geometry records, not copies. Geometry insertion is
+ * conservative: a geometry is pushed into a child only when its bbox is fully
+ * contained by that child; otherwise it remains in the current node.
+ *
+ * @param {SimpleGeoJSONGeometry[]} geometries - Projected geometry records.
+ * @returns {QuadtreeNode|null} Quadtree root node, or null when direct scanning is preferable.
+ */
+function createSpatialIndex(geometries) {
+    if (!Array.isArray(geometries) || geometries.length < SPATIAL_INDEX_MIN_GEOMETRIES) {
+        return null;
+    }
+
+    const root = createQuadtreeNode([0, 0, STATE.width, STATE.height], 0);
+
+    for (const geometry of geometries) {
+        insertIntoQuadtree(root, geometry);
+    }
+
+    return root;
+}
+
+/**
+ * Create one quadtree node.
+ *
+ * @param {number[]} bounds - Node bounds as [minX, minY, maxX, maxY].
+ * @param {number} depth - Node depth.
+ * @returns {QuadtreeNode} Quadtree node.
+ */
+function createQuadtreeNode(bounds, depth) {
+    return {
+        bounds,
+        depth,
+        geometries: [],
+        children: null
+    };
+}
+
+/**
+ * Insert one geometry into a quadtree node.
+ *
+ * @param {QuadtreeNode} node - Quadtree node.
+ * @param {SimpleGeoJSONGeometry} geometry - Projected geometry record.
+ * @returns {void}
+ */
+function insertIntoQuadtree(node, geometry) {
+    if (node.children) {
+        const child = findContainingChild(node.children, geometry.bbox);
+
+        if (child) {
+            insertIntoQuadtree(child, geometry);
+            return;
+        }
+    }
+
+    node.geometries.push(geometry);
+
+    if (node.geometries.length > QUADTREE_NODE_CAPACITY && node.depth < QUADTREE_MAX_DEPTH) {
+        subdivideQuadtreeNode(node);
+    }
+}
+
+/**
+ * Subdivide one quadtree node and move contained geometries into children.
+ *
+ * Geometries that do not fit completely inside a single child remain in the
+ * parent node. This avoids duplicating large lines and polygons across many
+ * descendants.
+ *
+ * @param {QuadtreeNode} node - Quadtree node.
+ * @returns {void}
+ */
+function subdivideQuadtreeNode(node) {
+    if (node.children) {
+        return;
+    }
+
+    const [minX, minY, maxX, maxY] = node.bounds;
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    const nextDepth = node.depth + 1;
+
+    if (midX <= minX || midX >= maxX || midY <= minY || midY >= maxY) {
+        return;
+    }
+
+    node.children = [
+        createQuadtreeNode([minX, minY, midX, midY], nextDepth),
+        createQuadtreeNode([midX, minY, maxX, midY], nextDepth),
+        createQuadtreeNode([minX, midY, midX, maxY], nextDepth),
+        createQuadtreeNode([midX, midY, maxX, maxY], nextDepth)
+    ];
+
+    const remaining = [];
+
+    for (const geometry of node.geometries) {
+        const child = findContainingChild(node.children, geometry.bbox);
+
+        if (child) {
+            insertIntoQuadtree(child, geometry);
+        } else {
+            remaining.push(geometry);
+        }
+    }
+
+    node.geometries = remaining;
+}
+
+/**
+ * Return the child that fully contains a bbox.
+ *
+ * @param {object[]} children - Quadtree child nodes.
+ * @param {number[]} bbox - Geometry bbox as [minX, minY, maxX, maxY].
+ * @returns {QuadtreeNode|null} Containing child node, or null when no single child contains the bbox.
+ */
+function findContainingChild(children, bbox) {
+    for (const child of children) {
+        if (containsBounds(child.bounds, bbox)) {
+            return child;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Test whether outer bounds fully contain inner bounds.
+ *
+ * @param {number[]} outer - Outer bounds as [minX, minY, maxX, maxY].
+ * @param {number[]} inner - Inner bounds as [minX, minY, maxX, maxY].
+ * @returns {boolean} True when inner is fully inside outer.
+ */
+function containsBounds(outer, inner) {
+    return inner[0] >= outer[0] && inner[1] >= outer[1] && inner[2] <= outer[2] && inner[3] <= outer[3];
+}
+
+/**
+ * Return candidate geometries for a tile.
+ *
+ * If no spatial index is available, this returns the full geometry list and
+ * preserves the previous direct-scan behavior.
+ *
+ * @param {number[]} tileBounds - Tile image-space bounds.
+ * @returns {SimpleGeoJSONGeometry[]} Candidate geometry records.
+ */
+function getTileCandidateGeometries(tileBounds) {
+    if (!STATE.spatialIndex) {
+        return STATE.geometries;
+    }
+
+    const results = [];
+    queryQuadtree(STATE.spatialIndex, tileBounds, results);
+
+    return results;
+}
+
+/**
+ * Query a quadtree node for geometries whose quadtree may intersect the query.
+ *
+ * @param {object} quadtree - Quadtree to query.
+ * @param {number[]} bbox - Query bounds as [minX, minY, maxX, maxY].
+ * @param {SimpleGeoJSONGeometry[]} results - Mutable result list.
+ * @returns {void}
+ */
+function queryQuadtree(quadtree, bbox, results) {
+    if (!intersects(bbox, quadtree.bounds)) {
+        return;
+    }
+
+    for (const geometry of quadtree.geometries) {
+        results.push(geometry);
+    }
+
+    if (!quadtree.children) {
+        return;
+    }
+
+    for (const child of quadtree.children) {
+        queryQuadtree(child, bbox, results);
+    }
+}
+
+
+/**
+ * Return one tile's full-resolution image bounds.
+ *
+ * Low pyramid levels and edge tiles can be smaller than tileSize in level-pixel
+ * coordinates, so bounds must be derived from the actual clipped level rectangle.
+ *
+ * @param {number} level - OSD level.
+ * @param {number} x - Tile x.
+ * @param {number} y - Tile y.
+ * @returns {number[]} Bounds as [minX, minY, maxX, maxY].
+ */
+function getTileImageBounds(level, x, y) {
+    const scale = getLevelScale(level);
+    const rect = getTileLevelRect(level, x, y);
+
+    return [
+        rect.left / scale,
+        rect.top / scale,
+        rect.right / scale,
+        rect.bottom / scale
+    ];
+}
+
+/**
+ * Return the actual tile rectangle in level-pixel coordinates.
+ *
+ * For low pyramid levels, the whole level image can be smaller than tileSize.
+ * For edge tiles, only part of the nominal tile rectangle is inside the level.
+ *
+ * @param {number} level - OSD level.
+ * @param {number} x - Tile x.
+ * @param {number} y - Tile y.
+ * @returns {{left: number, top: number, right: number, bottom: number, width: number, height: number}}
+ */
+function getTileLevelRect(level, x, y) {
+    const [levelWidth, levelHeight] = getLevelDimensions(level);
+    const left = x * STATE.tileSize;
+    const top = y * STATE.tileSize;
+    const right = Math.min(left + STATE.tileSize, levelWidth);
+    const bottom = Math.min(top + STATE.tileSize, levelHeight);
+
+    return {
+        left,
+        top,
+        right,
+        bottom,
+        width: Math.max(1, right - left),
+        height: Math.max(1, bottom - top)
+    };
+}
+
+/**
+ * Return the image dimensions at one pyramid level.
+ *
+ * @param {number} level - OSD level.
+ * @returns {number[]} Level dimensions as [width, height].
+ */
+function getLevelDimensions(level) {
+    const scale = getLevelScale(level);
+
+    return [
+        Math.max(1, Math.ceil(STATE.width * scale)),
+        Math.max(1, Math.ceil(STATE.height * scale))
+    ];
+}
+
+/**
+ * Return the OpenSeadragon pyramid scale for a level.
+ *
+ * @param {number} level - OSD level.
+ * @returns {number} Level scale.
+ */
+function getLevelScale(level) {
+    return 1 / Math.pow(2, STATE.maxLevel - level);
+}
+
+/**
+ * Return the packed tile-depth value used by the vector renderer.
+ *
+ * @param {number} level - OSD level.
+ * @param {number} x - Tile x.
+ * @param {number} y - Tile y.
+ * @returns {number} Tile depth value.
+ */
+function getTileDepth(level, x, y) {
+    return (level << 2) + (2 * (y % 2) + (x % 2)) + 1;
+}
+
+/**
+ * Test whether two bounds intersect.
+ *
+ * @param {number[]} a - First bounds.
+ * @param {number[]} b - Second bounds.
+ * @returns {boolean} True when the rectangles intersect.
+ */
+function intersects(a, b) {
+    return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+/**
+ * Test whether an image-space point is inside image-space bounds.
+ *
+ * @param {number[]} point - Image-space point.
+ * @param {number[]} bounds - Bounds as [minX, minY, maxX, maxY].
+ * @returns {boolean} True when the point is inside or on the bounds edge.
+ */
+function pointInBounds(point, bounds) {
+    return point[0] >= bounds[0] && point[0] <= bounds[2] && point[1] >= bounds[1] && point[1] <= bounds[3];
+}
+
+/**
+ * Clip a LineString to rectangular image-space bounds.
+ *
+ * Each visible segment is returned as a separate two-point LineString. This
+ * avoids connecting disjoint clipped segments after clipping.
+ *
+ * @param {number[][]} coordinates - Image-space LineString coordinates.
+ * @param {number[]} bounds - Bounds as [minX, minY, maxX, maxY].
+ * @returns {number[][][]} Clipped LineString segments.
+ */
+function clipLineStringToBounds(coordinates, bounds) {
+    const clipped = [];
+
+    for (let i = 0; i < coordinates.length - 1; i += 1) {
+        const segment = clipLineSegmentToBounds(coordinates[i], coordinates[i + 1], bounds);
+
+        if (segment) {
+            clipped.push(segment);
+        }
+    }
+
+    return clipped;
+}
+
+/**
+ * Clip one line segment to rectangular image-space bounds.
+ *
+ * Uses Liang-Barsky segment clipping.
+ *
+ * @param {number[]} start - Segment start point.
+ * @param {number[]} end - Segment end point.
+ * @param {number[]} bounds - Bounds as [minX, minY, maxX, maxY].
+ * @returns {?number[][]} Clipped two-point segment, or null when outside.
+ */
+function clipLineSegmentToBounds(start, end, bounds) {
+    const [minX, minY, maxX, maxY] = bounds;
+    const x0 = start[0];
+    const y0 = start[1];
+    const x1 = end[0];
+    const y1 = end[1];
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+
+    let t0 = 0;
+    let t1 = 1;
+
+    const clip = (p, q) => {
+        if (p === 0) {
+            return q >= 0;
+        }
+
+        const r = q / p;
+
+        if (p < 0) {
+            if (r > t1) {
+                return false;
+            }
+
+            if (r > t0) {
+                t0 = r;
+            }
+        } else {
+            if (r < t0) {
+                return false;
+            }
+
+            if (r < t1) {
+                t1 = r;
+            }
+        }
+
+        return true;
+    };
+
+    if (
+        clip(-dx, x0 - minX) &&
+        clip(dx, maxX - x0) &&
+        clip(-dy, y0 - minY) &&
+        clip(dy, maxY - y0)
+    ) {
+        return [
+            [x0 + t0 * dx, y0 + t0 * dy],
+            [x0 + t1 * dx, y0 + t1 * dy]
+        ];
+    }
+
+    return null;
+}
+
+/**
+ * Clip a Polygon to rectangular image-space bounds.
+ *
+ * The first ring is clipped as the exterior ring. Following rings are clipped
+ * as hole rings and passed through to earcut.
+ *
+ * @param {number[][][]} coordinates - Polygon image-space coordinates.
+ * @param {number[]} bounds - Bounds as [minX, minY, maxX, maxY].
+ * @returns {?number[][][]} Clipped Polygon coordinates, or null when outside.
+ */
+function clipPolygonToBounds(coordinates, bounds) {
+    if (!coordinates || coordinates.length === 0) {
+        return null;
+    }
+
+    const clippedRings = [];
+
+    for (let ringIndex = 0; ringIndex < coordinates.length; ringIndex += 1) {
+        const clippedRing = clipRingToBounds(coordinates[ringIndex], bounds);
+
+        if (clippedRing.length >= 4) {
+            clippedRings.push(clippedRing);
+        }
+    }
+
+    if (!clippedRings.length) {
+        return null;
+    }
+
+    return clippedRings;
+}
+
+/**
+ * Clip one polygon ring to rectangular image-space bounds.
+ *
+ * Uses Sutherland-Hodgman clipping against the four rectangle edges.
+ *
+ * @param {number[][]} ring - Closed polygon ring.
+ * @param {number[]} bounds - Bounds as [minX, minY, maxX, maxY].
+ * @returns {number[][]} Closed clipped ring, or an empty array.
+ */
+function clipRingToBounds(ring, bounds) {
+    if (!Array.isArray(ring) || ring.length < 4) {
+        return [];
+    }
+
+    const [minX, minY, maxX, maxY] = bounds;
+    let output = ring.slice(0, -1);
+
+    output = clipRingToBoundary(
+        output,
+        point => point[0] >= minX,
+        (start, end) => intersectVertical(start, end, minX)
+    );
+
+    output = clipRingToBoundary(
+        output,
+        point => point[0] <= maxX,
+        (start, end) => intersectVertical(start, end, maxX)
+    );
+
+    output = clipRingToBoundary(
+        output,
+        point => point[1] >= minY,
+        (start, end) => intersectHorizontal(start, end, minY)
+    );
+
+    output = clipRingToBoundary(
+        output,
+        point => point[1] <= maxY,
+        (start, end) => intersectHorizontal(start, end, maxY)
+    );
+
+    if (output.length < 3) {
+        return [];
+    }
+
+    output.push(output[0].slice());
+
+    return output;
+}
+
+/**
+ * Clip one polygon ring against one half-plane.
+ *
+ * @param {number[][]} ring - Ring without duplicate closing coordinate.
+ * @param {function(number[]): boolean} isInside - Boundary inclusion test.
+ * @param {function(number[], number[]): number[]} intersect - Boundary intersection function.
+ * @returns {number[][]} Clipped ring without duplicate closing coordinate.
+ */
+function clipRingToBoundary(ring, isInside, intersect) {
+    if (!ring.length) {
+        return [];
+    }
+
+    const clipped = [];
+
+    for (let i = 0; i < ring.length; i += 1) {
+        const current = ring[i];
+        const previous = ring[(i + ring.length - 1) % ring.length];
+        const currentInside = isInside(current);
+        const previousInside = isInside(previous);
+
+        if (currentInside) {
+            if (!previousInside) {
+                clipped.push(intersect(previous, current));
+            }
+
+            clipped.push(current);
+        } else if (previousInside) {
+            clipped.push(intersect(previous, current));
+        }
+    }
+
+    return clipped;
+}
+
+/**
+ * Intersect a segment with a vertical line.
+ *
+ * @param {number[]} start - Segment start.
+ * @param {number[]} end - Segment end.
+ * @param {number} x - Vertical line x coordinate.
+ * @returns {number[]} Intersection point.
+ */
+function intersectVertical(start, end, x) {
+    const dx = end[0] - start[0];
+
+    if (dx === 0) {
+        return [x, start[1]];
+    }
+
+    const t = (x - start[0]) / dx;
+
+    return [
+        x,
+        start[1] + t * (end[1] - start[1])
+    ];
+}
+
+/**
+ * Intersect a segment with a horizontal line.
+ *
+ * @param {number[]} start - Segment start.
+ * @param {number[]} end - Segment end.
+ * @param {number} y - Horizontal line y coordinate.
+ * @returns {number[]} Intersection point.
+ */
+function intersectHorizontal(start, end, y) {
+    const dy = end[1] - start[1];
+
+    if (dy === 0) {
+        return [start[0], y];
+    }
+
+    const t = (y - start[1]) / dy;
+
+    return [
+        start[0] + t * (end[0] - start[0]),
+        y
+    ];
+}
+
+
+/**
+ * Convert image coordinates into normalized tile-local coordinates.
+ *
+ * @param {number[]} coordinate - Image coordinate.
+ * @param {object} tile - Tile request.
+ * @returns {number[]} Tile-local coordinate normalized to the actual tile rectangle.
+ */
+function imageToTileUv(coordinate, tile) {
+    const scale = getLevelScale(tile.level);
+    const rect = getTileLevelRect(tile.level, tile.x, tile.y);
+    const levelX = coordinate[0] * scale;
+    const levelY = coordinate[1] * scale;
+    const localX = levelX - rect.left;
+    const localY = levelY - rect.top;
+
+    return [
+        localX / rect.width,
+        localY / rect.height
+    ];
+}
+
+/**
+ * Convert a level-pixel size to normalized tile-local units.
+ *
+ * Mesh coordinates are emitted in normalized tile-local coordinates, where 1.0
+ * equals the actual tile width or height at the requested level.
+ *
+ * @param {number} size - Size in level pixels.
+ * @param {object} tile - Tile request.
+ * @returns {number} Size in normalized tile-local units.
+ */
+function tilePixelSizeToUv(size, tile) {
+    const rect = getTileLevelRect(tile.level, tile.x, tile.y);
+    const denominator = Math.max(rect.width, rect.height);
+
+    return size / denominator;
+}
+
+
+/**
+ * Build a tile after configuration completes.
+ *
+ * @param {object} message - Tile request.
+ * @returns {Promise<void>} Resolves after response posting.
+ */
+async function buildTileWhenReady(message) {
+    try {
+        if (STATE.configurePromise) {
+            await STATE.configurePromise;
+        }
+
+        if (!STATE.configured) {
+            throw new Error('GeoJSON worker: received tile request before valid configuration.');
+        }
+
+        buildTile(message);
+    } catch (error) {
+        self.postMessage({
+            type: 'tile',
+            key: message.key,
+            ok: false,
+            error: error.message || String(error)
+        });
+    }
+}
+
+/**
+ * Build one vector-mesh tile.
+ *
+ * @param {object} tile - Tile request.
+ * @returns {void}
+ */
+function buildTile(tile) {
+    const tileBounds = getTileImageBounds(tile.level, tile.x, tile.y);
+    const depth = getTileDepth(tile.level, tile.x, tile.y);
+
+    const output = {
+        fills: [],
+        lines: [],
+        linePrimitives: [],
+        points: []
+    };
+
+    const transfers = [];
+
+    const visibleGeometries = getVisibleTileGeometries(tileBounds);
+
+    if (shouldAggregateTile(tile, visibleGeometries.length)) {
+        buildAggregateTile(tile, depth, visibleGeometries.length, output, transfers);
+    } else {
+        buildGeometryTile(tile, depth, visibleGeometries, output, transfers);
+    }
+
+    self.postMessage({
+        type: 'tile',
+        key: tile.key,
+        ok: true,
+        data: output
+    }, transfers);
+}
+
+/**
+ * Return geometries that actually contribute to a tile.
+ *
+ * The candidate list comes from the quadtree when available. This function then
+ * applies the same geometry-specific inclusion and clipping checks used by the
+ * previous direct rendering path.
+ *
+ * @param {number[]} tileBounds - Tile image-space bounds.
+ * @returns {object[]} Array of objects containing the full visible geometries and their clipped variants.
+ */
+function getVisibleTileGeometries(tileBounds) {
+    const visible = [];
+
+    // Candidate geometries are read from a static image-space quadtree when the
+    // source is large enough to justify indexing. Small sources fall back to
+    // direct scanning.
+    //
+    // The quadtree is only an acceleration structure. Each candidate is still
+    // bbox-checked and then clipped/meshed by the existing geometry-specific
+    // paths, preserving previous rendering behavior.
+    const candidateGeometries = getTileCandidateGeometries(tileBounds);
+
+    // Geometries are bbox-filtered first, then clipped to the current tile before meshing.
+    // This prevents large geometries from being emitted into every intersecting tile in full.
+    for (const geometry of candidateGeometries) {
+        if (!intersects(geometry.bbox, tileBounds)) {
+            continue;
+        }
+
+        if (geometry.type === 'Point') {
+            if (pointInBounds(geometry.coordinates, tileBounds)) {
+                visible.push({
+                    geometry
+                });
+            }
+        } else if (geometry.type === 'LineString') {
+            const clippedLines = clipLineStringToBounds(geometry.coordinates, tileBounds);
+
+            if (clippedLines.length) {
+                visible.push({
+                    geometry,
+                    clippedLines
+                });
+            }
+        } else if (geometry.type === 'Polygon') {
+            const clippedPolygon = clipPolygonToBounds(geometry.coordinates, tileBounds);
+
+            if (clippedPolygon) {
+                visible.push({
+                    geometry,
+                    clippedPolygon
+                });
+            }
+        }
+    }
+
+    return visible;
+}
+
+/**
+ * Test whether a tile should be rendered as one aggregate marker.
+ *
+ * Aggregation is disabled at max level so the deepest available level always
+ * renders the original annotation geometry.
+ *
+ * @param {object} tile - Tile request.
+ * @param {number} count - Visible annotation count.
+ * @returns {boolean} True when the tile should be aggregated.
+ */
+function shouldAggregateTile(tile, count) {
+    return !!(STATE.aggregation && STATE.aggregation.enabled && tile.level < STATE.maxLevel && count > STATE.aggregation.threshold);
+}
+
+/**
+ * Build normal annotation meshes for a tile.
+ *
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {object[]} visibleGeometries - Array of objects containing the full visible geometries and their clipped variants.
+ * @param {object} output - Mesh output object.
+ * @param {ArrayBuffer[]} transfers - Transferable buffers.
+ * @returns {void}
+ */
+function buildGeometryTile(tile, depth, visibleGeometries, output, transfers) {
+    for (const item of visibleGeometries) {
+        const geometry = item.geometry;
+
+        switch (geometry.type) {
+            case 'Point': {
+                const mesh = makePointMesh(geometry.coordinates, tile, depth, STATE.style.pointSize, STATE.style.pointColor);
+                pushMesh(output.points, transfers, mesh);
+                break;
+            }
+
+            case 'LineString': {
+                const target = STATE.useNativeLines ? output.linePrimitives : output.lines;
+
+                for (const clippedLine of item.clippedLines) {
+                    const mesh = makeLineMesh(clippedLine, tile, depth, STATE.style.lineWidth, STATE.style.lineColor);
+                    pushMesh(target, transfers, mesh);
+                }
+
+                break;
+            }
+
+            case 'Polygon': {
+                const mesh = makePolygonMesh(item.clippedPolygon, tile, depth, STATE.style.fillColor);
+                pushMesh(output.fills, transfers, mesh);
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Build one aggregate badge tile.
+ *
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {number} count - Visible geometry count.
+ * @param {object} output - Mesh output object.
+ * @param {ArrayBuffer[]} transfers - Transferable buffers.
+ * @returns {void}
+ */
+function buildAggregateTile(tile, depth, count, output, transfers) {
+    const tileBounds = getTileImageBounds(tile.level, tile.x, tile.y);
+    const center = [ (tileBounds[0] + tileBounds[2]) / 2, (tileBounds[1] + tileBounds[3]) / 2 ];
+    const badgeMesh = makeAggregateBadgeMesh(center, tile, depth, count);
+
+    pushMesh(output.fills, transfers, badgeMesh);
+
+    const labelTarget = STATE.useNativeLines ? output.linePrimitives : output.lines;
+
+    for (const labelMesh of makeAggregateLabelMeshes(center, tile, depth, count)) {
+        pushMesh(labelTarget, transfers, labelMesh);
+    }
+}
+
+
+/**
+ * Create a filled octagonal aggregate badge mesh.
+ *
+ * @param {number[]} center - Badge center in image coordinates.
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @returns {object} Mesh object.
+ */
+function makeAggregateBadgeMesh(center, tile, depth) {
+    const [x, y] = imageToTileUv(center, tile);
+    const rect = getTileLevelRect(tile.level, tile.x, tile.y);
+    const radiusX = (STATE.aggregation.badgeSize / 2) / rect.width;
+    const radiusY = (STATE.aggregation.badgeSize / 2) / rect.height;
+    const vertices = [
+        x, y, depth, -1
+    ];
+    const indices = [];
+    const sides = 8;
+
+    for (let i = 0; i < sides; i += 1) {
+        const angle = -Math.PI / 2 + (i / sides) * Math.PI * 2;
+
+        vertices.push(
+            x + Math.cos(angle) * radiusX,
+            y + Math.sin(angle) * radiusY,
+            depth,
+            -1
+        );
+    }
+
+    for (let i = 1; i <= sides; i += 1) {
+        indices.push(0, i, i === sides ? 1 : i + 1);
+    }
+
+    return makeMesh(vertices, indices, STATE.aggregation.badgeColor);
+}
+
+/**
+ * Create line meshes for an aggregate badge count label.
+ *
+ * @param {number[]} center - Label center in image coordinates.
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {number} count - Visible annotation count.
+ * @returns {object[]} Label line meshes.
+ */
+function makeAggregateLabelMeshes(center, tile, depth, count) {
+    const label = count > STATE.aggregation.maxLabelValue ? \`\${STATE.aggregation.maxLabelValue}+\` : String(count);
+    const scale = getLevelScale(tile.level);
+    const height = STATE.aggregation.labelSize / scale;
+    const width = height * 0.55;
+    const gap = height * 0.22;
+    const totalWidth = label.length * width + Math.max(0, label.length - 1) * gap;
+    const startX = center[0] - totalWidth / 2 + width / 2;
+    const meshes = [];
+
+    for (let index = 0; index < label.length; index += 1) {
+        const character = label[index];
+        const glyphCenter = [
+            startX + index * (width + gap),
+            center[1]
+        ];
+
+        for (const segment of getGlyphSegments(character, glyphCenter, width, height)) {
+            const mesh = makeLineMesh(
+                segment,
+                tile,
+                depth,
+                STATE.aggregation.labelStrokeWidth,
+                STATE.aggregation.labelColor
+            );
+
+            if (mesh) {
+                meshes.push(mesh);
+            }
+        }
+    }
+
+    return meshes;
+}
+
+/**
+ * Return line segments for one seven-segment glyph.
+ *
+ * @param {string} character - Digit or plus sign.
+ * @param {number[]} center - Glyph center in image coordinates.
+ * @param {number} width - Glyph width in image coordinates.
+ * @param {number} height - Glyph height in image coordinates.
+ * @returns {number[][][]} Glyph line segments.
+ */
+function getGlyphSegments(character, center, width, height) {
+    const segments = SEVEN_SEGMENT_GLYPHS[character];
+
+    if (!segments) {
+        return [];
+    }
+
+    const halfWidth = width / 2;
+    const halfHeight = height / 2;
+    const midY = center[1];
+
+    const points = {
+        topLeft: [center[0] - halfWidth, center[1] - halfHeight],
+        topRight: [center[0] + halfWidth, center[1] - halfHeight],
+        middleLeft: [center[0] - halfWidth, midY],
+        middleRight: [center[0] + halfWidth, midY],
+        bottomLeft: [center[0] - halfWidth, center[1] + halfHeight],
+        bottomRight: [center[0] + halfWidth, center[1] + halfHeight],
+        topMiddle: [center[0], center[1] - halfHeight * 0.65],
+        bottomMiddle: [center[0], center[1] + halfHeight * 0.65]
+    };
+
+    const segmentCoordinates = {
+        top: [points.topLeft, points.topRight],
+        upperRight: [points.topRight, points.middleRight],
+        lowerRight: [points.middleRight, points.bottomRight],
+        bottom: [points.bottomLeft, points.bottomRight],
+        lowerLeft: [points.middleLeft, points.bottomLeft],
+        upperLeft: [points.topLeft, points.middleLeft],
+        middle: [points.middleLeft, points.middleRight],
+        verticalMiddle: [points.topMiddle, points.bottomMiddle]
+    };
+
+    return segments.map(segment => segmentCoordinates[segment]);
+}
+
+
+/**
+ * Create a square point marker mesh.
+ *
+ * @param {number[]} coordinate - Image coordinate.
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {number} pointSize - Line width in level pixels.
+ * @param {number[]} color - RGBA color.
+ * @returns {?object} Mesh object.
+ */
+function makePointMesh(coordinate, tile, depth, pointSize, color) {
+    const [x, y] = imageToTileUv(coordinate, tile);
+    const size = tilePixelSizeToUv(pointSize, tile);
+    const half = size / 2;
+
+    return makeMesh(
+        [
+            x - half, y - half, depth, -1,
+            x + half, y - half, depth, -1,
+            x + half, y + half, depth, -1,
+            x - half, y + half, depth, -1
+        ],
+        [0, 1, 2, 0, 2, 3],
+        color
+    );
+}
+
+/**
+ * Create simple rectangular segment meshes for a styled line.
+ *
+ * @param {number[][]} coordinates - Image coordinates.
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {number} lineWidth - Line width in level pixels.
+ * @param {number[]} color - RGBA color.
+ * @returns {?object} Mesh object.
+ */
+function makeLineMesh(coordinates, tile, depth, lineWidth, color) {
+    if (!coordinates || coordinates.length < 2) {
+        return null;
+    }
+
+    if (STATE.useNativeLines) {
+        const vertices = [];
+        const indices = [];
+
+        for (let i = 0; i < coordinates.length; i++) {
+            const point = imageToTileUv(coordinates[i], tile);
+
+            vertices.push(point[0], point[1], depth, -1);
+
+            if (i < coordinates.length - 1) {
+                indices.push(i, i + 1);
+            }
+        }
+
+        if (!indices.length) {
+            return null;
+        }
+
+        const mesh = makeMesh(vertices, indices, color);
+        mesh.lineWidth = Number.isFinite(lineWidth) && lineWidth > 0 ? lineWidth : 1;
+        return mesh;
+    }
+
+    const vertices = [];
+    const indices = [];
+    const width = tilePixelSizeToUv(lineWidth, tile);
+    const half = width / 2;
+
+    for (let i = 0; i < coordinates.length - 1; i++) {
+        const p0 = imageToTileUv(coordinates[i], tile);
+        const p1 = imageToTileUv(coordinates[i + 1], tile);
+        const dx = p1[0] - p0[0];
+        const dy = p1[1] - p0[1];
+        const length = Math.sqrt(dx * dx + dy * dy);
+
+        if (!length) {
+            continue;
+        }
+
+        const nx = -dy / length * half;
+        const ny = dx / length * half;
+        const base = vertices.length / 4;
+
+        vertices.push(
+            p0[0] - nx, p0[1] - ny, depth, -1,
+            p0[0] + nx, p0[1] + ny, depth, -1,
+            p1[0] + nx, p1[1] + ny, depth, -1,
+            p1[0] - nx, p1[1] - ny, depth, -1
+        );
+
+        indices.push(
+            base, base + 1, base + 2,
+            base, base + 2, base + 3
+        );
+    }
+
+    if (!indices.length) {
+        return null;
+    }
+
+    return makeMesh(vertices, indices, color);
+}
+
+/**
+ * Create a triangulated mesh for a Polygon.
+ *
+ * Earcut supports concave polygons and holes. The first ring is treated as the
+ * exterior ring and all following rings are treated as holes, matching GeoJSON
+ * Polygon coordinate structure.
+ *
+ * @param {number[][][]} coordinates - Polygon image coordinates.
+ * @param {object} tile - Tile request.
+ * @param {number} depth - Depth value.
+ * @param {number[]} color - RGBA color.
+ * @returns {?object} Mesh object.
+ */
+function makePolygonMesh(coordinates, tile, depth, color) {
+    if (!self.earcut) {
+        throw new Error('GeoJSON worker: missing earcut library.');
+    }
+
+    if (coordinates.length === 0) {
+        return null;
+    }
+
+    const flat = [];
+    const holes = [];
+    const vertices = [];
+    let vertexCount = 0;
+
+    for (let ringIndex = 0; ringIndex < coordinates.length; ringIndex += 1) {
+        const ring = coordinates[ringIndex].slice(0, -1);
+
+        if (ringIndex > 0) {
+            holes.push(vertexCount);
+        }
+
+        for (const coordinate of ring) {
+            const point = imageToTileUv(coordinate, tile);
+
+            flat.push(point[0], point[1]);
+            vertices.push(point[0], point[1], depth, -1);
+            vertexCount += 1;
+        }
+    }
+
+    const indices = self.earcut(flat, holes, 2);
+
+    if (!indices.length) {
+        return null;
+    }
+
+    return makeMesh(vertices, indices, color);
+}
+
+/**
+ * Create a vector mesh object with transferable buffers.
+ *
+ * @param {number[]} vertices - Flat vec4 vertex coordinates.
+ * @param {number[]} indices - Triangle indices.
+ * @param {number[]} color - RGBA color.
+ * @returns {object} Mesh object.
+ */
+function makeMesh(vertices, indices, color) {
+    return {
+        vertices: new Float32Array(vertices).buffer,
+        indices: new Uint32Array(indices).buffer,
+        color
+    };
+}
+
+/**
+ * Push a mesh and its transferable buffers into tile output arrays.
+ *
+ * @param {object[]} target - Mesh target array.
+ * @param {ArrayBuffer[]} transfers - Transferable buffers.
+ * @param {?object} mesh - Mesh to push.
+ * @returns {void}
+ */
+function pushMesh(target, transfers, mesh) {
+    if (!mesh) {
+        return;
+    }
+
+    target.push(mesh);
+    transfers.push(mesh.vertices, mesh.indices);
 }
 
 `;

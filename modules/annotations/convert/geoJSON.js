@@ -97,6 +97,20 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
                 properties: factory.copyNecessaryProperties(object, [], true)
             };
         },
+        // 3-point LineString: [first, vertex, second]. The middle point is
+        // the vertex by convention — keep the order, downstream consumers
+        // (and the native decoder below) rely on it.
+        "angle": (object) => {
+            const factory = this.context.module.getAnnotationObjectFactory(object.factoryID);
+            const converter = OSDAnnotations.AnnotationObjectFactory.withArrayPoint;
+            return {
+                geometry: {
+                    type: "LineString",
+                    coordinates: factory?.toPointArray(object, converter, fabric.Object.NUM_FRACTION_DIGITS)
+                },
+                properties: factory.copyNecessaryProperties(object, [], true)
+            };
+        },
     };
 
     //decode all supported factory types if factoryID present
@@ -123,6 +137,7 @@ OSDAnnotations.Convertor.register("geo-json", class extends OSDAnnotations.Conve
             return object;
         }),
         "ruler": (object) => this._getAsNativeObject(object),
+        "angle": (object) => this._getAsNativeObject(object),
     };
 
     // todo support unpacking like qupath does

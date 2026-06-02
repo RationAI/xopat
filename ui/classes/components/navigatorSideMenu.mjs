@@ -3,7 +3,7 @@ import { BaseComponent } from "../baseComponent.mjs";
 import {Button} from "../elements/buttons.mjs";
 import {Checkbox} from "../elements/checkbox.mjs";
 import {Join} from "../elements/join.mjs";
-import {FAIcon} from "../elements/fa-icon.mjs";
+import {PhIcon} from "../elements/ph-icon.mjs";
 import {Div} from "../elements/div.mjs";
 
 const { div, } = van.tags;
@@ -81,7 +81,7 @@ export class NavigatorSideMenu extends BaseComponent {
                 title: $.t("main.bar.copy"),
                 style: "width:30px;"
             },
-        }, new FAIcon({ name: "fa-copy" }));
+        }, new PhIcon({ name: "ph-copy" }));
 
 
         const header = new Join({

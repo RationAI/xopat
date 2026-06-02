@@ -4,8 +4,8 @@ import { MainPanel } from '../classes/components/mainPanel.mjs';
 import { Dropdown } from '../classes/elements/dropdown.mjs';
 import { Button } from '../classes/elements/buttons.mjs';
 import { Menu } from '../classes/components/menu.mjs';
-import { MenuTabBanner } from '../classes/components/menuTabBanner.mjs';
-import { FAIcon } from '../classes/elements/fa-icon.mjs';
+import { PhIcon } from '../classes/elements/ph-icon.mjs';
+import { VisibilityManager } from '../classes/mixins/visibilityManager.mjs';
 
 export class AppBar {
 
@@ -25,7 +25,7 @@ export class AppBar {
                 extraClasses: {bg: "bg-transparent"},
             }, {
                 id: "view",
-                icon: "fa-window-restore",
+                icon: "ph-layout",
                 title: $.t('main.bar.view'),
                 body: [],
                 class: Dropdown,
@@ -34,14 +34,14 @@ export class AppBar {
                 onClick: e => this.View._refreshVisualDropdown()
             }, {
                 id: "edit",
-                icon: "fa-bars",
+                icon: "ph-list",
                 title: $.t('main.bar.edit'),
                 body: [],
                 class: Dropdown,
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.Edit.refresh(true)
             }, {
-                id: "plugins", icon: "fa-puzzle-piece", title: $.t('main.bar.plugins'),
+                id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
             }
         );
@@ -55,7 +55,7 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: {bg: "bg-transparent"},
             },{
-                id: "Menu", icon: "fa-bars",
+                id: "Menu", icon: "ph-list",
                 body: [], class: Dropdown
             }
         );
@@ -69,10 +69,9 @@ export class AppBar {
                 rounded: Menu.ROUNDED.ENABLE,
                 extraClasses: { bg: "bg-transparent" }
             },
-            { id: "banner", icon: "fa-warning", title: "Banner", body: undefined, class: MenuTabBanner },
-            { id: "settings", icon: "fa-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
-            { id: "tutorial", icon: "fa-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
-            { id: "share", icon: "fa-share-nodes", title: $.t('main.bar.share'), items: [
+            { id: "settings", icon: "ph-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
+            { id: "tutorial", icon: "ph-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+            { id: "share", icon: "ph-share-network", title: $.t('main.bar.share'), items: [
                     {
                         id: "global-export",
                         domID: true,
@@ -82,7 +81,7 @@ export class AppBar {
                             UTILITIES.export();
                             this.rightMenu.closeTab("share");
                         },
-                        icon: "fa-download"
+                        icon: "ph-download-simple"
                     },
                     {
                         id: "copy-url-inner",
@@ -93,10 +92,10 @@ export class AppBar {
                             UTILITIES.copyUrlToClipboard();
                             this.rightMenu.closeTab("share");
                         },
-                        icon: "fa-link"
+                        icon: "ph-link"
                     }
                 ], class: Dropdown},
-            { id: "user", icon: "fa-circle-user", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
+            { id: "user", icon: "ph-user-circle", title: XOpatUser.instance().name || $.t('user.anonymous'), body: undefined, styleOverride: true, class: UI.MenuButton}
         );
 
         this.rightMenu.attachTo($("#top-side-left-user"));
@@ -110,37 +109,73 @@ export class AppBar {
             this.rightMenuCollapsed.setClass("display", "hidden");
         }
 
-        // Fullscreen button switch
+        // Keep the user tab title in sync with the user's currently assigned
+        // role(s). See src/USER_ROLES.md — this is the v1 surface for the
+        // "show user role in the user detail" requirement until the user tab
+        // gains a proper popup body.
+        const user = window.XOpatUser?.instance?.();
+        if (user) {
+            const renderTitle = () => {
+                const name = user.name || $.t('user.anonymous');
+                const roles = user.currentRoles?.() ?? [];
+                if (!roles.length) return name;
+                const labels = roles.map(id => window.XOpatUser?.describeRole?.(id)?.label ?? id);
+                return `${name} · ${labels.join(", ")}`;
+            };
+            const setTitle = () => {
+                try { this.rightMenu.getTab('user')?.setTitle?.(renderTitle()); }
+                catch (e) { /* ignore during teardown */ }
+            };
+            setTitle();
+            user.addHandler('roles-changed', setTitle);
+            user.addHandler('login', setTitle);
+            user.addHandler('logout', setTitle);
+        }
+
+        // Hide-chrome button — toggles every component registered with AppBar.Chrome.
+        // Components opt in via AppBar.Chrome.register(id, vm) (or get auto-enrolled
+        // by AppBar.View.append / View.registerViewComponent). No hardcoded IDs here.
         this.button = new Button({
                 id: "fullscreen-button",
                 size: Button.SIZE.SMALL,
-                onClick: function () {
-
-                    // todo through API, remove usage of the IDs!
-                    // add components which you want to be hidden on fullscreen here:
-                    document.getElementById("top-side-left-user").classList.toggle("invisible");
-                    document.getElementById("top-side-left").classList.toggle("invisible");
-
-                    // cannot hide whole top-side, because it contains also fullscreen button
-                    document.getElementById("top-side").classList.toggle("opaque-bg");
-                    const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                    if (toolbarDivs.length >= 0 && toolbarDivs[0].classList.contains("hidden")){
-                        toolbarDivs.forEach((el) => el.classList.remove("hidden"));
-                    } else {
-                        toolbarDivs.forEach((el) => el.classList.add("hidden"));
-                    }
-
-                    this._fullscreen = !this._fullscreen;
+                onClick: () => {
+                    this.Chrome.toggle();
+                    this._fullscreen = this.Chrome.isHidden();
                 }
             },
-            new FAIcon("fa-up-right-and-down-left-from-center"));
-        this._fullscreen = false; // todo option
+            new PhIcon("ph-arrows-out"));
+        this._fullscreen = false;
         this.button.attachTo($("#top-side-left-fullscreen"));
+
+        // Register the AppBar's own children as chrome-hideable. The hide button
+        // itself lives in #top-side-left-fullscreen and is intentionally excluded.
+        const makeNodeVm = (id) => {
+            const node = document.getElementById(id);
+            if (!node) return null;
+            return new VisibilityManager(`appbar-chrome::${id}`).initOnRootNode(node, true);
+        };
+        for (const id of ["top-side-left", "top-side-left-user", "top-side-badges"]) {
+            const vm = makeNodeVm(id);
+            if (vm) this.Chrome.register(`appbar-chrome::${id}`, vm);
+        }
+        // Drop the bar's frosted-glass background while hidden so the viewer is
+        // unobstructed; the bar itself stays in the DOM because it hosts the hide button.
+        this.Chrome.register("appbar-chrome::top-side-bg", {
+            is:  () =>  document.getElementById("top-side")?.classList.contains("glass") ?? false,
+            on:  () => document.getElementById("top-side")?.classList.add("glass"),
+            off: () => document.getElementById("top-side")?.classList.remove("glass"),
+        });
 
         // init submenus
         this.View.init(this.menu.getTab("view"));
         this.Edit.init(this.menu.getTab("edit"));
         this.Plugins.init(this.menu.getTab("plugins"));
+
+        // `disablePluginsUi` also hides the top-bar plugins tab. Plugins
+        // remain loaded; they just have no entry point in the chrome.
+        if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+            this.menu.getTab("plugins")?.setClass?.("display", "hidden");
+        }
     }
 
     /**
@@ -157,17 +192,33 @@ export class AppBar {
     }
 
     /**
-     * Top App Bar - banner message / item
-     * @param banner
+     * Show / replace / clear a status pill in the AppBar's badge area.
+     * Multiple coexisting pills are supported by passing distinct `id`s.
+     *
+     * @param {Badge|null} banner Badge component to mount, or null to remove.
+     * @param {string} [id="banner"] Pill identifier. Repeat calls with the
+     *   same id replace the existing pill; pass null to remove it.
+     * @returns {HTMLElement|null} The mounted element (or null on removal).
      */
-    setBanner(banner) {
-        const bItem = this.rightMenu.getTab("banner");
-        if (banner) {
-            bItem.visibilityManager.on();
-            bItem.setVisuals(banner);
-        } else {
-            bItem.visibilityManager.off();
+    setBanner(banner, id = "banner") {
+        this._banners = this._banners || new Map();
+        const host = document.getElementById("top-side-badges");
+        if (!host) {
+            console.warn("AppBar.setBanner: host element #top-side-badges missing");
+            return null;
         }
+
+        const prev = this._banners.get(id);
+        if (prev?.parentNode) prev.parentNode.removeChild(prev);
+        this._banners.delete(id);
+
+        if (!banner) return null;
+
+        const el = banner.create();
+        el.dataset.bannerId = id;
+        host.appendChild(el);
+        this._banners.set(id, el);
+        return el;
     }
 
     // ── Badge API ─────────────────────────────────────────────────────────
@@ -194,7 +245,7 @@ export class AppBar {
      * @param {('success'|'warning'|'error'|'info'|'neutral'|'primary'|'secondary'|'accent')} [opts.color='neutral']
      * @param {('none'|'soft'|'outline'|'ghost')} [opts.style='none']
      * @param {('xs'|'sm'|'md'|'lg')} [opts.size='sm']
-     * @param {string} [opts.icon] FontAwesome icon class (e.g. "fa-users").
+     * @param {string} [opts.icon] Icon class — Phosphor (`ph-users`) preferred; legacy `fa-users` also accepted.
      * @param {boolean} [opts.dot=false] Render a colored dot before label.
      * @param {string} [opts.dotColor] Optional explicit dot colour token (defaults to opts.color).
      * @param {boolean} [opts.pulse=false] Animate the dot for "active/connecting" states.
@@ -334,16 +385,91 @@ export class AppBar {
         return this._fullscreen;
     }
 
+    /**
+     * Opt-in registry of components that should disappear when the user
+     * presses the AppBar "hide chrome" button (the one that looks like a
+     * fullscreen expand). It is **not** related to the browser fullscreen
+     * API or to `UI.Services.FullscreenMenus`.
+     *
+     * Reuses the existing {@link VisibilityManager} pattern: components
+     * register a manager (or any duck with `is()` + `on()/off()` or
+     * `is()/set(bool)`). On hide, the snapshot of each `is()` is captured
+     * and `off()` is called directly — `vm.set(false)` is intentionally
+     * avoided so that `AppCache` is not polluted with the transient state.
+     * On show, only the entries that were visible before are turned back
+     * on, preserving any pre-hide user choices.
+     *
+     * Anything already going through `AppBar.View.append()` or
+     * `AppBar.View.registerViewComponent()` is auto-registered.
+     *
+     * @example
+     *   USER_INTERFACE.AppBar.Chrome.register("my-panel", myVm);
+     *   USER_INTERFACE.AppBar.Chrome.unregister("my-panel");
+     *   USER_INTERFACE.AppBar.Chrome.toggle();
+     */
+    Chrome = {
+        _entries: new Map(),
+        _hidden: false,
+
+        /**
+         * @param {string} id Unique key; re-registering the same id replaces the entry.
+         * @param {VisibilityManager | { is: () => boolean, on?: () => void, off?: () => void, set?: (b: boolean) => void }} vm
+         */
+        register(id, vm) {
+            if (!id || !vm) return;
+            this._entries.set(id, { vm, snapshot: undefined });
+            if (this._hidden) {
+                const entry = this._entries.get(id);
+                entry.snapshot = !!vm.is?.();
+                this._off(vm);
+            }
+        },
+
+        unregister(id) {
+            this._entries.delete(id);
+        },
+
+        isHidden() { return this._hidden; },
+
+        hide() {
+            if (this._hidden) return;
+            for (const entry of this._entries.values()) {
+                entry.snapshot = !!entry.vm.is?.();
+                this._off(entry.vm);
+            }
+            this._hidden = true;
+        },
+
+        show() {
+            if (!this._hidden) return;
+            for (const entry of this._entries.values()) {
+                if (entry.snapshot) this._on(entry.vm);
+                entry.snapshot = undefined;
+            }
+            this._hidden = false;
+        },
+
+        toggle() { this._hidden ? this.show() : this.hide(); },
+
+        _off(vm) {
+            if (typeof vm.off === "function") vm.off();
+            else if (typeof vm.set === "function") vm.set(false);
+        },
+        _on(vm) {
+            if (typeof vm.on === "function") vm.on();
+            else if (typeof vm.set === "function") vm.set(true);
+        },
+    }
+
     rightMenuSideCollapsed = {
         init(subMenu) {
             this.subMenu = subMenu;
-            this.subMenu.addItem({ id: "banner", icon: "fa-warning", label: "Banner", body: undefined, class: MenuTabBanner })
-            this.subMenu.addItem({ id: "settings", icon: "fa-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
-            this.subMenu.addItem({ id: "tutorial", icon: "fa-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
+            this.subMenu.addItem({ id: "settings", icon: "ph-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
+            this.subMenu.addItem({ id: "tutorial", icon: "ph-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
             this.subMenu.addItem({
                 id: 'share',
                 label: $.t('main.bar.share'),
-                icon: 'fa-share-nodes',
+                icon: 'ph-share-network',
                 children: [
                     {
                         id: "global-export",
@@ -353,7 +479,7 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.export();
                         },
-                        icon: "fa-download"
+                        icon: "ph-download-simple"
                     },
                     {
                         id: "copy-url-inner",
@@ -363,7 +489,7 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.copyUrlToClipboard();
                         },
-                        icon: "fa-link"
+                        icon: "ph-link"
                     }
                 ],
             });
@@ -380,19 +506,19 @@ export class AppBar {
                 'sideViewerMenu': {
                     id: 'viewer-sidebars',
                     label: $.t('main.bar.viewerSidebars'),
-                    icon: 'fa-columns',
+                    icon: 'ph-sidebar',
                     section: 'global-windows',
                 },
                 'toolbarMenu': {
                     id: 'viewer-toolbars',
                     label: $.t('main.bar.viewerToolbars'),
-                    icon: 'fa-columns',
+                    icon: 'ph-toolbox',
                     section: 'global-windows',
                 },
                 'globalMenuTabs': {
                     id: 'global-menu-tabs',
                     label: $.t('main.bar.globalMenus'),
-                    icon: 'fa-table-columns',
+                    icon: 'ph-tabs',
                     section: 'global-windows',
                 }
             };
@@ -405,7 +531,7 @@ export class AppBar {
             this.subMenu.addItem({
                 id: 'clone-viewer',
                 onClick: () => UTILITIES.clone(),
-                icon: "fa-clone",
+                icon: "ph-copy-simple",
                 label: $.t('main.global.clone'),
             });
 
@@ -437,31 +563,6 @@ export class AppBar {
                 const item = this.structure[id];
                 const subItemSpecs = this[id];
                 if (!subItemSpecs) continue;
-
-                if (id === 'globalMenuTabs') {
-                    for (let subItem of subItemSpecs) {
-                        const vm = subItem.visibilityManager;
-                        if (!vm) {
-                            console.error(`View.registerViewComponent: "${subItem.id}" has no visibilityManager`);
-                            continue;
-                        }
-
-                        this.subMenu.addItem({
-                            id: subItem.id,
-                            icon: subItem.iconName || subItem.icon,
-                            label: subItem.title || subItem.label || subItem.id,
-                            selected: vm.is(),
-                            onClick: () => {
-                                const next = !vm.is();
-                                this._setVisibility(vm, next);
-                                this._visualMenuNeedsRefresh = true;
-                                return true;
-                            },
-                            section: item.section || 'global-windows',
-                        });
-                    }
-                    continue;
-                }
 
                 const subChildren = [];
                 for (let subItem of subItemSpecs) {
@@ -499,6 +600,10 @@ export class AppBar {
             if (!visibilityManager) {
                 throw new Error(`View.append requires a visibilityManager for "${ownerPluginId}"`);
             }
+            // Honor `disablePluginsUi`: skip plugin view panels.
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
 
             this.otherWindows[ownerPluginId] = {
                 id: ownerPluginId,
@@ -507,6 +612,7 @@ export class AppBar {
                 visibilityManager
             };
             this._visualMenuNeedsRefresh = true;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${ownerPluginId}`, visibilityManager);
         },
 
         setSelected: function (ownerPluginId, selected) {
@@ -557,6 +663,7 @@ export class AppBar {
 
             childList.sort((a, b) => (a.title || a.label || a.id).localeCompare(b.title || b.label || b.id));
             this._visualMenuNeedsRefresh = true;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}`, tab.visibilityManager);
         },
 
         _findEntry(ownerPluginId) {
@@ -599,7 +706,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'history-undo',
-                icon: 'fa-rotate-left',
+                icon: 'ph-arrow-counter-clockwise',
                 label: $.t('main.bar.undo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
@@ -628,7 +735,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'history-redo',
-                icon: 'fa-rotate-right',
+                icon: 'ph-arrow-clockwise',
                 label: $.t('main.bar.redo', { action: '' }),
                 disabled: true,
                 onClick: async () => {
@@ -661,7 +768,7 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'value-inspector',
-                icon: 'fa-crosshairs',
+                icon: 'ph-crosshair',
                 label: 'Value inspector',
                 section: 'visualization-inspector',
                 onClick: () => {
@@ -673,13 +780,13 @@ export class AppBar {
 
             this.subMenu.addItem({
                 id: 'visualization-inspector',
-                icon: 'fa-eye',
+                icon: 'ph-eye',
                 label: 'Visualization inspector',
                 section: 'visualization-inspector',
                 children: [
                     {
                         id: 'visualization-inspector-toggle',
-                        icon: 'fa-power-off',
+                        icon: 'ph-power',
                         label: 'Toggle inspector',
                         onClick: () => {
                             UTILITIES.toggleVisualizationInspector();
@@ -689,13 +796,13 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-mode',
-                        icon: 'fa-circle-half-stroke',
+                        icon: 'ph-circle-half',
                         label: 'Reveal mode',
                         childSelectionStyle: 'check',
                         children: [
                             {
                                 id: 'visualization-inspector-mode-inclusive',
-                                icon: 'fa-circle',
+                                icon: 'ph-circle',
                                 label: 'Inclusive reveal',
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-inside');
@@ -705,7 +812,7 @@ export class AppBar {
                             },
                             {
                                 id: 'visualization-inspector-mode-exclusive',
-                                icon: 'fa-circle-notch',
+                                icon: 'ph-circle-notch',
                                 label: 'Exclusive reveal',
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-outside');
@@ -717,7 +824,7 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-radius-down',
-                        icon: 'fa-minus',
+                        icon: 'ph-minus',
                         label: 'Smaller radius',
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(-24);
@@ -727,7 +834,7 @@ export class AppBar {
                     },
                     {
                         id: 'visualization-inspector-radius-up',
-                        icon: 'fa-plus',
+                        icon: 'ph-plus',
                         label: 'Larger radius',
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(24);
@@ -847,9 +954,16 @@ export class AppBar {
     Plugins = {
         init(subMenu) {
             this.subMenu = subMenu;
+            // `disablePluginsUi` hides every plugin-driven entry: skip seeding
+            // the plugin-manager link and the per-plugin section. setMenu()
+            // below also short-circuits, so individual plugins can't add items
+            // either.
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
             this.subMenu.addItem({
                 id: 'plugins',
-                icon: "fa-puzzle-piece",
+                icon: "ph-puzzle-piece",
                 label: $.t('main.bar.plugins'),
                 onClick: function () {UI.Services.FullscreenMenus.focus("app-plugins")}
             });
@@ -859,7 +973,10 @@ export class AppBar {
         },
 
         // should add submenus to plugin menu
-        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
+        setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+            if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
+                return;
+            }
 
             if (!this.subMenu.getItem(ownerPluginId)) {
                 this.subMenu.addItem({
@@ -872,7 +989,7 @@ export class AppBar {
                 });
             }
 
-            UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon);
+            UI.Services.FullscreenMenus.setMenu(ownerPluginId, toolsMenuId, title, html, icon, opts);
         },
         openSubmenu(atPluginId, atSubId = undefined, toggle = true) {
             return UI.Services.FullscreenMenus.openSubmenu(atPluginId, atSubId);

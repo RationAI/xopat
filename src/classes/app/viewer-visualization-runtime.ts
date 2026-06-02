@@ -67,7 +67,7 @@ export class ViewerVisualizationRuntime {
         data: DataSpecification[] = [],
     ) {
         const rendererClass: any = (window.OpenSeadragon as any)?.FlexRenderer;
-        const shaderMediator = rendererClass?.ShaderMediator;
+        const shaderRegistry = rendererClass?.ShaderLayerRegistry;
         const sanitizedVisualizations: VisualizationItem[] = [];
         const issues: string[] = [];
 
@@ -131,7 +131,7 @@ export class ViewerVisualizationRuntime {
                         issues.push(`Visualization #${vizIndex} layer '${layerPath}' is missing a shader type.`);
                         continue;
                     }
-                    if (shaderMediator && typeof shaderMediator.getClass === "function" && !shaderMediator.getClass(layer.type)) {
+                    if (shaderRegistry && typeof shaderRegistry.get === "function" && !shaderRegistry.get(layer.type)) {
                         issues.push(`Visualization #${vizIndex} layer '${layerPath}' uses unknown shader type '${layer.type}'.`);
                         continue;
                     }

@@ -3,7 +3,9 @@ import { PresetCard } from '../components/presetCard.mjs';
 const { div, span, input, select, option, button, i, b, a, br, h4 } = globalThis.van.tags;
 
 function iconNode(icon, extraClass = '', style = '') {
-    return i({ class: `fa-auto ${icon} ${extraClass}`.trim(), style });
+    const isPh = String(icon ?? '').trim().startsWith('ph-');
+    const cls = isPh ? `ph-light ${icon} ${extraClass}` : `fa-auto ${icon} ${extraClass}`;
+    return i({ class: cls.trim(), style });
 }
 
 function textNode(value) {
@@ -149,7 +151,7 @@ export const presetMethods = {
                     event.stopPropagation();
                     this.context.setPreset(undefined, isLeftClick);
                 }
-            }, iconNode('fa-xmark', 'text-[10px]'))
+            }, iconNode('ph-x', 'text-[10px]'))
         );
     },
 
@@ -158,7 +160,7 @@ export const presetMethods = {
                 class: 'btn btn-ghost btn-xs border-dashed border-base-content/20 gap-1 normal-case font-medium',
                 onclick: () => this.showPresets(isLeftClick)
             },
-            iconNode('fa-plus', 'text-[10px]'),
+            iconNode('ph-plus', 'text-[10px]'),
             'Set'
         );
     },
@@ -204,7 +206,7 @@ export const presetMethods = {
             container.appendChild(button({
                 class: 'btn btn-ghost btn-xs btn-square absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/meta:opacity-100 text-error',
                 onclick: (e) => { e.stopPropagation(); this.deletePresetMeta(e.currentTarget, presetId, key); }
-            }, iconNode('fa-trash', 'text-[10px]')));
+            }, iconNode('ph-trash', 'text-[10px]')));
         }
 
         return container;
@@ -340,12 +342,12 @@ export const presetMethods = {
     _createPresetDialogHeader() {
         return div({ class: 'flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 pb-2' },
             div({ class: 'flex items-center gap-2' },
-                iconNode('fa-tags', 'text-primary'),
+                iconNode('ph-tag', 'text-primary'),
                 h4({ class: 'text-lg font-bold' }, this.t('annotations.presets.dialogTitle'))
             ),
             div({ class: 'relative w-full sm:w-64' },
                 span({ class: 'absolute inset-y-0 left-0 flex items-center pl-3 opacity-50' },
-                    iconNode('fa-magnifying-glass', 'text-xs')
+                    iconNode('ph-magnifying-glass', 'text-xs')
                 ),
                 input({
                     id: 'preset-filter-select',
@@ -364,7 +366,7 @@ export const presetMethods = {
                 class: 'flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-base-content/20 bg-base-100 hover:border-primary/60 hover:bg-base-200 transition-all cursor-pointer group min-h-[64px] py-3',
                 onclick: (e) => this.createNewPreset(e.currentTarget, isLeftClick)
             },
-            iconNode('fa-circle-plus', 'text-base opacity-60 group-hover:opacity-100'),
+            iconNode('ph-plus-circle', 'text-base opacity-60 group-hover:opacity-100'),
             span({ class: 'text-sm font-semibold uppercase tracking-wide opacity-60 group-hover:opacity-100' },
                 this.t('annotations.presets.addNew') || 'Add new class'
             )
@@ -376,7 +378,7 @@ export const presetMethods = {
             'data-preset-empty': '',
             class: 'flex flex-col items-center justify-center gap-2 py-6 text-center text-base-content/60 hidden'
         },
-            iconNode('fa-tag', 'text-2xl opacity-60'),
+            iconNode('ph-tag', 'text-2xl opacity-60'),
             span({ class: 'text-sm' },
                 this.t('annotations.presets.emptyState') || 'No classes yet. Use "Add new class" below to create one.'
             )
@@ -547,15 +549,18 @@ export const presetMethods = {
     },
 
     _copyAnnotation(mousePos, annotation) {
-        const bounds = annotation.getBoundingRect(true, true);
-        this._copiedPos = { x: bounds.left - mousePos.x, y: bounds.top - mousePos.y };
+        // Anchor is the offset from the click position to the annotation's
+        // own `left`/`top` (originX/Y space). Using `left`/`top` directly —
+        // not `getBoundingRect()`'s bbox-min — keeps the math compatible
+        // with originX='center' shapes like polygons, where bbox.left and
+        // obj.left differ by half the width.
+        this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = true;
     },
 
     _cutAnnotation(mousePos, annotation) {
-        const bounds = annotation.getBoundingRect(true, true);
-        this._copiedPos = { x: bounds.left - mousePos.x, y: bounds.top - mousePos.y };
+        this._copiedPos = { x: annotation.left - mousePos.x, y: annotation.top - mousePos.y };
         this._copiedAnnotation = annotation;
         this._copiedIsCopy = false;
         this._deleteAnnotation(annotation);
@@ -582,10 +587,12 @@ export const presetMethods = {
         const annotation = this._copiedAnnotation;
         const factory = annotation._factory();
         const copy = factory.copy(annotation);
-        const res = factory.translate(copy, { x: mousePos.x + this._copiedPos.x, y: mousePos.y + this._copiedPos.y }, true);
+        const targetLeft = mousePos.x + this._copiedPos.x;
+        const targetTop = mousePos.y + this._copiedPos.y;
+        factory.move(copy, targetLeft - copy.left, targetTop - copy.top);
         if (this._copiedIsCopy) delete copy.internalID;
-        this.context.fabric.addAnnotation(res);
-        factory.renderAllControls(res);
+        this.context.fabric.addAnnotation(copy);
+        factory.renderAllControls(copy);
     },
 
     _clickAnnotationChangePreset(annotation) {

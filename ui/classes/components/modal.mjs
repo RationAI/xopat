@@ -1,5 +1,6 @@
 import van from "../../vanjs.mjs";
 import {BaseComponent} from "../baseComponent.mjs";
+import { Button } from "../elements/buttons.mjs";
 
 const { div } = van.tags;
 
@@ -161,5 +162,81 @@ export class Modal extends BaseComponent {
         document.body.style.cursor = "";
         document.removeEventListener("mousemove", this._mouseMoving);
         document.removeEventListener("mouseup", this._mouseUp);
+    }
+
+    /**
+     * Render a centered confirm dialog. Resolves true on confirm, false on
+     * cancel / X / Escape / outside-click (when non-blocking).
+     * @param {object} opts
+     * @param {string} opts.header
+     * @param {string|Node} opts.body
+     * @param {string} [opts.confirmLabel]
+     * @param {string} [opts.cancelLabel]
+     * @param {boolean} [opts.isBlocking=true]
+     * @returns {Promise<boolean>}
+     */
+    static confirm(opts = {}) {
+        return new Promise((resolve) => {
+            const t = (typeof $ !== "undefined" && typeof $.t === "function") ? $.t.bind($) : null;
+            const footerRoot = div({ class: "w-full flex items-center justify-end gap-2" });
+            const bodyNode = typeof opts.body === "string"
+                ? div({ class: "text-sm" }, opts.body)
+                : opts.body;
+
+            const modal = new Modal({
+                header: opts.header,
+                body: bodyNode,
+                footer: footerRoot,
+                width: "min(28rem, 92vw)",
+                isBlocking: opts.isBlocking ?? true,
+                allowClose: true,
+            });
+
+            let settled = false;
+            const finish = (v) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener("keydown", onKey, true);
+                modal.close();
+                modal.root?.remove();
+                resolve(v);
+            };
+            const onKey = (e) => {
+                if (e.key === "Escape") {
+                    e.stopPropagation();
+                    finish(false);
+                }
+            };
+
+            const cancelBtn = new Button(
+                {
+                    size: Button.SIZE.SMALL,
+                    type: Button.TYPE.NONE,
+                    outline: Button.OUTLINE.ENABLE,
+                    onClick: () => finish(false),
+                },
+                opts.cancelLabel || (t ? t("common.cancel") : "Cancel")
+            );
+            const confirmBtn = new Button(
+                {
+                    size: Button.SIZE.SMALL,
+                    type: Button.TYPE.PRIMARY,
+                    onClick: () => finish(true),
+                },
+                opts.confirmLabel || (t ? t("common.confirm") : "Confirm")
+            );
+
+            footerRoot.append(cancelBtn.create(), confirmBtn.create());
+
+            modal.mount(document.body).open();
+            const xBtn = modal.root.querySelector(".btn-circle");
+            if (xBtn) xBtn.addEventListener("click", () => finish(false));
+            if (opts.isBlocking === false) {
+                modal.root.addEventListener("click", (e) => {
+                    if (e.target === modal.root) finish(false);
+                });
+            }
+            document.addEventListener("keydown", onKey, true);
+        });
     }
 }

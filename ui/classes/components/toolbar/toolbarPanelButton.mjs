@@ -1,6 +1,6 @@
-import { BaseSelectableComponent } from "../../baseComponent.mjs";
+import { BaseComponent, BaseSelectableComponent } from "../../baseComponent.mjs";
 import { Button } from "../../elements/buttons.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
+import { iconComponentFor } from "../../elements/ph-icon.mjs";
 import van from "../../../vanjs.mjs";
 
 const { div } = van.tags;
@@ -20,7 +20,7 @@ const { div } = van.tags;
  * const panelBtn = new UI.ToolbarPanelButton({
  *   id: "mode-options",
  *   itemID: "mode-options",
- *   icon: "fa-sliders",
+ *   icon: "ph-sliders",
  *   label: "Mode options",
  *   panelClass: "w-80 max-h-[60vh]", // optional extra Tailwind classes
  *   onToggle: (open) => console.log("panel open?", open)
@@ -56,6 +56,8 @@ class ToolbarPanelButton extends BaseSelectableComponent {
 
         /** @private */
         this._enabled = options.enabled !== false;   // default: true
+        /** @private */
+        this._visible = options.visible !== false;   // default: true
     }
 
     isOpen() { return !!this._open.val; }
@@ -105,13 +107,26 @@ class ToolbarPanelButton extends BaseSelectableComponent {
     }
 
     /**
+     * Show / hide the entire button + panel slot. When hidden, also closes
+     * the panel so re-showing doesn't restore a stale open state.
+     * @param {boolean} visible
+     */
+    setVisible(visible) {
+        this._visible = visible !== false;
+        if (this._rootEl) {
+            this._rootEl.classList.toggle("hidden", !this._visible);
+        }
+        if (!this._visible) this.close();
+    }
+
+    /**
      * @description Creates the toolbar button + attached panel.
      * @returns {HTMLElement}
      */
     create() {
-        const iconComp = (this.options.icon instanceof FAIcon)
+        const iconComp = (this.options.icon instanceof BaseComponent)
             ? this.options.icon
-            : new FAIcon({ name: this.options.icon || "fa-ellipsis-vertical" });
+            : iconComponentFor(this.options.icon || "ph-dots-three-vertical");
 
         this._button = new Button({
             id: this.id,
@@ -151,7 +166,7 @@ class ToolbarPanelButton extends BaseSelectableComponent {
         const root = div(
             {
                 ...this.commonProperties,
-                class: "relative inline-flex",
+                class: "relative inline-flex" + (this._visible ? "" : " hidden"),
                 ...this.extraProperties
             },
             this._button.create(),
@@ -238,7 +253,7 @@ ui = globalThis.UI;
 const panelBtn = new ui.ToolbarPanelButton({
     id: "example-more",
     itemID: "example-more",
-    icon: "fa-ellipsis-vertical",
+    icon: "ph-dots-three-vertical",
     label: "More settings",
     panelClass: "w-72 max-h-[50vh] overflow-y-auto",
 }, new ui.RawHtml({}, "<div class='p-2'>Hello from panel</div>"));

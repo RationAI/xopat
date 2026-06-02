@@ -27,7 +27,7 @@ const { div } = van.tags;
 /**
  * @typedef {Object} MainLayoutTab
  * @property {string} id - Unique tab identifier.
- * @property {string} [icon] - Icon class name, e.g., "fa-circle-info".
+ * @property {string} [icon] - Icon class name, e.g., "ph-info" (or legacy "fa-circle-info").
  * @property {string} [title] - Human-readable title.
  * @property {VisibilityManager} [visibilityManager] - The visibility manager for this tab. Required.
  * @property {Array<string|import('../elements/rawHtml.mjs').RawHtml|HTMLElement>} [body] - Tab content definition.
@@ -74,7 +74,6 @@ export class MainLayout extends BaseComponent {
         this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
-        this._dockRegisteredInView = false;
         this._registeredTabViewIds = new Set();
 
         this._wrapperRegistry = new Map();
@@ -524,10 +523,10 @@ export class MainLayout extends BaseComponent {
             const wrapper = new DockableWindow({
                 id: mainLayoutTab.id,
                 title: mainLayoutTab.title || mainLayoutTab.id,
-                icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                icon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
                 tabId: mainLayoutTab.id,
                 tabTitle: mainLayoutTab.title || mainLayoutTab.id,
-                tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+                tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
                 defaultMode: "tab",
                 layout: this,
                 visibilityManager: mainLayoutTab.visibilityManager,
@@ -540,10 +539,10 @@ export class MainLayout extends BaseComponent {
         const wrapper = new DockableWindow({
             id: mainLayoutTab.id,
             title: mainLayoutTab.title || mainLayoutTab.id,
-            icon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            icon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
             tabId: mainLayoutTab.id,
             tabTitle: mainLayoutTab.title || mainLayoutTab.id,
-            tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "fa-window-maximize",
+            tabIcon: mainLayoutTab.iconName || mainLayoutTab.icon || "ph-frame-corners",
             defaultMode: "tab",
             layout: this,
             visibilityManager: mainLayoutTab.visibilityManager,
@@ -875,7 +874,7 @@ export class MainLayout extends BaseComponent {
             const meta = toolbar.getEmbeddedMeta?.() || {
                 id: toolbar.id,
                 title: toolbar.id,
-                icon: "fa-wrench"
+                icon: "ph-wrench"
             };
 
             this._toolbarDropdown.addItem({
@@ -1054,7 +1053,7 @@ export class MainLayout extends BaseComponent {
             id: `${this.id}-toolbar-switcher`,
             parentId: this.id,
             title: "Toolbars",
-            icon: "fa-toolbox",
+            icon: "ph-toolbox",
             items: []
         });
         this._toolbarDropdown.iconOnly();
@@ -1123,8 +1122,8 @@ export class MainLayout extends BaseComponent {
         if (!view.structure[this._dockViewTabCategory]) {
             view.structure[this._dockViewTabCategory] = {
                 id: "global-menu-tabs",
-                label: $.t("main.globalMenu.globalMenuTabs"),
-                icon: "fa-table-columns",
+                label: $.t("main.bar.globalMenus"),
+                icon: "ph-tabs",
                 section: "global-windows",
             };
             view._visualMenuNeedsRefresh = true;
@@ -1135,25 +1134,6 @@ export class MainLayout extends BaseComponent {
 
     _shouldHideToolbarsForMobileGlobalWindow() {
         return this._isFullscreen && window.innerWidth < this.collapseBreakpointPx;
-    }
-
-    _registerDockInView() {
-        const view = this._ensureViewCategory();
-        if (!view || this._dockRegisteredInView) return;
-
-        view.append(
-            this._dockViewItemId,
-            "fa-table-columns",
-            $.t("main.globalMenu.globalMenu"),
-            {
-                is: () => this._isDockEffectivelyVisible(),
-                set: next => next
-                    ? this.showGlobalMenu()
-                    : this.hideGlobalMenu()
-            }
-        );
-
-        this._dockRegisteredInView = true;
     }
 
     _registerTabInView(tab) {
@@ -1167,7 +1147,7 @@ export class MainLayout extends BaseComponent {
         view.registerViewComponent(this._dockViewTabCategory, {
             id: viewRegistration?.id || tab.id,
             title: viewRegistration?.title || tab.title || tab.id,
-            icon: viewRegistration?.icon || tab.iconName || tab.icon || "fa-window-maximize",
+            icon: viewRegistration?.icon || tab.iconName || tab.icon || "ph-frame-corners",
             visibilityManager: {
                 is: () => this._isTabVisible(tab),
                 set: next => next
@@ -1181,7 +1161,7 @@ export class MainLayout extends BaseComponent {
 
     _syncMenuTabs() {
         if (!this._menu) return;
-        this._registerDockInView();
+        this._ensureViewCategory();
         for (const tab of this._getMenuTabs()) {
             this._setTabVisibleState(tab, this._isTabVisible(tab));
             this._attachCloseButton(tab);
@@ -1299,9 +1279,10 @@ export class MainLayout extends BaseComponent {
 
         const topSide = new Div({ id: "top-side-wrapper" }, new RawHtml(null, `
             <div id="top-side" class="flex-row w-full glass" style="display: flex; position: relative; align-items: flex-start; height: 35px; pointer-events: none;">
-                <div id="top-menus" class="flex flex-row w-full" style="justify-content: space-between;">
+                <div id="top-menus" class="flex flex-row w-full">
                     <div id="top-side-left" class="flex flex-row" style="align-items: center; pointer-events: auto;"></div>
-                    <div class="flex flex-row" style="align-items: center;">
+                    <div class="flex flex-row ml-auto" style="align-items: center;">
+
                         <div id="top-side-badges" class="flex flex-row gap-1" style="align-items: center; margin-right: 6px; pointer-events: auto;"></div>
                         <div id="top-side-left-user" style="margin-left: 5px; margin-right: 5px; pointer-events: auto;"></div>
                         <div id="top-side-left-fullscreen" style="margin-left: 5px; pointer-events: auto;"></div>

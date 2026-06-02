@@ -8,6 +8,7 @@
     "samState.js"
   ],
   "requires": ["annotations"],
+  "requiredConfig": ["servers", "models"],
   "models": {
     "slimsam-77-uniform": "Xenova/slimsam-77-uniform",
     "medsam-vit-base": "Xenova/medsam-vit-base"

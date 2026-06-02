@@ -1,3 +1,13 @@
 {
-    "requires": []
+    "id": "recorder",
+    "name": "Recorder",
+    "description": "Captures keyframe and navigation snapshots of the active viewers and plays them back as a timeline.",
+    "requires": [],
+    "io": {
+        "capabilities": [
+            { "id": "bundle-export", "kind": "bundle", "label": "Recorder timeline export" },
+            { "id": "bundle-import", "kind": "bundle", "label": "Recorder timeline import" },
+            { "id": "crud:step",     "kind": "crud",   "label": "Recorder step" }
+        ]
+    }
 }

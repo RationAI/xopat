@@ -72,6 +72,16 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             set: next => next ? this.open() : this.close(),
             toggle: () => this.visibilityManager.is() ? this.close() : this.open()
         };
+
+        // Keep the open-viewers tab bar in sync when the user focuses a
+        // different viewport directly (without going through this panel).
+        this._onActiveViewerChanged = () => {
+            this._syncWithViewer();
+            this._renderSelectionHeader();
+        };
+        if (typeof VIEWER_MANAGER !== "undefined" && typeof VIEWER_MANAGER.addHandler === "function") {
+            VIEWER_MANAGER.addHandler("active-viewer-changed", this._onActiveViewerChanged);
+        }
     }
 
     // ---------- Public API ----------
@@ -288,14 +298,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
 
     _buildViewerPayload(entries) {
         const normalized = this._dedupeEntries(entries);
-        const data = Array.isArray(APPLICATION_CONTEXT.config.data)
-            ? APPLICATION_CONTEXT.config.data.map(entry => this._cloneValue(entry))
-            : [];
-        const background = Array.isArray(APPLICATION_CONTEXT.config.background)
-            ? APPLICATION_CONTEXT.config.background.map(entry =>
-                typeof entry?.toJSON === "function" ? entry.toJSON() : this._cloneValue(entry)
-            )
-            : [];
+        const data = [];
+        const background = [];
         const bgSpec = [];
 
         normalized.forEach((entry) => {
@@ -305,21 +309,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             const raw = typeof conf.toJSON === "function" ? conf.toJSON() : this._cloneValue(conf);
             const dataEntry = this._resolveDataEntry(conf);
             const dataIndex = this._ensureDataEntry(data, dataEntry);
-            const bgCopy = { ...raw, dataReference: dataIndex };
-
-            let backgroundIndex = background.findIndex(existing => existing?.id && bgCopy?.id && existing.id === bgCopy.id);
-            if (backgroundIndex < 0) {
-                backgroundIndex = background.findIndex(existing => APPLICATION_CONTEXT.sameBackground(existing, bgCopy));
-            }
-
-            if (backgroundIndex >= 0) {
-                background[backgroundIndex] = bgCopy;
-            } else {
-                background.push(bgCopy);
-                backgroundIndex = background.length - 1;
-            }
-
-            bgSpec.push(backgroundIndex);
+            background.push({ ...raw, dataReference: dataIndex });
+            bgSpec.push(background.length - 1);
         });
 
         return {
@@ -333,6 +324,11 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
     async _openEntries(entries, activeViewerIndex = 0) {
         const payload = this._buildViewerPayload(entries);
 
+        // `merge-exact` treats the payload as the COMPLETE intended open-set:
+        // existing data/background entries with no counterpart in the payload
+        // get dropped. Plain `merge` (additive) would silently keep removed
+        // slides alive in config.background, which breaks closes when more
+        // than one slide was open.
         await APPLICATION_CONTEXT.openViewerWith(
             payload.background.length ? payload.data : null,
             payload.background.length ? payload.background : null,
@@ -341,8 +337,8 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             payload.background.length ? undefined : null,
             {
                 deriveOverlayFromBackgroundGoals: true,
-                dataMode: "merge",
-                backgroundMode: "merge",
+                dataMode: "merge-exact",
+                backgroundMode: "merge-exact",
             },
         );
 
@@ -425,49 +421,73 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             this._headerHost.classList.remove("hidden");
             const count = this.selectedItems.size;
 
-            const title = div({ class: "text-[10px] font-bold text-base-content/50 uppercase tracking-wider px-2 py-1" },
-                `Open (${count})`
+            const header = div({ class: "flex items-center justify-between gap-2 px-2 pt-1" },
+                span({ class: "text-[10px] font-bold text-base-content/50 uppercase tracking-wider" },
+                    `Open viewers (${count})`
+                ),
+                button({
+                    class: "btn btn-ghost btn-xs",
+                    title: "Close all opened slides",
+                    onclick: this._clearAll
+                }, "Close all")
             );
-            const list = div({ class: "flex flex-col gap-1 p-2 max-h-[132px] overflow-y-auto" });
 
-            this.selectedItems.forEach((entry) => {
-                list.appendChild(this._renderOpenSlideChip(entry.item, entry.config));
+            const tabs = div({ class: "flex flex-wrap gap-1 p-2 max-h-[96px] overflow-y-auto" });
+
+            const orderedEntries = this._collectOpenEntries();
+            orderedEntries.forEach((entry, idx) => {
+                tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx));
             });
 
-            this._headerHost.append(title, list);
+            this._headerHost.append(header, tabs);
         });
     }
 
-    _renderOpenSlideChip(item, config) {
+    _renderViewerTab(item, config, viewerIndex) {
         const bg = config || this._getConfig(item);
         const id = bg?.id;
         const name = UTILITIES.nameFromBGOrIndex(bg);
-        const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
+        const viewer = VIEWER_MANAGER.viewers?.[viewerIndex] || null;
         const linked = this._isLinked(viewer);
-        const isActive = viewer && VIEWER_MANAGER.get?.() === viewer;
+        const isActive = !!viewer && VIEWER_MANAGER.get?.() === viewer;
+
+        const dot = span({
+            class: `inline-block w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-success' : 'bg-base-300'}`,
+            title: isActive ? 'Active viewer' : 'Inactive viewer'
+        });
 
         const linkBtn = button({
             id: `${this.windowId}-lnk-${id}`,
-            class: `btn btn-ghost btn-xs btn-square shrink-0 ${linked ? 'text-primary' : 'text-base-content/50'}`,
+            class: `btn btn-ghost btn-xs btn-square shrink-0 ${linked ? 'text-primary' : 'text-base-content/40'}`,
             title: linked ? 'Linked' : 'Not linked',
             onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
         }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create());
 
+        const label = span({
+            class: 'truncate max-w-[16ch] text-xs font-medium',
+            title: name
+        }, `V${viewerIndex + 1} · ${name}`);
+
         const closeBtn = button({
             class: 'btn btn-ghost btn-xs btn-square shrink-0 text-error',
-            title: 'Close',
+            title: 'Close this viewer',
             onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
         }, new UI.FAIcon({ name: 'fa-xmark' }).create());
 
+        const base = 'flex items-center gap-1 rounded px-2 py-1 min-h-[30px] cursor-pointer transition';
+        const stateCls = isActive
+            ? ' bg-primary text-primary-content border border-primary'
+            : ' bg-base-100 border border-base-300 hover:bg-base-200';
+
         return div({
                 id: `${this.windowId}-open-${id}`,
-                class: 'flex items-center gap-1 rounded border border-base-300 bg-base-100 px-2 py-1 min-h-[30px]'
-                    + (isActive ? ' ring ring-primary ring-offset-1' : ''),
-                title: 'Focus this viewer',
+                class: base + stateCls,
+                title: isActive ? 'Active viewer' : 'Focus this viewer',
                 onclick: () => this._focusItem(item)
             },
+            dot,
             linkBtn,
-            div({ class: 'min-w-0 flex-1 truncate text-xs font-medium' }, name),
+            label,
             closeBtn
         );
     }
@@ -479,12 +499,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 span({ class: "font-semibold" }, this.title),
             ),
             div({ class: "flex items-center gap-2" },
-                span({ class: "text-[11px] text-base-content/60 hidden sm:inline" }, "tap preview = Here, New = new viewer"),
-                button({
-                    class: "btn btn-ghost btn-xs",
-                    title: "Close all opened slides",
-                    onclick: this._clearAll
-                }, "Close all")
+                span({ class: "text-[11px] text-base-content/60 hidden sm:inline" }, "tap preview to open · use ▾ for more options")
             )
         );
     }
@@ -569,11 +584,12 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
         const viewer = VIEWER_MANAGER.getViewerForConfig(bg);
         const isOpen = !!viewer;
         const linked = this._isLinked(viewer);
+        const openViewerCount = (VIEWER_MANAGER.viewers || []).length;
 
         const wrapClass = "relative overflow-hidden w-full rounded border border-base-300 bg-base-100";
         const hostClass = "flex items-center justify-center h-[120px]";
         const thumbClass = "block object-contain select-none pointer-events-none";
-        const labelClass = "hidden";
+        const labelImageClass = "block object-contain h-12 max-w-[80px] select-none pointer-events-none";
 
         const previewImage = img({
             id: `${this.windowId}-thumb-${id}`,
@@ -583,25 +599,20 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             src: APPLICATION_CONTEXT.url + "src/assets/dummy-slide.png"
         });
 
+        const labelImgId = `${this.windowId}-label-${id}`;
+        const labelWrapId = `${this.windowId}-lbl-${id}`;
+        const labelToggleId = `${this.windowId}-lbl-tog-${id}`;
+        const TRANSPARENT_PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
         let thumbWrap;
         if (withImagery) {
-            const labelImage = img({
-                id: `${this.windowId}-label-${id}`,
-                class: labelClass,
-                alt: name,
-                draggable: "false",
-                src: APPLICATION_CONTEXT.url + "src/assets/image.png"
-            });
-
             thumbWrap = div(
                 {
                     class: wrapClass,
-                    title: "Open in active viewer",
+                    title: openViewerCount === 0 ? "Open this slide" : "Open in active viewer",
                     onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
                 },
                 div({ class: hostClass }, previewImage),
-                div({ class: "absolute left-1 top-1 z-10 max-w-[80%] px-2 py-1 text-xs font-medium truncate bg-base-200/90 text-primary rounded" }, name),
-                labelImage,
                 isOpen ? div({ class: "absolute right-1 top-1 z-10" },
                     span({ class: `badge badge-xs ${linked ? 'badge-primary' : 'badge-ghost'}` }, linked ? 'linked' : 'open')
                 ) : null
@@ -611,32 +622,99 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
                 if (usedViewer?.tools) {
                     this._loadSlideComplementaryImage(this._cachedPreviews, c => usedViewer.tools.createImagePreview(c), bg, thumbWrap, previewImage, thumbClass);
-                    this._loadSlideComplementaryImage(this._cachedLabels, c => usedViewer.tools.retrieveLabel(c), bg, thumbWrap, labelImage, labelClass);
                 }
             }
         } else {
-            thumbWrap = div({ class: wrapClass },
-                div({ class: "absolute left-1 top-1 z-10 max-w-[80%] px-2 py-1 text-xs font-medium truncate bg-base-200/90 text-primary rounded" }, name)
-            );
+            thumbWrap = div({ class: wrapClass + " " + hostClass });
         }
 
-        const controls = div({ class: "flex items-center gap-1 p-2 shrink-0" },
-            button({
-                class: "btn btn-ghost btn-xs",
-                title: "Open in active viewer",
-                onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
-            }, 'Here'),
-            button({
-                class: "btn btn-ghost btn-xs",
-                title: isOpen ? "Already open" : "Open in new viewer",
-                disabled: isOpen,
-                onclick: (e) => { e.stopPropagation(); this._openInViewer(item, true); }
-            }, 'New'),
-            isOpen ? button({
-                class: "btn btn-ghost btn-xs text-error",
-                title: "Close",
-                onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
-            }, 'Close') : null
+        // Label image lives in the actions row (next to sync / clear), not
+        // overlaid on the thumbnail. `transform: scale` on hover gives a
+        // larger peek without shifting layout — siblings don't move, so the
+        // cursor cannot "lose" the label and flicker.
+        const labelImage = img({
+            id: labelImgId,
+            class: "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30",
+            alt: name,
+            draggable: "false",
+            src: TRANSPARENT_PX,
+        });
+        const labelWrap = span({
+            id: labelWrapId,
+            class: "inline-flex items-center bg-base-100 border border-base-300 rounded overflow-visible",
+            style: "display: none;",
+            title: name,
+        }, labelImage);
+        const labelToggle = button({
+            id: labelToggleId,
+            class: "btn btn-ghost btn-xs btn-square",
+            style: "display: none;",
+            title: "Hide label",
+            onclick: (e) => {
+                e.stopPropagation();
+                const wrap = document.getElementById(labelWrapId);
+                const tog = document.getElementById(labelToggleId);
+                if (!wrap || !tog) return;
+                const collapsed = wrap.style.display === "none";
+                wrap.style.display = collapsed ? "" : "none";
+                tog.title = collapsed ? "Hide label" : "Show label";
+                tog.innerHTML = "";
+                tog.appendChild(new UI.FAIcon({
+                    name: collapsed ? "fa-eye" : "fa-eye-slash"
+                }).create());
+            },
+        }, new UI.FAIcon({ name: "fa-eye" }).create());
+
+        if (withImagery && bg?.id) {
+            const usedViewer = viewer || VIEWER_MANAGER.viewers?.[0];
+            if (usedViewer?.tools) {
+                this._loadAndRevealLabel(bg, usedViewer, [labelWrap, labelToggle], labelImgId,
+                    "block object-contain h-6 max-w-[40px] select-none origin-right relative z-10 transition-transform hover:scale-[2.5] hover:z-30");
+            }
+        }
+
+        const caption = div({
+            class: "px-2 pt-2 text-xs font-medium truncate text-base-content",
+            title: name
+        }, name);
+
+        const primaryLabel = openViewerCount === 0 ? 'Open' : 'Open in active';
+        const primaryBtn = button({
+            class: "btn btn-primary btn-xs join-item",
+            title: openViewerCount === 0 ? "Open this slide in a new viewer" : "Open in the currently active viewer",
+            onclick: (e) => { e.stopPropagation(); this._openInViewer(item, false); }
+        }, primaryLabel);
+
+        const caretBtn = button({
+            class: "btn btn-primary btn-xs join-item btn-square",
+            title: "More open options",
+            onclick: (e) => {
+                e.stopPropagation();
+                const items = this._buildOpenMenuItems(item);
+                if (items.length && globalThis.ContextMenu?.open) {
+                    globalThis.ContextMenu.open(e, items);
+                }
+            }
+        }, new UI.FAIcon({ name: 'fa-caret-down' }).create());
+
+        const splitButton = div({ class: "join" }, primaryBtn, caretBtn);
+
+        const linkToggle = isOpen ? button({
+            id: `${this.windowId}-lnk-card-${id}`,
+            class: `btn btn-ghost btn-xs btn-square ${linked ? 'text-primary' : 'text-base-content/50'}`,
+            title: linked ? 'Linked' : 'Not linked',
+            onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
+        }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()) : null;
+
+        const closeBtn = isOpen ? button({
+            class: "btn btn-ghost btn-xs btn-square text-error",
+            title: "Close",
+            onclick: (e) => { e.stopPropagation(); this._removeSlide(item); }
+        }, new UI.FAIcon({ name: 'fa-xmark' }).create()) : null;
+
+        const actionsRow = div({ class: "flex items-center justify-between gap-1 px-2 py-2" },
+            splitButton,
+            div({ class: "flex items-center gap-1" }, linkToggle, closeBtn, labelWrap, labelToggle)
         );
 
         return div({
@@ -645,19 +723,109 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                     + (isOpen ? " ring ring-primary ring-offset-1" : ""),
             },
             thumbWrap,
-            div({ class: "flex items-center justify-between gap-2" },
-                controls,
-                isOpen ? button({
-                    id: `${this.windowId}-lnk-card-${id}`,
-                    class: `btn btn-ghost btn-xs btn-square mr-2 ${linked ? 'text-primary' : 'text-base-content/50'}`,
-                    title: linked ? 'Linked' : 'Not linked',
-                    onclick: (e) => { e.stopPropagation(); this._onToggleLink(id, item, e); }
-                }, new UI.FAIcon({ name: linked ? 'fa-link' : 'fa-link-slash' }).create()) : span({ class: 'mr-2 text-xs text-base-content/50' }, '')
-            )
+            caption,
+            actionsRow
         );
     }
 
+    _buildOpenMenuItems(item) {
+        const entries = this._collectOpenEntries();
+        const active = VIEWER_MANAGER.get?.();
+        const out = entries.map((entry, i) => {
+            const v = VIEWER_MANAGER.viewers?.[i] || null;
+            const isActive = v && v === active;
+            const slideName = UTILITIES.nameFromBGOrIndex(entry.config);
+            return {
+                title: `Open in V${i + 1}${isActive ? ' (Active)' : ''} · ${slideName}`,
+                icon: 'fa-circle',
+                iconCss: isActive ? 'color: var(--color-success, #36d399);' : 'color: var(--color-base-300, #d1d5db);',
+                action: () => this._openInTargetIndex(item, i),
+            };
+        });
+        if (entries.length) {
+            out.push({ title: '' }); // separator (header with no action / no children)
+        }
+        out.push({
+            title: 'Open in new viewer',
+            icon: 'fa-plus',
+            action: () => this._openInViewer(item, true),
+        });
+        return out;
+    }
+
+    async _openInTargetIndex(item, targetIndex) {
+        const conf = this._getConfig(item);
+        if (!conf?.id) return;
+
+        const existingViewer = VIEWER_MANAGER.getViewerForConfig(conf);
+        if (existingViewer) {
+            VIEWER_MANAGER.setActive(existingViewer);
+            this._syncWithViewer();
+            this._renderSelectionHeader();
+            this.explorer?._loadAndRender?.(this.explorer._path?.length || 0, { replace: true });
+            return;
+        }
+
+        const entries = this._collectOpenEntries();
+        if (targetIndex < 0 || targetIndex >= entries.length) {
+            return this._openInViewer(item, true);
+        }
+        entries[targetIndex] = { item, config: conf };
+        await this._openEntries(entries, targetIndex);
+    }
+
     // ---------- Utilities ----------
+
+    _loadAndRevealLabel(bg, viewer, revealEls, targetImgId, classes) {
+        const cache = this._cachedLabels;
+        const key = bg.id;
+        const toReveal = Array.isArray(revealEls) ? revealEls : [revealEls];
+
+        const apply = (node) => {
+            const current = document.getElementById(targetImgId);
+            if (!current || !(node instanceof HTMLElement)) return false;
+            const clone = node.cloneNode(true);
+            clone.id = targetImgId;
+            clone.className = classes;
+            current.replaceWith(clone);
+            return true;
+        };
+
+        const reveal = (node) => {
+            // Swap-then-reveal: only mark the elements visible after the real
+            // label has replaced the transparent placeholder. Avoids a brief
+            // frame where an empty box flickers in the row.
+            if (apply(node)) {
+                for (const el of toReveal) {
+                    if (el) el.style.display = "";
+                }
+            }
+        };
+
+        if (cache[key] instanceof HTMLElement) {
+            reveal(cache[key]);
+            return;
+        }
+
+        if (cache[key] instanceof Promise) {
+            cache[key].then((node) => { if (node) reveal(node); }).catch(() => {});
+            return;
+        }
+
+        cache[key] = viewer.tools.retrieveLabel(bg).then((node) => {
+            if (node) {
+                cache[key] = node;
+                reveal(node);
+            }
+            return node;
+        }).catch((err) => {
+            // Missing / failing labels are expected — many tile sources
+            // return undefined or throw. Keep the noise low and leave the
+            // overlay hidden.
+            console.debug("Label loading failed:", err);
+            delete cache[key];
+        });
+    }
 
     _loadSlideComplementaryImage(cacheMap, method, bg, parentNode, replacedImageNode, imageClasses) {
         const cacheKey = bg.id;
@@ -681,7 +849,10 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
             }
             return node;
         }).catch(err => {
-            console.error("Thumbnail loading failed:", err);
+            // Missing label/thumbnail is expected for many DICOM stores
+            // (no OVERVIEW/LABEL instance, 406 from /rendered, etc.). The card
+            // already falls back to a placeholder; keep the noise low.
+            console.debug("Thumbnail loading failed:", err);
             delete cacheMap[cacheKey];
         });
     }

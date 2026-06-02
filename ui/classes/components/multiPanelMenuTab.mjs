@@ -1,7 +1,7 @@
 import { BaseComponent } from "../baseComponent.mjs";
 import van from "../../vanjs.mjs";
 
-import { FAIcon } from "../elements/fa-icon.mjs";
+import { PhIcon, iconComponentFor } from "../elements/ph-icon.mjs";
 import { Button } from "../elements/buttons.mjs";
 import { Div } from "../elements/div.mjs";
 import { MenuTab } from "./menuTab.mjs";
@@ -42,7 +42,7 @@ class MultiPanelMenuTab extends MenuTab {
     _createTab(item) {
         const content = item["body"];
         const inText = item["title"];
-        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : new FAIcon({ name: item["icon"] });
+        let inIcon = (item["icon"] instanceof BaseComponent) ? item["icon"] : iconComponentFor(item["icon"]);
         //todo dirty?
         this.iconName = inIcon.options.name;
         this.title = inText;
@@ -51,7 +51,7 @@ class MultiPanelMenuTab extends MenuTab {
         this._bgClass = item.background || "bg-base-200";
         this._radiusClass = "rounded-tl-md rounded-bl-md";
 
-        const pinIcon = new FAIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "fa-thumbtack" });
+        const pinIcon = new PhIcon({id: this.parent.id + "-b-icon-pin-"+ item.id, name: "ph-push-pin" });
         this.pin = new Button({
             id: this.parent.id + "-b-pin-" + item.id,
             type: Button.TYPE.NONE,
@@ -64,10 +64,10 @@ class MultiPanelMenuTab extends MenuTab {
                     return;
                 }
                 this.togglePinned();
-                if (pinIcon.classMap["name"] === "fa-thumbtack") {
-                    pinIcon.changeIcon("fa-thumbtack-slash");
+                if (pinIcon.classMap["name"] === "ph-push-pin") {
+                    pinIcon.changeIcon("ph-push-pin-slash");
                 } else {
-                    pinIcon.changeIcon("fa-thumbtack");
+                    pinIcon.changeIcon("ph-push-pin");
                 }
 
                 if (USER_INTERFACE.AppBar.isFullScreen()) {
@@ -78,7 +78,7 @@ class MultiPanelMenuTab extends MenuTab {
             }
         }, pinIcon);
 
-        const crossIcon = new FAIcon({id: this.parent.id + "-b-icon-close-"+ item.id, name: "fa-close" });
+        const crossIcon = new PhIcon({id: this.parent.id + "-b-icon-close-"+ item.id, name: "ph-x" });
         this.closeButton = new Button({
             id: this.parent.id + "-b-close" + item.id,
             type: Button.TYPE.NONE,
@@ -131,7 +131,7 @@ class MultiPanelMenuTab extends MenuTab {
 
         if (APPLICATION_CONTEXT.AppCache.get(`${this.id}-pinned`, false)){
             this.parent._pinnedTabs[this.id] = true;
-            pinIcon.changeIcon("fa-thumbtack-slash");
+            pinIcon.changeIcon("ph-push-pin-slash");
         }
         return [undefined, this.mainDiv];
     }

@@ -222,6 +222,14 @@ declare global {
             url?: string;
             setSourceOptions?(options: SlideSourceOptions): void;
             getMetadata?(): TileSourceMetadata;
+            /**
+             * User-facing display metadata. Returns an ordered list of card-shaped
+             * sections to render in the Slide Information panel. Each `value` must
+             * be a primitive (string|number|boolean|null) — no nested objects,
+             * no functions, no event queues. Return [] when there is nothing
+             * user-relevant to show. See `src/tile-source.ts` for the default.
+             */
+            getDisplayMetadata?(): TileSourceDisplayMetadata;
         }
 
         // ── MouseTracker event ───────────────────────────────────────────────

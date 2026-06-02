@@ -7,7 +7,7 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-square";
+        return "ph-rectangle";
     }
 
     fabricStructure() {
@@ -139,6 +139,25 @@ OSDAnnotations.Rect = class extends OSDAnnotations.AnnotationObjectFactory {
         this._current.set({ width: width, height: height });
     }
 
+    supportsFixedArea() {
+        return true;
+    }
+
+    // Fixed-area variant: draw a SQUARE anchored at the initial click corner,
+    // growing into the quadrant the cursor is in. Side = √area.
+    updateCreateFixedArea(x, y, areaPx) {
+        if (!this._current || !(areaPx > 0)) return false;
+        const side = Math.sqrt(areaPx);
+        const dx = x - this._origX, dy = y - this._origY;
+        this._current.set({
+            left:   dx >= 0 ? this._origX : this._origX - side,
+            top:    dy >= 0 ? this._origY : this._origY - side,
+            width:  side,
+            height: side,
+        });
+        return true;
+    }
+
     discardCreate() {
         if (this._current) {
             this._context.fabric.deleteHelperAnnotation(this._current);
@@ -221,7 +240,7 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-circle";
+        return "ph-circle";
     }
 
     fabricStructure() {
@@ -407,6 +426,26 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
         });
     }
 
+    supportsFixedArea() {
+        return true;
+    }
+
+    // Fixed-area variant: draw a CIRCLE (rx === ry) whose bounding-box corner
+    // is the initial click and which grows into the cursor's quadrant.
+    updateCreateFixedArea(x, y, areaPx) {
+        if (!this._current || !(areaPx > 0)) return false;
+        const r = Math.sqrt(areaPx / Math.PI);
+        const dx = x - this._origX, dy = y - this._origY;
+        this._current.set({
+            left: dx >= 0 ? this._origX : this._origX - 2 * r,
+            top:  dy >= 0 ? this._origY : this._origY - 2 * r,
+            rx: r,
+            ry: r,
+            angle: -this._getViewportRotation(),
+        });
+        return true;
+    }
+
     discardCreate() {
         if (this._current) {
             this._context.fabric.deleteHelperAnnotation(this._current);
@@ -437,6 +476,20 @@ OSDAnnotations.Ellipse = class extends OSDAnnotations.AnnotationObjectFactory {
      * @param {number} quality between 0 and 1, of the approximation in percentage (1 = 100%)
      * @return {Array} array of items returned by the converter - points
      */
+    // Snap targets the visual centre of the ellipse — perimeter samples
+    // from toPointArray are correct for area/export but wrong for snap:
+    // the user thinks they're clicking the dot, but lands on its edge.
+    // Use fabric's getCenterPoint() so origin (Point uses 'center') and
+    // scale (Point's onZoom adjusts rx/ry inversely) are both respected.
+    getSnapVertices(obj) {
+        if (typeof obj.getCenterPoint === 'function') {
+            const c = obj.getCenterPoint();
+            return [{ x: c.x, y: c.y }];
+        }
+        const rx = obj.rx || 0, ry = obj.ry || 0;
+        return [{ x: (obj.left || 0) + rx, y: (obj.top || 0) + ry }];
+    }
+
     toPointArray(obj, converter, digits=undefined, quality=1) {
         //see https://math.stackexchange.com/questions/2093569/points-on-an-ellipse
         //formula author https://math.stackexchange.com/users/299599/ng-chung-tak
@@ -534,7 +587,7 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-font";
+        return "ph-text-aa";
     }
 
     fabricStructure() {
@@ -828,6 +881,20 @@ OSDAnnotations.Text = class extends OSDAnnotations.AnnotationObjectFactory {
         return [converter(obj.left, obj.top)];
     }
 
+    // toPointArray returns the text's top-left anchor; snap targets the
+    // visible centre of the text bbox so clicks land where the label is.
+    // getCenterPoint() handles origin / scale correctly.
+    getSnapVertices(obj) {
+        if (typeof obj.getCenterPoint === 'function') {
+            const c = obj.getCenterPoint();
+            return [{ x: c.x, y: c.y }];
+        }
+        return [{
+            x: (obj.left || 0) + (obj.width  || 0) / 2,
+            y: (obj.top  || 0) + (obj.height || 0) / 2,
+        }];
+    }
+
     fromPointArray(points, deconvertor) {
         if (!points || points.length === 0) {
             throw new Error("Points array must contain at least one point");
@@ -858,7 +925,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     getIcon() {
-        return "fa-solid fa-location-crosshairs";
+        return "ph-map-pin";
     }
 
     getDescription(ofObject) {
@@ -905,7 +972,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
      */
     configure(object, options) {
         const graphicZoom = this._context.fabric.canvas.computeGraphicZoom();
-        const zoom = 3 / graphicZoom;
+        const zoom = 7 / graphicZoom;
         $.extend(object, options, {
             angle: 0,
             rx: zoom,
@@ -930,7 +997,7 @@ OSDAnnotations.Point = class extends OSDAnnotations.Ellipse {
     }
 
     onZoom(ofObject, graphicZoom, realZoom) {
-        const zoom = 3 / graphicZoom;
+        const zoom = 7 / graphicZoom;
         ofObject.rx = ofObject.ry = zoom;
         ofObject.width = ofObject.height = zoom*1.5;
         ofObject.strokeWidth = ofObject.originalStrokeWidth / realZoom;
@@ -1078,16 +1145,22 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
      * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters) {
+        // Deep-clone the point objects so the returned annotation has
+        // structurally independent geometry. Sharing point references
+        // with the source lets _applyMoveToGeometry (called from drag,
+        // factory.move, and edit recalculate) mutate the source too,
+        // which breaks undo across edit-mode drag, cut/paste and
+        // copy/paste.
         if (parameters && Array.isArray(parameters)) {
             // array kept for backwards compatibility
             parameters = {
-                points: parameters,
+                points: parameters.map(p => ({ x: p.x, y: p.y })),
                 left: ofObject.left,
                 top: ofObject.top,
             }
         } else if (!parameters) {
             parameters = {
-                points: [...ofObject.points],
+                points: ofObject.points.map(p => ({ x: p.x, y: p.y })),
                 left: ofObject.left,
                 top: ofObject.top,
             }
@@ -1115,11 +1188,20 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
     }
 
     edit(theObject) {
-        this._origPoints = [...theObject.points];
+        // Deep-clone so the pre-edit snapshot is immune to in-place
+        // mutations through _applyMoveToGeometry (factory.move).
+        this._origPoints = theObject.points.map(p => ({ x: p.x, y: p.y }));
 
         var lastControl = theObject.points.length - 1;
         const _this = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            // Annotations ship with lockMovementX/Y=true (see Preset.commonAnnotationVisuals).
+            // Unlock body-drag for edit; recalculate() doesn't have to undo this
+            // because the edit-target is a doppelganger that gets discarded.
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1188,9 +1270,14 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
 
         let newObject = undefined;
 
-        if (theObject.points.length !== this._origPoints.length ||
-            !theObject.points.every((value, index) => value === this._origPoints[index])
-        ) {
+        // Value-compare each point. Identity compare was load-bearing
+        // on the (now-fixed) shared-reference shape: when points were
+        // shared with the original via shallow copy, identity matched
+        // even after the user dragged vertices, hiding the edit.
+        const changed = theObject.points.length !== this._origPoints.length ||
+            theObject.points.some((p, i) =>
+                p.x !== this._origPoints[i].x || p.y !== this._origPoints[i].y);
+        if (changed) {
             newObject = this.copy(theObject, theObject.points);
             theObject.points = this._origPoints;
 
@@ -1233,6 +1320,20 @@ OSDAnnotations.ExplicitPointsObjectFactory = class extends OSDAnnotations.Annota
         }
 
         return newObject;
+    }
+
+    _applyMoveToGeometry(theObject, deltaX, deltaY) {
+        if (!Array.isArray(theObject.points) || (!deltaX && !deltaY)) return;
+        for (const p of theObject.points) {
+            p.x += deltaX;
+            p.y += deltaY;
+        }
+        // Recompute pathOffset / width / height from the shifted points.
+        // Without this, lineCoords / aCoords / hit-tests would lag behind
+        // the new point positions.
+        if (typeof theObject._setPositionDimensions === 'function') {
+            theObject._setPositionDimensions({});
+        }
     }
 
     getCreationRequiredMouseDragDurationMS() {
@@ -1408,7 +1509,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
 
     getIcon() {
-        return "fa-minus";
+        return "ph-line-segment";
     }
 
     fabricStructure() {
@@ -1452,6 +1553,10 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
         return ["x1", "x2", "y1", "y2"];
     }
 
+    getLength(theObject) {
+        return Math.hypot(theObject.x1 - theObject.x2, theObject.y1 - theObject.y2);
+    }
+
     updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas=undefined) {
         visualProperties.modeOutline = true;
         super.updateRendering(ofObject, preset, visualProperties, defaultVisualProperties, targetCanvas);
@@ -1471,6 +1576,7 @@ OSDAnnotations.Line = class extends OSDAnnotations.AnnotationObjectFactory {
 
         const _this = this,
             rightSkew = theObject.x1 > theObject.x2;
+        theObject.set({ lockMovementX: false, lockMovementY: false });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;
@@ -1703,7 +1809,7 @@ OSDAnnotations.Polygon = class extends OSDAnnotations.ExplicitPointsObjectFactor
     }
 
     getIcon() {
-        return "fa-draw-polygon";
+        return "ph-polygon";
     }
 
     fabricStructure() {
@@ -1725,7 +1831,7 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
     }
 
     getIcon() {
-        return "share-nodes";
+        return "ph-path";
     }
 
     fabricStructure() {
@@ -1752,6 +1858,26 @@ OSDAnnotations.Polyline = class extends OSDAnnotations.ExplicitPointsObjectFacto
         return "Polyline";
     }
 
+    // Polylines are open paths — the shoelace inherited from
+    // ExplicitPointsObjectFactory would give a nonsensical "area" by
+    // pretending the shape is closed.
+    getArea(theObject) {
+        return undefined;
+    }
+
+    // Sum of segment lengths between consecutive points.
+    getLength(theObject) {
+        const points = theObject?.points;
+        if (!Array.isArray(points) || points.length < 2) return undefined;
+        let total = 0;
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            total += Math.hypot(dx, dy);
+        }
+        return total;
+    }
+
     finishDirect() {
         this.finishIndirect();
         return true;
@@ -1765,7 +1891,7 @@ OSDAnnotations.Group = class extends OSDAnnotations.AnnotationObjectFactory {
     }
 
     getIcon() {
-        return "fa-object-group";
+        return "ph-frame-corners";
     }
 
     fabricStructure() {
@@ -1955,7 +2081,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
     }
 
     getIcon() {
-        return "fa-draw-polygon"; //todo same icon as polygon... does it matter?
+        return "ph-polygon"; //todo same icon as polygon... does it matter?
     }
 
     fabricStructure() {
@@ -2028,10 +2154,15 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
      * }} parameters array of 'points' or an object which also specifies 'left' and 'top' values
      */
     copy(ofObject, parameters=undefined) {
+        // Deep-clone the ring-of-rings-of-points so the returned
+        // annotation has structurally independent geometry — matches
+        // the deep clone already used in Multipolygon.edit's
+        // _origPoints snapshot.
+        const deepCloneRings = (rings) => rings.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
         if (parameters && Array.isArray(parameters)) {
             // array kept for backwards compatibility
             parameters = {
-                points: parameters,
+                points: deepCloneRings(parameters),
                 left: ofObject.left,
                 top: ofObject.top,
             }
@@ -2039,7 +2170,7 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
             parameters = {
                 left: ofObject.left,
                 top: ofObject.top,
-                points: [...ofObject.points],
+                points: deepCloneRings(ofObject.points),
             };
         }
         const props = this.copyProperties(ofObject);
@@ -2130,7 +2261,11 @@ OSDAnnotations.Multipolygon = class extends OSDAnnotations.AnnotationObjectFacto
         this._origPoints = theObject.points.map(ring => ring.map(p => ({ x: p.x, y: p.y })));
 
         const self = this;
-        theObject.set({ hoverCursor: 'default' });
+        theObject.set({
+            hoverCursor: 'default',
+            lockMovementX: false,
+            lockMovementY: false,
+        });
         theObject.cornerStyle = 'circle';
         theObject.cornerColor = '#fbb802';
         theObject.hasControls = true;

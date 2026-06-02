@@ -41,6 +41,7 @@ export class FullscreenMenus {
             this._bindStatePersistence();
             this._registerDefaults();
             this._restoreState();
+            this._registerChrome();
             this._initialized = true;
             return this;
         } finally {
@@ -59,17 +60,24 @@ export class FullscreenMenus {
             id: "settings-menu",
             title: $.t?.("main.bar.settings") || "Settings",
             label: $.t?.("main.bar.settings") || "Settings",
-            icon: "fa-gear",
+            icon: "ph-gear",
             body: () => this.getSettingsBody
         }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
 
-        this.register({
-            id: "app-plugins",
-            title: $.t?.("main.bar.plugins") || "Plugins",
-            label: $.t?.("main.bar.plugins") || "Plugins",
-            icon: "fa-puzzle-piece",
-            body: () => this.getPluginsBody
-        }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
+        // Skip the plugin-management tab when the deployment hides plugin UI.
+        if (!this._isPluginUiDisabled()) {
+            this.register({
+                id: "app-plugins",
+                title: $.t?.("main.bar.plugins") || "Plugins",
+                label: $.t?.("main.bar.plugins") || "Plugins",
+                icon: "ph-puzzle-piece",
+                body: () => this.getPluginsBody
+            }, FullscreenMenuPanel.NAMESPACE.SYSTEM);
+        }
+    }
+
+    _isPluginUiDisabled() {
+        return !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
     }
 
     _bindStatePersistence() {
@@ -99,7 +107,13 @@ export class FullscreenMenus {
 
     register(item, ns = FullscreenMenuPanel.NAMESPACE.PLUGINS) {
         this._ensureInit();
+        // Honor `disablePluginsUi`: drop plugin-namespaced tabs (and the
+        // plugin manager itself). Plugins stay loaded; only UI is hidden.
+        if (this._isPluginUiDisabled() && ns === FullscreenMenuPanel.NAMESPACE.PLUGINS) {
+            return null;
+        }
         return this.menu.addTab({
+            namespace: ns,           // item.namespace below still wins if set
             ...item,
             body: this._normalizeBody(item.body)
         });
@@ -111,10 +125,45 @@ export class FullscreenMenus {
             id: item.id,
             title: label,
             label,
-            icon: item.icon || "fa-circle",
+            icon: item.icon || "ph-circle",
             body: () => item,
             namespace: ns
         });
+    }
+
+    /**
+     * Outer shell for a tab body shown in the FullscreenMenu. Children render
+     * in a responsive 1/2-column card grid that matches the core Settings tab.
+     * Return this (or a single `card()`) from a tab `body` for visual parity.
+     *
+     * Overloads:
+     *   - `layout(...sections)` — no title header.
+     *   - `layout(title, ...sections)` — `title` (string) renders as a 2xl
+     *     in-body header above the grid; pass `null`/`""` for the same as
+     *     omitting the parameter. Detected by typeof first arg.
+     */
+    layout(...args) {
+        let title = null;
+        if (args.length && (typeof args[0] === "string" || args[0] == null)) {
+            title = args.shift();
+        }
+        return div({ class: "relative flex min-h-full flex-col gap-4 pb-24 pt-3" },
+            title ? div({ class: "flex flex-wrap items-start justify-between gap-3" },
+                span({ class: "text-2xl font-semibold" }, title)
+            ) : null,
+            div({ class: "grid gap-4 lg:grid-cols-2" }, ...args)
+        );
+    }
+
+    /**
+     * One titled card within a `layout()`. Title row + body content. Pass an
+     * empty/null title for an untitled card.
+     */
+    card(title, ...children) {
+        return div({ class: "rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm" },
+            title ? span({ class: "mb-3 block text-lg font-semibold" }, title) : null,
+            div({ class: "form-control gap-3" }, ...children)
+        );
     }
 
     has(id) {
@@ -163,6 +212,20 @@ export class FullscreenMenus {
         APPLICATION_CONTEXT?.AppCache?.set?.(this._visibilityCacheKey, !!visible);
     }
 
+    isVisible() {
+        return !!APPLICATION_CONTEXT?.AppCache?.get?.(this._visibilityCacheKey, false);
+    }
+
+    _registerChrome() {
+        const chrome = window.USER_INTERFACE?.AppBar?.Chrome;
+        if (!chrome?.register) return;
+        chrome.register("fullscreen-menu", {
+            is:  () => this.isVisible(),
+            on:  () => this.open(),
+            off: () => this.close(),
+        });
+    }
+
     _storeFocused(id) {
         if (!id) return;
         APPLICATION_CONTEXT?.AppCache?.set?.(this._focusedCacheKey, id);
@@ -198,10 +261,12 @@ export class FullscreenMenus {
         return true;
     }
 
-    ensurePluginMenu(ownerPluginId) {
+    ensurePluginMenu(ownerPluginId, opts = {}) {
         this._ensureInit();
         const key = `${ownerPluginId}-menu`;
         if (this._pluginMenus[key]) {
+            // Chrome is cached on first ensure call; subsequent setMenu calls
+            // for the same plugin can't flip it mid-life.
             return this._pluginMenus[key];
         }
 
@@ -218,11 +283,18 @@ export class FullscreenMenus {
             extraClasses: { bg: "bg-transparent", height: "h-full", width: "w-full", gap: "gap-3", overflow: "overflow-hidden" }
         });
 
-        submenu.body.setClass("fullscreenPluginMenuBody", "min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-base-300 bg-base-100 p-4");
+        // `chrome: "plain"` strips the outer rounded card; intended for plugin
+        // tabs that render their own cards via `this.card(...)` and would
+        // otherwise nest borders.
+        const chrome = opts.chrome === "plain" ? "plain" : "card";
+        const bodyClass = chrome === "plain"
+            ? "min-h-0 min-w-0 flex-1 overflow-y-auto"
+            : "min-h-0 min-w-0 flex-1 overflow-y-auto rounded-2xl border border-base-300 bg-base-100 p-4";
+        submenu.body.setClass("fullscreenPluginMenuBody", bodyClass);
         submenu.attachTo(mount);
 
         const label = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "name")) || ownerPluginId;
-        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon")) || "fa-puzzle-piece";
+        const icon = (typeof pluginMeta === "function" && pluginMeta(ownerPluginId, "icon")) || "ph-puzzle-piece";
 
         this.register({
             id: key,
@@ -233,13 +305,13 @@ export class FullscreenMenus {
             body: () => mount
         }, FullscreenMenuPanel.NAMESPACE.PLUGINS);
 
-        const state = { mount, menu: submenu, id: key };
+        const state = { mount, menu: submenu, id: key, chrome };
         this._pluginMenus[key] = state;
         return state;
     }
 
-    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw") {
-        const { menu } = this.ensurePluginMenu(ownerPluginId);
+    setMenu(ownerPluginId, toolsMenuId, title, html, icon = "fa-fw", opts = {}) {
+        const { menu } = this.ensurePluginMenu(ownerPluginId, opts);
         if (menu.tabs?.[toolsMenuId]) {
             return menu.tabs[toolsMenuId];
         }
@@ -263,6 +335,13 @@ export class FullscreenMenus {
         if (!menu._focused) {
             this._focusSubmenu(menu, toolsMenuId);
         }
+
+        // Hide the sub-tab switcher when there's only one tab — a single
+        // button next to nothing is just noise. Show it as soon as a second
+        // tab is added.
+        const tabCount = Object.keys(menu.tabs || {}).length;
+        menu.header?.setClass?.("hidden", tabCount > 1 ? "" : "hidden");
+
         return tab;
     }
 
@@ -325,7 +404,7 @@ export class FullscreenMenus {
     get getSettingsBody() {
         const notification = div({ class: "mb-4 hidden", id: "settings-notification-wrap" },
             div({ class: "rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3 text-sm" },
-                span({ class: "fa-auto fa-warning mr-2", style: "font-size: initial;" }),
+                span({ class: "ph-light ph-warning mr-2", style: "font-size: initial;" }),
                 "To apply changes, please ",
                 a({ onclick: () => { UTILITIES.refreshPage(); }, class: "link link-hover cursor-pointer font-semibold" },
                     b("reload the page")
@@ -345,6 +424,10 @@ export class FullscreenMenus {
             { value: "dark", text: $.t('settings.theme.dark') }
         );
 
+        // Settings keeps its bespoke outer chrome (notification + title row +
+        // logo) inline; the section cards go through `this.card()` so plugin
+        // tabs and core settings share one source of truth. Plugins with no
+        // bespoke chrome should just return `this.layout(this.card(...), ...)`.
         return div({ class: "relative flex min-h-full flex-col gap-4 pb-24 pt-3" },
             notification,
             div({ class: "flex flex-wrap items-start justify-between gap-3" },
@@ -352,78 +435,81 @@ export class FullscreenMenus {
                 this.getHeaderBrand()
             ),
             div({ class: "grid gap-4 lg:grid-cols-2" },
-                div({ class: "rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm" },
-                    span({ class: "mb-3 block text-lg font-semibold" }, "Appearance"),
-                    div({ class: "form-control gap-3" },
-                        themeSelect.create(),
-                        this.createCheckbox(
-                            "toolbar-checkbox",
-                            $.t('settings.toolBar'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('toolBar', this.checked);
-                                const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
-                                toolbarDivs.forEach(div => div.classList.toggle('hidden'));
-                            },
-                            APPLICATION_CONTEXT.getOption('toolBar', true)
-                        ),
-                        this.createCheckbox(
-                            "scalebar-checkbox",
-                            $.t('settings.scaleBar'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('scaleBar', this.checked);
-                                for (let viewer of VIEWER_MANAGER.viewers) {
-                                    viewer.scalebar.setActive(this.checked);
-                                }
-                            },
-                            APPLICATION_CONTEXT.getOption('scaleBar', true)
-                        ),
-                        this.createCheckbox(
-                            "statusbar-checkbox",
-                            $.t('settings.statusBar'),
-                            function () {
-                                APPLICATION_CONTEXT.setOption('statusBar', this.checked);
-                                $('#viewer-status-bar').toggleClass('hidden');
-                            },
-                            APPLICATION_CONTEXT.getOption('statusBar', true)
-                        )
+                this.card("Appearance",
+                    themeSelect.create(),
+                    this.createCheckbox(
+                        "toolbar-checkbox",
+                        $.t('settings.toolBar'),
+                        function () {
+                            APPLICATION_CONTEXT.setUiOption('toolBar', this.checked);
+                            const toolbarDivs = document.querySelectorAll('div[id^="toolbar-"]');
+                            toolbarDivs.forEach(div => div.classList.toggle('hidden'));
+                        },
+                        APPLICATION_CONTEXT.getUiOption('toolBar')
+                    ),
+                    this.createCheckbox(
+                        "scalebar-checkbox",
+                        $.t('settings.scaleBar'),
+                        function () {
+                            APPLICATION_CONTEXT.setUiOption('scaleBar', this.checked);
+                            for (let viewer of VIEWER_MANAGER.viewers) {
+                                viewer.scalebar.setActive(this.checked);
+                            }
+                        },
+                        APPLICATION_CONTEXT.getUiOption('scaleBar')
+                    ),
+                    this.createCheckbox(
+                        "statusbar-checkbox",
+                        $.t('settings.statusBar'),
+                        function () {
+                            APPLICATION_CONTEXT.setUiOption('statusBar', this.checked);
+                            $('#viewer-status-bar').toggleClass('hidden');
+                        },
+                        APPLICATION_CONTEXT.getUiOption('statusBar')
+                    ),
+                    this.createCheckbox(
+                        "navigator-checkbox",
+                        $.t('settings.navigator'),
+                        function () {
+                            APPLICATION_CONTEXT.setUiOption('navigator', this.checked);
+                            for (let viewer of VIEWER_MANAGER.viewers) {
+                                const el = viewer.navigator?.element;
+                                if (el) el.style.display = this.checked ? "" : "none";
+                            }
+                        },
+                        APPLICATION_CONTEXT.getUiOption('navigator')
                     )
                 ),
                 div({ class: "space-y-4" },
-                    div({ class: "rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm" },
-                        span({ class: "mb-3 block text-lg font-semibold" }, "Behaviour"),
-                        div({ class: "form-control gap-3" },
-                            this.createCheckbox(
-                                "cookies-checkbox",
-                                $.t('settings.cookies'),
-                                function () {
-                                    APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
-                                    $('#settings-notification-wrap').removeClass('hidden');
-                                },
-                                APPLICATION_CONTEXT.getOption('bypassCookies', false)
-                            )
+                    this.card("Behaviour",
+                        this.createCheckbox(
+                            "cookies-checkbox",
+                            $.t('settings.cookies'),
+                            function () {
+                                APPLICATION_CONTEXT.setOption('bypassCookies', this.checked);
+                                $('#settings-notification-wrap').removeClass('hidden');
+                            },
+                            APPLICATION_CONTEXT.getOption('bypassCookies', false)
                         )
                     ),
-                    div({ class: "rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm" },
-                        span({ class: "mb-3 block text-lg font-semibold" }, "Other"),
-                        div({ class: "form-control gap-3" },
-                            this.createCheckbox(
-                                "debug-checkbox",
-                                $.t('settings.debugMode'),
-                                function () {
-                                    APPLICATION_CONTEXT.setOption('debugMode', this.checked);
-                                    $('#settings-notification-wrap').removeClass('hidden');
-                                },
-                                APPLICATION_CONTEXT.getOption('debugMode', false)
-                            ),
-                            this.createCheckbox(
-                                "render-checkbox",
-                                $.t('settings.debugRender'),
-                                function () {
-                                    APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
-                                    $('#settings-notification-wrap').removeClass('hidden');
-                                },
-                                APPLICATION_CONTEXT.getOption('webglDebugMode', false)
-                            )
+                    this.card("Other",
+                        this.createCheckbox(
+                            "debug-checkbox",
+                            $.t('settings.debugMode'),
+                            function () {
+                                APPLICATION_CONTEXT.setOption('debugMode', this.checked);
+                                $('#settings-notification-wrap').removeClass('hidden');
+                            },
+                            APPLICATION_CONTEXT.getOption('debugMode', false)
+                        ),
+                        this.createCheckbox(
+                            "render-checkbox",
+                            $.t('settings.debugRender'),
+                            function () {
+                                APPLICATION_CONTEXT.setOption('webglDebugMode', this.checked);
+                                $('#settings-notification-wrap').removeClass('hidden');
+                            },
+                            APPLICATION_CONTEXT.getOption('webglDebugMode', false)
                         )
                     )
                 )

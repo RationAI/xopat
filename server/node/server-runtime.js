@@ -519,8 +519,17 @@ class XopatServerRuntime {
     #resolveRpcVerifierContext(core, contextId) {
         const secure = core?.CORE?.server?.secure || {};
         const contexts = secure.rpcVerifiers || secure.rpcAuth || {};
-        if (contextId && contexts[contextId]) return contexts[contextId];
-        return contexts.default || null;
+        // Prototype-walk lookups (e.g. contextId: "__proto__") can return
+        // Object.prototype, which has no verifiers and was previously treated
+        // as "no auth required". hasOwn-only lookups close that bypass.
+        if (typeof contextId === "string" && contextId
+            && Object.prototype.hasOwnProperty.call(contexts, contextId)) {
+            return contexts[contextId];
+        }
+        if (Object.prototype.hasOwnProperty.call(contexts, "default")) {
+            return contexts.default || null;
+        }
+        return null;
     }
 
     #isPublicAuth(publicValue, ctx) {
@@ -564,10 +573,35 @@ class XopatServerRuntime {
         if (!publicAllowed) {
             const contextId = meta?.contextId;
             const verifierContext = this.#resolveRpcVerifierContext(core, contextId);
-            if (this.auth && typeof this.auth.verifyRpcAuth === "function") {
+            const explicitlyDisabled = !!(verifierContext && verifierContext.enabled === false);
+            const hasVerifiers = !!(verifierContext
+                && verifierContext.verifiers
+                && typeof verifierContext.verifiers === "object"
+                && Object.keys(verifierContext.verifiers).length > 0);
+
+            // Fail-closed by default. The operator opts out *explicitly* via
+            // `{ enabled: false }`, never by leaving the entry empty/missing.
+            //
+            //  - Real verifiers present → run them.
+            //  - `enabled: false`       → accept (operator opt-out).
+            //  - Empty / missing entry  → accept iff session also passed,
+            //                              otherwise reject and tell the
+            //                              operator how to configure it.
+            if (hasVerifiers && this.auth && typeof this.auth.verifyRpcAuth === "function") {
                 const result = await this.auth.verifyRpcAuth(req, res, core, verifierContext, meta);
                 if (!result || result.ok === false) return { ok: false };
                 user = result.user || user;
+            } else if (!explicitlyDisabled && !requireSession) {
+                const code = verifierContext ? "RPC_AUTH_NO_VERIFIERS" : "RPC_AUTH_NOT_CONFIGURED";
+                const detail = verifierContext ? "no verifiers in" : "no";
+                this.logger.warn?.(
+                    `[rpc-auth] ${meta.kind}/${meta.item?.id || meta.itemId}/${meta.method} ` +
+                    `is non-public, opted out of session, and has ${detail} verifier context ` +
+                    `(contextId=${JSON.stringify(contextId)}); rejecting. ` +
+                    `Add an explicit \`enabled: false\` to opt out, or configure verifiers under server.secure.rpcVerifiers.`
+                );
+                this.#writeJson(res, 401, { error: "Unauthorized: RPC auth not configured", code });
+                return { ok: false };
             }
         }
         return { ok: true, user };

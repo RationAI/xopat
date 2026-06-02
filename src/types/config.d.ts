@@ -42,6 +42,12 @@ type XOpatClientConfig = {
      * `src/IO_PIPELINE.md` for the full design.
      */
     io?: IOConfigBlock;
+    /**
+     * Server-side plugin selection mode. Controls which plugins the server
+     * ships to the client in the page-level `PLUGINS` map. See
+     * `XOpatPluginSelectionMode` for semantics. Defaults to `"all"`.
+     */
+    pluginSelectionMode?: XOpatPluginSelectionMode;
 };
 
 type ViewportSetup = {
@@ -50,14 +56,52 @@ type ViewportSetup = {
     rotation?: number;
 }
 
+/**
+ * UI visibility namespace under `params.ui.*`. Each flag is the *initial*
+ * visible state at boot — `false` boots the component collapsed/hidden but
+ * the user can still bring it back via the relevant toggle (settings
+ * checkbox, hide-UI button, menu opener). Defaults to `true` for every key
+ * when unset. Read at boot via `APPLICATION_CONTEXT.getUiOption(key)` —
+ * which also honors the legacy flat `XOpatSetup.scaleBar`/`toolBar`/
+ * `statusBar` aliases.
+ */
+type XOpatUiSetup = {
+    /** Initial visible state of the scalebar overlay. */
+    scaleBar?: boolean | null;
+    /** Initial visible state of the top toolbar. */
+    toolBar?: boolean | null;
+    /** Initial visible state of the bottom status bar. */
+    statusBar?: boolean | null;
+    /** Initial visible state of the global menu (FullscreenMenus panel). */
+    mainMenu?: boolean | null;
+    /** Initial visible state of the OSD navigator panel (per viewer). */
+    navigator?: boolean | null;
+    /**
+     * Initial visible state of the top app bar chrome. `false` is equivalent
+     * to the hide-UI button being pre-toggled at boot — hides every
+     * Chrome-registered component until the user toggles back.
+     */
+    appBar?: boolean | null;
+    /**
+     * Initial visible state of the global right-side dock (`window.LAYOUT`,
+     * `MainLayout`) that hosts plugin tabs such as chats, slide-switcher and
+     * questionnaire. `false` boots the dock closed; the user (and plugins
+     * that explicitly focus a tab) can still reopen it.
+     */
+    globalMenu?: boolean | null;
+};
+
 type XOpatSetup = {
     sessionName?: string | null;
     locale?: string | null;
     customBlending?: boolean | null;
     debugMode?: boolean | null;
     webglDebugMode?: boolean | null;
+    /** @deprecated Use `params.ui.scaleBar` instead. Kept as backwards-compatible alias. */
     scaleBar?: boolean | null;
+    /** @deprecated Use `params.ui.toolBar` instead. Kept as backwards-compatible alias. */
     toolBar?: boolean | null;
+    /** @deprecated Use `params.ui.statusBar` instead. Kept as backwards-compatible alias. */
     statusBar?: boolean | null;
     background?: string | null;
     viewport?: ViewportSetup | ViewportSetup[] | null;
@@ -66,7 +110,14 @@ type XOpatSetup = {
     grayscale?: boolean | null;
     tileCache?: boolean | null;
     preventNavigationShortcuts?: boolean | null;
+    /**
+     * If true, the viewer only zooms on `Ctrl/Cmd + wheel`; plain wheel scrolls
+     * the host page through. Intended for notebook / scrollable-host embeddings
+     * where unintentional viewer zoom hijacks page scroll.
+     */
+    scrollRequiresCtrl?: boolean | null;
     permaLoadPlugins?: boolean | null;
+    bypassCloseConfirmation?: boolean | null;
     bypassCookies?: boolean | null;
     bypassCache?: boolean | null;
     bypassCacheLoadTime?: boolean | null;
@@ -76,6 +127,15 @@ type XOpatSetup = {
     preferredFormat?: string | null;
     fetchAsync?: boolean | null;
     disablePluginsUi?: boolean | null;
+    /**
+     * If true, skip the cookie-driven plugin restore (`_plugins`) for this
+     * session. Plugins flagged `permaLoad: true` in their `include.json` and
+     * plugins explicitly listed in this session's `config.plugins` still come
+     * up normally. The intent is to ignore the user's *previous* manual
+     * picks while still respecting the deployment's auto-loaded set and the
+     * current session's declared plugins.
+     */
+    disablePluginsAutoload?: boolean | null;
     valueInspectorEnabled?: boolean | null;
     visualizationInspectorEnabled?: boolean | null;
     visualizationInspectorMode?: string | null;
@@ -84,6 +144,13 @@ type XOpatSetup = {
     isStaticPreview?: boolean | null;
     historySize?: number | null;
     maxMobileWidthPx?: number | null;
+    /**
+     * Canonical home for UI initial-visibility flags. See `XOpatUiSetup`.
+     * As a shorthand, set to `false` to hide every global UI component at
+     * boot (useful for headless / notebook embeddings). `true` is equivalent
+     * to leaving the field unset.
+     */
+    ui?: XOpatUiSetup | boolean | null;
 };
 
 type XOpatServerProxyAuthJwt = {
@@ -111,10 +178,45 @@ type XOpatServerConfig = {
     devMode: boolean | null | undefined;
     name: string | null;
     supportsPost: boolean;
+    /**
+     * Server-side-only configuration. Always stripped from the CORE object
+     * shipped to the browser (the server keeps a pre-strip copy for its
+     * own use — see `core.CORE_SECURE` in `core.js` and PHP's
+     * `$GLOBALS['CORE_SECURE']`). The `plugins[id]` / `modules[id]` slots
+     * are the second source consulted by element-level `requiredConfig`
+     * declarations in "available" plugin-selection mode (see
+     * `XOpatPluginSelectionMode`) — they're the natural home for
+     * secret-adjacent per-element configuration that should never leak to
+     * the client.
+     */
     secure?: {
         proxies?: Record<string, XOpatServerProxy>;
+        plugins?: Record<string, Record<string, unknown>>;
+        modules?: Record<string, Record<string, unknown>>;
     };
 };
+
+/**
+ * Server-side plugin selection mode. Read by the server when building the
+ * plugin manifest shipped to the client.
+ *  - "all":       every plugin without `enabled: false` is shipped (default).
+ *  - "whitelist": only plugins for which the deployment ENV sets
+ *                 `plugins[id].enabled = true` are shipped. A plugin's own
+ *                 `enabled: true` in include.json is NOT enough. No
+ *                 server-secure-side fallback for this opt-in.
+ *  - "available": same as "all", but each plugin / module may declare a
+ *                 single `requiredConfig: string[]` array of dot-paths in
+ *                 its include.json. The gate resolves each path against
+ *                 the deployment ENV block (`ENV.plugins[id]` /
+ *                 `ENV.modules[id]`) AND the server-secure block
+ *                 (`CORE.server.secure.plugins[id]` / `...modules[id]`);
+ *                 a path is satisfied when EITHER source carries a
+ *                 non-undefined/non-null/non-empty value. Include.json
+ *                 defaults are NOT consulted. The plugin author declares
+ *                 *what* is needed; the deployment admin decides *where*
+ *                 each value lives based on sensitivity.
+ */
+type XOpatPluginSelectionMode = "all" | "whitelist" | "available";
 
 type XOpatCoreConfig = {
     name: string;
@@ -149,6 +251,28 @@ type XOpatElementItem = {
     modules?: string[];
     /** Module IDs to require for a module */
     requires?: string[];
+    /**
+     * Dot-paths within this element's `<id>` namespace that MUST be
+     * configured by the deployment for the element to be shipped to the
+     * client under "available" plugin-selection mode. Each path is resolved
+     * against TWO deployment-controlled sources (in order); a path is
+     * satisfied when it resolves to a non-`undefined`/non-`null`/non-empty
+     * value in EITHER source:
+     *   1. Deployment ENV block — `ENV.plugins[id]` (plugins) /
+     *      `ENV.modules[id]` (modules). Set via env.json's top-level
+     *      `plugins`/`modules` arrays.
+     *   2. Server-secure block — `CORE.server.secure.plugins[id]` /
+     *      `CORE.server.secure.modules[id]`. Set via env.json's
+     *      `core.server.secure.plugins`/`modules` and never shipped to the
+     *      client. The natural home for secret-adjacent values (API key
+     *      bindings, proxy aliases referencing a secret).
+     * Include.json defaults are NOT consulted — only deployment
+     * configuration satisfies the gate. Booleans `false` and the number `0`
+     * count as configured. Ignored in other selection modes. The plugin
+     * author declares *what* is needed; the admin chooses *where* per
+     * deployment based on sensitivity.
+     */
+    requiredConfig?: string[];
     [key: string]: any;
 }
 

@@ -33,6 +33,16 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this._activeViewer = VIEWER;
         this.commentsEnabled = true;
         this._init();
+
+        // Point-snap settings. Persisted via cache; clamped on read so a
+        // corrupted entry can't make the snap radius absurd.
+        const snapEnabledRaw = this.cache?.get?.('snap.enabled');
+        this.snapEnabled = snapEnabledRaw === undefined || snapEnabledRaw === null
+            ? true : !!snapEnabledRaw;
+        const snapRadiusRaw = Number(this.cache?.get?.('snap.radiusPx'));
+        this.snapRadiusPx = Number.isFinite(snapRadiusRaw) && snapRadiusRaw > 0
+            ? Math.min(64, Math.max(2, snapRadiusRaw)) : 12;
+
         this.user = XOpatUser.instance();
 
         this._annotationsHistoryProvider = new OSDAnnotations.HistoryProvider(this);
@@ -69,7 +79,14 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     async _initIOPipeline() {
         const formatOf = (ctx) => (ctx.meta && ctx.meta.format) || this.getExportOptions()?.format || "native";
         await this.initIO({
-            bundleScope: "per-viewer",
+            // Annotations are bound to their target slide. The pipeline keys
+            // bundles by (viewerId, backgroundId) and the viewer-open-pipeline
+            // auto-fires flush-on-leave + restore-on-enter when the active
+            // slide in a viewer changes — so swapping slides within one viewer
+            // swaps the annotation set without leaking from the previous slide.
+            // The fabric canvas itself is still per-viewer (one wrapper per
+            // OSD viewer); only the IO state-keying axis is per-slide.
+            bundleScope: "per-viewer-background",
             exportBundle: async (ctx) => {
                 if (!ctx.viewerId) return undefined;
                 const fabric = this.getFabric(ctx.viewerId);
@@ -77,12 +94,54 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 return fabric.export({ format: formatOf(ctx) }, true, true);
             },
             importBundle: async (ctx, data) => {
-                if (data === undefined || data === null) return;
                 if (!ctx.viewerId) return;
                 const fabric = this.getFabric(ctx.viewerId);
                 if (!fabric) return;
+                // Slide-change restore semantics. The fabric canvas is a
+                // per-viewer overlay that survives OSD world resets, so when
+                // the active slide swaps we have to wipe the canvas ourselves
+                // — otherwise the previous slide's annotations stay on screen
+                // overlaid on the new slide.
+                //
+                // CRITICAL: the wipe MUST be synchronous from the pipeline's
+                // POV. `deleteAllAnnotations()` and `fabric.import(history=true)`
+                // both route through `APPLICATION_CONTEXT.history.push`, which
+                // queues forward() on a microtask Promise chain. If we don't
+                // wait for the queue to drain, the IO pipeline finishes
+                // restore, the renderer paints, and the user sees the previous
+                // slide's annotations until the queued delete fires. The
+                // history-bypassing fast path on `loadObjects(...,
+                // recordHistory=false)` calls `_loadObjects` directly — that
+                // does a synchronous `canvas.clear()` + state reset and
+                // returns a Promise we can actually await.
+                if (ctx.backgroundId) {
+                    try {
+                        await fabric.loadObjects({ objects: [] }, true, true, false);
+                    } catch (e) {
+                        console.warn("[annotations] pre-import clear failed:", e);
+                    }
+                }
+                if (data === undefined || data === null) return;
                 try {
-                    await fabric.import(data, { format: formatOf(ctx) }, true);
+                    // Payload-specific sinks (e.g. DICOM SR) wrap their content
+                    // as `{ format, meta, buffer }` so they can carry both the
+                    // wire-format hint and any decoder-side metadata (slide
+                    // pixel spacing, FrameOfReferenceUID, …). Unwrap here so
+                    // the convertor receives the raw payload + its meta.
+                    const isWrapped = typeof data === "object"
+                        && data !== null
+                        && typeof data.format === "string"
+                        && "buffer" in data;
+                    const importOptions = isWrapped
+                        ? { format: data.format, meta: data.meta }
+                        : { format: formatOf(ctx) };
+                    // Slide-aware restores aren't user actions; skip history
+                    // so the populate is synchronous too (same race that the
+                    // clear above was hitting). The legacy per-viewer path
+                    // keeps history tracking (ctx.backgroundId is unset).
+                    if (ctx.backgroundId) importOptions.history = false;
+                    const payload = isWrapped ? data.buffer : data;
+                    await fabric.import(payload, importOptions, true);
                 } catch (e) {
                     // Rethrow so the IO pipeline surfaces the failure to the
                     // user (`failure()` → `surfaceRefusal()` → Dialogs toast).
@@ -118,10 +177,26 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
             persistOutbox: true,
             persistMaxEntries: 5000,
             persistMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
-            validate: (item) => {
+            validate: (item, ctx) => {
+                // Delete carries only an itemId — no item to validate.
+                if (ctx?.direction === "delete") return { ok: true };
+                // History replays (undo/redo of a previously-applied mutation)
+                // dispatch back through the resource with a placeholder
+                // payload. The real mutation happens via the closure-captured
+                // apply; the wire payload is meaningless here, so don't
+                // refuse on shape.
+                if (ctx?.meta?.fromUndo || ctx?.meta?.fromRedo) return { ok: true };
+
                 const bad = requireObject(item, "annotation");
                 if (bad) return bad;
-                if (!item.factoryID && !item.type) {
+                // Update patches are partial — they carry only the fields
+                // being changed (e.g. `{ presetID }` from
+                // changeAnnotationPreset). Only enforce shape-identity
+                // (factoryID/type) on create, where the full item is
+                // submitted. Without this guard, every update was refused
+                // for missing factoryID, and `changeAnnotationPreset` silently
+                // returned `ok: false`.
+                if (ctx?.direction === "create" && !item.factoryID && !item.type) {
                     return {
                         ok: false, refused: true,
                         reason: "missing factoryID/type",
@@ -920,6 +995,26 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         return this.isAnnotation(annotation) && !this.annotationMatchesFilters(annotation);
     }
 
+    /** Current point-snap settings (live; reflects cache-restored state). */
+    getSnap() {
+        return { enabled: !!this.snapEnabled, radiusPx: this.snapRadiusPx };
+    }
+
+    /**
+     * Update point-snap settings; persists to cache so the choice survives
+     * a reload. Partial updates allowed: `{ enabled }` or `{ radiusPx }` or both.
+     */
+    setSnap(opts = {}) {
+        if (typeof opts.enabled === 'boolean') {
+            this.snapEnabled = opts.enabled;
+            this.cache?.set?.('snap.enabled', opts.enabled);
+        }
+        if (Number.isFinite(opts.radiusPx) && opts.radiusPx > 0) {
+            this.snapRadiusPx = Math.min(64, Math.max(2, opts.radiusPx));
+            this.cache?.set?.('snap.radiusPx', this.snapRadiusPx);
+        }
+    }
+
     /**
      * Returns currently available filter values discovered from existing full annotations.
      * The return object contains arrays for `instanceId`, `author`, `presetName`, and `factoryType`.
@@ -1316,6 +1411,22 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 
 		const _this = this;
         this._ioArgs = this.getStaticMeta("convertors") || {};
+        // Normalize imageCoordinatesOffset to the documented {x, y} shape.
+        // include.json ships it as a [x, y] array which the convertors read as
+        // `offset.x` / `offset.y` — undefined on an array, producing NaN
+        // coordinates in every exported feature. Normalize here so every
+        // downstream consumer sees the contract shape.
+        const rawOffset = this._ioArgs.imageCoordinatesOffset;
+        if (Array.isArray(rawOffset)) {
+            this._ioArgs.imageCoordinatesOffset = {
+                x: Number.isFinite(rawOffset[0]) ? rawOffset[0] : 0,
+                y: Number.isFinite(rawOffset[1]) ? rawOffset[1] : 0,
+            };
+        } else if (rawOffset && (!Number.isFinite(rawOffset.x) || !Number.isFinite(rawOffset.y))) {
+            // Object shape but with non-numeric components — drop it rather
+            // than letting NaN propagate.
+            delete this._ioArgs.imageCoordinatesOffset;
+        }
         this._defaultFormat = this._ioArgs.format || "native";
 
 		/**
@@ -1324,7 +1435,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		fabric.Object.prototype._factory = function () {
 			const factory = _this.getAnnotationObjectFactory(this.factoryID);
 			if (factory) this._factory = () => factory;
-			else if (!this.factoryID) {
+			else if (!this.factoryID && !this.isHelperAnnotation && !this.isHighlight) {
 				console.warn("Object", this.type, "has no associated factory for: ",  this.factoryID);
 				//maybe provide general implementation that can do nearly nothing
 			}
@@ -1338,7 +1449,61 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
                 });
 				return;
             }
+			if (this.isHelperAnnotation) return;
 			this._factory()?.onZoom(this, zoom, _realZoom);
+		}
+
+		// fabric's stock calcOCoords composes a [1/vpt[0],0,0,1/vpt[3],0,0]
+		// "inverse scale" matrix that only inverts vpt's scale correctly when
+		// vpt has no rotation. OSD's viewport rotation gives vpt non-zero
+		// off-diagonal terms, so the inverse is wrong and control positions
+		// either orbit (small angle) or blow up (near 90°). calcLineCoords
+		// sidesteps this: it transforms aCoords by the full vpt and gives us
+		// the OBB in screen coords, rotation-correct by construction.
+		const lineCoordsFallback = function (ctrl, dim, finalMatrix) {
+			return fabric.util.transformPoint({
+				x: ctrl.x * dim.x + ctrl.offsetX,
+				y: ctrl.y * dim.y + ctrl.offsetY,
+			}, finalMatrix);
+		};
+		const obbPositionHandler = (cornerKey) => function (dim, finalMatrix, fabricObject) {
+			if (!fabricObject?.canvas?.__spatialIndex) {
+				return lineCoordsFallback(this, dim, finalMatrix);
+			}
+			const c = fabricObject.calcLineCoords();
+			switch (cornerKey) {
+				case 'tl': return new fabric.Point(c.tl.x, c.tl.y);
+				case 'tr': return new fabric.Point(c.tr.x, c.tr.y);
+				case 'br': return new fabric.Point(c.br.x, c.br.y);
+				case 'bl': return new fabric.Point(c.bl.x, c.bl.y);
+				case 'mt': return new fabric.Point((c.tl.x + c.tr.x) / 2, (c.tl.y + c.tr.y) / 2);
+				case 'mr': return new fabric.Point((c.tr.x + c.br.x) / 2, (c.tr.y + c.br.y) / 2);
+				case 'mb': return new fabric.Point((c.br.x + c.bl.x) / 2, (c.br.y + c.bl.y) / 2);
+				case 'ml': return new fabric.Point((c.bl.x + c.tl.x) / 2, (c.bl.y + c.tl.y) / 2);
+				default:   return lineCoordsFallback(this, dim, finalMatrix);
+			}
+		};
+		const protoControls = fabric.Object.prototype.controls;
+		if (protoControls) {
+			for (const key of ['tl','tr','br','bl','mt','mr','mb','ml']) {
+				if (protoControls[key]) protoControls[key].positionHandler = obbPositionHandler(key);
+			}
+			if (protoControls.mtr) {
+				protoControls.mtr.positionHandler = function (dim, finalMatrix, fabricObject) {
+					if (!fabricObject?.canvas?.__spatialIndex) {
+						return lineCoordsFallback(this, dim, finalMatrix);
+					}
+					const c = fabricObject.calcLineCoords();
+					const midTopX = (c.tl.x + c.tr.x) / 2;
+					const midTopY = (c.tl.y + c.tr.y) / 2;
+					const cx = (c.tl.x + c.br.x) / 2;
+					const cy = (c.tl.y + c.br.y) / 2;
+					const dx = midTopX - cx;
+					const dy = midTopY - cy;
+					const len = Math.hypot(dx, dy) || 1;
+					return new fabric.Point(midTopX + (dx / len) * 40, midTopY + (dy / len) * 40);
+				};
+			}
 		}
 
 		const __renderStroke = fabric.Object.prototype._renderStroke;
@@ -1417,6 +1582,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Rect, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ellipse, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Ruler, false);
+		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Angle, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Polygon, false);
 		OSDAnnotations.registerAnnotationFactory(OSDAnnotations.Multipolygon, false);
 
@@ -1441,6 +1607,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         VIEWER_MANAGER.addHandler('key-down', e => this._keyDownHandler(e));
         VIEWER_MANAGER.addHandler('key-up', e => this._keyUpHandler(e));
         // window.addEventListener("blur", e => _this.setMode(_this.Modes.AUTO), false);
+
+        // Note: the canvas right-click menu is built by the plugin's
+        // per-viewer provider in plugins/annotations/methods/viewerMenu.mjs.
+        // The "Send to back" entry there calls fabric.Canvas#sendToBack
+        // directly — purely visual, no module-level z-order API.
+
+        // Note: the corner controls (tl/tr/bl/br/mt/mb/ml/mr) and rotation
+        // handle (mtr) on `fabric.Object.prototype.controls` keep fabric's
+        // default OBB-based positionHandlers. The handles follow the
+        // ROTATED bounding box of the annotation (the object's own bbox,
+        // not the screen-axis-aligned one) — which is what the user wants:
+        // handles attached to the corners of the visibly tilted shape.
+        // A previous round tried AABB anchoring, but that made the corner
+        // hit-boxes overlap the OBB body and stole click events from the
+        // drag/move gesture.
     }
 
     _keyDownHandler(e) {
@@ -2068,7 +2249,7 @@ OSDAnnotations.AnnotationState = class {
 
 OSDAnnotations.StateAuto = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "auto", "fa-arrows-up-down-left-right", "🆀  navigate / select annotations");
+		super(context, "auto", "ph-arrows-out-cardinal", "🆀  navigate / select annotations");
 	}
 
 	// handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2247,7 +2428,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-add", "fa-paintbrush", "🅴  brush to create/edit");
+		super(context, "fft-add", "ph-paint-brush", "🅴  brush to create/edit");
 	}
 
 	handleClickUp(o, point, isLeftClick, objectFactory) {
@@ -2301,7 +2482,7 @@ OSDAnnotations.StateFreeFormToolAdd = class extends OSDAnnotations.StateFreeForm
 OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-remove", "fa-paintbrush", "🆁  brush to remove");
+		super(context, "fft-remove", "ph-eraser", "🆁  brush to remove");
 		this.candidates = null;
 	}
 
@@ -2369,7 +2550,7 @@ OSDAnnotations.StateFreeFormToolRemove = class extends OSDAnnotations.StateFreeF
 
 OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState {
 	constructor(context) {
-		super(context, "custom", "fa-object-group", "🆆  create annotations manually");
+		super(context, "custom", "ph-bounding-box", "🆆  create annotations manually");
 		this._lastUsed = null;
 	}
 
@@ -2434,7 +2615,14 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 
 	_init(point, isLeftClick, updater) {
 		if (!updater) return;
-		updater.initCreate(point.x, point.y, isLeftClick);
+		let px = point.x, py = point.y;
+		// Snap the click position to a nearby visible annotation vertex when
+		// enabled. Drag motion (updateCreate) is NOT snapped; only clicks.
+		if (this.context.snapEnabled) {
+			const snapped = this.context.fabric?.findSnapTarget?.(px, py, this.context.snapRadiusPx);
+			if (snapped) { px = snapped.x; py = snapped.y; }
+		}
+		updater.initCreate(px, py, isLeftClick);
 		this._lastUsed = updater;
 	}
 
@@ -2486,7 +2674,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormTool {
 
 	constructor(context) {
-		super(context, "fft-correct", "fa-paintbrush", "🆉  correction tool");
+		super(context, "fft-correct", "ph-paint-brush-broad", "🆉  correction tool");
 		this.candidates = null;
 	}
 
@@ -2555,7 +2743,7 @@ OSDAnnotations.StateCorrectionTool = class extends OSDAnnotations.StateFreeFormT
 
 OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "edit-selection", "fa-pen-to-square", "Edit selected annotation");
+        super(context, "edit-selection", "ph-note-pencil", "Edit selected annotation");
     }
 
     setFromAuto() {

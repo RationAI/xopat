@@ -102,15 +102,18 @@ function createSession(res) {
 
     sessions.set(id, session);
 
-    // Set an HttpOnly cookie so front-end JS can’t steal it
-    // (but browser will send it automatically with requests)
+    const isCrossSiteCookieMode = process.env.XOPAT_CROSS_SITE_COOKIES === 'true';
+
     const cookieParts = [
         `xopat_session=${encodeURIComponent(id)}`,
         'Path=/',
         'HttpOnly',
-        'SameSite=Lax'
+        isCrossSiteCookieMode ? 'SameSite=None' : 'SameSite=Lax'
     ];
-    if (process.env.NODE_ENV === 'production') {
+
+    // SameSite=None is rejected by browsers unless Secure is also present.
+    // In Colab/proxy mode this must be enabled even if NODE_ENV !== 'production'.
+    if (process.env.NODE_ENV === 'production' || isCrossSiteCookieMode) {
         cookieParts.push('Secure');
     }
     const cookie = cookieParts.join('; ');
@@ -164,7 +167,8 @@ function normalizeSchemePluginRecords(plugins) {
     const manifestKeys = new Set([
         'id', 'name', 'author', 'version', 'description', 'icon',
         'includes', 'modules', 'requires', 'permaLoad', 'enabled',
-        'loaded', 'error', 'directory', 'path', 'styleSheet'
+        'loaded', 'error', 'directory', 'path', 'styleSheet',
+        'requiredConfig'
     ]);
 
     for (const [id, plugin] of Object.entries(plugins || {})) {
@@ -176,7 +180,7 @@ function normalizeSchemePluginRecords(plugins) {
         for (const key of [
             'id', 'name', 'author', 'version', 'description', 'icon',
             'modules', 'requires', 'permaLoad', 'enabled', 'loaded',
-            'directory'
+            'directory', 'requiredConfig'
         ]) {
             if (Object.prototype.hasOwnProperty.call(plugin, key)) {
                 meta[key] = plugin[key];
@@ -573,6 +577,11 @@ const server = http.createServer(async (req, res) => {
         if (urlObj.pathname.startsWith("/__rpc/")) {
             const core = initViewerCoreAndPlugins(req, res, true);
             if (!core) return;
+            // Populate core.CORE_AUTHOR_SECURE so getSecurePluginConfig can
+            // fall back on author-shipped server.json defaults during RPC.
+            // serverOnly mode preserves CORE.server.secure (deployer tier);
+            // running loadPlugins additionally fills the author tier.
+            loadPlugins(core, fs.existsSync, p => fs.readFileSync(p, { encoding: 'utf8', flag: 'r' }), i18n);
             const session = getSession(req);
             return serverRuntime.handleRpc(req, res, core, session, urlObj);
         }

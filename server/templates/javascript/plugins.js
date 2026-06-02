@@ -1,6 +1,11 @@
 const {parse} = require("comment-json")
 const {loadModules} = require("./modules");
-const {safeScanDir, expandIncludeGlobs} = require("./utils");
+const {
+    safeScanDir,
+    expandIncludeGlobs,
+    resolvePluginSelectionMode,
+    requiredConfigSatisfied
+} = require("./utils");
 
 module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
 
@@ -18,6 +23,8 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
     const PLUGINS = core.PLUGINS,
         MODULES = core.MODULES,
         ENV = core.ENV;
+
+    const pluginSelectionMode = resolvePluginSelectionMode(core);
 
     let pluginPaths = safeScanDir(core.ABS_PLUGINS);
     for (let dir of pluginPaths) {
@@ -65,6 +72,28 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                 data["description"] = data["description"] || packageData["description"];
             }
 
+            // Author server manifest (server.json) — optional. Its
+            // `requiredConfig` is unioned into the gate paths; its remaining
+            // fields become the author tier of secure config (visible to
+            // plugin server code via XS.getSecurePluginConfig, NOT counted
+            // toward the `requiredConfig` gate).
+            const serverManifestPath = fullPath + "server.json";
+            if (fileExists(serverManifestPath)) {
+                const serverManifest = parse(readFile(serverManifestPath));
+                if (serverManifest && typeof serverManifest === "object") {
+                    data = data || {};
+                    if (Array.isArray(serverManifest.requiredConfig)) {
+                        const existing = Array.isArray(data.requiredConfig) ? data.requiredConfig : [];
+                        data.requiredConfig = [...new Set([...existing, ...serverManifest.requiredConfig])];
+                    }
+                    const { requiredConfig: _drop, ...authorSecure } = serverManifest;
+                    if (Object.keys(authorSecure).length && data.id) {
+                        if (!core.CORE_AUTHOR_SECURE) core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
+                        core.CORE_AUTHOR_SECURE.plugins[data.id] = authorSecure;
+                    }
+                }
+            }
+
             if (data) {
                 if (!data["id"]) {
                     data["id"] = "__generated_id_" + dir;
@@ -88,13 +117,32 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                     }
                 }
 
+                // Pre-merge captures: deployment-ENV plugin block AND
+                // preserved server-secure plugin block. Include.json defaults
+                // must NOT count toward `requiredConfig`. The secure block is
+                // read from the pre-strip backup `core.CORE_SECURE` (set by
+                // core.js); `core.CORE.server.secure` is already gone here.
+                let envBlock = {};
+                let secBlock = {};
+                let envEnabledOptIn = false;
                 try {
                     if (isType(ENV, "object")) {
                         if (!isType(ENV["plugins"], "object")) ENV["plugins"] = {};
                         const ENV_PLUG = ENV["plugins"];
 
                         if (isType(ENV_PLUG[data["id"]], "object")) {
-                            data = core.objectMergeRecursiveDistinct(data, ENV_PLUG[data["id"]]);
+                            envBlock = ENV_PLUG[data["id"]];
+                            // Capture deployment-ENV opt-in BEFORE the merge clobbers the
+                            // origin of `enabled`. Only used by "whitelist" mode.
+                            if (envBlock.enabled === true) {
+                                envEnabledOptIn = true;
+                            }
+                            data = core.objectMergeRecursiveDistinct(data, envBlock);
+                        }
+
+                        const securePlugins = core?.CORE_SECURE?.plugins;
+                        if (securePlugins && isType(securePlugins[data["id"]], "object")) {
+                            secBlock = securePlugins[data["id"]];
                         }
 
                         if (core.parseBool(data["permaLoad"]) === true) {
@@ -110,7 +158,28 @@ module.exports.loadPlugins = function(core, fileExists, readFile, i18n) {
                     console.error(e);
                 }
 
-                if (core.parseBool(data["enabled"]) !== false) {
+                let shouldInclude = false;
+                const enabledNotFalse = core.parseBool(data["enabled"]) !== false;
+                switch (pluginSelectionMode) {
+                    case "whitelist":
+                        // Inverse default: nothing ships unless deployment ENV opted in.
+                        // No secure-side fallback for the opt-in flag (deliberate).
+                        shouldInclude = envEnabledOptIn && enabledNotFalse;
+                        break;
+                    case "available":
+                        // Unified `requiredConfig` gate: each path must
+                        // resolve in EITHER the ENV block OR the
+                        // server-secure block.
+                        shouldInclude = enabledNotFalse
+                            && requiredConfigSatisfied(data["requiredConfig"], envBlock, secBlock);
+                        break;
+                    case "all":
+                    default:
+                        shouldInclude = enabledNotFalse;
+                        break;
+                }
+
+                if (shouldInclude) {
                     PLUGINS[data["id"]] = data;
                 }
             }

@@ -63,6 +63,32 @@ interface TileSourceMetadata {
     micronsX?: number;
     micronsY?: number;
 }
+
+/**
+ * One displayable scalar inside a {@link TileSourceDisplaySection}. The renderer
+ * formats `value` directly — no functions, no nested objects.
+ */
+interface TileSourceDisplayField {
+    label: string;
+    value: string | number | boolean | null;
+}
+
+/**
+ * One card in the Slide Information panel. `fields` renders as a key/value
+ * grid; `description` renders as a paragraph; either or both may be set.
+ */
+interface TileSourceDisplaySection {
+    title?: string;
+    description?: string;
+    fields?: TileSourceDisplayField[];
+}
+
+/**
+ * Ordered list of cards returned by `TileSource.getDisplayMetadata()`. Tightens
+ * the user-facing shape so the slide-info panel never has to introspect raw
+ * TileSource instances. See `src/tile-source.ts` for the default and contract.
+ */
+type TileSourceDisplayMetadata = TileSourceDisplaySection[];
 /**
  * @property dataReference index to the `data` array, can be only one unlike in `shaders`, required - marks the target data item others refer to (e.g. in measurements)
  * @property shaders array of optional rendering specification
@@ -258,8 +284,8 @@ interface XOpatHistory extends OpenSeadragon.EventSource {
 
 type ViewerOpenOptions = {
     deriveOverlayFromBackgroundGoals?: boolean;
-    dataMode?: "replace" | "merge";
-    backgroundMode?: "replace" | "merge";
+    dataMode?: "replace" | "merge" | "merge-exact";
+    backgroundMode?: "replace" | "merge" | "merge-exact";
     historyMode?: "auto" | "skip" | "visualization-step" | "content-switch" | "reset-history";
     fromHistory?: boolean;
     preserveHistoryOnBackgroundChange?: boolean;
@@ -290,6 +316,10 @@ interface ApplicationContext {
     readonly pluginsMenuId: string;
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
+    /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
+    getUiOption(key: keyof XOpatUiSetup): boolean;
+    /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
+    setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -348,6 +378,10 @@ interface ApplicationContext {
     readonly pluginsMenuId: string;
     getOption(name: string, defaultValue?: any, cache?: boolean, parse?: boolean): any;
     setOption(name: string, value: any, cache?: boolean): void;
+    /** Read a UI initial-visibility flag with the full fallback chain (params.ui → legacy flat → defaults → true). */
+    getUiOption(key: keyof XOpatUiSetup): boolean;
+    /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
+    setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -384,6 +418,7 @@ interface ApplicationContext {
 interface XOpatUtilities {
     fileNameFromPath(imageFilePath: string, stripSuffix?: boolean): string;
     nameFromBGOrIndex(indexOrItem: number | BackgroundItem | BackgroundConfig, stripSuffix?: boolean): string;
+    currentBackgroundIdFor(viewer: OpenSeadragon.Viewer | undefined): string | undefined;
     stripSuffix(path: string): string;
 
     loadModules(onload?: () => void, ...ids: string[]): void;

@@ -3,12 +3,14 @@ import { AnnotationBoardPanel } from '../board/annotationBoardPanel.mjs';
 const { div, button, input, span, h3 } = globalThis.van.tags;
 
 function iconButton(icon, title, onClick, active = false) {
+    const isPh = String(icon ?? '').trim().startsWith('ph-');
+    const iconCls = isPh ? `ph-light ${icon}` : `fa-auto ${icon}`;
     return button({
         type: 'button',
         class: `btn btn-ghost btn-sm btn-square ${active ? 'btn-active' : ''}`.trim(),
         title,
         onclick: onClick,
-    }, span({ class: `fa-auto ${icon}` }));
+    }, span({ class: iconCls }));
 }
 
 function tabButton(label, onClick, active = false, hidden = false) {
@@ -239,7 +241,12 @@ export const viewerMenuMethods = {
     initViewerMenu() {
         this.registerViewerMenu((viewer) => {
             const viewerId = viewer.uniqueId;
+            // viewer-reset fires with the world momentarily empty; uniqueId is
+            // documented to be transiently undefined in that window. Same bail
+            // pattern as _getViewerUI above.
+            if (!viewerId) return null;
             const state = this.getViewerContext(viewerId);
+            if (!state) return null;
             state.viewer = viewer;
             state.currentTab = state.currentTab || 'preset';
 
@@ -251,21 +258,21 @@ export const viewerMenuMethods = {
             state.boardPanel = new AnnotationBoardPanel(this, viewer);
             this._bindViewerFabricEvents(viewerId);
 
-            state.enableButton = iconButton('fa-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
-            state.outlineButton = iconButton('fa-vector-square', this.t('annotations.viewerMenu.outlineOnly'), () => {
+            state.enableButton = iconButton('ph-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
+            state.outlineButton = iconButton('ph-rectangle-dashed', this.t('annotations.viewerMenu.outlineOnly'), () => {
                 const next = !this.context.getAnnotationCommonVisualProperty('modeOutline');
                 this.setDrawOutline(next);
             }, this.context.getAnnotationCommonVisualProperty('modeOutline'));
-            state.edgeButton = iconButton('fa-up-down-left-right', this.t('annotations.viewerMenu.edgeNavigation'), () => {
+            state.edgeButton = iconButton('ph-arrows-out-cardinal', this.t('annotations.viewerMenu.edgeNavigation'), () => {
                 const active = !(state.edgeButton.classList.contains('btn-active'));
                 this.setEdgeCursorNavigate(active, viewerId);
             }, this.getOption('edgeCursorNavigate', true));
-            state.saveButton = iconButton('fa-floppy-disk', this.t('annotations.viewerMenu.save'), () => {
+            state.saveButton = iconButton('ph-floppy-disk', this.t('annotations.viewerMenu.save'), () => {
                 this.context.requestExport()
                     .then((msg) => Dialogs.show(msg))
                     .catch((e) => Dialogs.show(`${this.t('annotations.export.saveFailed')} ${e.message}`, 5000, Dialogs.MSG_ERR));
             });
-            state.moreButton = iconButton('fa-ellipsis-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
+            state.moreButton = iconButton('ph-dots-three-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
                 USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared');
             });
 
@@ -296,7 +303,7 @@ export const viewerMenuMethods = {
             state.presetInner = div({ class: 'space-y-1' });
             state.presetList = div({ class: `flex-1 pl-2 pr-1 mt-2 relative ${state.currentTab === 'preset' ? '' : 'hidden'}`.trim() },
                 button({ type: 'button', class: 'btn btn-xs absolute top-0 right-4 z-10', onclick: () => this.showPresets() },
-                    span({ class: 'fa-auto fa-pen-to-square mr-1 text-xs' }),
+                    span({ class: 'ph-light ph-note-pencil mr-1 text-xs' }),
                     this.t('annotations.viewerMenu.editPresets')
                 ),
                 div({ class: 'pt-4' }, state.presetInner)
@@ -311,7 +318,7 @@ export const viewerMenuMethods = {
                         class: 'btn btn-ghost btn-xs',
                         onclick: () => this._openAnnotationFilterModal(viewerId)
                     },
-                        span({ class: 'fa-auto fa-filter mr-1 text-xs' }),
+                        span({ class: 'ph-light ph-funnel mr-1 text-xs' }),
                         this.t('annotations.filters.button')
                     )
                 ),
@@ -358,6 +365,12 @@ export const viewerMenuMethods = {
             );
 
             requestAnimationFrame(() => {
+                // The menu builder fires before the slide-open pipeline finishes
+                // wiring the new viewer. If the viewer this menu was built for
+                // has already been retired (slide-switch, viewer-reset), bail
+                // silently — a fresh menu will be rebuilt for the new viewer.
+                if (!window.VIEWER_MANAGER?.getViewer(viewerId)) return;
+
                 this._renderPresetList(viewerId);
                 this._refreshAnnotationFilterBadges(viewerId);
                 // todo race condition, accesses canvas instance, still, this update is too slow and fired too often, fix it
@@ -369,7 +382,7 @@ export const viewerMenuMethods = {
             return {
                 id: this.id,
                 title: this.t('annotations.viewerMenu.title'),
-                icon: 'fa-question-circle',
+                icon: 'ph-question',
                 body
             };
         });
@@ -391,25 +404,33 @@ export const viewerMenuMethods = {
     _buildAnnotationContextActions(active, fabric, opts = {}) {
         const {
             originalEvent,
+            source,
             includePresetSelection = true,
             includeMarkAsPrivate = true,
             includeMoveToLayer = true,
         } = opts;
         const wrapped = { originalEvent };
-        const actions = [];
+        const fromBoard = source === 'board';
 
         // Cascading flyouts are only rendered when `window.ContextMenu` is
-        // available (van.js component bundled into ui/index.js). Until then,
-        // emit a flat list with section header so the legacy
+        // available (van.js component bundled into ui/index.js). When it
+        // isn't, fall back to a flat list with header rows so the legacy
         // `window.DropDown` fallback still shows the items.
         const supportsFlyouts = typeof window !== 'undefined' && !!window.ContextMenu?.open;
 
+        // ── Build the building-block child arrays ───────────────────────
+        // Each block is computed up front so we can either nest them under
+        // the "Annotation" parent (modern flyout path) or flatten them with
+        // headers (legacy DropDown fallback) using the same data.
+
+        let presetItems = null;
+        let presetTitle = null;
         if (includePresetSelection) {
             const handler = active
                 ? this._clickAnnotationChangePreset.bind(this, active)
                 : this._clickPresetSelect.bind(this, true);
-            const parentTitle = active ? 'Change annotation to' : 'Select preset for left click';
-            const presetItems = [];
+            presetTitle = active ? 'Change preset' : 'Select preset for left click';
+            presetItems = [];
             this.context.presets.foreach((preset) => {
                 const category = preset.getMetaValue('category') || 'unknown';
                 const icon = preset.objectFactory.getIcon();
@@ -425,61 +446,204 @@ export const viewerMenuMethods = {
                     }
                 });
             });
-            if (presetItems.length) {
-                if (supportsFlyouts) {
-                    actions.push({ title: parentTitle, icon: 'fa-tag', children: presetItems });
-                } else {
-                    actions.push({ title: `${parentTitle}:` });
-                    actions.push(...presetItems);
-                }
-            }
+            if (!presetItems.length) presetItems = null;
         }
 
-        if (active && includeMarkAsPrivate) {
-            const props = this._getAnnotationProps(active);
-            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
-            actions.push({ title: 'Modify annotation:' });
-            actions.push({
-                title: props.private ? 'Unmark as private' : 'Mark as private',
-                icon: props.private ? 'visibility' : 'visibility_lock',
-                action: () => handlerMarkPrivate()
-            });
-        }
+        const mousePos = this._getMousePosition(wrapped);
+        const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
+        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
+        // From the board panel there is no real cursor position over the
+        // slide, so Paste-at-mouse cannot anchor sensibly — force-disable it.
+        // _canPasteAnnotation's bounds check would also reject most board
+        // origins, but the explicit gate makes the intent unambiguous.
+        const canPaste = !fromBoard && this._canPasteAnnotation(wrapped);
+        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
+        const handlerDelete = this._deleteAnnotation.bind(this, active);
+        const cudActions = [
+            { title: 'Copy',   icon: 'ph-copy',           containerCss: !active && 'opacity-50',  action: () => active && handlerCopy() },
+            { title: 'Cut',    icon: 'ph-scissors',       containerCss: !active && 'opacity-50',  action: () => active && handlerCut() },
+            { title: 'Paste',  icon: 'ph-clipboard-text', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() },
+            { title: 'Delete', icon: 'ph-trash',          containerCss: !active && 'opacity-50',  action: () => active && handlerDelete() },
+        ];
 
+        let layerItems = null;
         if (active && includeMoveToLayer && typeof fabric?.setAnnotationLayer === 'function') {
             const layers = fabric.getAllLayers?.() || [];
-            const layerItems = [{
+            layerItems = [{
                 title: '(no layer)',
-                icon: 'fa-layer-group',
+                icon: 'ph-stack',
                 action: () => fabric.setAnnotationLayer(active, null),
             }];
             for (const layer of layers) {
                 layerItems.push({
                     title: layer.name || `Layer ${layer.id}`,
-                    icon: 'fa-layer-group',
+                    icon: 'ph-stack',
                     action: () => fabric.setAnnotationLayer(active, layer.id),
                 });
             }
-            if (supportsFlyouts) {
-                actions.push({ title: 'Move to layer', icon: 'fa-layer-group', children: layerItems });
-            } else {
-                actions.push({ title: 'Move to layer:' });
-                actions.push(...layerItems);
+        }
+
+        let zOrderItems = null;
+        if (active && typeof fabric?.canvas?.sendToBack === 'function') {
+            zOrderItems = [{
+                title: 'Send to back',
+                icon: 'ph-caret-double-down',
+                action: () => {
+                    // Fabric draws the active object on top regardless of
+                    // its canvas._objects position (default
+                    // preserveObjectStacking=false), so drop the selection
+                    // for the new order to take effect immediately.
+                    fabric.canvas.discardActiveObject();
+                    fabric.canvas.sendToBack(active);
+                    fabric.canvas.requestRenderAll();
+                },
+            }];
+        }
+
+        let privateItem = null;
+        if (active && includeMarkAsPrivate) {
+            const props = this._getAnnotationProps(active);
+            const handlerMarkPrivate = this._clickAnnotationMarkPrivate.bind(this, active);
+            privateItem = {
+                title: props.private ? 'Unmark as private' : 'Mark as private',
+                icon: props.private ? 'visibility' : 'visibility_lock',
+                action: () => handlerMarkPrivate(),
+            };
+        }
+
+        let measurementsItem = null;
+        if (active && typeof this.showMeasurementsPopover === 'function') {
+            measurementsItem = {
+                title: 'View measurements',
+                icon: 'ph-chart-bar-horizontal',
+                action: () => this.showMeasurementsPopover(active),
+            };
+        }
+
+        // Group — "From selection (N)" plus criterion-based grouping that
+        // used to live on the board panel's right-click menu. Both paths
+        // funnel into layer-based grouping (annotations move into a layer;
+        // there is no fabric.Group annotation here).
+        let groupParent = null;
+        let groupItemsFlat = null;
+        if (typeof fabric?.groupAnnotationsIntoLayer === 'function') {
+            const selection = fabric.getSelectionSnapshot?.() || [];
+            const selectionCount = selection.length;
+            const fromSelectionEnabled = selectionCount >= 2;
+
+            const layersFor = (excludeLayerId) => {
+                const all = fabric.getAllLayers?.() || [];
+                return excludeLayerId
+                    ? all.filter(l => String(l.id) !== String(excludeLayerId))
+                    : all;
+            };
+
+            const targetChildren = (apply, excludeLayerId) => {
+                const items = [{
+                    title: '(new collapsed layer)',
+                    icon: 'ph-stack',
+                    action: () => apply({ kind: 'new' }),
+                }];
+                for (const l of layersFor(excludeLayerId)) {
+                    items.push({
+                        title: l.name || `Layer ${l.id}`,
+                        icon: 'ph-stack',
+                        action: () => apply({ kind: 'layer', layerId: l.id }),
+                    });
+                }
+                return items;
+            };
+
+            const groupItems = [];
+            groupItems.push({
+                title: `From selection (${selectionCount})`,
+                icon: 'ph-bounding-box',
+                containerCss: !fromSelectionEnabled && 'opacity-50',
+                children: fromSelectionEnabled
+                    ? targetChildren(t => fabric.groupAnnotationsIntoLayer(selection, t))
+                    : undefined,
+                action: fromSelectionEnabled ? undefined : () => {},
+            });
+
+            if (active && typeof fabric?.groupSiblingsByCriterion === 'function') {
+                groupItems.push({ title: '' }); // separator
+                const categoryRaw = active.meta?.category;
+                const categoryValue = (categoryRaw && typeof categoryRaw === 'object')
+                    ? categoryRaw.value : categoryRaw;
+                const criteria = [
+                    { id: 'factory',  label: 'Same shape type',   value: active.factoryID },
+                    { id: 'preset',   label: 'Same preset',       value: active.presetID },
+                    { id: 'author',   label: 'Same author',       value: active.author ?? active.sessionID },
+                    { id: 'category', label: 'Same category text', value: categoryValue },
+                ];
+                const excludeId = active.layerID ?? '';
+                for (const c of criteria) {
+                    const hasValue = c.value !== undefined && c.value !== null && c.value !== '';
+                    groupItems.push({
+                        title: c.label,
+                        icon: 'ph-bounding-box',
+                        containerCss: !hasValue && 'opacity-50',
+                        children: hasValue
+                            ? targetChildren(t => fabric.groupSiblingsByCriterion(active, c.id, t), excludeId)
+                            : undefined,
+                        action: hasValue ? undefined : () => {},
+                    });
+                }
+            }
+
+            if (groupItems.length) {
+                groupParent = { title: 'Group', icon: 'ph-bounding-box', children: groupItems };
+                // For the legacy flat path, drop separator placeholders.
+                groupItemsFlat = groupItems.filter(it => it.title !== '');
             }
         }
 
-        actions.push({ title: 'Actions:' });
-        const mousePos = this._getMousePosition(wrapped);
-        const handlerCopy = this._copyAnnotation.bind(this, mousePos, active);
-        actions.push({ title: 'Copy', icon: 'fa-copy', containerCss: !active && 'opacity-50', action: () => active && handlerCopy() });
-        const handlerCut = this._cutAnnotation.bind(this, mousePos, active);
-        actions.push({ title: 'Cut', icon: 'fa-scissors', containerCss: !active && 'opacity-50', action: () => active && handlerCut() });
-        const canPaste = this._canPasteAnnotation(wrapped);
-        const handlerPaste = this._pasteAnnotation.bind(this, wrapped);
-        actions.push({ title: 'Paste', icon: 'fa-paste', containerCss: !canPaste && 'opacity-50', action: () => canPaste && handlerPaste() });
-        const handlerDelete = this._deleteAnnotation.bind(this, active);
-        actions.push({ title: 'Delete', icon: 'fa-trash', containerCss: !active && 'opacity-50', action: () => active && handlerDelete() });
+        // ── Assemble ────────────────────────────────────────────────────
+        // Modern path: one "Annotation" parent with the children in the
+        // user-specified order. Inserts an empty-title row between the
+        // preset section and the Copy/Cut/Paste/Delete group as a visual
+        // separator (no header label, just breathing room).
+        if (supportsFlyouts) {
+            const children = [];
+            if (presetItems) {
+                children.push({ title: presetTitle, icon: 'ph-tag', children: presetItems });
+                children.push({ title: '' }); // visual separator
+            }
+            children.push(...cudActions);
+            if (layerItems) {
+                children.push({ title: 'Move to layer', icon: 'ph-stack', children: layerItems });
+            }
+            if (groupParent) children.push(groupParent);
+            if (zOrderItems) children.push(...zOrderItems);
+            if (privateItem) children.push(privateItem);
+            if (measurementsItem) children.push(measurementsItem);
+            return [{ title: 'Annotation', icon: 'ph-shapes', children }];
+        }
 
+        // Legacy `window.DropDown` fallback — flat list with header rows.
+        // Order matches the modern submenu so users see the same mental
+        // model regardless of which renderer is active.
+        const actions = [];
+        if (presetItems) {
+            actions.push({ title: `${presetTitle}:` });
+            actions.push(...presetItems);
+        }
+        actions.push({ title: 'Actions:' });
+        actions.push(...cudActions);
+        if (layerItems) {
+            actions.push({ title: 'Move to layer:' });
+            actions.push(...layerItems);
+        }
+        if (groupItemsFlat) {
+            actions.push({ title: 'Group:' });
+            actions.push(...groupItemsFlat);
+        }
+        if (zOrderItems) actions.push(...zOrderItems);
+        if (privateItem) {
+            actions.push({ title: 'Modify annotation:' });
+            actions.push(privateItem);
+        }
+        if (measurementsItem) actions.push(measurementsItem);
         return actions;
     },
 
@@ -565,6 +729,7 @@ export const viewerMenuMethods = {
             }
             return this._buildAnnotationContextActions(active, fabric, {
                 originalEvent: ctx.event,
+                source: ctx.source,
                 includeMarkAsPrivate: true,
                 includeMoveToLayer: true,
                 includePresetSelection: true,
@@ -679,7 +844,11 @@ export const viewerMenuMethods = {
                         return false;
                     }
                 },
-                span({ class: `fa-auto ${preset.objectFactory.getIcon()}`, style: `color:${preset.color};` }),
+                (() => {
+                    const ico = preset.objectFactory.getIcon();
+                    const isPh = String(ico ?? '').trim().startsWith('ph-');
+                    return span({ class: isPh ? `ph-light ${ico}` : `fa-auto ${ico}`, style: `color:${preset.color};` });
+                })(),
                 span({ class: 'truncate flex-1 text-left' }, category),
                 isLeft ? span({ class: 'badge badge-primary badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'L') : null,
                 isRight ? span({ class: 'badge badge-outline badge-xs h-4 min-h-0 w-4 p-0 font-bold' }, 'R') : null

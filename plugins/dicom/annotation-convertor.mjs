@@ -3,9 +3,35 @@ import DicomTools from "./dicom-query.mjs";
 OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Convertor.IConvertor {
     static title = 'DICOM SR';
     static description = 'DICOM Structured Report (TID 1500)';
-    static exportsPresets = false;
+    static exportsPresets = true;
     static includeAllAnnotationProps = false;
     static getSuffix() { return '.dcm'; }
+
+    // Private concept code carrying the xOpat preset blob inside the SR
+    // ContentSequence. Standard DICOM SR has no native slot for "drawing
+    // presets" (color/style/factory templates) — we co-encode them as a
+    // single TEXT item tagged with this private concept so we can find &
+    // strip it on decode without confusing it with a real text annotation.
+    // Pre-existing SR files (without this item) decode cleanly to
+    // `presets: []`, preserving backwards compatibility.
+    static _PRESETS_CONCEPT = {
+        CodeValue: "XOPAT.PRESETS",
+        CodingSchemeDesignator: "99XOPAT",
+        CodeMeaning: "xOpat Annotation Presets"
+    };
+
+    // Private concept code attached as a CONTAINS child item under each
+    // SCOORD3D annotation, carrying the per-annotation `presetID`. Without
+    // this child, decode falls back to the default preset's id for every
+    // annotation — "classes not preserved". With it, the combination of the
+    // XOPAT.PRESETS blob (preset definitions) + this per-annotation pointer
+    // round-trips the full class binding. Pre-existing SR files without the
+    // child decode unchanged (default-preset fallback path).
+    static _PRESETID_CONCEPT = {
+        CodeValue: "XOPAT.PRESETID",
+        CodingSchemeDesignator: "99XOPAT",
+        CodeMeaning: "xOpat Per-Annotation Preset Id"
+    };
 
     // --- EXPORT: OSD -> DICOM ---
     async encodePartial(annotationsGetter, presetsGetter) {
@@ -27,6 +53,8 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
             // Generate DICOM items (handles specific geometry types)
             const dicomItems = this._toDicomItems(obj, meta);
 
+            const presetIdValue = obj.presetID != null && obj.presetID !== "" ? String(obj.presetID) : null;
+
             for (const dicomItem of dicomItems) {
                 dicomItem.RelationshipType = "CONTAINS";
                 dicomItem.ValueType = "SCOORD3D";
@@ -38,9 +66,38 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
                 if (textValue) {
                     dicomItem.TextValue = textValue.substring(0, 64);
                 }
+
+                // Per-annotation preset binding. See `_PRESETID_CONCEPT`.
+                // The XOPAT.PRESETS blob (below) carries the preset
+                // *definitions*; this child gives each annotation a stable
+                // pointer back into that set, restoring class/color/factory
+                // after re-import. Without this, every annotation imports
+                // under the default preset and "classes are lost".
+                if (presetIdValue) {
+                    dicomItem.ContentSequence = (dicomItem.ContentSequence || []).concat({
+                        RelationshipType: "CONTAINS",
+                        ValueType: "TEXT",
+                        ConceptNameCodeSequence: [this.constructor._PRESETID_CONCEPT],
+                        TextValue: presetIdValue,
+                    });
+                }
+
                 objects.push(dicomItem);
             }
         }
+
+        // Co-encode presets as one TEXT ContentSequence item carrying the
+        // serialised preset list. See `_PRESETS_CONCEPT` for rationale.
+        const presets = typeof presetsGetter === 'function' ? presetsGetter() : presetsGetter;
+        if (Array.isArray(presets) && presets.length > 0) {
+            objects.push({
+                RelationshipType: "CONTAINS",
+                ValueType: "TEXT",
+                ConceptNameCodeSequence: [this.constructor._PRESETS_CONCEPT],
+                TextValue: JSON.stringify(presets),
+            });
+        }
+
         return { objects: objects, meta: meta };
     }
 
@@ -60,25 +117,58 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
 
         const meta = this.options.meta;
         const objects = [];
+        let presets = [];
         const contentSeq = dataset.ContentSequence || [];
+        const PRESETS_CODE = this.constructor._PRESETS_CONCEPT.CodeValue;
 
         for (const item of contentSeq) {
+            // xOpat preset blob, co-encoded as a TEXT item with a private
+            // concept code. Strip it from the annotation stream and feed it
+            // back through the framework's preset import path (handled by
+            // annotations-canvas.js::_applyImportState when `presets` is
+            // non-empty on the returned payload).
+            if (item.ValueType === "TEXT"
+                && item.ConceptNameCodeSequence?.[0]?.CodeValue === PRESETS_CODE) {
+                try {
+                    const parsed = JSON.parse(item.TextValue);
+                    if (Array.isArray(parsed)) presets = parsed;
+                } catch (e) {
+                    console.warn("[dicom] failed to parse preset blob:", e);
+                }
+                continue;
+            }
+
             if (item.ValueType !== "SCOORD3D" || !item.GraphicData) continue;
 
             const conceptCode = item.ConceptNameCodeSequence?.[0]?.CodeValue;
 
+            // Per-annotation preset binding (see `_PRESETID_CONCEPT` on the
+            // encode side). dcmjs may surface single-item ContentSequences
+            // as a plain object instead of an array — normalize.
+            const PRESETID_CODE = this.constructor._PRESETID_CONCEPT.CodeValue;
+            const childContentRaw = item.ContentSequence;
+            const childContent = Array.isArray(childContentRaw)
+                ? childContentRaw
+                : (childContentRaw ? [childContentRaw] : []);
+            const childPresetId = childContent.find(c =>
+                c?.ValueType === "TEXT"
+                && c?.ConceptNameCodeSequence?.[0]?.CodeValue === PRESETID_CODE
+            )?.TextValue;
+
             // Generate Fabric Object
-            const fabricObj = this._createFabricObjectFromDicom(item.GraphicType, item.GraphicData, meta, conceptCode, item.TextValue);
+            const fabricObj = this._createFabricObjectFromDicom(
+                item.GraphicType, item.GraphicData, meta, conceptCode, item.TextValue, childPresetId
+            );
 
             if (fabricObj) {
                 objects.push(fabricObj);
             }
         }
-        return { objects: objects, presets: [] };
+        return { objects: objects, presets: presets };
     }
 
     // --- HELPER: Create Fabric Object from DICOM Data ---
-    _createFabricObjectFromDicom(type, data, meta, conceptCode, textValue) {
+    _createFabricObjectFromDicom(type, data, meta, conceptCode, textValue, presetIdOverride) {
         const scaleX = 1 / (meta.micronsX || 0.00025);
         const scaleY = 1 / (meta.micronsY || 0.00025);
 
@@ -138,11 +228,28 @@ OSDAnnotations.Convertor.register("dicom", class extends OSDAnnotations.Converto
         }
 
         // 5. Create Fabric Object
-        // CLONE options to prevent pollution of shared references (fixes "jump to same origin" issue)
-        const commonProps = this.context.module.presets.getCommonProperties();
+        // CLONE options to prevent pollution of shared references (fixes "jump to same origin" issue).
+        // Pass the default preset so `getCommonProperties` includes a `presetID` —
+        // otherwise factory.create produces objects without one, and
+        // updateSingleAnnotationVisuals warns when the synchronous render path
+        // triggered by text/grouped factories sees them mid-import.
+        const defaultPreset = this.context.module.presets.get();
+        const commonProps = this.context.module.presets.getCommonProperties(defaultPreset);
         const options = $.extend(true, {}, commonProps);
 
         let fabricObj = factory.create(parameters, options);
+
+        // Restore the per-annotation preset binding when the DICOM SR
+        // carried it (see `_PRESETID_CONCEPT`). Falls back to the default
+        // preset only when no per-annotation pointer was encoded — covers
+        // pre-fix SR files and legacy imports.
+        if (fabricObj) {
+            if (presetIdOverride) {
+                fabricObj.presetID = presetIdOverride;
+            } else if (!fabricObj.presetID && defaultPreset?.presetID) {
+                fabricObj.presetID = defaultPreset.presetID;
+            }
+        }
 
         // 6. Post-Creation Fixups
         if (fabricObj) {

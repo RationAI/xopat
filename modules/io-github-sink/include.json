@@ -19,5 +19,6 @@
         "committer": null,
         "author": null,
         "auth": null
-    }
+    },
+    "requiredConfig": ["github"]
 }

@@ -146,12 +146,18 @@ async function requireSessionAccess(ctx: any, sessionId: string): Promise<ChatSe
     const owner = hydrated.session.metadata?.userId ?? null;
     const requester = ctx?.user?.id ?? null;
 
-    if (owner && requester && owner !== requester) {
+    // Exact-match ACL: anon→anon and identity→same-identity are the only
+    // permitted combinations. The previous code allowed (owner=null,
+    // requester=any) which made anon-owned sessions visible to every
+    // signed-in user as well.
+    if (owner !== requester) {
+        if (owner && !requester) {
+            throw new Error('Chat session requires an authenticated user.');
+        }
+        if (!owner && requester) {
+            throw new Error('Chat session is anonymous; signed-in users cannot access it.');
+        }
         throw new Error('Chat session does not belong to current user.');
-    }
-
-    if (owner && !requester) {
-        throw new Error('Chat session requires an authenticated user.');
     }
 
     return hydrated;
@@ -1098,12 +1104,22 @@ export async function listProviders(ctx: any, input?: { typeId?: string | null }
     return { providers };
 }
 
+function assertProviderAccess(ctx: any, owner: string | null): void {
+    // Anon (no requester id) is allowed to touch only anon-owned providers.
+    // Signed-in users may touch only providers they own. The old compound
+    // `owner && ctx?.user?.id && owner !== ctx.user.id` short-circuited to
+    // "allowed" whenever the requester was anonymous, which let anon callers
+    // edit/delete anyone's provider.
+    const requester = ctx?.user?.id ?? null;
+    if (owner && !requester) throw new Error('Provider requires an authenticated user.');
+    if (owner && owner !== requester) throw new Error('Provider does not belong to current user.');
+}
+
 export async function getProvider(ctx: any, input: { providerId: string }): Promise<any> {
     ensureBuiltinAdapters();
     const provider = await getRegistry().getProviderInstance(input.providerId);
     if (!provider) throw new Error(`Unknown provider '${input.providerId}'.`);
-    const owner = provider.metadata?.ownerUserId ?? null;
-    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    assertProviderAccess(ctx, provider.metadata?.ownerUserId ?? null);
     return provider;
 }
 
@@ -1111,8 +1127,7 @@ export async function updateProvider(ctx: any, input: UpdateProviderInstanceInpu
     ensureBuiltinAdapters();
     const current = await getRegistry().getProviderInstance(input.id);
     if (!current) throw new Error(`Unknown provider '${input.id}'.`);
-    const owner = current.metadata?.ownerUserId ?? null;
-    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    assertProviderAccess(ctx, current.metadata?.ownerUserId ?? null);
     return getRegistry().updateProviderInstance(input.id, input);
 }
 
@@ -1120,8 +1135,7 @@ export async function deleteProvider(ctx: any, input: { providerId: string }): P
     ensureBuiltinAdapters();
     const current = await getRegistry().getProviderInstance(input.providerId);
     if (!current) throw new Error(`Unknown provider '${input.providerId}'.`);
-    const owner = current.metadata?.ownerUserId ?? null;
-    if (owner && ctx?.user?.id && owner !== ctx.user.id) throw new Error('Provider does not belong to current user.');
+    assertProviderAccess(ctx, current.metadata?.ownerUserId ?? null);
     await getRegistry().deleteProviderInstance(input.providerId);
     return { ok: true };
 }

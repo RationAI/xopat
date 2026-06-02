@@ -171,7 +171,7 @@ export class FullscreenMenuModal extends BaseComponent {
             id: item.id,
             title: item.title || item.label || item.id,
             label: item.label || item.title || item.id,
-            icon: item.icon || "fa-circle",
+            icon: item.icon || "ph-circle",
             body: item.body,
             onBeforeFocus: item.onBeforeFocus,
             navHidden: Boolean(item.navHidden),
@@ -248,8 +248,9 @@ export class FullscreenMenuModal extends BaseComponent {
             this.refs.nav.appendChild(div({ class: "px-3 pt-3 text-xs font-semibold uppercase tracking-[0.16em] text-base-content/50" }, namespace.title || namespace.label || namespace.id));
 
             for (const item of namespace.items) {
+                const _isPh = String(item.icon ?? '').trim().startsWith('ph-');
                 const icon = span({
-                    class: `fa-auto ${item.icon} text-sm opacity-80`
+                    class: `${_isPh ? 'ph-light' : 'fa-auto'} ${item.icon} text-sm opacity-80`
                 });
 
                 const label = span({ class: "truncate text-sm font-medium" }, item.label);

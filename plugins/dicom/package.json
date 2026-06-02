@@ -6,9 +6,11 @@
   "type": "commonjs",
   "main": "index.workspace.mjs",
   "dependencies": {
-    "cornerstone-wado-image-loader": "^4.13.2"
+    "cornerstone-wado-image-loader": "^4.13.2",
+    "dcmjs": "^0.30.0"
   },
   "copy": {
-    "../../node_modules/cornerstone-wado-image-loader/dist/*.js": "dist/"
+    "../../node_modules/cornerstone-wado-image-loader/dist/*.js": "dist/",
+    "../../node_modules/dcmjs/build/dcmjs.js": "dist/"
   }
 }

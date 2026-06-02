@@ -14,6 +14,7 @@
  */
 
 import { ViewerShaderSourceController } from "./viewer-shader-source-controller";
+import { createHttpClientAdapter } from "../http-client";
 
 export interface IsolatedViewerOptions {
     /** Container element where the OSD canvas will be mounted. Must be in the DOM and have nonzero size. */
@@ -73,6 +74,9 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         webGlPreferredVersion: preferredWebGlVersion,
         backgroundColor: APP?.getOption?.("backgroundColor"),
         debug: !!APP?.getOption?.("webglDebugMode"),
+        // Use the same shared WebGL context as the main viewer/navigator/standalone drawers
+        // so playground/isolated viewers don't each consume a browser context slot.
+        sharedContextKey: "xopat-flex-renderer",
         interactive: true,
         htmlHandler: options.htmlHandler || (() => {}),
         htmlReset: options.htmlReset || (() => {}),
@@ -85,6 +89,7 @@ export function setupIsolatedViewer(options: IsolatedViewerOptions): IsolatedVie
         // host & navigator drawer init order is bullet-proof, or once the upstream
         // null-guard lands.
         handleNavigator: false,
+        httpAdapter: createHttpClientAdapter(),
     };
 
     const renderingCapability = flexRendererClass && typeof flexRendererClass.ensureRuntimeSupport === "function"

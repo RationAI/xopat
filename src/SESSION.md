@@ -1,5 +1,17 @@
 # Live Collaboration Sessions
 
+> ⚠️ **TODO(live-sessions): currently disabled.** The shared-session feature is
+> not fully developed and is wired off at the application boundary:
+> `window.SESSION = new SessionSyncController()` is commented out in
+> `src/app.ts`, and the companion UI plugin `plugins/session-controls/` is
+> shipped with `"enabled": false`. The source under `src/classes/session/`
+> remains in the tree so the work can be resumed without re-implementing
+> transport/providers. To bring it back: uncomment the singleton wiring in
+> `src/app.ts` and flip `enabled`/`permaLoad` in
+> `plugins/session-controls/include.json`. All existing callsites already use
+> `window.SESSION?.…` (optional chain), so leaving the singleton undefined is
+> a safe no-op for the rest of the app.
+
 xOpat supports real-time multi-user sessions where each peer's viewport, cursor,
 visualization, and opted-in module state stay in sync. Transport is WebRTC
 peer-to-peer; the default signalling mode is a URL fragment exchanged out-of-band

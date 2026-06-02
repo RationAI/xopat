@@ -55,7 +55,15 @@ export class ApplicationLifecycleController {
                 });
             }
 
-            const pluginKeys = this.appContext.AppCookies.get("_plugins", "").split(",") || [];
+            // `disablePluginsAutoload` suppresses ONLY the cookie-driven
+            // restore (`_plugins`). Server-side permaLoad and per-session
+            // declared plugins still come up normally — the session is
+            // meant to pretend cached user picks weren't made, not to
+            // disable the deployment's auto-loaded set.
+            const allowCookieRestore = !this.appContext.getOption("disablePluginsAutoload", false);
+            const pluginKeys = allowCookieRestore
+                ? (this.appContext.AppCookies.get("_plugins", "").split(",") || [])
+                : [];
             const config = this.appContext._dangerouslyAccessConfig();
             for (const pid in pluginRegistry) {
                 const hasParams = !!config.plugins?.[pid];

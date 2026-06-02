@@ -9,11 +9,16 @@ import { ViewerStateBindingController } from "./classes/app/viewer-state-binding
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
 import { ViewerInspectorController } from "./classes/app/viewer-inspector-controller";
 import { ApplicationLifecycleController } from "./classes/app/application-lifecycle-controller";
-import { SessionSyncController } from "./classes/session/session-sync";
+// TODO(live-sessions): re-enable once src/classes/session/* is production-ready.
+// Live shared sessions (WebRTC viewport/cursor/visualization sync) are
+// currently disabled — see src/SESSION.md. Re-import together with
+// `window.SESSION = new SessionSyncController()` below.
+// import { SessionSyncController } from "./classes/session/session-sync";
 import { bootstrapIOPipeline } from "./classes/io/bootstrap";
 import { bootstrapSlideProtocols } from "./classes/slide-protocols";
 import { createApplicationContext } from "./classes/app/application-context";
 import { installScalebarUtilities } from "./classes/app/scalebar-utilities";
+import { applyInitialUiVisibility } from "./classes/app/ui-visibility";
 import { wireViewerErrorHandlers } from "./classes/app/viewer-error-wiring";
 // Side-effect import: registers `window.PLAYGROUND` so `requireVisualizationReview` can open
 // the Visualization Playground for script-driven mutations. Without this import the playground
@@ -52,6 +57,16 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         MODULES_FOLDER = savedState.MODULES_FOLDER;
         VERSION = savedState.VERSION;
         I18NCONFIG = savedState.I18NCONFIG;
+    }
+
+    // `__ORIGIN__` marker → `window.location.origin`. Required for deployments
+    // where the deploy script cannot predict which alias will actually serve
+    // the iframe (canonical case: Colab's `serve_kernel_port_as_iframe` picks
+    // a different alias than `google.colab.kernel.proxyPort(...)` returns).
+    // The `/proxy/...` route emits no CORS headers, so the effective `domain`
+    // must match the iframe origin or every proxy fetch fails the preflight.
+    if (ENV?.client?.domain === "__ORIGIN__") {
+        ENV.client.domain = window.location.origin;
     }
 
     //Setup language and parse config if function provided
@@ -105,19 +120,41 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     //default parameters not extended by CONFIG.params (would bloat link files)
     const rawParams = (CONFIG.params || {}) as Record<string, unknown>;
     const allowedParamNames = Object.keys(defaultSetup) as Array<keyof XOpatSetup>;
-    const sanitizedParams = {} as XOpatSetup;
-    const droppedParamNames: string[] = [];
-    for (const [name, value] of Object.entries(rawParams)) {
-        if (Object.prototype.hasOwnProperty.call(defaultSetup, name)) {
-            (sanitizedParams as Record<string, unknown>)[name] = value;
-        } else {
-            droppedParamNames.push(name);
+    const droppedParamPaths: string[] = [];
+    // Recurses one level: when the default value is a plain object (e.g. `ui`),
+    // children are filtered against that nested allowlist with dotted paths in
+    // the dropped-key warning.
+    const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+        !!v && typeof v === "object" && !Array.isArray(v);
+    const sanitizeAgainst = (
+        raw: Record<string, unknown>,
+        defaults: Record<string, unknown>,
+        prefix: string
+    ): Record<string, unknown> => {
+        const out: Record<string, unknown> = {};
+        for (const [name, value] of Object.entries(raw)) {
+            if (!Object.prototype.hasOwnProperty.call(defaults, name)) {
+                droppedParamPaths.push(prefix ? `${prefix}.${name}` : name);
+                continue;
+            }
+            const defaultValue = defaults[name];
+            if (isPlainObject(defaultValue) && isPlainObject(value)) {
+                out[name] = sanitizeAgainst(value, defaultValue, prefix ? `${prefix}.${name}` : name);
+            } else {
+                out[name] = value;
+            }
         }
-    }
-    if (droppedParamNames.length) {
+        return out;
+    };
+    const sanitizedParams = sanitizeAgainst(
+        rawParams,
+        defaultSetup as unknown as Record<string, unknown>,
+        ""
+    ) as XOpatSetup;
+    if (droppedParamPaths.length) {
         console.warn(
-            `Ignoring unsupported viewer parameters: ${droppedParamNames.join(", ")}. ` +
-            `Only these viewer parameters are allowed: ${allowedParamNames.join(", ")}.`
+            `Ignoring unsupported viewer parameters: ${droppedParamPaths.join(", ")}. ` +
+            `Only these top-level viewer parameters are allowed: ${allowedParamNames.join(", ")}.`
         );
     }
     CONFIG.params = sanitizedParams;
@@ -196,6 +233,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     USER_INTERFACE.FullscreenMenu.init();
     USER_INTERFACE.MobileBottomBar.init();
     UTILITIES.updateTheme(null);
+    // Apply session-declared `params.ui.*` initial visibility. Per-viewer
+    // wiring (scaleBar / navigator) runs in loader.ts on each `viewer.open`.
+    applyInitialUiVisibility();
 
     /**
      * Replace share button in static preview mode
@@ -226,8 +266,17 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
      * Live-collaboration session singleton. See src/SESSION.md.
      * Instantiated here so providers can lazily reach VIEWER_MANAGER
      * once they subscribe (i.e. once a session actually starts).
+     *
+     * TODO(live-sessions): the shared-session feature (WebRTC mesh sharing
+     * viewport / cursor / visualization between peers) is not fully developed
+     * and is disabled until the transport + provider story stabilises.
+     * Consumers already access this via `window.SESSION?.…` (optional chain),
+     * so leaving it `undefined` is safe. Re-instantiate together with the
+     * `SessionSyncController` import above and re-enable the
+     * `plugins/session-controls/` UI plugin (`enabled: false` in its
+     * `include.json`) to bring the feature back.
      */
-    window.SESSION = new SessionSyncController();
+    // window.SESSION = new SessionSyncController();
     /**
      * OpenSeadragon Viewer Instance. Note the viewer instance
      * as well as OpenSeadragon namespace can (and is) extended with

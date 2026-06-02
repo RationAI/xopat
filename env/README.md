@@ -49,6 +49,19 @@ To provide a configuration file path, you can set
  - a string data, its contents will be treated as a serialized JSON,
  - otherwise, ``env/env.json`` is used (if exists)
 
+### `__ORIGIN__` for unpredictable iframe origins
+The `core.client.<active_client>.domain` field accepts the literal token
+`"__ORIGIN__"`. At browser boot, xopat replaces it with
+`window.location.origin`. Use this when the deploy script cannot know in
+advance which origin will actually serve the iframe — the canonical case is
+Google Colab's `serve_kernel_port_as_iframe`, which serves the iframe under
+a different alias than `google.colab.kernel.proxyPort(...)` returns. The
+xopat `/proxy/...` route emits no CORS headers, so the effective `domain`
+must match the iframe origin or every proxy fetch fails the preflight.
+
+If you also need cookies in such a deployment, set `js_cookie_domain`
+explicitly — the cookie attribute receives the raw token unchanged.
+
 ### Slide-protocol registry
 The `core.client.<active_client>` block declares which image servers the viewer
 talks to via the named **slide-protocol registry**:
@@ -75,6 +88,77 @@ The legacy `image_group_server` + `image_group_protocol` + `data_group_server`
 boot into deprecated `__legacy_bg` / `__legacy_viz` registry entries (with a
 one-shot deprecation warning). Plan to migrate new deployments to the new
 shape; the legacy fields will be removed in a follow-up major.
+
+### Plugin selection mode
+The active client block carries a `pluginSelectionMode` knob (default `"all"`)
+that decides which plugins the server ships to the client:
+
+```json
+"core": {
+    "active_client": "localhost",
+    "client": {
+        "localhost": {
+            "pluginSelectionMode": "available"
+        }
+    }
+}
+```
+
+- `"all"` — every discovered plugin without `enabled: false` is shipped.
+- `"whitelist"` — only plugins explicitly opted in by this env via
+  `plugins.<id>.enabled = true` are shipped. A plugin's own `enabled: true`
+  in `include.json` does NOT whitelist it; only the deployment ENV does.
+- `"available"` — like `"all"`, plus each plugin OR module may declare
+  a single `requiredConfig: ["dot.path", ...]` array in its
+  `include.json`. Each path is resolved against TWO deployment-owned
+  sources; a path is satisfied when EITHER carries a non-empty value:
+    1. `plugins[<id>]` / `modules[<id>]` block in env.json (the public
+       per-element block).
+    2. `core.server.secure.plugins[<id>]` / `core.server.secure.modules[<id>]`
+       (the server-only block, never shipped to the browser — natural
+       home for secret-adjacent values).
+  **Include.json defaults are not consulted**; only what this env
+  explicitly sets in one of the two buckets satisfies the gate.
+  Plugins whose required module is dropped get the existing missing-dep
+  error, which is the intended UX when an upstream isn't configured.
+  The plugin author lists *what* keys must exist; this env decides
+  *where* each value lives based on sensitivity.
+
+  Concrete shape for a deployment that wants DICOM and a chat plugin to
+  be available, mixing both buckets according to sensitivity:
+
+  ```json
+  {
+      "core": {
+          "client": { "<env>": { "pluginSelectionMode": "available" } },
+          "server": {
+              "secure": {
+                  "proxies": {
+                      "openai": {
+                          "baseUrl": "https://api.openai.com",
+                          "headers": { "Authorization": "Bearer <% OPENAI_KEY %>" }
+                      }
+                  },
+                  "plugins": {
+                      "chat-chatgpt": { "proxyAlias": "openai" }
+                  }
+              }
+          }
+      },
+      "plugins": [
+          { "id": "dicom", "serviceUrl": "https://my-pacs/dicom-web" }
+      ]
+  }
+  ```
+
+  Both `dicom.requiredConfig` (`["serviceUrl"]`) and
+  `chat-chatgpt.requiredConfig` (`["proxyAlias"]`) are satisfied — the
+  former by the public `plugins.dicom.serviceUrl` entry, the latter by
+  `core.server.secure.plugins.chat-chatgpt.proxyAlias`. The gate doesn't
+  care which bucket carried each value, only that something did.
+
+See `server/README.md` for the full reference and `plugins/README.md` for
+the `requiredConfig` field semantics.
 
 ### Environmental variables
 You can use custom environment variables as a string values like this: ``<% ENV_VAR_NAME %>``.

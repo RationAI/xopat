@@ -3,11 +3,37 @@
   "author": "Aiosa",
   "name": "DICOM Integration",
   // Provide service URL of your DICOM API
+  // (default below is dev-only — see `requiredConfig` note).
   "serviceUrl": "http://localhost:8042/dicom-web",
+  // Under `pluginSelectionMode: "available"` the gate resolves these paths
+  // against the deployment env.json — EITHER `plugins.dicom.serviceUrl` OR
+  // `core.server.secure.plugins.dicom.serviceUrl` will satisfy it. The
+  // include.json default above is NOT consulted by the gate and is kept
+  // purely as a dev/local convenience for the (default) "all" mode.
+  // DICOM is dropped in `"available"` mode unless the deployment supplies
+  // a real `serviceUrl` in one of the two buckets.
+  "requiredConfig": ["serviceUrl"],
   "includes": [
+    "dist/dcmjs.js",
     "dist/cornerstoneWADOImageLoader.bundle.min.js",
     "dist/index.worker.bundle.min.worker.js"
   ],
   // Default study to open
-  "defaultStudy": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522"
+  "defaultStudy": "1.2.826.0.1.3680043.8.498.35759453015100453210054623601138997522",
+  // Override the runtime QIDO probe for `/patients`. Set to `false` for cloud
+  // stores that don't implement it (e.g. Google Healthcare) — the probe
+  // otherwise produces a loud CORS error even though the JS code recovers.
+  // Leave unset to auto-detect at runtime.
+  // "supportsPatients": false
+  // Optional: override the HttpClient used for every DICOMweb request issued
+  // by this plugin (tiles, metadata, QIDO, STOW). Defaults to a direct client
+  // at `serviceUrl` with the main user-auth JWT injected. To proxy through
+  // the xOpat server (recommended for cloud DICOM stores like Google Healthcare),
+  // declare a proxy alias under `server.secure.proxies` and reference it here:
+  //
+  // "httpClient": {
+  //   "proxy": "google-healthcare",
+  //   "baseURL": "/projects/<id>/locations/<loc>/datasets/<ds>/dicomStores/<store>/dicomWeb",
+  //   "auth": { "contextId": "dicom", "types": ["jwt"], "required": true }
+  // }
 }

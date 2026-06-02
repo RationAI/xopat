@@ -26,59 +26,64 @@ export default class DicomTools {
 
     /* BASE QUERIES */
 
-    static async qido(url, authToken) {
-        const res = await fetch(url.toString(), {
-            headers: {
-                Accept: 'application/dicom+json',
-                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-            }
-        });
-        if (res.status === 204) return undefined;
-        const text = await res.text();
-        if (res.status === 404 && /Unknown resource/i.test(text)) throw new Error(`QIDO endpoint missing at ${path}`);
-        if (res.status === 404) return undefined;
-        if (!res.ok) throw new Error(`QIDO ${url.pathname} failed: ${res.status} ${text}`);
-        try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
-    }
+    // All HTTP goes through `client: HttpClient` — auth, retries, CSRF and
+    // 401-refresh are handled there. Callers pass relative paths (`/studies/...`);
+    // the client's `baseURL` carries the DICOMweb service URL or proxy prefix.
 
-    // Safe QIDO wrapper: try with includefield, retry without if server rejects that param
-    static async qidoSafe(baseUrl, authToken, includefield) {
-        const withParams = new URL(baseUrl);
-        if (includefield) withParams.searchParams.set('includefield', includefield);
+    static async qido(client, path) {
         try {
-            return await this.qido(withParams, authToken);
+            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+            if (res.status === 204) return undefined;
+            const text = await res.text();
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
         } catch (e) {
-            const msg = String(e?.message || '');
-            if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                const noParams = new URL(baseUrl);
-                return await this.qido(noParams, authToken);
+            if (e instanceof HTTPError) {
+                const body = e.textData || '';
+                if (e.statusCode === 404 && /Unknown resource/i.test(body)) throw new Error(`QIDO endpoint missing at ${path}`);
+                if (e.statusCode === 404) return undefined;
+                throw new Error(`QIDO ${path} failed: ${e.statusCode} ${body}`);
             }
             throw e;
         }
     }
 
-    static async qidoSafeWithMeta(baseUrl, authToken, includefield) {
-        const make = (withFields) => {
-            const u = new URL(baseUrl);
-            if (withFields && includefield) u.searchParams.set('includefield', includefield);
-            return u;
-        };
-
-        // First try with includefield
-        let url = make(true);
-        let res = await fetch(url.toString(), {
-            headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
-        });
-        if (!res.ok) {
-            // Retry without includefield if the server rejects it (e.g., GCP)
-            const msg = await res.text();
+    // Safe QIDO wrapper: try with includefield, retry without if server rejects that param
+    static async qidoSafe(client, path, includefield) {
+        const sep = path.includes('?') ? '&' : '?';
+        const pathWithField = includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
+        try {
+            return await this.qido(client, pathWithField);
+        } catch (e) {
+            const msg = String(e?.message || '');
             if (includefield && (msg.includes('includefield') || msg.includes('Invalid JSON payload'))) {
-                url = make(false);
-                res = await fetch(url.toString(), {
-                    headers: { Accept: 'application/dicom+json', ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) }
-                });
+                return await this.qido(client, path);
+            }
+            throw e;
+        }
+    }
+
+    static async qidoSafeWithMeta(client, path, includefield) {
+        const sep = path.includes('?') ? '&' : '?';
+        const make = (withFields) => withFields && includefield ? `${path}${sep}includefield=${encodeURIComponent(includefield)}` : path;
+
+        const tryFetch = (p) => client.fetchRaw(p, { headers: { Accept: 'application/dicom+json' } });
+
+        let url = make(true);
+        let res;
+        try {
+            res = await tryFetch(url);
+        } catch (e) {
+            // Retry without includefield if the server rejects it (e.g., GCP)
+            if (e instanceof HTTPError && includefield) {
+                const msg = e.textData || '';
+                if (msg.includes('includefield') || msg.includes('Invalid JSON payload')) {
+                    url = make(false);
+                    res = await tryFetch(url);
+                } else {
+                    throw new Error(`QIDO ${url} failed: ${e.statusCode} ${msg}`);
+                }
             } else {
-                throw new Error(`QIDO ${url.pathname} failed: ${res.status} ${msg}`);
+                throw e;
             }
         }
         const total = this._readTotalHeader(res.headers);
@@ -89,21 +94,19 @@ export default class DicomTools {
     }
 
     // WADO-RS metadata fetch for richer details when QIDO filters are blocked
-    static async wadoMetadata(urlPath, authToken) {
-        const url = new URL(urlPath);
-        const res = await fetch(url.toString(), {
-            headers: {
-                Accept: 'application/dicom+json',
-                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-            }
-        });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`WADO ${url.pathname} failed: ${res.status} ${text}`);
-        try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+    static async wadoMetadata(client, path) {
+        try {
+            const res = await client.fetchRaw(path, { headers: { Accept: 'application/dicom+json' } });
+            const text = await res.text();
+            try { return JSON.parse(text); } catch (e) { throw new Error(`Bad DICOM JSON: ${e.message} - body: ${text}`); }
+        } catch (e) {
+            if (e instanceof HTTPError) throw new Error(`WADO ${path} failed: ${e.statusCode} ${e.textData || ''}`);
+            throw e;
+        }
     }
 
-    static async stow(serviceUrl, authToken, studyUID, dicomData) {
-        const url = `${serviceUrl}/studies/${studyUID}`;
+    static async stow(client, studyUID, dicomData) {
+        const path = `/studies/${studyUID}`;
         const boundary = 'DICOM_STOW_BOUNDARY';
 
         // 1. Construct Body
@@ -121,24 +124,22 @@ export default class DicomTools {
         body.set(new Uint8Array(dicomData), headerBuf.length);
         body.set(footerBuf, headerBuf.length + dicomData.byteLength);
 
-        // 2. Send Request with CORRECT HEADERS
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
-                'Accept': 'application/dicom+json', // <--- THIS FIXES THE CRASH
-                ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
-            },
-            body: body
-        });
-
-        // 3. Handle Response
-        if (!res.ok) {
-            const txt = await res.text();
-            throw new Error(`STOW-RS failed (${res.status}): ${txt}`);
+        let res;
+        try {
+            res = await client.fetchRaw(path, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': `multipart/related; type="application/dicom"; boundary=${boundary}`,
+                    'Accept': 'application/dicom+json'
+                },
+                body
+            });
+        } catch (e) {
+            if (e instanceof HTTPError) throw new Error(`STOW-RS failed (${e.statusCode}): ${e.textData || ''}`);
+            throw e;
         }
 
-        // Safety check: verify response is actually JSON before parsing
+        // Verify response is actually JSON before parsing
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("json")) {
             return await res.json();
@@ -167,16 +168,20 @@ export default class DicomTools {
         return (/WSI/i.test(imageType) || /LABEL|OVERVIEW/i.test(imageType));
     }
 
-    static async findWSIItems(serviceUrl, authToken, studyUID, seriesUID, options = {}) {
-        const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
-        const { rows, total } = await this.qidoSafeWithMeta(base, authToken,
+    static async findWSIItems(client, studyUID, seriesUID, options = {}) {
+        const base = `/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances`;
+        const { rows, total } = await this.qidoSafeWithMeta(client, base,
             //'00080018,00080008,00280010,00280011,00400512,00480106,00480006,00480007'
             [
                 "52009230", // Per-Frame FG
                 "00209157", // DimensionIndexValues
-                "0048021E", // Column position (fallback)
-                "0048021F", // Row position (fallback)
+                "0048021E", // Column position (preferred ground truth)
+                "0048021F", // Row position (preferred ground truth)
                 "00209113", // PlanePosition(Slide) (fallback)
+                "52009229", // Shared FG (carries DimensionIndexSequence)
+                "00209222", // DimensionIndexSequence
+                "00209165", // DimensionIndexPointer (resolves DIV axes)
+                "00209311", // DimensionOrganizationType (TILED_FULL / TILED_SPARSE)
                 "00480006", "00480007", // TotalPixelMatrix
                 "00280010", "00280011", // Rows/Cols
                 "00280008",             // NumberOfFrames
@@ -184,8 +189,12 @@ export default class DicomTools {
                 "00080018",             // SOPInstanceUID
             ].join(',')
         );
-        // rows are already instance objects; pass through or normalize if needed
-        const wsiInstances = await this.groupSeriesInstances(serviceUrl, authToken, rows, { studyUID, seriesUID });
+        // rows are already instance objects; pass through or normalize if needed.
+        // Series-level metadata (description / modality / bodyPart / number) is
+        // forwarded via options.seriesMeta so groupSeriesInstances can build a
+        // human-readable label instead of a bare UID tail.
+        const seriesObject = { studyUID, seriesUID, ...(options.seriesMeta || null) };
+        const wsiInstances = await this.groupSeriesInstances(rows, seriesObject);
 
         for (let wsi of wsiInstances) {
             wsi.levels = [];
@@ -200,9 +209,13 @@ export default class DicomTools {
 
             for (let instance of wsi.pyramidInstances) {
                 const uid = this.v(instance, "00080018");
-                const meta = await this.wadoMetadata(`${serviceUrl}/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`, authToken);
-                this._ingestInstanceMetadata(uid, instance, meta, wsi, options);
+                const meta = await this.wadoMetadata(client, `/studies/${studyUID}/series/${seriesUID}/instances/${uid}/metadata`);
+                // Pass the string default (options.frameOrder), not the whole
+                // options object — the per-instance / per-series overrides are
+                // already stashed on `wsi` above.
+                this._ingestInstanceMetadata(uid, instance, meta, wsi, options.frameOrder || null);
             }
+            this._inferSequentialLayoutForWsi(wsi);
         }
         return wsiInstances;
     }
@@ -217,67 +230,96 @@ export default class DicomTools {
         return `${yyyy}-${mm}-${dd}${timePart}`;
     }
 
-    static async findLatestAnnotation(serviceUrl, authToken, studyUID) {
+    /**
+     * Find the latest DICOM SR that references the given imaging series.
+     *
+     * @param {HttpClient} client
+     * @param {string} studyUID — the study to search.
+     * @param {string} [seriesUID] — when provided, only SR instances whose
+     *   `ReferencedSeriesSequence[0].SeriesInstanceUID` matches are returned.
+     *   Without this filter, opening different series from the same study would
+     *   hydrate the same SR into both viewers (the encode side records the
+     *   referenced series on every SR via annotation-convertor.mjs:332-335).
+     *   Omit to keep the legacy "any latest SR in study" behavior.
+     */
+    static async findLatestAnnotation(client, studyUID, seriesUID) {
         // Request Modality (00080060) and Dates explicitly
-        const seriesUrl = `${serviceUrl}/studies/${studyUID}/series?includefield=00080060&includefield=00080021&includefield=00080031`;
+        const seriesPath = `/studies/${studyUID}/series?includefield=00080060&includefield=00080021&includefield=00080031`;
 
         try {
-            const seriesList = await this.qidoSafe(seriesUrl, authToken);
+            const seriesList = await this.qidoSafe(client, seriesPath);
             if (!seriesList || !seriesList.length) return null;
 
             // Filter for SR (Structured Report) series client-side
-            const srSeriesList = seriesList.filter(s => {
-                const mod = this.v(s, '00080060');
-                return mod === 'SR';
-            });
+            const srSeriesList = seriesList.filter(s => this.v(s, '00080060') === 'SR');
 
             if (srSeriesList.length === 0) {
                 console.log("No SR series found in this study.");
                 return null;
             }
 
-            let allCandidates = [];
+            const allCandidates = [];
 
             // Check every SR series for instances
             for (const series of srSeriesList) {
-                const seriesUID = this.v(series, '0020000E');
+                const srSeriesUID = this.v(series, '0020000E');
 
                 // Fetch instances with date tags
-                const instancesUrl = `${serviceUrl}/studies/${studyUID}/series/${seriesUID}/instances?includefield=00080023&includefield=00080033&includefield=00080012&includefield=00080013`;
+                const instancesPath = `/studies/${studyUID}/series/${srSeriesUID}/instances?includefield=00080023&includefield=00080033&includefield=00080012&includefield=00080013`;
 
-                const instances = await this.qidoSafe(instancesUrl, authToken);
+                const instances = await this.qidoSafe(client, instancesPath);
                 if (instances && instances.length) {
                     // Attach SeriesUID so we can use it later
-                    instances.forEach(i => { i._parentSeriesUID = seriesUID; });
+                    instances.forEach(i => { i._parentSeriesUID = srSeriesUID; });
                     allCandidates.push(...instances);
                 }
             }
 
             if (allCandidates.length === 0) return null;
 
-            // Sort: Newest First
-            // Priortize Content Date/Time (SR specific), fallback to Instance Creation
-            allCandidates.sort((a, b) => {
-                const getDt = (item) => {
-                    const clean = (val) => (val || '').replace(/[^0-9]/g, '');
-                    const date = clean(this.v(item, '00080023')) ||
-                        clean(this.v(item, '00080012')) ||
-                        clean(this.v(item, '00080021')) || '00000000';
-                    const time = clean(this.v(item, '00080033')) ||
-                        clean(this.v(item, '00080013')) ||
-                        clean(this.v(item, '00080031')) || '000000';
-                    return Number(date + time);
-                };
-                return getDt(b) - getDt(a);
-            });
-
-            const latest = allCandidates[0];
-            console.log(`Found ${allCandidates.length} annotations. Newest:`, latest, allCandidates);
-
-            return {
-                seriesUID: latest._parentSeriesUID,
-                sopUID: this.v(latest, '00080018')
+            // Sort newest-first. Walking in this order lets the
+            // `ReferencedSeriesSequence` filter short-circuit on the first
+            // matching SR rather than fetching every candidate's metadata.
+            const datetimeOf = (item) => {
+                const clean = (val) => (val || '').replace(/[^0-9]/g, '');
+                const date = clean(this.v(item, '00080023')) ||
+                    clean(this.v(item, '00080012')) ||
+                    clean(this.v(item, '00080021')) || '00000000';
+                const time = clean(this.v(item, '00080033')) ||
+                    clean(this.v(item, '00080013')) ||
+                    clean(this.v(item, '00080031')) || '000000';
+                return Number(date + time);
             };
+            allCandidates.sort((a, b) => datetimeOf(b) - datetimeOf(a));
+
+            // Without a seriesUID constraint, keep legacy behavior — return
+            // the absolute newest SR in the study without touching metadata.
+            if (!seriesUID) {
+                const latest = allCandidates[0];
+                const sopUID = this.v(latest, '00080018');
+                console.log(`Found ${allCandidates.length} annotations. Newest:`, latest);
+                return { seriesUID: latest._parentSeriesUID, sopUID };
+            }
+
+            // With seriesUID, walk newest-first and fetch each SR's metadata
+            // to read its ReferencedSeriesSequence (tag 0008,1115 →
+            // SeriesInstanceUID 0020,000E). Return on the first match.
+            for (const cand of allCandidates) {
+                const sopUID = this.v(cand, '00080018');
+                if (!sopUID) continue;
+                try {
+                    const meta = await this.wadoMetadata(
+                        client,
+                        `/studies/${studyUID}/series/${cand._parentSeriesUID}/instances/${sopUID}/metadata`,
+                    );
+                    const refSeriesUID = meta?.[0]?.['00081115']?.Value?.[0]?.['0020000E']?.Value?.[0];
+                    if (refSeriesUID !== seriesUID) continue;
+                    return { seriesUID: cand._parentSeriesUID, sopUID };
+                } catch (e) {
+                    console.warn('[DICOM] SR metadata fetch failed; skipping candidate', sopUID, e?.message ?? e);
+                }
+            }
+            return null;
 
         } catch (e) {
             console.warn("Error finding annotations:", e);
@@ -286,7 +328,7 @@ export default class DicomTools {
     }
     /* PRIVATE */
 
-    static async groupSeriesInstances(serviceUrl, authToken, instancesObject, seriesObject) {
+    static async groupSeriesInstances(instancesObject, seriesObject) {
         const _best = (v) => (typeof v === "string" && v.trim()) ? v.trim() : null;
         const _tail = (uid, n = 6) => (uid ? uid.slice(-n) : null);
         const _makeSeriesLabel = (group, seriesObject) => {
@@ -295,13 +337,34 @@ export default class DicomTools {
             const dims      = _best(group.totalPixelMatrix);
             const sDesc     = _best(seriesObject?.description);
             const sTail     = _tail(seriesObject?.seriesUID);
+            const sNum      = seriesObject?.seriesNumber;
+            const modality  = _best(seriesObject?.modality);
+            const bodyPart  = _best(seriesObject?.bodyPart);
 
-            // Build pieces in priority order
-            const base = container || sDesc || `Series …${sTail ?? ""}`;
+            // Pick the most informative primary name. Prefer ContainerIdentifier
+            // (a real specimen ID), then SeriesDescription, then a friendly
+            // "Series #N …<tail>" fallback. If we have both a container and a
+            // description that says something different, combine them so the
+            // operator sees the protocol context as well as the slot.
+            let base;
+            if (container && sDesc && container.toLowerCase() !== sDesc.toLowerCase()) {
+                base = `${container} · ${sDesc}`;
+            } else {
+                base = container || sDesc || `Series ${sNum != null ? `#${sNum} ` : ""}…${sTail ?? ""}`;
+            }
+
             const parts = [base];
 
             if (pathId && pathId !== "DEFAULT_PATH") parts.push(`[${pathId}]`);
             if (dims) parts.push(`• ${dims}`);
+
+            // Modality + body-part are tiny but identify the slide type at a
+            // glance. Only append when meaningful (skip the obvious "SM" if
+            // nothing else differentiates the row).
+            const tail = [];
+            if (bodyPart) tail.push(bodyPart);
+            if (modality && modality !== "SM") tail.push(modality);
+            if (tail.length) parts.push(`(${tail.join(", ")})`);
 
             return parts.join(" ");
         };
@@ -337,7 +400,13 @@ export default class DicomTools {
                     studyUID: seriesObject.studyUID,
                     seriesUID: seriesObject.seriesUID,
                     _bestSop: null, _bestArea: Infinity,
-                    thumbUrl: null, renderedUrl: null,
+                    // SOPInstanceUIDs of the LABEL/OVERVIEW instances are filled
+                    // in during the post-grouping loop below. The TileSource
+                    // reads them via `wsi.previewInstanceUID` / `macroInstanceUID`
+                    // and routes through `/rendered` (broadly supported,
+                    // unlike `/thumbnail` which 404s on GCS Healthcare).
+                    previewInstanceUID: null,
+                    macroInstanceUID: null,
                 };
                 g.label = _makeSeriesLabel(g, seriesObject);
                 groups.set(key, g);
@@ -377,18 +446,19 @@ export default class DicomTools {
         }
 
         for (const g of groups.values()) {
-            const studyUID  = g.studyUID;
-            const seriesUID = g.seriesUID;
-            // Prefer LABEL, then OVERVIEW, then smallest volume instance
-            const pick = this.v(g.labelInstance, "00080018")
-                || this.v(g.overviewInstance, "00080018")
-                || g._bestSop
-                || null;
-            if (pick) {
-                const base = `${serviceUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances/${encodeURIComponent(pick)}`;
-                g.thumbUrl    = `${base}/thumbnail`;
-                g.renderedUrl = `${base}/rendered?rows=256`;
-            }
+            // Promote the LABEL/OVERVIEW SOPInstanceUIDs discovered above to
+            // canonical fields on the WSI group. The TileSource's
+            // getThumbnail / downloadMacroImage paths route these through
+            // `/rendered`, which works on GCS Healthcare. Previously we
+            // synthesized a `/thumbnail` URL on top of these instance UIDs,
+            // which GCS returns 404 on — and the 404 carries no
+            // `Access-Control-Allow-Origin`, so Chrome surfaces it as a loud
+            // `CORS error`. Using `/rendered` via the existing
+            // `previewInstanceUID` path avoids the failure entirely.
+            const overviewUid = this.v(g.overviewInstance, "00080018");
+            const labelUid    = this.v(g.labelInstance, "00080018");
+            if (overviewUid) g.previewInstanceUID = overviewUid;
+            if (labelUid)    g.macroInstanceUID   = labelUid;
             const originals = (g._pyrOriginal || []).slice();
             const derived   = (g._pyrDerived  || []).slice();
 
@@ -518,178 +588,326 @@ export default class DicomTools {
         level.frames = level.frames || Object.create(null);
         applySpacingToLevel(level);
 
-        // -----------------------------
-        // 1) Best: build frame map from per-frame FG
-        // -----------------------------
-        if (Array.isArray(perFrameFG) && perFrameFG.length) {
-            // We'll try multiple interpretations and keep the one with best coverage + lowest collisions.
-            const buildMap = (mode) => {
-                const frames = Object.create(null);
-                let mapped = 0;
-                let collisions = 0;
+        // Resolve user-provided ordering override once (applies only to the
+        // sequential fallback path; never overrides explicit per-frame data).
+        const overrideOrder =
+            (wsiInstance.frameOrderByInstance && wsiInstance.frameOrderByInstance[instanceUID]) ||
+            (wsiInstance.frameOrderBySeries && wsiInstance.frameOrderBySeries[wsiInstance.seriesUID]) ||
+            frameOrder ||
+            wsiInstance.frameOrder ||
+            null;
 
-                for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
-                    const fg = perFrameFG[frameIndex];
-                    if (!fg) continue;
+        // Detect TILED_FULL vs TILED_SPARSE. Used to bound the sequential
+        // fallback (TILED_SPARSE without per-frame data is a malformed file).
+        const dimOrgType = String(this.v(attrs, "00209311") || "").toUpperCase().trim() || null;
 
-                    let tileX = null, tileY = null;
+        // --- Build one candidate map ----------------------------------------
+        // Returns { frames, mapped, collisions, oob } for a per-frame mapper
+        // that, given (frameIndex, fg), produces tileX/tileY (or null).
+        const buildFrameMap = (resolver) => {
+            const frames = Object.create(null);
+            let mapped = 0, collisions = 0, oob = 0;
 
-                    // --- A) DimensionIndexValues (0020,9157) ---
-                    const div = fg["00209157"]?.Value;
-                    if (Array.isArray(div) && div.length >= 2) {
-                        const a = Number(div[0]) - 1;
-                        const b = Number(div[1]) - 1;
+            if (!Array.isArray(perFrameFG) || !perFrameFG.length) {
+                return { frames, mapped, collisions, oob, supported: false };
+            }
 
-                        if (Number.isFinite(a) && Number.isFinite(b)) {
-                            if (mode === "div_xy") { tileX = a; tileY = b; }
-                            if (mode === "div_yx") { tileX = b; tileY = a; }
-                        }
-                    }
+            for (let frameIndex = 0; frameIndex < numberOfFrames; frameIndex++) {
+                const fg = perFrameFG[frameIndex];
+                if (!fg) continue;
 
-                    // --- B) Pixel offsets fallback ---
-                    if (tileX == null || tileY == null) {
-                        // Google / various servers tend to put this under PlanePosition(Slide) sequence 0048,021A
-                        // or PlanePosition (Slide) 0020,9113
-                        const planePos =
-                            fg["0048021A"]?.Value?.[0] ||
-                            fg["00209113"]?.Value?.[0] ||
-                            null;
+                const pos = resolver(frameIndex, fg);
+                if (!pos) continue;
+                const { tileX, tileY } = pos;
+                if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) continue;
+                if (tileX < 0 || tileY < 0 || tileX >= tilesX || tileY >= tilesY) { oob++; continue; }
 
-                        // Correct tags:
-                        // 0048,021E = ColumnPositionInTotalImagePixelMatrix (X)
-                        // 0048,021F = RowPositionInTotalImagePixelMatrix    (Y)
-                        const colOff =
-                            this.fv(fg, "0048021E") ??
-                            this.fv(planePos, "0048021E");
+                const k = `${tileX}_${tileY}`;
+                if (frames[k] == null) mapped++;
+                else collisions++;
+                frames[k] = frameIndex + 1;
+            }
+            return { frames, mapped, collisions, oob, supported: true };
+        };
 
-                        const rowOff =
-                            this.fv(fg, "0048021F") ??
-                            this.fv(planePos, "0048021F");
+        // Strict acceptance: every cell of the grid must be uniquely populated.
+        const accepts = (cand) => cand.supported && cand.mapped === expected && cand.collisions === 0;
 
-                        if (Number.isFinite(colOff) && Number.isFinite(rowOff)) {
-                            tileX = Math.floor(colOff / tileWidth);
-                            tileY = Math.floor(rowOff / tileHeight);
-                        }
-                    }
+        // ---------- Strategy 1: pixel positions (unambiguous ground truth) --
+        const pixelPosResolver = (_idx, fg) => {
+            const planePos =
+                fg["0048021A"]?.Value?.[0] ||
+                fg["00209113"]?.Value?.[0] ||
+                null;
+            const colOff =
+                this.fv(fg, "0048021E") ??
+                this.fv(planePos, "0048021E");
+            const rowOff =
+                this.fv(fg, "0048021F") ??
+                this.fv(planePos, "0048021F");
+            if (!Number.isFinite(colOff) || !Number.isFinite(rowOff)) return null;
+            return { tileX: Math.floor(colOff / tileWidth), tileY: Math.floor(rowOff / tileHeight) };
+        };
 
-                    if (tileX == null || tileY == null) continue;
-                    if (tileX < 0 || tileY < 0 || tileX >= tilesX || tileY >= tilesY) continue;
+        const pixelMap = buildFrameMap(pixelPosResolver);
+        if (accepts(pixelMap)) {
+            level.frames = pixelMap.frames;
+            level._strategy = "pixel-pos";
+            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "pixel-pos", pixelMap);
+            return;
+        }
 
-                    const k = `${tileX}_${tileY}`;
-                    const v = frameIndex + 1;
-                    if (frames[k] == null) mapped++;
-                    else collisions++;
-                    frames[k] = v;
-                }
+        // ---------- Strategy 2: DimensionIndexSequence-resolved DIV ---------
+        // DIS lives in the Shared Functional Groups (52009229).
+        const sharedFG = attrs["52009229"]?.Value?.[0] || null;
+        const dis = sharedFG?.["00209222"]?.Value || attrs["00209222"]?.Value || null;
+        let xSlot = -1, ySlot = -1;
+        if (Array.isArray(dis)) {
+            for (let i = 0; i < dis.length; i++) {
+                const ptr = this.v(dis[i], "00209165"); // DimensionIndexPointer
+                const ptrTag = String(ptr || "").replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+                if (ptrTag === "0048021E") xSlot = i;
+                else if (ptrTag === "0048021F") ySlot = i;
+            }
+        }
 
-                return { frames, mapped, collisions };
+        if (xSlot >= 0 && ySlot >= 0 && xSlot !== ySlot) {
+            const disResolver = (_idx, fg) => {
+                const div = fg["00209157"]?.Value;
+                if (!Array.isArray(div)) return null;
+                const xRaw = Number(div[xSlot]);
+                const yRaw = Number(div[ySlot]);
+                if (!Number.isFinite(xRaw) || !Number.isFinite(yRaw)) return null;
+                return { tileX: xRaw - 1, tileY: yRaw - 1 };
             };
-
-            // Try DIV orderings first (most common cause of “striping” is swapped DIV axes)
-            const candidates = [
-                buildMap("div_xy"),
-                buildMap("div_yx"),
-            ];
-
-            // Pick best by mapped count; tie-break by fewer collisions
-            candidates.sort((A, B) => {
-                if (B.mapped !== A.mapped) return B.mapped - A.mapped;
-                return A.collisions - B.collisions;
-            });
-
-            const best = candidates[0];
-
-            // Accept when basically full grid (WSI should be full)
-            if (expected > 0 && best.mapped >= expected * 0.98) {
-                level.frames = best.frames;
+            const disMap = buildFrameMap(disResolver);
+            if (accepts(disMap)) {
+                level.frames = disMap.frames;
+                level._strategy = "div-dis";
+                this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-dis", disMap);
                 return;
             }
-
-            // If per-frame FG exists but is not grid-complete, we DO NOT wipe frames and doom the viewer.
-            // We simply fall through to sequential mapping (if safe) or partial mapping (best effort).
-            if (best.mapped > 0) {
-                console.warn("Per-frame FG mapping incomplete; using best-effort partial map", {
-                    instanceUID, expected, mapped: best.mapped, collisions: best.collisions
-                });
-                level.frames = best.frames;
-                // do NOT return; allow sequential fill for missing tiles if safe
-            }
         }
 
-        // -----------------------------
-        // 2) Safe sequential fallback only when grid exactly matches frames
-        // -----------------------------
+        // ---------- Strategy 3: heuristic DIV (legacy) ----------------------
+        // Try both axis assignments; accept ONLY if exactly one is full+clean.
+        // Refuse to silently pick when both are full — that's the documented
+        // source of the high-res striping bug.
+        const mkHeuristic = (mode) => (_idx, fg) => {
+            const div = fg["00209157"]?.Value;
+            if (!Array.isArray(div) || div.length < 2) return null;
+            const a = Number(div[0]) - 1;
+            const b = Number(div[1]) - 1;
+            if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+            return mode === "xy" ? { tileX: a, tileY: b } : { tileX: b, tileY: a };
+        };
+        const heurXY = buildFrameMap(mkHeuristic("xy"));
+        const heurYX = buildFrameMap(mkHeuristic("yx"));
+        const okXY = accepts(heurXY);
+        const okYX = accepts(heurYX);
+        if (okXY && !okYX) {
+            level.frames = heurXY.frames;
+            level._strategy = "div-heuristic-xy";
+            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-heuristic-xy", heurXY);
+            return;
+        }
+        if (okYX && !okXY) {
+            level.frames = heurYX.frames;
+            level._strategy = "div-heuristic-yx";
+            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, "div-heuristic-yx", heurYX);
+            return;
+        }
+        if (okXY && okYX) {
+            console.warn(
+                `[DICOM] Ambiguous DIV axes for instance ${instanceUID} (level ${tilesX}×${tilesY}, ${numberOfFrames} frames): ` +
+                "both div_xy and div_yx fully map the grid. Falling back to sequential layout. " +
+                "Override with frameOrderByInstance / frameOrderBySeries in plugin options if the result is wrong."
+            );
+        }
+
+        // ---------- Strategy 4: DimensionOrganizationType-informed sequential
+        // Only bail on TILED_SPARSE when the frame count genuinely can't tile
+        // the grid. When expected === numberOfFrames, the SPARSE label is
+        // effectively misleading metadata — fall through to the sequential
+        // assignment block, and let post-loop inference rewrite the layout
+        // using truth levels from the same WSI if any exist.
+        if (dimOrgType === "TILED_SPARSE" && !overrideOrder && expected !== numberOfFrames) {
+            console.error(
+                `[DICOM] Malformed TILED_SPARSE instance ${instanceUID}: ` +
+                `frame count ${numberOfFrames} does not cover grid ${tilesX}×${tilesY} (${expected} tiles) ` +
+                "and no per-frame positions are present. Tiles will fail-fast. " +
+                "Provide frameOrderByInstance in plugin options if you know the layout."
+            );
+            return;
+        }
+
         if (expected === numberOfFrames) {
-            level._usedSequentialFallback = true;
+            // TILED_FULL standard layout is row-major; honor explicit user overrides above all.
+            // Inference (post-loop) may rewrite this map when no user override
+            // was supplied and other levels carry per-frame truth.
+            const resolved = overrideOrder || "row-major";
+            level.frames = this._buildSequentialFrames(tilesX, tilesY, resolved);
+            level._overrideApplied = !!overrideOrder;
+            level._strategy = overrideOrder
+                ? `sequential-${String(resolved).toLowerCase()}`
+                : (dimOrgType === "TILED_FULL" ? "sequential-tiled-full-row-major" : "sequential-row-major-legacy");
+            this._logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, level._strategy,
+                { mapped: expected, collisions: 0, oob: 0 });
+            return;
+        }
 
-            // frameOrder can be passed from TileSource (options.frameOrder)
-            // Supported values:
-            //   "row-major"
-            //   "row-major-serpentine"
-            //   "col-major"
-            //   "col-major-serpentine"
-            //   add "-flipY" suffix to flip vertical axis (e.g. "row-major-serpentine-flipY")
-            const resolved =
-                (wsiInstance.frameOrderByInstance && wsiInstance.frameOrderByInstance[instanceUID]) ||
-                (wsiInstance.frameOrderBySeries && wsiInstance.frameOrderBySeries[wsiInstance.seriesUID]) ||
-                frameOrder ||
-                wsiInstance.frameOrder ||
-                "row-major";
+        // Out of options.
+        console.warn(
+            `[DICOM] WSI frame-map mismatch for instance ${instanceUID}: ` +
+            `grid ${tilesX}×${tilesY} (${expected} tiles) vs ${numberOfFrames} frames, ` +
+            `dimOrgType=${dimOrgType || "unknown"}. Tiles will fail-fast.`
+        );
+    }
 
-            const orderRaw = String(resolved).toLowerCase();
-            const flipY = orderRaw.includes("flipy");
-            const serp = orderRaw.includes("serpentine");
-            const colMajor = orderRaw.startsWith("col-major");
+    /**
+     * The 8 sequential layout patterns the plugin understands.
+     * row/col-major × {plain, serpentine} × {flipY off, flipY on}.
+     */
+    static SEQUENTIAL_LAYOUTS = [
+        "row-major",
+        "row-major-flipY",
+        "row-major-serpentine",
+        "row-major-serpentine-flipY",
+        "col-major",
+        "col-major-flipY",
+        "col-major-serpentine",
+        "col-major-serpentine-flipY",
+    ];
 
-            const frameAt = (x, y) => {
-                const yy = flipY ? (tilesY - 1 - y) : y;
+    /**
+     * Return the 1-based frame index that the named layout places at tile
+     * coordinate (x, y) inside a tilesX × tilesY grid.
+     */
+    static _sequentialFrameAt(x, y, tilesX, tilesY, orderName) {
+        const o = String(orderName).toLowerCase();
+        const flipY = o.includes("flipy");
+        const serp = o.includes("serpentine");
+        const colMajor = o.startsWith("col-major");
+        const yy = flipY ? (tilesY - 1 - y) : y;
+        if (!colMajor) {
+            const base = yy * tilesX;
+            if (!serp) return base + x + 1;
+            const xx = (yy % 2 === 1) ? (tilesX - 1 - x) : x;
+            return base + xx + 1;
+        }
+        const base = x * tilesY;
+        if (!serp) return base + yy + 1;
+        const yyy = (x % 2 === 1) ? (tilesY - 1 - yy) : yy;
+        return base + yyy + 1;
+    }
 
-                if (!colMajor) {
-                    // row-major: rows laid out sequentially
-                    const base = yy * tilesX;
-
-                    if (!serp) {
-                        return base + x + 1;
-                    }
-
-                    // serpentine: odd rows reverse X
-                    const xx = (yy % 2 === 1) ? (tilesX - 1 - x) : x;
-                    return base + xx + 1;
-                } else {
-                    // col-major: columns laid out sequentially
-                    const base = x * tilesY;
-
-                    if (!serp) {
-                        return base + yy + 1;
-                    }
-
-                    // serpentine: odd columns reverse Y
-                    const yyy = (x % 2 === 1) ? (tilesY - 1 - yy) : yy;
-                    return base + yyy + 1;
-                }
-            };
-
-            // IMPORTANT: don't blow away a partial per-frame map; only fill missing keys
-            level.frames = level.frames || Object.create(null);
-
-            for (let y = 0; y < tilesY; y++) {
-                for (let x = 0; x < tilesX; x++) {
-                    const k = `${x}_${y}`;
-                    if (level.frames[k] == null) {
-                        level.frames[k] = frameAt(x, y);
-                    }
-                }
+    static _buildSequentialFrames(tilesX, tilesY, orderName) {
+        const frames = Object.create(null);
+        for (let y = 0; y < tilesY; y++) {
+            for (let x = 0; x < tilesX; x++) {
+                frames[`${x}_${y}`] = this._sequentialFrameAt(x, y, tilesX, tilesY, orderName);
             }
         }
+        return frames;
+    }
 
-        if (this._hasWarnedFrameMismatch !== instanceUID) {
-            console.warn("WSI frame-map mismatch; cannot map frames reliably", {
-                instanceUID,
-                totalWidth, totalHeight, tileWidth, tileHeight,
-                tilesX, tilesY, expected, numberOfFrames
-            });
-            this._hasWarnedFrameMismatch = instanceUID;
+    /**
+     * After every instance in a WSI group has been ingested, look at the
+     * levels that resolved from explicit per-frame metadata (pixel-pos,
+     * div-dis, unambiguous div-heuristic) and see whether any of the eight
+     * sequential layout patterns reproduces those ground-truth maps. If one
+     * pattern fits *every* truth level (≥99% per level), apply it to the
+     * sequential levels that did not have an explicit user override.
+     *
+     * Why per-level min-score (not average): a sequential layout claim is
+     * only credible if it explains the data on every truth level. A pattern
+     * that fits one level perfectly and another not at all is not the
+     * scanner's canonical layout — it's a coincidence on a single grid size.
+     */
+    static _inferSequentialLayoutForWsi(wsi) {
+        if (!wsi?.levels?.length) return;
+
+        const truthLevels = wsi.levels.filter(L =>
+            L?._strategy && /^(pixel-pos|div-)/.test(L._strategy) && L.frames
+        );
+        const targets = wsi.levels.filter(L =>
+            L?._strategy?.startsWith("sequential-") && !L._overrideApplied && L.width && L.height && L.tileWidth && L.tileHeight
+        );
+
+        if (!truthLevels.length || !targets.length) return;
+
+        // Score each candidate against every truth level; track the minimum.
+        let best = null;
+        for (const name of this.SEQUENTIAL_LAYOUTS) {
+            let minScore = 1.0;
+            for (const T of truthLevels) {
+                const tilesX = Math.ceil(T.width / T.tileWidth);
+                const tilesY = Math.ceil(T.height / T.tileHeight);
+                const cells = tilesX * tilesY;
+                if (cells <= 0) { minScore = 0; break; }
+
+                let hits = 0;
+                for (let y = 0; y < tilesY; y++) {
+                    for (let x = 0; x < tilesX; x++) {
+                        const want = T.frames[`${x}_${y}`];
+                        if (want == null) continue;
+                        if (this._sequentialFrameAt(x, y, tilesX, tilesY, name) === want) hits++;
+                    }
+                }
+                const score = hits / cells;
+                if (score < minScore) minScore = score;
+                if (minScore < (best?.minScore ?? 0)) break;
+            }
+            if (!best || minScore > best.minScore) best = { name, minScore };
         }
+
+        const truthDims = truthLevels.map(L => `${L.width}×${L.height}`).join(", ");
+
+        if (best && best.minScore >= 0.99 && best.name !== "row-major") {
+            // Apply the inferred pattern to all sequential targets.
+            for (const T of targets) {
+                const tilesX = Math.ceil(T.width / T.tileWidth);
+                const tilesY = Math.ceil(T.height / T.tileHeight);
+                T.frames = this._buildSequentialFrames(tilesX, tilesY, best.name);
+                T._strategy = `sequential-inferred-${best.name}`;
+            }
+            console.info(
+                `[DICOM] inferred sequential layout=${best.name} ` +
+                `(min truth-level match=${(best.minScore * 100).toFixed(1)}%, ` +
+                `truth dims=[${truthDims}]); applied to ${targets.length} level(s)`
+            );
+            return;
+        }
+
+        if (best && best.minScore >= 0.99 && best.name === "row-major") {
+            // Default row-major already in place — confirm in logs for traceability.
+            console.info(
+                `[DICOM] inferred sequential layout=row-major confirmed by truth levels [${truthDims}]; ` +
+                `${targets.length} target level(s) already row-major`
+            );
+            return;
+        }
+
+        const bestScore = best ? (best.minScore * 100).toFixed(1) : "0";
+        console.warn(
+            `[DICOM] could not infer sequential layout from truth levels [${truthDims}] ` +
+            `(best candidate=${best?.name ?? "n/a"}, min-match=${bestScore}%). ` +
+            `${targets.length} level(s) remain row-major. ` +
+            "Set frameOrderByInstance / frameOrderBySeries in plugin options if tiles look misaligned."
+        );
+    }
+
+    static _logFrameStrategy(wsiInstance, instanceUID, level, tilesX, tilesY, numberOfFrames, strategy, stats) {
+        const expected = tilesX * tilesY;
+        const coverage = expected > 0 ? ((stats.mapped / expected) * 100).toFixed(1) : "0.0";
+        const idx = wsiInstance?.levels ? wsiInstance.levels.indexOf(level) : -1;
+        const dims = level.width != null ? `${level.width}×${level.height}` : "?";
+        // One concise line per level — searchable, single-grep diagnostic.
+        console.info(
+            `[DICOM] level=${idx >= 0 ? idx : "?"} dims=${dims} grid=${tilesX}×${tilesY} frames=${numberOfFrames} ` +
+            `strategy=${strategy} coverage=${coverage}% collisions=${stats.collisions || 0} oob=${stats.oob || 0} ` +
+            `instance=${instanceUID}`
+        );
     }
 
     static _injectLevelByDims(wsiInstance, totalWidth, totalHeight, tileWidth, tileHeight) {

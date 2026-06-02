@@ -1,29 +1,28 @@
 "use strict";
 
-const { spawn } = require("child_process");
+const crossSpawn = require("cross-spawn");
 const path = require("path");
 const fs = require("fs");
 const glob = require("glob");
 
+// We route every child process through `cross-spawn` instead of the bare
+// `child_process.spawn`. Two reasons:
+//   1) Security — the original code flattened cmd + args into a single
+//      shell string and wrapped each arg in `"..."`, which allowed
+//      embedded double-quotes to break out of cmd.exe quoting and
+//      execute arbitrary commands. `cross-spawn` does the correct
+//      libuv-style escaping per argument.
+//   2) Compatibility — Node 20+ refuses to spawn `.cmd` / `.bat` shims
+//      (npm, npx, tailwindcss, …) without `shell: true`, throwing
+//      `EINVAL`. `cross-spawn` invokes `cmd.exe /d /s /c` with the
+//      escaped command line itself, so we don't pass `shell: true`
+//      and don't lose argv quoting safety either.
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-        const isWin = process.platform === "win32";
-
-        // On Windows, we must use shell: true for npx/npm,
-        // but we should pass the command and args as a single string
-        // to avoid the "Invalid build flag" concatenation error.
-        const fullCommand = isWin
-            ? `${cmd} ${args.map(a => `"${a}"`).join(" ")}`
-            : cmd;
-
-        const spawnArgs = isWin ? [] : args;
-        const options = {
+        const child = crossSpawn(cmd, args, {
             stdio: "inherit",
-            shell: isWin,
-            ...opts
-        };
-
-        const child = spawn(fullCommand, spawnArgs, options);
+            ...opts,
+        });
 
         child.on("exit", (code) => {
             if (code === 0) resolve();
@@ -32,6 +31,22 @@ function spawnAsync(cmd, args, opts = {}) {
 
         child.on("error", (err) => reject(err));
     });
+}
+
+// Reject any string heading into a child-process argv that contains shell
+// metacharacters, control bytes, or attempts directory traversal. The argv
+// path is shell-free since we drop shell:true above, but defense-in-depth
+// keeps malicious workspace items from injecting esbuild flags either.
+const UNSAFE_ARG_CHARS = /[\x00-\x1f"`$&|;<>\r\n]/;
+
+function isSafeRelativeEntry(value, baseDir) {
+    if (typeof value !== "string" || value.length === 0) return false;
+    if (UNSAFE_ARG_CHARS.test(value)) return false;
+    if (path.isAbsolute(value)) return false;
+    const resolved = path.resolve(baseDir, value);
+    const rel = path.relative(baseDir, resolved);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+    return true;
 }
 
 function executeCopy(itemDirectory, copyMap, logger, prefix) {
@@ -171,6 +186,11 @@ const BuildLogic = {
         }
         // 2. Default fallback: Use esbuild if a buildEntry entry point is defined
         else if (packageData.buildEntry) {
+            if (!isSafeRelativeEntry(packageData.buildEntry, itemDirectory)) {
+                logger.error(`${logPrefix} refusing to build: "buildEntry" must be a safe relative path inside the workspace item (got ${JSON.stringify(packageData.buildEntry)}).`);
+                return;
+            }
+
             const outFile = path.join(itemDirectory, "index.workspace.js");
 
             const rawId = packageData.name || itemDirectory;

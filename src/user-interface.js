@@ -366,6 +366,12 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             },
             getPluginsBody: function () {
                 return UI.Services.FullscreenMenus.getPluginsBody;
+            },
+            layout(...sections) {
+                return UI.Services.FullscreenMenus.layout(...sections);
+            },
+            card(title, ...children) {
+                return UI.Services.FullscreenMenus.card(title, ...children);
             }
         },
 

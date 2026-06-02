@@ -4,6 +4,9 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     static exportsPresets = false;
     static includeAllAnnotationProps = false;
 
+    static lossy = true;
+    static lossyReason = "QuPath stores geometry only — text, custom factory metadata, and presets do not round-trip. Rulers and angles import back as plain polylines.";
+
     static getSuffix() {
         return 'qu.geo.json';
     }
@@ -146,6 +149,9 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             return object;
         },
         "ruler": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
+        // QuPath is geometry-only — on re-import this comes back as a
+        // polyline (no factoryID round-trip). Same lossy contract as Ruler.
+        "angle": (object, preset) => this._asGEOJsonFeature(object, preset, "LineString"),
     };
 
     _decodeMulti(object, featureParentDict, type) {
@@ -205,10 +211,26 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
         return JSON.stringify(result);
     }
 
+    /**
+     * Coerce a configured offset into the documented {x:number, y:number} shape
+     * or undefined. Defends against accidental [x,y] arrays or partially-set
+     * objects whose `undefined` fields would otherwise NaN-poison every
+     * exported coordinate.
+     */
+    _normalizeOffset(raw) {
+        if (!raw) return undefined;
+        if (Array.isArray(raw)) {
+            if (Number.isFinite(raw[0]) && Number.isFinite(raw[1])) return { x: raw[0], y: raw[1] };
+            return undefined;
+        }
+        if (Number.isFinite(raw.x) && Number.isFinite(raw.y)) return { x: raw.x, y: raw.y };
+        return undefined;
+    }
+
     async encodePartial(annotationsGetter, presetsGetter) {
         const result = {}
         if (!this.options.exportsObjects) return result;
-        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
+        this.offset = this.options.addOffset ? this._normalizeOffset(this.options.imageCoordinatesOffset) : undefined;
         this._presetReplacer = this.options.trimToDefaultPresets ?
             OSDAnnotations.Preset.fromJSONFriendlyObject(this._defaultQuPathPresets[0], this.context.module) : false;
         this._validPresets = this._presetReplacer ? this._defaultQuPathPresets.map(x => x.presetID) : null;
@@ -239,7 +261,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
     }
 
     async decode(data) {
-        this.offset = this.options.addOffset ? this.options.imageCoordinatesOffset : undefined;
+        this.offset = this.options.addOffset ? this._normalizeOffset(this.options.imageCoordinatesOffset) : undefined;
 
         data = JSON.parse(data);
 
@@ -251,7 +273,7 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             if (object.properties?.classification) {
                 const p = object.properties.classification;
 
-                const builtInPreset = this._defaultQuPathPresets.find(p => p.presetID === p.name);
+                const builtInPreset = this._defaultQuPathPresets.find(bp => bp.presetID === p.name);
                 presets[p.name] = builtInPreset || {
                     color: asHexColor(p.color),
                     factoryID: "polygon",
@@ -294,9 +316,31 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             annotations.push(parsedResult);
         }
 
+        // Recursively walk a GeoJSON coordinates value (number | [num,num] |
+        // ring | rings | rings-of-rings) looking for non-finite entries. Some
+        // QuPath exports (and older xOpat exports with a partial export bug)
+        // serialize NaN/undefined as JSON `null`, which silently produces 0×0
+        // annotations on import. Reject such features upfront with a clear log
+        // so the user knows the file is the problem.
+        const hasInvalidCoord = (value) => {
+            if (Array.isArray(value)) return value.some(hasInvalidCoord);
+            return value === null || value === undefined || (typeof value === 'number' && !Number.isFinite(value));
+        };
+
+        let skippedInvalid = 0;
         const parseFeature = (object, presets, annotations) => {
             if (object.geometry === null) {
                 throw "Invalid feature! ";
+            }
+
+            if (hasInvalidCoord(object.geometry?.coordinates)) {
+                skippedInvalid++;
+                console.warn(
+                    "[qupath] Skipping feature with invalid (null/NaN) coordinates:",
+                    object.geometry?.type,
+                    object.properties
+                );
+                return;
             }
 
             let result = this.decoders[object.geometry.type]?.(object.geometry, object);
@@ -324,6 +368,15 @@ OSDAnnotations.Convertor.register("qupath", class extends OSDAnnotations.Convert
             parseFeature(data, presets, annotations);
         } else {
             throw "Unsupported quPath GEOJson Type " + data.type;
+        }
+
+        if (skippedInvalid > 0 && typeof Dialogs !== 'undefined' && Dialogs?.show) {
+            Dialogs.show(
+                `Skipped ${skippedInvalid} QuPath feature${skippedInvalid === 1 ? '' : 's'} ` +
+                `with invalid coordinates (null/NaN). The source file is likely corrupt.`,
+                5000,
+                Dialogs.MSG_WARN
+            );
         }
 
         return {

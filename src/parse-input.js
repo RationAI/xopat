@@ -48,12 +48,29 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
         const isDebug = isBoolFlagInObject(configuration.params, "debugMode");
         const bypassCookies = isBoolFlagInObject(configuration.params, "bypassCookies");
 
+        // `bg.dataReference` permits three shapes, matching the ambient
+        // type at src/types/app.d.ts (DataReference = number | DataID |
+        // DataOverride) and what BackgroundConfig.from() already accepts:
+        //   - integer  → index into configuration.data (legacy)
+        //   - string   → inline DataID (URL/path carried on the bg entry)
+        //   - object   → DataOverride {dataID, protocol, options, …} as used
+        //                by the DICOM plugin and any future factory protocol
+        // The old strict `Number.isInteger` gate rejected the DataOverride
+        // form, so exporting a DICOM-backed session and reloading it always
+        // landed on "no slide opened" — fixed here.
+        function isValidDataReference(ref, dataLen) {
+            if (Number.isInteger(ref)) return ref >= 0 && ref < dataLen;
+            if (typeof ref === "string" && ref) return true;
+            if (ref && typeof ref === "object") {
+                if (ref.dataID !== undefined) return true;
+                return Object.keys(ref).length > 0;
+            }
+            return false;
+        }
         for (let bg of configuration.background) {
-            if (!bg || !Number.isInteger(bg.dataReference)
-                || bg.dataReference < 0
-                || bg.dataReference > configuration.data.length) {
-                return getError(  "messages.urlInvalid", "messages.bgReferenceMissing",
-                    `Invalid data reference value '${bg.dataReference}'. Available data: `
+            if (!bg || !isValidDataReference(bg.dataReference, configuration.data.length)) {
+                return getError("messages.urlInvalid", "messages.bgReferenceMissing",
+                    `Invalid data reference '${JSON.stringify(bg?.dataReference)}'. Available data: `
                     + JSON.stringify(configuration.data));
             }
         }

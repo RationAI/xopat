@@ -7,6 +7,7 @@
   "icon": null,
   "includes": ["index.js"],
   "modules": ["mlflow"],
+  "requiredConfig": ["mlflowURL"],
   "permaLoad": true,
   //mlflow endpoint
   "mlflowURL": "http://localhost:5000",

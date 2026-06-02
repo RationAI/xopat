@@ -149,12 +149,12 @@ const toolGroup = new ui.ToolbarGroup({
 },
     new ui.ToolbarItem({
         id: "select-tool",
-        icon: "fa-mouse-pointer",
+        icon: "ph-cursor",
         label: "Select"
     }),
     new ui.ToolbarItem({
         id: "draw-rect",
-        icon: "fa-square",
+        icon: "ph-rectangle",
         label: "Draw Rectangle"
     })
 );

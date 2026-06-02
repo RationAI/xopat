@@ -56,6 +56,7 @@ class AnnotationsGUI extends XOpatPlugin {
         this.context.setCustomModeUsed('MAGIC_WAND', OSDAnnotations.MagicWand);
         this.context.setCustomModeUsed('FREE_FORM_TOOL_CORRECT', OSDAnnotations.StateCorrectionTool);
         this.context.setCustomModeUsed('VIEWPORT_SEGMENTATION', OSDAnnotations.ViewportSegmentation);
+        this.context.setCustomModeUsed('FIXED_AREA', OSDAnnotations.FixedAreaMode);
         this.context.setCustomModeUsed('EDIT_SELECTION', OSDAnnotations.StateEditSelection);
 
         this._commentsEnabled = this.getOption('commentsEnabled', this.getStaticMeta('commentsEnabled', true));
@@ -78,31 +79,15 @@ class AnnotationsGUI extends XOpatPlugin {
         this._copiedPos = { x: 0, y: 0 };
         this._selectedAnnot = null;
         this._refreshCommentsInterval = null;
-
-        this._registerMeasurementsContextMenu();
     }
 
-    /**
-     * Adds a "View measurements" entry to the canvas right-click menu when the
-     * user clicks over a single annotation (or has exactly one selected). The
-     * provider intentionally returns nothing on multi-selection / empty space
-     * so the menu stays uncluttered for callers that don't want measurements.
-     */
-    _registerMeasurementsContextMenu() {
-        const registry = window.CanvasContextMenu;
-        if (!registry?.register) return;
-        registry.register('annotation-measurements', (ctx) => {
-            const fabric = this.context?.getFabric?.(ctx.viewer?.uniqueId);
-            if (!fabric) return null;
-            const candidate = this._pickAnnotationForContext(fabric, ctx);
-            if (!candidate) return null;
-            return [{
-                title: this.t('annotations.measurements.viewMeasurements'),
-                icon: 'fa-square-poll-horizontal',
-                action: () => this.showMeasurementsPopover(candidate),
-            }];
-        }, 50);
-    }
+    // `_pickAnnotationForContext` and `showMeasurementsPopover` remain
+    // public on the plugin so the unified canvas right-click menu (built
+    // in `methods/viewerMenu.mjs::_buildAnnotationContextActions`) can
+    // call them via `this`. The standalone `annotation-measurements`
+    // provider that used to live here was folded into that unified menu —
+    // a separate top-level entry would have been a third "Annotation"
+    // section alongside z-order and Change-preset/Copy/Cut/etc.
 
     _pickAnnotationForContext(fabric, ctx) {
         // Prefer single-selection scenarios so we don't have to do hit-testing.
@@ -167,8 +152,13 @@ class AnnotationsGUI extends XOpatPlugin {
             scope: 'all'
         };
         const formats = OSDAnnotations.Convertor.formats;
-        if (!formats.includes(this.exportOptions.format)) this.exportOptions.format = 'native';
-        if (!formats.includes(this._defaultFormat)) this._defaultFormat = 'native';
+        // 'auto' is a UI-only sentinel (import-time auto-detect), not a registered convertor.
+        if (this.exportOptions.format !== 'auto' && !formats.includes(this.exportOptions.format)) {
+            this.exportOptions.format = 'native';
+        }
+        if (this._defaultFormat !== 'auto' && !formats.includes(this._defaultFormat)) {
+            this._defaultFormat = 'native';
+        }
 
         const staticPresetList = this.getOption('staticPresets', undefined, false);
         if (staticPresetList) {

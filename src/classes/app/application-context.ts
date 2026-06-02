@@ -201,6 +201,62 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             else if (value === "true") value = true;
             self.config.params[name] = value;
         },
+        /**
+         * Read a UI visibility flag with precedence:
+         *   1. explicit `params.ui[key]` (session JSON wins over cached user pref);
+         *      `params.ui === false` is a global override that hides every key,
+         *      `params.ui === true` falls through to lower-priority sources,
+         *   2. legacy flat `params[key]` (back-compat with old session shape),
+         *   3. cached AppCache value (Settings checkbox toggles persist here),
+         *   4. `defaultSetup.ui[key]` (or `defaultSetup.ui === false` as a
+         *      deployment-wide hide-all default) → legacy flat
+         *      `defaultSetup[key]` → `true`.
+         * The "explicit > cache" order lets a session author hard-set a boot state
+         * without bypassCache; if the session leaves the key unset, the user's
+         * last Settings toggle is honored.
+         */
+        getUiOption(key: keyof XOpatUiSetup): boolean {
+            const self = this as unknown as ApplicationContext;
+            const params = self.config.params as Record<string, any>;
+            const defaults = self.config.defaultParams as Record<string, any>;
+            const paramsUi = params.ui;
+            if (paramsUi === false) return false;
+            if (paramsUi && typeof paramsUi === "object") {
+                const v = paramsUi[key];
+                if (v !== undefined && v !== null) return !!v;
+            }
+            const fromParamsFlat = params[key];
+            if (fromParamsFlat !== undefined && fromParamsFlat !== null) return !!fromParamsFlat;
+            if (self.AppCache) {
+                const cached = self.AppCache.get(key);
+                if (cached !== undefined && cached !== null) {
+                    if (cached === "false") return false;
+                    if (cached === "true") return true;
+                    return !!cached;
+                }
+            }
+            const defaultsUi = defaults.ui;
+            if (defaultsUi === false) return false;
+            if (defaultsUi && typeof defaultsUi === "object") {
+                const v = defaultsUi[key];
+                if (v !== undefined && v !== null) return !!v;
+            }
+            const fromDefaultsFlat = defaults[key];
+            if (fromDefaultsFlat !== undefined && fromDefaultsFlat !== null) return !!fromDefaultsFlat;
+            return true;
+        },
+        /**
+         * Persist a UI visibility flag. Writes to `params.ui[key]` and the
+         * AppCache under the legacy flat key (matches existing scaleBar/toolBar
+         * checkbox cache shape).
+         */
+        setUiOption(key: keyof XOpatUiSetup, value: boolean, cache = true) {
+            const self = this as unknown as ApplicationContext;
+            const params = self.config.params as Record<string, any>;
+            if (!params.ui || typeof params.ui !== "object") params.ui = {};
+            params.ui[key] = !!value;
+            if (cache && self.AppCache) self.AppCache.set(key, !!value);
+        },
         setDirty() {
             (this as unknown as ApplicationContext).__cache.dirty = true;
         },

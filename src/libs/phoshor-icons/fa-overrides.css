@@ -1,0 +1,271 @@
+/*
+ * Font Awesome → Phosphor (Light) override map.
+ *
+ * Loaded as part of css.libs in src/config.json. Important cascade note: this
+ * file is loaded BEFORE src/assets/style.css, which sets
+ *   .fa-auto::before { font-family: ... FA ... !important; }
+ * If we used selector `.fa-X::before` (specificity 0,1,1), style.css would win
+ * on font-family via source order, even with !important. The result: our
+ * Phosphor codepoint would be rendered through the FA font, producing
+ * unrelated glyphs (e.g. \e4c4 in FA is fa-bottle-droplet, \e4f6 is
+ * fa-group-arrows-rotate). To beat .fa-auto::before regardless of load order
+ * we double the class selector — `.fa-X.fa-X::before` gives specificity 0,2,1
+ * which wins without ordering tricks.
+ *
+ * For every fa-* class listed here, ::before is re-pointed to a Phosphor Light
+ * glyph. Unmapped fa-* classes fall through and keep rendering as Font Awesome
+ * — that is the migration runway.
+ *
+ * Visual parity caveat: Phosphor LIGHT is thinner than FA FREE SOLID. Chunky
+ * FA icons can read spindly in Phosphor Light at small sizes. If you want
+ * heavier output, drop the Phosphor Regular/Bold/Fill bundle into this folder
+ * and switch the font-family below.
+ *
+ * To add a mapping:
+ *   1. Find the Phosphor name on https://phosphoricons.com (Light weight).
+ *   2. Read the codepoint from src/libs/phoshor-icons/style.css (rule
+ *      `.ph-light.ph-<name>:before { content: "\xxxx"; }`).
+ *   3. Add a rule below using the doubled-class form, grouped near related icons.
+ */
+
+/* ----- navigation / chevrons ----- */
+.fa-chevron-down.fa-chevron-down::before, .fa-angle-down.fa-angle-down::before, .fa-caret-down.fa-caret-down::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e136" !important;
+}
+.fa-chevron-up.fa-chevron-up::before, .fa-angle-up.fa-angle-up::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e13c" !important;
+}
+.fa-chevron-left.fa-chevron-left::before, .fa-angle-left.fa-angle-left::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e138" !important;
+}
+.fa-chevron-right.fa-chevron-right::before, .fa-angle-right.fa-angle-right::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e13a" !important;
+}
+
+/* ----- arrows ----- */
+.fa-arrow-left.fa-arrow-left::before  { font-family: "Phosphor-Light" !important; content: "\e058" !important; }
+.fa-arrow-right.fa-arrow-right::before { font-family: "Phosphor-Light" !important; content: "\e06c" !important; }
+.fa-arrow-up.fa-arrow-up::before    { font-family: "Phosphor-Light" !important; content: "\e08e" !important; }
+.fa-arrow-down.fa-arrow-down::before  { font-family: "Phosphor-Light" !important; content: "\e03e" !important; }
+.fa-arrow-down-a-z.fa-arrow-down-a-z::before { font-family: "Phosphor-Light" !important; content: "\e444" !important; }
+.fa-arrows-up-down.fa-arrows-up-down::before { font-family: "Phosphor-Light" !important; content: "\eb04" !important; }
+.fa-arrows-up-down-left-right.fa-arrows-up-down-left-right::before, .fa-up-down-left-right.fa-up-down-left-right::before {
+    font-family: "Phosphor-Light" !important; content: "\e0a4" !important;
+}
+.fa-up-right-and-down-left-from-center.fa-up-right-and-down-left-from-center::before {
+    font-family: "Phosphor-Light" !important; content: "\e0a2" !important;
+}
+.fa-rotate.fa-rotate::before       { font-family: "Phosphor-Light" !important; content: "\e094" !important; }
+.fa-rotate-left.fa-rotate-left::before  { font-family: "Phosphor-Light" !important; content: "\e038" !important; }
+.fa-rotate-right.fa-rotate-right::before { font-family: "Phosphor-Light" !important; content: "\e036" !important; }
+.fa-reply.fa-reply::before        { font-family: "Phosphor-Light" !important; content: "\e024" !important; }
+
+/* ----- close / x ----- */
+.fa-close.fa-close::before, .fa-xmark.fa-xmark::before, .fa-times.fa-times::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e4f6" !important;
+}
+
+/* ----- search ----- */
+.fa-search.fa-search::before, .fa-magnifying-glass.fa-magnifying-glass::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e30c" !important;
+}
+
+/* ----- settings / tools ----- */
+.fa-gear.fa-gear::before, .fa-cog.fa-cog::before, .fa-cogs.fa-cogs::before {
+    font-family: "Phosphor-Light" !important;
+    content: "\e270" !important;
+}
+.fa-wrench.fa-wrench::before  { font-family: "Phosphor-Light" !important; content: "\e5d4" !important; }
+.fa-toolbox.fa-toolbox::before { font-family: "Phosphor-Light" !important; content: "\eca0" !important; }
+.fa-sliders.fa-sliders::before { font-family: "Phosphor-Light" !important; content: "\e432" !important; }
+.fa-filter.fa-filter::before  { font-family: "Phosphor-Light" !important; content: "\e266" !important; }
+
+/* ----- user / people ----- */
+.fa-user.fa-user::before          { font-family: "Phosphor-Light" !important; content: "\e4c2" !important; }
+.fa-circle-user.fa-circle-user::before   { font-family: "Phosphor-Light" !important; content: "\e4c4" !important; }
+.fa-user-plus.fa-user-plus::before     { font-family: "Phosphor-Light" !important; content: "\e4d0" !important; }
+.fa-user-lock.fa-user-lock::before     { font-family: "Phosphor-Light" !important; content: "\e4c6" !important; }
+.fa-users.fa-users::before         { font-family: "Phosphor-Light" !important; content: "\e4d6" !important; }
+.fa-graduation-cap.fa-graduation-cap::before, .fa-school.fa-school::before {
+    font-family: "Phosphor-Light" !important; content: "\e62c" !important;
+}
+
+/* ----- alerts / info ----- */
+.fa-triangle-exclamation.fa-triangle-exclamation::before, .fa-exclamation-triangle.fa-exclamation-triangle::before, .fa-warning.fa-warning::before {
+    font-family: "Phosphor-Light" !important; content: "\e4e0" !important;
+}
+.fa-info-circle.fa-info-circle::before, .fa-circle-info.fa-circle-info::before {
+    font-family: "Phosphor-Light" !important; content: "\e2ce" !important;
+}
+.fa-question.fa-question::before, .fa-question-circle.fa-question-circle::before, .fa-circle-question.fa-circle-question::before {
+    font-family: "Phosphor-Light" !important; content: "\e3e8" !important;
+}
+
+/* ----- menus / lists ----- */
+.fa-bars.fa-bars::before              { font-family: "Phosphor-Light" !important; content: "\e2f0" !important; }
+.fa-ellipsis-h.fa-ellipsis-h::before        { font-family: "Phosphor-Light" !important; content: "\e1fe" !important; }
+.fa-ellipsis-vertical.fa-ellipsis-vertical::before { font-family: "Phosphor-Light" !important; content: "\e208" !important; }
+.fa-grip-lines.fa-grip-lines::before        { font-family: "Phosphor-Light" !important; content: "\eae2" !important; }
+.fa-list-ol.fa-list-ol::before           { font-family: "Phosphor-Light" !important; content: "\e2f6" !important; }
+.fa-columns.fa-columns::before, .fa-table-columns.fa-table-columns::before {
+    font-family: "Phosphor-Light" !important; content: "\e546" !important;
+}
+.fa-table-cells.fa-table-cells::before { font-family: "Phosphor-Light" !important; content: "\e476" !important; }
+
+/* ----- editing ----- */
+.fa-pen.fa-pen::before           { font-family: "Phosphor-Light" !important; content: "\e3ae" !important; }
+.fa-pen-to-square.fa-pen-to-square::before { font-family: "Phosphor-Light" !important; content: "\e34c" !important; }
+.fa-trash.fa-trash::before, .fa-trash-can.fa-trash-can::before {
+    font-family: "Phosphor-Light" !important; content: "\e4a6" !important;
+}
+.fa-plus.fa-plus::before, .fa-add.fa-add::before { font-family: "Phosphor-Light" !important; content: "\e3d4" !important; }
+.fa-minus.fa-minus::before                 { font-family: "Phosphor-Light" !important; content: "\e32a" !important; }
+.fa-circle-plus.fa-circle-plus::before           { font-family: "Phosphor-Light" !important; content: "\e3d6" !important; }
+.fa-copy.fa-copy::before, .fa-clone.fa-clone::before { font-family: "Phosphor-Light" !important; content: "\e1ca" !important; }
+.fa-paste.fa-paste::before                 { font-family: "Phosphor-Light" !important; content: "\e198" !important; }
+.fa-scissors.fa-scissors::before              { font-family: "Phosphor-Light" !important; content: "\eae0" !important; }
+.fa-eye.fa-eye::before                   { font-family: "Phosphor-Light" !important; content: "\e220" !important; }
+.fa-eye-slash.fa-eye-slash::before             { font-family: "Phosphor-Light" !important; content: "\e224" !important; }
+.fa-floppy-disk.fa-floppy-disk::before           { font-family: "Phosphor-Light" !important; content: "\e248" !important; }
+.fa-upload.fa-upload::before                { font-family: "Phosphor-Light" !important; content: "\e4c0" !important; }
+.fa-download.fa-download::before              { font-family: "Phosphor-Light" !important; content: "\e20c" !important; }
+.fa-archive.fa-archive::before               { font-family: "Phosphor-Light" !important; content: "\e00c" !important; }
+.fa-font.fa-font::before                  { font-family: "Phosphor-Light" !important; content: "\e6ee" !important; }
+
+/* ----- circles / status dots ----- */
+.fa-circle.fa-circle::before               { font-family: "Phosphor-Light" !important; content: "\e18a" !important; }
+.fa-circle-half-stroke.fa-circle-half-stroke::before   { font-family: "Phosphor-Light" !important; content: "\e18c" !important; }
+.fa-circle-notch.fa-circle-notch::before         { font-family: "Phosphor-Light" !important; content: "\eb44" !important; }
+
+/* ----- media ----- */
+.fa-play.fa-play::before     { font-family: "Phosphor-Light" !important; content: "\e3d0" !important; }
+.fa-pause.fa-pause::before    { font-family: "Phosphor-Light" !important; content: "\e39e" !important; }
+.fa-stop.fa-stop::before     { font-family: "Phosphor-Light" !important; content: "\e46c" !important; }
+.fa-forward.fa-forward::before  { font-family: "Phosphor-Light" !important; content: "\e6a6" !important; }
+.fa-backward.fa-backward::before { font-family: "Phosphor-Light" !important; content: "\e6a8" !important; }
+.fa-music.fa-music::before    { font-family: "Phosphor-Light" !important; content: "\e33c" !important; }
+.fa-video.fa-video::before    { font-family: "Phosphor-Light" !important; content: "\e4da" !important; }
+.fa-camera.fa-camera::before   { font-family: "Phosphor-Light" !important; content: "\e10e" !important; }
+
+/* ----- files / storage ----- */
+.fa-image.fa-image::before      { font-family: "Phosphor-Light" !important; content: "\e2ca" !important; }
+.fa-images.fa-images::before     { font-family: "Phosphor-Light" !important; content: "\e836" !important; }
+.fa-folder.fa-folder::before     { font-family: "Phosphor-Light" !important; content: "\e24a" !important; }
+.fa-file.fa-file::before       { font-family: "Phosphor-Light" !important; content: "\e230" !important; }
+.fa-file-lines.fa-file-lines::before { font-family: "Phosphor-Light" !important; content: "\e23a" !important; }
+.fa-panorama.fa-panorama::before   { font-family: "Phosphor-Light" !important; content: "\eaa2" !important; }
+
+/* ----- links / security ----- */
+.fa-link.fa-link::before                       { font-family: "Phosphor-Light" !important; content: "\e2e2" !important; }
+.fa-link-slash.fa-link-slash::before                 { font-family: "Phosphor-Light" !important; content: "\e2e4" !important; }
+.fa-lock.fa-lock::before                       { font-family: "Phosphor-Light" !important; content: "\e2fa" !important; }
+.fa-lock-open.fa-lock-open::before, .fa-unlock.fa-unlock::before { font-family: "Phosphor-Light" !important; content: "\e306" !important; }
+.fa-shield-halved.fa-shield-halved::before              { font-family: "Phosphor-Light" !important; content: "\e40a" !important; }
+.fa-power-off.fa-power-off::before                  { font-family: "Phosphor-Light" !important; content: "\e3da" !important; }
+.fa-door-open.fa-door-open::before                  { font-family: "Phosphor-Light" !important; content: "\e7e6" !important; }
+.fa-right-to-bracket.fa-right-to-bracket::before           { font-family: "Phosphor-Light" !important; content: "\e428" !important; }
+
+/* ----- chat / share ----- */
+.fa-comment.fa-comment::before         { font-family: "Phosphor-Light" !important; content: "\e15c" !important; }
+.fa-comment-medical.fa-comment-medical::before { font-family: "Phosphor-Light" !important; content: "\e16c" !important; }
+.fa-comments.fa-comments::before        { font-family: "Phosphor-Light" !important; content: "\e17c" !important; }
+.fa-message.fa-message::before         { font-family: "Phosphor-Light" !important; content: "\e17a" !important; }
+.fa-paper-plane.fa-paper-plane::before     { font-family: "Phosphor-Light" !important; content: "\e398" !important; }
+.fa-share-nodes.fa-share-nodes::before     { font-family: "Phosphor-Light" !important; content: "\e408" !important; }
+.fa-envelope.fa-envelope::before        { font-family: "Phosphor-Light" !important; content: "\e214" !important; }
+.fa-at.fa-at::before              { font-family: "Phosphor-Light" !important; content: "\e0ac" !important; }
+.fa-phone.fa-phone::before           { font-family: "Phosphor-Light" !important; content: "\e3b8" !important; }
+
+/* ----- markers / favourites ----- */
+.fa-bell.fa-bell::before             { font-family: "Phosphor-Light" !important; content: "\e0ce" !important; }
+.fa-flag.fa-flag::before             { font-family: "Phosphor-Light" !important; content: "\e244" !important; }
+.fa-bookmark.fa-bookmark::before         { font-family: "Phosphor-Light" !important; content: "\e0e8" !important; }
+.fa-heart.fa-heart::before            { font-family: "Phosphor-Light" !important; content: "\e2a8" !important; }
+.fa-star.fa-star::before             { font-family: "Phosphor-Light" !important; content: "\e46a" !important; }
+.fa-thumbtack.fa-thumbtack::before        { font-family: "Phosphor-Light" !important; content: "\e3e2" !important; }
+.fa-thumbtack-slash.fa-thumbtack-slash::before  { font-family: "Phosphor-Light" !important; content: "\e3e4" !important; }
+.fa-tag.fa-tag::before              { font-family: "Phosphor-Light" !important; content: "\e478" !important; }
+.fa-tags.fa-tags::before             { font-family: "Phosphor-Light" !important; content: "\e478" !important; }
+
+/* ----- drawing / shapes ----- */
+.fa-brush.fa-brush::before, .fa-paintbrush.fa-paintbrush::before { font-family: "Phosphor-Light" !important; content: "\e6f0" !important; }
+.fa-palette.fa-palette::before            { font-family: "Phosphor-Light" !important; content: "\e6c8" !important; }
+.fa-broom.fa-broom::before              { font-family: "Phosphor-Light" !important; content: "\ec54" !important; }
+.fa-crop.fa-crop::before               { font-family: "Phosphor-Light" !important; content: "\e1d4" !important; }
+.fa-crosshairs.fa-crosshairs::before, .fa-bullseye.fa-bullseye::before {
+    font-family: "Phosphor-Light" !important; content: "\e1d6" !important;
+}
+.fa-location-crosshairs.fa-location-crosshairs::before { font-family: "Phosphor-Light" !important; content: "\e1d8" !important; }
+.fa-mouse-pointer.fa-mouse-pointer::before, .fa-arrow-pointer.fa-arrow-pointer::before {
+    font-family: "Phosphor-Light" !important; content: "\e1dc" !important;
+}
+.fa-draw-polygon.fa-draw-polygon::before  { font-family: "Phosphor-Light" !important; content: "\e6d0" !important; }
+.fa-shapes.fa-shapes::before        { font-family: "Phosphor-Light" !important; content: "\ec5e" !important; }
+.fa-square.fa-square::before        { font-family: "Phosphor-Light" !important; content: "\e45e" !important; }
+.fa-diamond.fa-diamond::before, .fa-gem.fa-gem::before {
+    font-family: "Phosphor-Light" !important; content: "\e1ec" !important;
+}
+.fa-vector-square.fa-vector-square::before { font-family: "Phosphor-Light" !important; content: "\e6ce" !important; }
+.fa-object-group.fa-object-group::before  { font-family: "Phosphor-Light" !important; content: "\e626" !important; }
+.fa-layer-group.fa-layer-group::before   { font-family: "Phosphor-Light" !important; content: "\e466" !important; }
+.fa-ruler.fa-ruler::before         { font-family: "Phosphor-Light" !important; content: "\e6b8" !important; }
+.fa-puzzle-piece.fa-puzzle-piece::before  { font-family: "Phosphor-Light" !important; content: "\e596" !important; }
+.fa-wand-sparkles.fa-wand-sparkles::before { font-family: "Phosphor-Light" !important; content: "\e6b6" !important; }
+.fa-chart-line.fa-chart-line::before    { font-family: "Phosphor-Light" !important; content: "\e154" !important; }
+.fa-chart-pie.fa-chart-pie::before     { font-family: "Phosphor-Light" !important; content: "\e158" !important; }
+
+/* ----- places / weather / nature ----- */
+.fa-home.fa-home::before, .fa-house.fa-house::before { font-family: "Phosphor-Light" !important; content: "\e2c2" !important; }
+.fa-map.fa-map::before                { font-family: "Phosphor-Light" !important; content: "\e31a" !important; }
+.fa-map-marker-alt.fa-map-marker-alt::before, .fa-location-dot.fa-location-dot::before {
+    font-family: "Phosphor-Light" !important; content: "\e316" !important;
+}
+.fa-database.fa-database::before  { font-family: "Phosphor-Light" !important; content: "\e1de" !important; }
+.fa-server.fa-server::before    { font-family: "Phosphor-Light" !important; content: "\e2a0" !important; }
+.fa-cloud.fa-cloud::before     { font-family: "Phosphor-Light" !important; content: "\e1aa" !important; }
+.fa-cloud-rain.fa-cloud-rain::before{ font-family: "Phosphor-Light" !important; content: "\e1b4" !important; }
+.fa-sun.fa-sun::before       { font-family: "Phosphor-Light" !important; content: "\e472" !important; }
+.fa-moon.fa-moon::before      { font-family: "Phosphor-Light" !important; content: "\e330" !important; }
+.fa-droplet.fa-droplet::before   { font-family: "Phosphor-Light" !important; content: "\e210" !important; }
+.fa-fire.fa-fire::before      { font-family: "Phosphor-Light" !important; content: "\e242" !important; }
+.fa-snowflake.fa-snowflake::before { font-family: "Phosphor-Light" !important; content: "\e5aa" !important; }
+.fa-umbrella.fa-umbrella::before  { font-family: "Phosphor-Light" !important; content: "\e684" !important; }
+.fa-seedling.fa-seedling::before  { font-family: "Phosphor-Light" !important; content: "\ebae" !important; }
+.fa-leaf.fa-leaf::before      { font-family: "Phosphor-Light" !important; content: "\e2da" !important; }
+
+/* ----- medical / science ----- */
+.fa-microscope.fa-microscope::before  { font-family: "Phosphor-Light" !important; content: "\ec7a" !important; }
+.fa-flask.fa-flask::before       { font-family: "Phosphor-Light" !important; content: "\e79e" !important; }
+.fa-dna.fa-dna::before         { font-family: "Phosphor-Light" !important; content: "\e924" !important; }
+.fa-syringe.fa-syringe::before     { font-family: "Phosphor-Light" !important; content: "\e968" !important; }
+.fa-pills.fa-pills::before       { font-family: "Phosphor-Light" !important; content: "\e700" !important; }
+.fa-stethoscope.fa-stethoscope::before { font-family: "Phosphor-Light" !important; content: "\e7ea" !important; }
+.fa-hospital.fa-hospital::before    { font-family: "Phosphor-Light" !important; content: "\e844" !important; }
+
+/* ----- misc / time ----- */
+.fa-keyboard.fa-keyboard::before        { font-family: "Phosphor-Light" !important; content: "\e2d8" !important; }
+.fa-calendar.fa-calendar::before        { font-family: "Phosphor-Light" !important; content: "\e108" !important; }
+.fa-clock.fa-clock::before           { font-family: "Phosphor-Light" !important; content: "\e19a" !important; }
+.fa-bug.fa-bug::before             { font-family: "Phosphor-Light" !important; content: "\e5f4" !important; }
+.fa-bolt.fa-bolt::before            { font-family: "Phosphor-Light" !important; content: "\e2de" !important; }
+.fa-window-maximize.fa-window-maximize::before { font-family: "Phosphor-Light" !important; content: "\e626" !important; }
+.fa-window-restore.fa-window-restore::before  { font-family: "Phosphor-Light" !important; content: "\e1d0" !important; }
+
+/* ----- brand logos (Phosphor Light coverage is partial; unmapped brands keep FA) ----- */
+.fa-github.fa-github::before    { font-family: "Phosphor-Light" !important; content: "\e576" !important; }
+.fa-gitlab.fa-gitlab::before    { font-family: "Phosphor-Light" !important; content: "\e694" !important; }
+.fa-google.fa-google::before    { font-family: "Phosphor-Light" !important; content: "\e292" !important; }
+.fa-discord.fa-discord::before   { font-family: "Phosphor-Light" !important; content: "\e61a" !important; }
+.fa-slack.fa-slack::before     { font-family: "Phosphor-Light" !important; content: "\e5a8" !important; }
+.fa-apple.fa-apple::before     { font-family: "Phosphor-Light" !important; content: "\e516" !important; }
+.fa-linux.fa-linux::before     { font-family: "Phosphor-Light" !important; content: "\eb02" !important; }
+.fa-android.fa-android::before   { font-family: "Phosphor-Light" !important; content: "\e008" !important; }
+.fa-figma.fa-figma::before     { font-family: "Phosphor-Light" !important; content: "\e22e" !important; }
+.fa-windows.fa-windows::before   { font-family: "Phosphor-Light" !important; content: "\e692" !important; }
+.fa-x-twitter.fa-x-twitter::before { font-family: "Phosphor-Light" !important; content: "\e4bc" !important; }

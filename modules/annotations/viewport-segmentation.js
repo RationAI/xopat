@@ -1,6 +1,6 @@
 OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationState {
     constructor(context) {
-        super(context, "viewport-segmentation", "fa-border-top-left", "🆄  viewport segmentation");
+        super(context, "viewport-segmentation", "ph-bounding-box", "🆄  viewport segmentation");
         this.MagicWand = OSDAnnotations.makeMagicWand();
 
         this.annotations = [];
@@ -23,7 +23,12 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     _bindFrameWatchers(viewer) {
         if (!viewer || this._framewatchViewer === viewer) return;
         this._unbindFrameWatchers();
-        viewer.addHandler('update-viewport', this._invalidate);
+        // Settle-only invalidation. `update-viewport` fires every draw frame and
+        // would re-stamp _invalidData on each background tile-load, forcing a
+        // shader recompile on every hover. The handler's viewport-key check
+        // (handleMouseHover) catches genuine pan/zoom changes — we only need a
+        // signal for state that the key can't see (control edits → below).
+        viewer.addHandler('animation-finish', this._invalidate);
         this._framewatchViewer = viewer;
 
         // 'visualization-change' fires on control edits (slider, color, inverse,
@@ -39,7 +44,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     _unbindFrameWatchers() {
         const viewer = this._framewatchViewer;
         if (viewer) {
-            viewer.removeHandler('update-viewport', this._invalidate);
+            viewer.removeHandler('animation-finish', this._invalidate);
             this._framewatchViewer = null;
         }
         const renderer = this._framewatchRenderer;
@@ -369,18 +374,20 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
     }
 
     _getPixelAlpha(point) {
+        // imageToViewerElementCoordinates returns CSS px (viewer-element space);
+        // this.data is sized in device px (viewer.drawer.canvas.width/height). Scale
+        // to device px before indexing — without this, Hi-DPI displays sample the
+        // upper-fraction of the buffer for a cursor at the visual middle (the bug
+        // that caused hovers over the heatmap to read as transparent).
         const windowPoint = this._tiRef.imageToViewerElementCoordinates(new OpenSeadragon.Point(point.x, point.y));
 
-        const outOfBounds =
-            windowPoint.x < this.contentSize.x ||
-            windowPoint.y < this.contentSize.y ||
-            windowPoint.x > this.contentSize.x + this.contentSize.w ||
-            windowPoint.y > this.contentSize.y + this.contentSize.h;
+        const cx = (windowPoint.x - this.contentSize.x) * this.ratio;
+        const cy = (windowPoint.y - this.contentSize.y) * this.ratio;
 
-        if (outOfBounds) return 0;
+        if (cx < 0 || cy < 0 || cx >= this.data.width || cy >= this.data.height) return 0;
 
-        const canvasX = Math.floor(windowPoint.x - this.contentSize.x);
-        const canvasY = Math.floor(windowPoint.y - this.contentSize.y);
+        const canvasX = Math.floor(cx);
+        const canvasY = Math.floor(cy);
         const pixelIndex = (canvasY * this.data.width + canvasX) * 4;
 
         return this.data.data[pixelIndex + 3] > 10;

@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const crossSpawn = require("cross-spawn");
 const inquirer = require("inquirer");
 const prompt = inquirer.createPromptModule();
 
@@ -12,7 +12,7 @@ function writeFile(p, s) { fs.writeFileSync(p, s); }
 
 function spawnAsync(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn(cmd, args, { stdio: "inherit", shell: process.platform === "win32", ...opts });
+        const child = crossSpawn(cmd, args, { stdio: "inherit", ...opts });
         child.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`)));
         child.on("error", reject);
     });

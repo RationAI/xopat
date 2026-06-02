@@ -63,7 +63,7 @@ function inferCapabilitiesFromModelItem(item: any): ModelCapabilities {
     };
 }
 
-function buildCeritProviderType(input: {
+function buildOpenAICompatibleProviderType(input: {
     id: string;
     label: string;
     description?: string;
@@ -78,7 +78,7 @@ function buildCeritProviderType(input: {
     return {
         id: input.id,
         label: input.label,
-        description: input.description || "CERIT OpenAI-compatible endpoint",
+        description: input.description || "OpenAI-compatible endpoint",
         adapter: "openai-compatible",
         supportsUploads: true,
         supportsFiles: false,
@@ -108,7 +108,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         throw new Error("XOPAT_SERVER helpers are not available.");
     }
 
-    const pluginId = ctx?.itemId || "chat-cerit-io";
+    const pluginId = ctx?.itemId || "chat-openai-compatible";
     const secure = XS.getSecurePluginConfig(ctx, pluginId);
     const defaults = secure?.providerDefaults || {};
 
@@ -117,13 +117,14 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         "module:vercel-ai-chat-sdk/server/providerRegistration.server.ts",
         "ensureManagedPluginProvider"
     );
+    const { safeFetch, validateUpstreamUrl } = XS;
 
-    const typeId = pick(defaults.id, input.typeId, "cerit-openai")!;
-    const label = pick(defaults.label, input.label, "CERIT")!;
+    const typeId = pick(defaults.id, input.typeId, "openai-compatible")!;
+    const label = pick(defaults.label, input.label, "OpenAI-compatible")!;
     const description = pick(
         defaults.description,
         input.description,
-        "CERIT OpenAI-compatible endpoint"
+        "OpenAI-compatible endpoint"
     )!;
     const contextId = pick(defaults.contextId, input.contextId, "jwt")!;
     const authType = pick(defaults.authType, input.authType, "jwt")!;
@@ -133,7 +134,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
     const defaultModelId = pick(defaults.defaultModelId, input.defaultModelId, "")!;
     const apiKey = pick(defaults.apiKey, input.apiKey, "")!;
 
-    const providerType = buildCeritProviderType({
+    const providerType = buildOpenAICompatibleProviderType({
         id: typeId,
         label,
         description,
@@ -178,7 +179,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                 const modelsPath = String(config.modelsPath || "/models");
                 const url = resolveEndpointUrl(baseURL, modelsPath);
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
-                const res = await fetch(url, { method: "GET", headers, signal: ctx?.signal });
+                const res = await safeFetch(url, { method: "GET", headers, signal: ctx?.signal });
                 if (!res.ok) throw new Error(`Model discovery failed: ${res.status} ${res.statusText}`);
                 const json = await res.json();
                 const data = Array.isArray(json?.data) ? json.data : [];
@@ -196,9 +197,12 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                     };
                 });
             },
-            resolveModel({ instance, modelId, config, secrets }: any) {
+            async resolveModel({ instance, modelId, config, secrets }: any) {
                 const baseURL = String(config.baseUrl || config.baseURL || "").trim();
                 if (!baseURL) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
+                // Vet the baseURL before handing it to the SDK; see the
+                // analogous note in chat-anthropic for the reasoning.
+                await validateUpstreamUrl(baseURL);
                 const apiKey = typeof secrets.apiKey === "string" && secrets.apiKey ? String(secrets.apiKey) : undefined;
                 const headers = buildOpenAICompatibleHeaders(config, secrets);
                 return createOpenAICompatible({ name: instance.id, baseURL, apiKey, headers })(modelId);

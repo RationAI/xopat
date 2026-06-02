@@ -66,6 +66,7 @@
     "chokidar": "^4.0.3",
     "comment-json": "^4.2.3",
     "cross-env": "^7.0.3",
+    "cross-spawn": "^7.0.6",
     "cssnano": "^7.1.1",
     "cypress": "^15.11.0",
     "cypress-real-events": "^1.7.1",

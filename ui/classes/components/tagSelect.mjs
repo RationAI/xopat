@@ -49,7 +49,7 @@ export class TagSelect extends BaseComponent {
                 e.stopPropagation();
                 this.toggleOpen();
             }
-        }, span({ class: "fa-auto fa-chevron-down text-xs" }));
+        }, span({ class: "ph-light ph-caret-down text-xs" }));
 
         this.refs.control = button({
             type: "button",

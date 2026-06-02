@@ -115,7 +115,7 @@ class MultiPanelMenu extends Menu {
 
 ui = globalThis.UI;
 
-const settingsIcon = new ui.FAIcon({name: "fa-gear"});
+const settingsIcon = new ui.PhIcon({name: "ph-gear"});
 
 window["workspaceItem"] = new ui.MultiPanelMenu({
     id: "myMenu",

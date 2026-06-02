@@ -83,6 +83,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
         "module:vercel-ai-chat-sdk/server/providerRegistration.server.ts",
         "ensureManagedPluginProvider"
     );
+    const { safeFetch, validateUpstreamUrl } = XS;
 
     const typeId = pick(defaults.id, input.typeId, "anthropic-claude")!;
     const label = pick(defaults.label, input.label, "Anthropic")!;
@@ -161,7 +162,7 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                     }
                 }
                 const url = resolveEndpointUrl(resolvedBaseUrl, resolvedModelsPath);
-                const res = await fetch(url, {
+                const res = await safeFetch(url, {
                     method: "GET",
                     headers,
                     signal: ctx?.signal,
@@ -189,9 +190,14 @@ export async function ensureChatProviderRegistered(ctx: any, input: any = {}) {
                     }))
                     .filter((item: any) => item.id);
             },
-            resolveModel({ instance, modelId, config, secrets }: any) {
+            async resolveModel({ instance, modelId, config, secrets }: any) {
                 const resolvedBaseUrl = String(config.baseUrl || "https://api.anthropic.com/v1").trim();
                 if (!resolvedBaseUrl) throw new Error(`Provider '${instance.label}' is missing baseUrl.`);
+                // Vet the baseUrl before handing it to the SDK; the SDK does
+                // its own fetching afterwards, so this is the only chance to
+                // block the obvious SSRF (private IP / localhost / metadata
+                // endpoint). The SDK's internal redirects remain trusted.
+                await validateUpstreamUrl(resolvedBaseUrl);
                 const resolvedVersion = typeof config.anthropicVersion === "string" && config.anthropicVersion
                     ? String(config.anthropicVersion)
                     : "2023-06-01";

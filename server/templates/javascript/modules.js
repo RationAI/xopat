@@ -1,11 +1,22 @@
 const {parse} = require("comment-json");
-const {safeScanDir, expandIncludeGlobs} = require("./utils");
+const {
+    safeScanDir,
+    expandIncludeGlobs,
+    resolvePluginSelectionMode,
+    requiredConfigSatisfied
+} = require("./utils");
 
 module.exports.loadModules = function(core, fileExists, readFile, i18n) {
 
     const isType = core.isType;
     const MODULES = core.MODULES,
         ENV = core.ENV;
+
+    // Modules only participate in the "available" config-gate. The "whitelist"
+    // mode is a plugin concept (modules are infrastructure dependencies pulled
+    // in by plugins; dropping a required module surfaces as a plugin-level
+    // missing-dep error via the existing dependency check).
+    const pluginSelectionMode = resolvePluginSelectionMode(core);
 
     let modulePaths = safeScanDir(core.ABS_MODULES);
 
@@ -53,6 +64,26 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                 data["description"] = data["description"] || packageData["description"];
             }
 
+            // Author server manifest (server.json) — see plugins.js for
+            // semantics. Mirrors `requiredConfig` hoist + author-secure stash
+            // for modules.
+            const serverManifestPath = fullPath + "server.json";
+            if (fileExists(serverManifestPath)) {
+                const serverManifest = parse(readFile(serverManifestPath));
+                if (serverManifest && typeof serverManifest === "object") {
+                    data = data || {};
+                    if (Array.isArray(serverManifest.requiredConfig)) {
+                        const existing = Array.isArray(data.requiredConfig) ? data.requiredConfig : [];
+                        data.requiredConfig = [...new Set([...existing, ...serverManifest.requiredConfig])];
+                    }
+                    const { requiredConfig: _drop, ...authorSecure } = serverManifest;
+                    if (Object.keys(authorSecure).length && data.id) {
+                        if (!core.CORE_AUTHOR_SECURE) core.CORE_AUTHOR_SECURE = { plugins: {}, modules: {} };
+                        core.CORE_AUTHOR_SECURE.modules[data.id] = authorSecure;
+                    }
+                }
+            }
+
             if (data) {
                 data["directory"] = dir;
                 data["path"] = `${core.MODULES_FOLDER}${dir}/`;
@@ -63,13 +94,24 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     data["styleSheet"] = data["path"] + "style.css";
                 }
 
+                // Pre-merge ENV + preserved server-secure module blocks feed
+                // the "available" gate. The secure block is read from the
+                // pre-strip backup `core.CORE_SECURE` (set by core.js).
+                let envBlock = {};
+                let secBlock = {};
                 try {
                     if (isType(ENV, "object")) {
                         if (!isType(ENV["modules"], "object")) ENV["modules"] = {};
                         const ENV_MOD = ENV["modules"];
 
                         if (isType(ENV_MOD[data["id"]], "object")) {
-                            data = core.objectMergeRecursiveDistinct(data, ENV_MOD[data["id"]]);
+                            envBlock = ENV_MOD[data["id"]];
+                            data = core.objectMergeRecursiveDistinct(data, envBlock);
+                        }
+
+                        const secureModules = core?.CORE_SECURE?.modules;
+                        if (secureModules && isType(secureModules[data["id"]], "object")) {
+                            secBlock = secureModules[data["id"]];
                         }
 
                         if (core.parseBool(data["permaLoad"]) === true) {
@@ -85,7 +127,10 @@ module.exports.loadModules = function(core, fileExists, readFile, i18n) {
                     console.error(e);
                 }
 
-                if (core.parseBool(data["enabled"]) !== false) {
+                const enabledNotFalse = core.parseBool(data["enabled"]) !== false;
+                const configSatisfied = pluginSelectionMode !== "available"
+                    || requiredConfigSatisfied(data["requiredConfig"], envBlock, secBlock);
+                if (enabledNotFalse && configSatisfied) {
                     MODULES[data["id"]] = data;
                 }
             }

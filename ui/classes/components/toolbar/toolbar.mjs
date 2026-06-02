@@ -2,7 +2,7 @@
 import { ToolbarGroup } from "./toolbarGroup.mjs";
 import { BaseComponent } from "../../baseComponent.mjs";
 import { Div } from "../../elements/div.mjs";
-import { FAIcon } from "../../elements/fa-icon.mjs";
+import { iconComponentFor } from "../../elements/ph-icon.mjs";
 import { Button } from "../../elements/buttons.mjs";
 import van from "../../../vanjs.mjs";
 
@@ -96,8 +96,8 @@ class Toolbar extends BaseComponent {
         USER_INTERFACE.AppBar.View.registerViewComponent('toolbarMenu',
             {
                 id: this.id,
-                icon: "fa-gear",
-                title: this.id, // todo name!!!!
+                icon: this._embeddedIcon || undefined,
+                title: this._embeddedTitle || this.id,
                 visibilityManager: this.visibility
             }
         );
@@ -127,7 +127,7 @@ class Toolbar extends BaseComponent {
         const inText  = item.title;
         const inIcon  = item.icon instanceof BaseComponent
             ? item.icon
-            : new FAIcon({ name: item.icon });
+            : iconComponentFor(item.icon);
 
         const action = item.onClick || (() => {});
 
@@ -208,14 +208,16 @@ class Toolbar extends BaseComponent {
                     i({ class: "fa-solid fa-grip-lines text-base-content" })
                 ),
 
-                // --- Close Button (Commented Out) ---
-                /*
+                // Small close button next to the handle. Guarded by a confirm
+                // dialog so a stray click can't dismiss a busy toolbar; the user
+                // can reopen it from the AppBar → View dropdown.
                 div({
-                    class: "toolbar-hide badge badge-soft badge-secondary pointer-events-auto self-center text-xs mb-1",
-                    style: "width: min(45px, 90%);",
-                    onclick: () => this.visibility.set(false)
-                }, i({ class: "fa-auto fa-xmark" }))
-                */
+                        class: "toolbar-close pointer-events-auto self-center ml-1 px-1.5 py-0.5 my-1 rounded-md bg-base-200/80 text-base-content border border-base-300 shadow cursor-pointer hover:bg-error/20 hover:text-error text-xs leading-none",
+                        title: $.t("toolbar.hide"),
+                        onclick: () => this._requestClose(),
+                    },
+                    i({ class: "fa-solid fa-xmark" })
+                )
             ),
             div({ "data-toolbar-root": "", class: "pointer-events-auto glass p-1 rounded-md" }, this.body.create())
         );
@@ -308,7 +310,7 @@ class Toolbar extends BaseComponent {
         return {
             id: this.id,
             title: this._embeddedTitle || firstHeader?.extraProperties?.title?.val || this.id,
-            icon: this._embeddedIcon || 'fa-wrench'
+            icon: this._embeddedIcon || 'ph-wrench'
         };
     }
 
@@ -362,6 +364,7 @@ class Toolbar extends BaseComponent {
         const spacer = root.querySelector(".spacer");
         spacer?.classList.add("hidden");
         root.querySelector(".handle")?.classList.add("hidden");
+        root.querySelector(".toolbar-close")?.classList.add("hidden");
 
         wrap.classList.remove("w-10", "h-10", "w-full", "h-full", "flex-col", "flex-col-reverse");
         wrap.classList.add("flex", "flex-row", "items-center", "max-w-full");
@@ -381,6 +384,7 @@ class Toolbar extends BaseComponent {
         const spacer = root.querySelector(".spacer");
         spacer?.classList.remove("hidden");
         root.querySelector(".handle")?.classList.remove("hidden");
+        root.querySelector(".toolbar-close")?.classList.remove("hidden");
 
         wrap.classList.remove("max-w-full");
     }
@@ -437,6 +441,15 @@ class Toolbar extends BaseComponent {
 
     
     isVisible() { return !this._outerEl.classList.contains("display-none"); }
+
+    async _requestClose() {
+        const ok = await UI.Modal.confirm({
+            header: $.t("toolbar.hide"),
+            body: $.t("toolbar.confirmHide"),
+            confirmLabel: $.t("toolbar.hide"),
+        });
+        if (ok) this.visibility.set(false);
+    }
     
     // _toggle_body() {
     //     if (this.body.classMap.display === "display-none") {
@@ -622,11 +635,13 @@ class Toolbar extends BaseComponent {
         if (isCompact) {
             this.setClass("mobile", "mobile");
             root.querySelector(".handle")?.classList.add("hidden");
+            root.querySelector(".toolbar-close")?.classList.add("hidden");
             this._applyEmbeddedStyles();
             this._setOrientation("horizontal", true);
         } else {
             this.setClass("mobile", "");
             root.querySelector(".handle")?.classList.remove("hidden");
+            root.querySelector(".toolbar-close")?.classList.remove("hidden");
             this._applyFloatingStyles();
             this._ensureFloatingRegistration();
             this._updateOrientationFromPosition(true);

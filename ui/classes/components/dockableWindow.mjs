@@ -13,7 +13,7 @@ const { div } = van.tags;
  * @typedef {Object} DockableWindowOptions
  * @property {string} [id] - ID for the window (also used for cache keys).
  * @property {string} [title="Window"] - Window / tab title.
- * @property {string} [icon="fa-window-maximize"] - Icon for the MainLayout tab.
+ * @property {string} [icon="ph-frame-corners"] - Icon for the MainLayout tab.
  * @property {DockableWindowMode} [defaultMode="floating"]
  *   Initial mode when nothing is stored in cache.
  * @property {string} [modeCacheKey] - Custom key for persisting mode in AppCache.
@@ -45,7 +45,7 @@ const { div } = van.tags;
  * const commentsWindow = new UI.DockableWindow({
  *   id: "annotation-comments",
  *   title: "Comments",
- *   icon: "fa-comment",
+ *   icon: "ph-chat",
  *   defaultMode: "floating", // or "tab"
  *   floating: {
  *     width: 360,
@@ -69,7 +69,7 @@ class DockableWindow extends BaseComponent {
         options = super(options, ...bodyChildren).options;
 
         this.title = options.title ?? "Window";
-        this.icon = options.icon ?? "fa-window-maximize";
+        this.icon = options.icon ?? "ph-frame-corners";
 
         // ---- mode & cache ----
         this._modeKey = options.modeCacheKey || `${this.id}:mode`;
@@ -310,7 +310,7 @@ class DockableWindow extends BaseComponent {
         return {
             id: this._tabId,
             title: this._tabTitle || this.title || this._tabId,
-            icon: this._tabIcon || this.icon || "fa-window-maximize",
+            icon: this._tabIcon || this.icon || "ph-frame-corners",
             visibilityManager: {
                 is: () => this.visibilityManager.is(),
                 set: next => {
@@ -431,7 +431,7 @@ ui = globalThis.UI;
 const win = new ui.DockableWindow({
     id: "example-dockable",
     title: "Example panel",
-    icon: "fa-circle-info",
+    icon: "ph-info",
     defaultMode: "tab",
     floating: { width: 420, height: 260 }
 }, new ui.RawHtml({}, "<div class='p-2'>Hello from dockable window</div>"));

@@ -136,11 +136,11 @@
             var props = this.sizeAndTextRenderer(this.currentResolution(), this.minWidth);
             this.drawScalebar(props.size, props.text);
             var location = this.getScalebarLocation();
-            this.scalebarContainer.style.left = location.x + "px";
+            this.scalebarContainer.style.left = (location.x + 5) + "px";
             this.scalebarContainer.style.top = location.y + "px";
             //todo location works only for bottom, also setting position each time is not efficient (could use align / float)
             if (this.magnificationContainer) {
-                this.magnificationContainer.style.left = location.x + 20 + "px";
+                this.magnificationContainer.style.left = (location.x + 10) + "px";
                 const h = this.magnificationContainer.offsetHeight || this.magnificationContainerHeight || 0;
                 this.magnificationContainer.style.top = (location.y - h - 12) + "px";
             }
@@ -232,7 +232,11 @@
                     rotSliderEl: null,
                     magSliderEl: null,
                     onRotate: null,
-                    onZoom: null
+                    onZoom: null,
+                    collapsed: false,
+                    collapsibles: [],
+                    labelEl: null,
+                    labelObjectUrl: null
                 };
                 this._originalClassTarget = noUiSlider.cssClasses.target;
             }
@@ -241,8 +245,13 @@
                 this._active = true;
                 if (!this.scalebarContainer) {
                     this.scalebarContainer = document.createElement("div");
+                    // z-[1] establishes a local stacking context so the
+                    // scalebar (and anything elevated inside it) cannot rise
+                    // above sibling viewer chrome like `.right-side-menu`
+                    // (z-index: 3).
                     this.scalebarContainer.classList.add(
                         "absolute",
+                        "z-[1]",
                         "m-0",
                         "pointer-events-none",
                         "select-none",
@@ -275,8 +284,15 @@
 
                         this.magnificationContainer = document.createElement("div");
                         this.magnificationContainer.id = this.id + "-magnification";
+                        // z-[1] both ranks the panel below sibling viewer
+                        // chrome (`.right-side-menu` is z-index: 3) and
+                        // establishes a stacking context that traps the
+                        // sync-header's `z-index: 3` and the slide-label's
+                        // hover `z-index: 40` so they cannot leak out into
+                        // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
                             "absolute",
+                            "z-[1]",
                             "m-0",
                             "text-base-content",
                             "flex",
@@ -292,12 +308,13 @@
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "auto";
 
-                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
-                        this.magnificationContainer.appendChild(sync);
+                        this._ui.collapsibles = [];
+                        addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         // --- SECTION A: ROTATION CONTROL (HOME PIP + 5 PIPS, NO BUTTONS) ---
                         const rotCol = document.createElement("div");
                         rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        this._ui.collapsibles.push(rotCol);
 
                         const rotReadout = document.createElement("div");
                         rotReadout.className =
@@ -469,6 +486,7 @@
                         this._ui.magSliderEl = sliderContainer;
                         const magCol = document.createElement("div");
                         magCol.className = "flex flex-col items-center pb-2 pr-4";
+                        this._ui.collapsibles.push(magCol);
 
                         const magInput = document.createElement("input");
                         magInput.type = "number";
@@ -690,8 +708,15 @@
 
                         this.magnificationContainer = document.createElement("div");
                         this.magnificationContainer.id = this.id + "-magnification";
+                        // z-[1] both ranks the panel below sibling viewer
+                        // chrome (`.right-side-menu` is z-index: 3) and
+                        // establishes a stacking context that traps the
+                        // sync-header's `z-index: 3` and the slide-label's
+                        // hover `z-index: 40` so they cannot leak out into
+                        // the parent stacking context and overlap menus.
                         this.magnificationContainer.classList.add(
                             "absolute",
+                            "z-[1]",
                             "m-0",
                             "text-base-content",
                             "flex",
@@ -706,11 +731,12 @@
                         this.magnificationContainer.style.height = `${this.magnificationContainerHeight}px`;
                         this.magnificationContainer.style.width = "auto";
 
-                        const sync = SyncToggleButton(this.viewer, this.ViewportSyncAPI);
-                        this.magnificationContainer.appendChild(sync);
+                        this._ui.collapsibles = [];
+                        addSyncMenuChrome(this, this.viewer, this.ViewportSyncAPI, this.magnificationContainer);
 
                         const rotCol = document.createElement("div");
                         rotCol.className = "flex flex-col items-center pb-2 pl-5";
+                        this._ui.collapsibles.push(rotCol);
 
                         const rotReadout = document.createElement("div");
                         rotReadout.className =
@@ -824,6 +850,7 @@
                         this._ui.magSliderEl = sliderContainer;
                         const magCol = document.createElement("div");
                         magCol.className = "flex flex-col items-center pb-2 pr-4";
+                        this._ui.collapsibles.push(magCol);
 
                         const levelReadout = document.createElement("input");
                         levelReadout.type = "text";
@@ -988,13 +1015,22 @@
 
                 this.magnificationContainer = null;
 
+                if (this._ui?.labelObjectUrl) {
+                    try { URL.revokeObjectURL(this._ui.labelObjectUrl); } catch {}
+                }
+
                 // Reset UI state
                 this._ui = {
                     rotSliderEl: null,
                     magSliderEl: null,
                     onRotate: null,
-                    onZoom: null
+                    onZoom: null,
+                    collapsed: false,
+                    collapsibles: [],
+                    labelEl: null,
+                    labelObjectUrl: null
                 };
+                this._applyCollapsed = null;
             }
         },
 
@@ -1541,15 +1577,14 @@
         return van.tags.button(
             {
                 class: () => [
-                    "btn btn-xs border-none absolute px-1",
+                    "btn btn-xs border-none px-1",
                     enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
                 ].join(" "),
                 onclick: onClick,
-                title: () => (enabled.val ? "Disable sync" : "Enable sync"),
-                style: "left: -10px; top: -15px;"
+                title: () => (enabled.val ? "Disable sync" : "Enable sync")
             },
             // Use a simple Link icon or text abbreviation
-            van.tags.span({ class: "text-[10px] font-bold" },
+            van.tags.span({ class: "font-bold", style: "font-size:10px;line-height:1" },
                 () => {
                     if (busy.val) return "...";
                     if (!enabled.val) return "LINK";
@@ -1557,6 +1592,244 @@
                 }
             )
         );
+    }
+
+    /**
+     * Render any of the documented `ImageLike` shapes returned by
+     * `TileSource.getLabel()` / `getThumbnail()` into `container`.
+     * Returns `{node, objectUrl}` (objectUrl is non-null when we created one
+     * from a Blob and must be revoked later), or null if `src` is unrenderable.
+     */
+    function renderImageLikeInto(container, src) {
+        let objectUrl = null;
+        let node = null;
+        if (typeof src === "string") {
+            node = document.createElement("img");
+            node.src = src;
+        } else if (src instanceof Blob) {
+            objectUrl = URL.createObjectURL(src);
+            node = document.createElement("img");
+            node.src = objectUrl;
+        } else if (typeof HTMLImageElement !== "undefined" && src instanceof HTMLImageElement) {
+            node = src.cloneNode(true);
+        } else if (typeof HTMLCanvasElement !== "undefined" && src instanceof HTMLCanvasElement) {
+            node = src;
+        } else if (src && src.canvas instanceof HTMLCanvasElement) {
+            node = src.canvas;
+        } else {
+            return null;
+        }
+        if (node.tagName === "IMG") {
+            node.alt = "Slide label";
+            node.loading = "lazy";
+        }
+        node.style.maxWidth = "100%";
+        node.style.maxHeight = "100%";
+        node.style.display = "block";
+        container.innerHTML = "";
+        container.appendChild(node);
+        return { node, objectUrl };
+    }
+
+    /**
+     * Mount the SYNC button, reset button, collapse toggle and slide-label
+     * onto the magnification panel. The caller is responsible for pushing
+     * the actual collapsible columns (`rotCol`, `magCol`) onto
+     * `scalebar._ui.collapsibles` after they are constructed.
+     */
+    function addSyncMenuChrome(scalebar, viewer, tool, magnificationContainer) {
+        scalebar._ui.collapsibles = scalebar._ui.collapsibles || [];
+
+        // Single inline strip that hangs off the top of the magnification
+        // panel. Items spread across the full width with justify-between:
+        // [▾]    [SYNC]    [✕]    [LABEL]
+        const header = document.createElement("div");
+        header.className = "absolute flex flex-row items-center justify-between gap-2";
+        header.style.left = "-10px";
+        header.style.top = "-15px";
+        header.style.right = "-10px";
+        header.style.zIndex = "3";
+        magnificationContainer.appendChild(header);
+        scalebar._ui.header = header;
+
+        // 1) Collapse / expand chevron — leftmost.
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn btn-xs border-none px-1 bg-base-content/10 hover:bg-base-content/20";
+        toggle.title = "Minimize";
+        toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
+        header.appendChild(toggle);
+
+        // 2) SYNC button.
+        const sync = SyncToggleButton(viewer, tool);
+        header.appendChild(sync);
+
+        // 3) Clear-sync (✕). Hidden unless a session is calibrated.
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.className = "btn btn-xs text-error border-none px-1";
+        reset.title = "Reset this viewer's alignment (Shift+click: clear whole sync session)";
+        reset.innerHTML = '<span class="font-bold leading-none" style="font-size:10px">✕</span>';
+        reset.style.display = "none";
+
+        const updateResetVisibility = () => {
+            const S = tool?.constructor?._session;
+            const shouldShow = !!(S && S.leaderId) && !scalebar._ui.collapsed;
+            reset.style.display = shouldShow ? "" : "none";
+        };
+
+        reset.addEventListener("click", async (e) => {
+            if (!tool) return;
+            try {
+                if (e.shiftKey) {
+                    tool.resetSession();
+                    Dialogs?.show?.("Sync session cleared", 1400, Dialogs.MSG_INFO);
+                } else {
+                    tool.resetViewer();
+                    Dialogs?.show?.("Re-calibrating this viewer", 1200, Dialogs.MSG_INFO);
+                    await tool.enable();
+                }
+            } catch (err) {
+                console.error(err);
+                Dialogs?.show?.("Reset failed", 1400, Dialogs.MSG_WARN);
+            } finally {
+                updateResetVisibility();
+            }
+        });
+        header.appendChild(reset);
+
+        // Chain into the existing __syncToolChanged hook set by SyncToggleButton.
+        const prev = viewer.__syncToolChanged;
+        viewer.__syncToolChanged = () => {
+            prev?.();
+            updateResetVisibility();
+        };
+        updateResetVisibility();
+
+        // 4) Label thumbnail — pushed to the right with margin-left:auto.
+        const LABEL_BOX = { width: "56px", height: "26px" };
+        const LABEL_SCALE_HOVER = 4.5;
+
+        const labelEl = document.createElement("div");
+        labelEl.className = "rounded-md bg-base-200 overflow-hidden flex items-center justify-center cursor-zoom-in";
+        labelEl.style.width = LABEL_BOX.width;
+        labelEl.style.height = LABEL_BOX.height;
+        labelEl.style.flex = "0 0 auto";
+        labelEl.style.transformOrigin = "left center";
+        labelEl.style.transition = "transform 0.18s ease";
+        labelEl.style.display = "none";
+        labelEl.title = "Slide label (hover to enlarge)";
+        header.appendChild(labelEl);
+        scalebar._ui.labelEl = labelEl;
+
+        labelEl.addEventListener("mouseenter", () => {
+            if (scalebar._ui.collapsed) return;
+            if (labelEl.style.pointerEvents === "none") return;
+            labelEl.style.transform = `scale(${LABEL_SCALE_HOVER})`;
+            labelEl.style.position = "relative";
+            labelEl.style.zIndex = "40";
+        });
+        labelEl.addEventListener("mouseleave", () => {
+            labelEl.style.transform = "";
+            labelEl.style.position = "";
+            labelEl.style.zIndex = "";
+        });
+
+        const showLabelPlaceholder = () => {
+            if (scalebar._ui?.labelEl !== labelEl) return;
+            labelEl.innerHTML = "";
+            labelEl.classList.remove("cursor-zoom-in");
+            labelEl.classList.add(
+                "border", "border-dashed", "border-base-content/30"
+            );
+            labelEl.style.cursor = "default";
+            labelEl.style.pointerEvents = "none";
+            const span = document.createElement("span");
+            span.className = "italic text-base-content/60 whitespace-nowrap px-1";
+            span.style.fontSize = "9px";
+            span.style.lineHeight = "1";
+            span.textContent = "no label";
+            labelEl.appendChild(span);
+            labelEl.title = "No slide label available";
+            if (!scalebar._ui.collapsed) labelEl.style.display = "";
+            scalebar.refreshHandler?.();
+        };
+
+        const tile = scalebar.getReferencedTiledImage?.() || viewer.world.getItemAt(0);
+        const getLabel = tile?.source?.getLabel;
+        if (typeof getLabel === "function") {
+            Promise.resolve(getLabel.call(tile.source)).then((res) => {
+                if (scalebar._ui?.labelEl !== labelEl) return;
+                if (!res) { showLabelPlaceholder(); return; }
+                const rendered = renderImageLikeInto(labelEl, res);
+                if (!rendered) { showLabelPlaceholder(); return; }
+                if (rendered.node && rendered.node.tagName === "IMG") {
+                    rendered.node.addEventListener("error", () => {
+                        if (rendered.objectUrl) {
+                            try { URL.revokeObjectURL(rendered.objectUrl); } catch {}
+                            scalebar._ui.labelObjectUrl = null;
+                        }
+                        showLabelPlaceholder();
+                    });
+                }
+                scalebar._ui.labelObjectUrl = rendered.objectUrl || null;
+                if (!scalebar._ui.collapsed) labelEl.style.display = "";
+                scalebar.refreshHandler?.();
+            }).catch(() => { showLabelPlaceholder(); });
+        } else {
+            showLabelPlaceholder();
+        }
+
+        scalebar._ui.collapsed = !!scalebar._ui.collapsed;
+
+        scalebar._applyCollapsed = () => {
+            const c = !!scalebar._ui.collapsed;
+            for (const el of scalebar._ui.collapsibles) {
+                if (el) el.style.display = c ? "none" : "";
+            }
+            // Cancel any in-flight hover-scale on the label.
+            labelEl.style.transform = "";
+            labelEl.style.position = "";
+            labelEl.style.zIndex = "";
+            // Collapsed mode hides everything except the chevron + SYNC.
+            labelEl.style.display = c ? "none" : "";
+            updateResetVisibility();
+            if (c) {
+                // The header flows as a normal child of the container so the
+                // container collapses to the header's natural height. The
+                // scalebar's refreshHandler then drops it just above the bar.
+                header.style.position = "relative";
+                header.style.left = "";
+                header.style.top = "";
+                header.style.right = "";
+                magnificationContainer.classList.remove("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
+                magnificationContainer.classList.add("items-center");
+                magnificationContainer.style.height = "auto";
+                magnificationContainer.style.background = "transparent";
+                toggle.title = "Expand";
+                toggle.firstChild.textContent = "▴";
+            } else {
+                // Expanded: header floats above the panel top-edge again.
+                header.style.position = "absolute";
+                header.style.left = "-10px";
+                header.style.top = "-15px";
+                header.style.right = "-10px";
+                magnificationContainer.classList.add("pt-2", "bg-base-200", "rounded-lg", "items-stretch");
+                magnificationContainer.classList.remove("items-center");
+                magnificationContainer.style.height = `${scalebar.magnificationContainerHeight}px`;
+                magnificationContainer.style.background = "";
+                toggle.title = "Minimize";
+                toggle.firstChild.textContent = "▾";
+            }
+            scalebar.refreshHandler?.();
+        };
+
+        toggle.addEventListener("click", () => {
+            scalebar._ui.collapsed = !scalebar._ui.collapsed;
+            scalebar._applyCollapsed();
+        });
+
+        if (scalebar._ui.collapsed) scalebar._applyCollapsed();
     }
 
     class ViewportSyncAPI {
@@ -1704,6 +1977,55 @@
             const S = this._getSession();
 
             this.master.tools?.unlink?.(S.context);
+            this.enabled = false;
+            this.master.__syncToolChanged?.();
+        }
+
+        /**
+         * Drop this viewer's calibration so the next `enable()` re-runs the
+         * 3-point picker against the existing leader. If this viewer IS the
+         * leader, the orphaned target transforms can no longer be resolved,
+         * so the whole session is reset instead.
+         */
+        resetViewer(viewerId = this.master.uniqueId) {
+            const S = this._getSession();
+            if (S.leaderId === viewerId) {
+                this.resetSession();
+                return;
+            }
+            delete S.transforms?.[viewerId];
+            delete S.flipParity?.[viewerId];
+            this.transforms.delete(viewerId);
+            this.points.delete(viewerId);
+
+            if (this.enabled) {
+                this.master.tools?.unlink?.(S.context);
+                this.enabled = false;
+            }
+            this.master.__syncToolChanged?.();
+        }
+
+        /**
+         * Wipe the shared sync session entirely: leader, leader points, all
+         * per-viewer transforms and flip parity. Every linked peer is unlinked
+         * and reverts to LINK state.
+         */
+        resetSession() {
+            const S = this._getSession();
+            const peers = this._getLinkedPeers();
+            for (const v of peers) {
+                v?.tools?.unlink?.(S.context);
+                const peerApi = v?.scalebar?.ViewportSyncAPI;
+                if (peerApi) {
+                    peerApi.enabled = false;
+                    peerApi.transforms.clear();
+                    peerApi.points.clear();
+                }
+                v?.__syncToolChanged?.();
+            }
+            ViewportSyncAPI._session = null;
+            this.transforms.clear();
+            this.points.clear();
             this.enabled = false;
             this.master.__syncToolChanged?.();
         }

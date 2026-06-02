@@ -183,28 +183,56 @@ auth: {
 ### Meaning
 `public: false`
 
-The method is protected and may trigger configured RPC verifiers.
+The method is protected. The server consults the session, the RPC verifier
+context, or both — see the decision matrix below.
 
 `public: true`
 
-The method is public and skips configured RPC verifier checks.
+The method is public and skips both session and verifier checks. Anyone who
+can reach the endpoint can call the method.
 
 `requireSession: true`
 
-A normal xOpat session is required.
+A normal xOpat session is required. The request must carry a valid session
+cookie and a matching `X-XOPAT-CSRF` header.
 
 `requireSession: false`
 
-No session is required. This is allowed, but the server should warn in logs.
+No session is required. The server logs a one-shot warning when an endpoint
+opts out. Because no session implies no CSRF, you must pair this with an RPC
+verifier — see the matrix.
 
-### Extending default auth: RPC verifier configuration
+### Decision matrix (server-side)
 
-RPC verifiers are configured under `server.secure.rpcAuth`:
-```
+For each call the runtime evaluates `auth.public`, `requireSession`, and the
+resolved verifier context. The outcome:
+
+| `public` | `requireSession` | Verifier context | Verifier entries | Result |
+|---|---|---|---|---|
+| `true` | — | — | — | Accepted (no checks) |
+| `false` | `true`  | any                  | any   | Session + CSRF (+ verifier if present); all must pass |
+| `false` | `false` | has `verifiers`      | ≥ 1   | Verifier only (e.g. raw JWT calls) |
+| `false` | `false` | `{ enabled: false }` | —     | Accepted — explicit operator opt-out |
+| `false` | `false` | empty `{}` / missing | —     | **Rejected** — `RPC_AUTH_NO_VERIFIERS` / `RPC_AUTH_NOT_CONFIGURED` |
+
+The last row is the fail-closed default. The bypass class was: an endpoint
+opting out of session (`requireSession: false`) plus an empty or absent
+`rpcVerifiers` entry would silently pass. **Fail-closed is now the default.**
+The operator opts back in *explicitly* by setting `enabled: false` on the
+verifier-context entry — leaving the entry empty is no longer accepted as
+"no auth needed", because that exact misconfiguration is what made the
+original bypass invisible.
+
+### Configuring RPC verifiers
+
+Verifiers live under `server.secure.rpcVerifiers` (the legacy key
+`server.secure.rpcAuth` is still recognised as an alias):
+
+```json
 {
   "server": {
     "secure": {
-      "rpcAuth": {
+      "rpcVerifiers": {
         "default": {},
         "my-service": {
           "verifiers": {
@@ -215,37 +243,153 @@ RPC verifiers are configured under `server.secure.rpcAuth`:
             }
           },
           "mode": "all"
+        },
+        "internal-only": {
+          "enabled": false
         }
       }
     }
   }
 }
 ```
+
 ### Context resolution
 
-RPC verifier config is resolved by contextId.
+The client picks the verifier context via the `contextId` field on the RPC
+request body. The runtime then looks it up against
+`server.secure.rpcVerifiers`:
 
+1. If `contextId` is a string and `rpcVerifiers` has an **own property** by
+   that name, that entry is used.
+2. Otherwise the `default` entry (own property only) is used.
+3. Otherwise the verifier context is empty — see the decision matrix.
 
-> Important note
-> default: {} does not mean public access.
-> It means: no extra verifier checked, normal session/CSRF behavior still applies unless the method says otherwise
+The own-property requirement matters: a naive lookup would let a client send
+`contextId: "__proto__"` and reach `Object.prototype`, which has no
+verifiers and was previously treated as "no auth required". The runtime now
+uses `Object.prototype.hasOwnProperty.call(...)` to block that bypass.
+
+> **`default: {}` is not public access.**
+> An empty entry exists but configures no verifiers. With `requireSession:
+> true` this means "session-only"; with `requireSession: false` it means
+> "no verifier configured", and the runtime rejects the call.
+
+#### Explicit opt-out
+
+An entry shaped `{ "enabled": false }` is treated as "this context disables
+verifier checks intentionally". It is the only way to mark a non-public
+endpoint as accepting requests without verifier (e.g. internal-only routes
+gated by network ACL). Use sparingly — it's the moral equivalent of
+`public: true` once the call passes session checks.
 
 #### Verifier mode
 `mode: "all"`
 
-All configured verifiers must pass.
+All configured verifiers must pass. This is the default.
 
 `mode: "any"`
 
 At least one configured verifier must pass.
 
-If only one verifier is configured, the mode usually makes no practical difference.
+If only one verifier is configured, the mode makes no practical difference.
+
+If the entry has `verifiers: {}` (or no `verifiers` at all) the runtime
+defers to the session check. With `requireSession: true` the call still
+goes through on a valid session. With `requireSession: false` the runtime
+rejects the call — empty/absent verifier entries are no longer treated as
+implicit "no auth needed". Set `enabled: false` if you really want a
+no-verifier, no-session route (e.g. an internal-only RPC fronted by a
+network ACL).
+
+### How to make a method "auth-less"
+
+There are three legitimate ways to expose a method without bothering with
+JWT/RPC verifiers, depending on what "auth-less" should mean for your use
+case:
+
+1. **Truly public** — anybody on the network can call it.
+   ```ts
+   export const policy = {
+     pingHealth: { auth: { public: true } },
+   } as const;
+   ```
+   Skip session, CSRF and verifier checks. Suitable only for endpoints that
+   leak nothing and have no side effects.
+
+2. **Session-only** — the call must come from a logged-in viewer tab. This
+   is the *default*; you can leave `auth` off entirely.
+   ```ts
+   export const policy = {
+     listMyThings: { auth: {} },                 // or omit auth entirely
+   } as const;
+   ```
+   The runtime enforces the xOpat session cookie + `X-XOPAT-CSRF`. No
+   `rpcVerifiers` configuration is needed.
+
+3. **Verifier-only** — for service-to-service traffic that has a JWT but no
+   browser session.
+   ```ts
+   export const policy = {
+     ingestExternalEvent: {
+       auth: { public: false, requireSession: false },
+     },
+   } as const;
+   ```
+   You **must** pair this with a `rpcVerifiers.<contextId>` entry that has
+   real verifiers in it. For an internal-only no-verifier route, opt out
+   explicitly:
+   ```json
+   { "server": { "secure": { "rpcVerifiers": {
+     "default": { "enabled": false }
+   } } } }
+   ```
+   An empty `default: {}` (or no `default` at all) is rejected — that was
+   the original silent-bypass shape and is the failure mode the fail-closed
+   guard is named after.
 
 #### Note on Proxy auth configuration
 
-Proxy auth is configured separately from RPC auth.
+Proxy auth is configured separately from RPC auth, under
+`server.secure.proxy.<alias>`. Proxy verifier configuration uses the same
+verifier maps but is unrelated to the RPC decision matrix above.
 
-Proxy verifier configuration is also server-side and uses configured verifier maps, not hardcoded method verifier arrays.
+## Outbound HTTP — SSRF guard
+
+Any `*.server.{ts,js,mjs}` file can reach a small server-level outbound-HTTP
+guard via `globalThis.XOPAT_SERVER`. Use it instead of raw `fetch` whenever
+the URL is operator- or user-influenced — provider registration, webhooks,
+custom proxies, model discovery, etc.
+
+```ts
+const XS = globalThis.XOPAT_SERVER;
+
+// Validate only — returns the parsed URL or throws SsrfBlockedError.
+const url = await XS.validateUpstreamUrl(config.baseUrl);
+
+// Fetch with: scheme allowlist (http/https), private/loopback/link-local/
+// CGNAT/multicast block (IPv4 + IPv6), redirect: "manual" enforced, and
+// a clear error on any 3xx so attacker-controlled hosts can't chain into
+// private space.
+const res = await XS.safeFetch(url.toString(), {
+  method: "GET",
+  headers: { ... },
+  signal: ctx?.signal,
+});
+```
+
+What the guard does **not** do:
+
+- Vet redirects performed *inside* third-party SDKs that bring their own
+  fetch (e.g. handing a baseURL to the Vercel AI SDK). Vet the baseURL with
+  `validateUpstreamUrl` before constructing the SDK client; once the SDK
+  takes over, its internal fetches are trusted.
+- Pin DNS between validation and the actual fetch. The TOCTOU window is
+  small and the upstream is typically operator-configured. A custom
+  dispatcher (e.g. `undici` with `lookup`) or fetching by literal IP is
+  required to close that gap.
+
+`SsrfBlockedError` (also exposed on `XS`) has `code === "SSRF_BLOCKED"` so
+callers can distinguish guard rejections from upstream errors.
 
 ### Runtime policy API
 
