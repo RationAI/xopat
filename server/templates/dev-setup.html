@@ -232,8 +232,66 @@
         docsNode.appendChild(section);
     }
 
+    function describeJsonSchemaType(schema) {
+        if (!schema || typeof schema !== "object") return "";
+        if (schema.type) return Array.isArray(schema.type) ? schema.type.join(" | ") : schema.type;
+        if (schema.const !== undefined) return `const: ${JSON.stringify(schema.const)}`;
+        if (schema.$ref) return schema.$ref;
+        if (Array.isArray(schema.oneOf)) return "oneOf";
+        if (Array.isArray(schema.anyOf)) return "anyOf";
+        if (Array.isArray(schema.allOf)) return "allOf";
+        return "";
+    }
+
+    function jsonSchemaPropertyToRow(key, schema, required) {
+        return {
+            key,
+            type: describeJsonSchemaType(schema),
+            required,
+            default: schema?.default,
+            usage: schema?.description || ""
+        };
+    }
+
+    function extractRootConfigRows(layerSchema) {
+        if (!layerSchema?.properties) return [];
+        const required = new Set(layerSchema.required || []);
+        return Object.entries(layerSchema.properties)
+            .filter(([key]) => key !== "params")
+            .map(([key, sub]) => jsonSchemaPropertyToRow(key, sub, required.has(key)));
+    }
+
+    function extractBuiltInRows(layerSchema, excludeKeys) {
+        const paramsSchema = layerSchema?.properties?.params;
+        if (!paramsSchema?.properties) return [];
+        const required = new Set(paramsSchema.required || []);
+        return Object.entries(paramsSchema.properties)
+            .filter(([key]) => !excludeKeys.has(key))
+            .map(([key, sub]) => jsonSchemaPropertyToRow(key, sub, required.has(key)));
+    }
+
+    function controlDescriptorToRow(ctrl) {
+        return {
+            key: ctrl.name,
+            supportedUiTypes: ctrl.supportedTypes || [],
+            defaultControlConfig: ctrl.default,
+            requiredControlConfig: ctrl.required,
+            usage: ctrl.usage || ""
+        };
+    }
+
+    function customParamDescriptorToRow(param) {
+        return {
+            key: param.name,
+            type: param.type || "",
+            required: !!param.required,
+            default: param.default,
+            usage: param.usage || ""
+        };
+    }
+
     function renderShaderConfigDocs(docsNode, configModel, docsModel, shaderConfigurator) {
-        const previewByType = new Map((docsModel?.shaders || []).map(shader => [shader.type, shader.preview]));
+        const shaderLayerSchemas = configModel?.$defs?.shaderLayers || {};
         docsNode.innerHTML = `
             <section class="card bg-base-100 border border-base-300 shadow-sm">
                 <div class="card-body">
@@ -258,14 +316,19 @@
             </section>
         `;
 
-        for (const shader of configModel?.shaders || []) {
-            const preview = previewByType.get(shader.type);
+        for (const shader of docsModel?.shaders || []) {
+            const preview = shader.preview;
             const previewMarkup = preview
                 ? shaderConfigurator._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")
                 : "";
-            const rootRows = normalizeSchemaRows(shader.rootConfig?.properties || []);
-            const builtInRows = normalizeSchemaRows(shader.params?.builtIn || []);
-            const customRows = normalizeSchemaRows(shader.params?.customParams || []);
+            const layerSchema = shaderLayerSchemas[shader.type];
+            const controlKeys = new Set((shader.controls || []).map(c => c.name));
+            const customKeys = new Set((shader.customParams || []).map(c => c.name));
+            const excludeFromBuiltIn = new Set([...controlKeys, ...customKeys]);
+            const rootRows = normalizeSchemaRows(extractRootConfigRows(layerSchema));
+            const builtInRows = normalizeSchemaRows(extractBuiltInRows(layerSchema, excludeFromBuiltIn));
+            const controlRows = (shader.controls || []).map(controlDescriptorToRow);
+            const customRows = normalizeSchemaRows((shader.customParams || []).map(customParamDescriptorToRow));
 
             const card = document.createElement("section");
             card.className = "card bg-base-100 border border-base-300 shadow-sm";
@@ -302,7 +365,7 @@
 
                     ${renderKeyValueTable("Layer Object Fields", rootRows)}
                     ${renderKeyValueTable("Built-in Params", builtInRows)}
-                    ${renderControlTable(shader.params?.controls || [])}
+                    ${renderControlTable(controlRows)}
                     ${renderKeyValueTable("Custom Params", customRows)}
                 </div>
             `;

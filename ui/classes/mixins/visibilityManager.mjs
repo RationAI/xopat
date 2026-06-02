@@ -8,6 +8,7 @@ export class VisibilityManager {
      */
     constructor(component) {
         this.id = typeof component === "string" ? component : component.id;
+        this._visible = undefined;
     }
 
     on() {
@@ -28,12 +29,18 @@ export class VisibilityManager {
      */
     initOnRootNode(node, visibleNow = true) {
         this._nRef = new WeakRef(node);
-        this.on = () => this._nRef.deref()?.classList.remove("display-none");
-        this.off = () => this._nRef.deref()?.classList.add("display-none");
+        this.on = () => {
+            this._visible = true;
+            this._nRef.deref()?.classList.remove("display-none");
+        };
+        this.off = () => {
+            this._visible = false;
+            this._nRef.deref()?.classList.add("display-none");
+        };
         this.defaultVisible = visibleNow === undefined ?
-            APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true): visibleNow;
+            !!APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true) : !!visibleNow;
+        this._visible = this.defaultVisible;
 
-        // todo caching tricky, for now just force
         if (this.defaultVisible) {
             this.on();
         } else {
@@ -50,12 +57,13 @@ export class VisibilityManager {
      *   undefined if the visibility is not known and the manager should take care of it
      */
     init(on, off, visibleNow = undefined) {
-        this.on = on;
-        this.off = off;
+        const userOn = on, userOff = off;
+        this.on = () => { this._visible = true; userOn(); };
+        this.off = () => { this._visible = false; userOff(); };
         this.defaultVisible = visibleNow === undefined ?
-            APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true) : visibleNow;
+            !!APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, true) : !!visibleNow;
+        this._visible = this.defaultVisible;
 
-        // todo caching tricky, for now just force
         if (this.defaultVisible) {
             this.on();
         } else {
@@ -74,8 +82,10 @@ export class VisibilityManager {
         }
     }
 
+    // Live state field — wrapped on()/off() keep it in sync, so toggles work
+    // correctly even when AppCache writes are no-ops (bypassCache=true).
     is() {
-        return APPLICATION_CONTEXT.AppCache.get(`v::${this.id}`, this.defaultVisible);
+        return !!this._visible;
     }
 
     toggle() {

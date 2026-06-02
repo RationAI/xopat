@@ -323,6 +323,17 @@ interface ApplicationContext {
     getUiOption(key: keyof XOpatUiSetup): boolean;
     /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
     setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
+    /**
+     * Boot-phase-only variant of {@link getUiOption}: honors `params.ui[key]`
+     * only until {@link setUiBootComplete} is called. After boot, components
+     * created later (toolbars, viewers, …) fall through to AppCache/defaults
+     * instead of being silently force-hidden by a session flag.
+     */
+    getInitialUiOption(key: keyof XOpatUiSetup): boolean;
+    /** True once the initial viewer has opened — `getInitialUiOption` flips after this. */
+    isUiBootComplete(): boolean;
+    /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
+    setUiBootComplete(): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];
@@ -385,6 +396,17 @@ interface ApplicationContext {
     getUiOption(key: keyof XOpatUiSetup): boolean;
     /** Persist a UI initial-visibility flag into params.ui[key] (and AppCache under the legacy key). */
     setUiOption(key: keyof XOpatUiSetup, value: boolean, cache?: boolean): void;
+    /**
+     * Boot-phase-only variant of {@link getUiOption}: honors `params.ui[key]`
+     * only until {@link setUiBootComplete} is called. After boot, components
+     * created later (toolbars, viewers, …) fall through to AppCache/defaults
+     * instead of being silently force-hidden by a session flag.
+     */
+    getInitialUiOption(key: keyof XOpatUiSetup): boolean;
+    /** True once the initial viewer has opened — `getInitialUiOption` flips after this. */
+    isUiBootComplete(): boolean;
+    /** Idempotently flips the boot-phase gate; called by the lifecycle controller. */
+    setUiBootComplete(): void;
     setDirty(): void;
     pluginIds(): string[];
     activePluginIds(): string[];

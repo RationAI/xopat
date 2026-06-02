@@ -223,7 +223,20 @@ class Toolbar extends BaseComponent {
         );
 
         this._rootWrap = this._outerEl.querySelector("[data-toolbar-root]");
-        this.visibility.initOnRootNode(this._outerEl);
+
+        // Wire the VisibilityManager so its on/off route through
+        // `setManagedVisible` — that keeps the VM's `_visible` field and
+        // the toolbar's own `_managedVisible` state (the single source of
+        // truth used by `_applyManagedVisibility`, MainLayout's per-host
+        // toolbar layout, etc.) in lockstep. `params.ui.toolBar = false`
+        // boots every toolbar hidden; user can re-open from the AppBar
+        // toolbar menu (vm.set(true) → setManagedVisible(true) → display).
+        const initialToolbarVisible = APPLICATION_CONTEXT?.getUiOption?.("toolBar");
+        this.visibility.init(
+            () => this.setManagedVisible(true),
+            () => this.setManagedVisible(false),
+            initialToolbarVisible === false ? false : undefined
+        );
 
         queueMicrotask(() => {
             if (this._embeddedMode) {

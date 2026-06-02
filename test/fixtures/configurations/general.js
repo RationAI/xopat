@@ -42,7 +42,6 @@ export default {
         statusBar: true,
         viewport: undefined,
         activeBackgroundIndex: 0,
-        activeVisualizationIndex: 0,
         grayscale: false,
         tileCache: true,
         preventNavigationShortcuts: false,

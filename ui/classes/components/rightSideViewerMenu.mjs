@@ -53,10 +53,12 @@ export class RightSideViewerMenu extends BaseComponent {
 
         const originalAddTab = this.menu.addTab;
         const skipAppBar = !!this._menuOptions.skipAppBarRegistration;
+        this._registeredAppBarTabs = [];
         this.menu.addTab = (item) => {
             const tabItem = originalAddTab.call(this.menu, item);
             if (!skipAppBar) {
                 USER_INTERFACE.AppBar.View.registerViewComponent("sideViewerMenu", tabItem);
+                this._registeredAppBarTabs.push(tabItem);
             }
             return tabItem;
         };
@@ -78,16 +80,28 @@ export class RightSideViewerMenu extends BaseComponent {
         const resolveViewer = this._menuOptions.viewerResolver
             ? (positionId) => this._menuOptions.viewerResolver(positionId)
             : (positionId) => VIEWER_MANAGER.getViewer(positionId, false);
+        this._resolveViewer = resolveViewer;
         nav._setFocus = () => {
             oldFocus.call(nav);
-            // todo do not use private arg, just create getViereBy..something() to allow queringy by positionID
-            setTimeout(() => resolveViewer(viewerPositionId)?.navigator?.forceResize());
+            // Wait one frame so the panel-open layout actually applies before resizing.
+            requestAnimationFrame(() => this._refreshNavigatorViewport());
         };
 
         // defaultly open menus
         for (let i of Object.keys(this.menu.tabs)) {
             // todo focus manager similar to visibility manager
-            if (APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true)) {
+            // `params.ui.navigator = false` defaults the navigator tab
+            // to closed (the OSD navigator element hangs off this tab's
+            // body, so closing the tab is what actually hides it). Other
+            // tabs continue to follow the user's cached open/closed
+            // preference.
+            let shouldOpen;
+            if (i === "navigator" && APPLICATION_CONTEXT.getUiOption?.("navigator") === false) {
+                shouldOpen = false;
+            } else {
+                shouldOpen = APPLICATION_CONTEXT.AppCache.get(`${i}-open`, true);
+            }
+            if (shouldOpen) {
                 this.menu.tabs[i]._setFocus();
             } else {
                 this.menu.tabs[i]._removeFocus();
@@ -104,6 +118,47 @@ export class RightSideViewerMenu extends BaseComponent {
      */
     init(viewer) {
         this.shadersMenu.init(viewer);
+        this._observeNavigatorContainer(viewer);
+    }
+
+    /**
+     * Refresh the OSD navigator when its container is actually visible.
+     * OSD's navigator may have rendered into a 0/1×1 canvas while the tab was
+     * collapsed; once the container reaches a real size we must both resize
+     * the navigator and force a redraw, otherwise the overview stays a flat
+     * single-color rectangle until the user pans the main viewport.
+     */
+    _refreshNavigatorViewport() {
+        const viewer = this._resolveViewer?.(this.viewerPositionId);
+        const navigator = viewer?.navigator;
+        if (!navigator?.element) return;
+        const { offsetWidth, offsetHeight } = navigator.element;
+        if (offsetWidth < 2 || offsetHeight < 2) return;
+        navigator.forceResize();
+        navigator.world?.draw?.();
+    }
+
+    /**
+     * Watch the navigator container for size transitions out of the
+     * collapsed (≤1px) state and re-render once it becomes real.
+     */
+    _observeNavigatorContainer(viewer) {
+        const element = viewer?.navigator?.element;
+        if (!element || typeof ResizeObserver === "undefined") return;
+        this._navResizeObserver?.disconnect?.();
+        let lastUsable = element.offsetWidth > 1 && element.offsetHeight > 1;
+        this._navResizeObserver = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                const width = entry.contentRect?.width || 0;
+                const height = entry.contentRect?.height || 0;
+                const usable = width > 1 && height > 1;
+                if (usable && !lastUsable) {
+                    this._refreshNavigatorViewport();
+                }
+                lastUsable = usable;
+            }
+        });
+        this._navResizeObserver.observe(element);
     }
 
     getShadersTab() {
@@ -157,6 +212,19 @@ export class RightSideViewerMenu extends BaseComponent {
         delete this.title;
         delete this.visibility;
         delete this.copy;
+
+        this._navResizeObserver?.disconnect?.();
+        this._navResizeObserver = undefined;
+
+        // Drop our AppBar.View entries so a closed viewer's tabs don't leave
+        // stale VisibilityManager references that the dropdown would try to
+        // toggle.
+        if (this._registeredAppBarTabs?.length) {
+            for (const tabItem of this._registeredAppBarTabs) {
+                USER_INTERFACE?.AppBar?.View?.unregisterViewComponent?.("sideViewerMenu", tabItem);
+            }
+            this._registeredAppBarTabs = [];
+        }
 
         this.menu?.destroy?.();
         this.menu = undefined;

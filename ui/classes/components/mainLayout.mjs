@@ -103,10 +103,28 @@ export class MainLayout extends BaseComponent {
         // When the flag is unset we leave `visibleNow` undefined so the
         // VisibilityManager falls back to its own AppCache key (= preserve
         // user's last manual toggle).
+        // `params.ui.globalMenu = false` is a persistent "default hidden"
+        // hint — the dock starts hidden, but every user-initiated open
+        // (View-menu tab click, AppBar globe, mobile open) flows normally.
         const initialDockVisible = APPLICATION_CONTEXT?.getUiOption?.("globalMenu");
+        // Sticky suppression for the deferred-sync race: cached docked tabs
+        // call `showTab → showGlobalMenu → _setDockRequestedOpen(true)`
+        // during boot, which would otherwise reopen a dock the session
+        // explicitly hid. The latch is cleared by any explicit user action
+        // — see `showTab`, `toggleGlobalMenu`, `openGlobalMenuMobile`, and
+        // the VM on-callback below. `_isFlushingDeferredSync` is true only
+        // while `addTab` is draining a wrapper's deferred-sync, so
+        // `showTab` can distinguish boot-race calls from user clicks.
+        this._sessionInitialHidden = initialDockVisible === false;
+        this._isFlushingDeferredSync = false;
         this.visibilityManager = new VisibilityManager(this._dockViewItemId).init(
             () => {
                 if (!this._syncingDockRequestedState) {
+                    // VM.on() is reached by explicit user toggles (View
+                    // menu → vm.set(true), Chrome.show() restoring the
+                    // pre-hide snapshot). Clear the session-initial hide
+                    // latch so subsequent programmatic opens flow.
+                    this._sessionInitialHidden = false;
                     this._dockRequestedOpen = true;
                 }
                 this._applyDockVisibility();
@@ -129,6 +147,11 @@ export class MainLayout extends BaseComponent {
         this._dockRequestedOpen = initialDockVisible === false
             ? false
             : !!this.visibilityManager?.is?.();
+
+        // Tie the dock into the AppBar "hide chrome" registry so that
+        // `params.ui.appBar = false` (which calls Chrome.hide()) collapses it
+        // alongside the rest of the chrome.
+        USER_INTERFACE?.AppBar?.Chrome?.register?.(this._dockViewItemId, this.visibilityManager);
 
         if (Array.isArray(options.tabs)) {
             for (const tab of options.tabs) {
@@ -197,9 +220,19 @@ export class MainLayout extends BaseComponent {
             this._menu?.addTab(tab);
             this._syncMenuTabs();
 
-            // NEW: now that the wrapper is actually registered, it is safe to
-            // apply its initial cached visibility state once.
-            wrapper._flushDeferredVisibilitySync?.();
+            // Wrap the deferred-sync flush so `showTab(...)` calls
+            // originating from a cached-visible tab's auto-show chain can
+            // be distinguished from explicit user/programmatic showTabs.
+            // The dock-suppression latch (`_sessionInitialHidden`) only
+            // clears in the explicit case — see showTab().
+            this._isFlushingDeferredSync = true;
+            try {
+                // Now that the wrapper is actually registered, it is safe to
+                // apply its initial cached visibility state once.
+                wrapper._flushDeferredVisibilitySync?.();
+            } finally {
+                this._isFlushingDeferredSync = false;
+            }
 
             this._updateDockVisibility();
             return wrapper;
@@ -328,12 +361,25 @@ export class MainLayout extends BaseComponent {
     }
 
     toggleGlobalMenu() {
+        // Explicit user intent clears the session-initial hide latch so the
+        // open is honored. Subsequent programmatic opens are then allowed.
+        this._sessionInitialHidden = false;
         return this.isOpened()
             ? this.hideGlobalMenu()
             : this.showGlobalMenu();
     }
 
     showTab(id) {
+        // Called either by user action (View-menu tab toggle, plugin
+        // `LAYOUT.showTab(...)`) or by the boot-time deferred-sync chain
+        // that runs inside `addTab → _flushDeferredVisibilitySync`. Only
+        // the former is "explicit user/programmatic intent" — clear the
+        // dock-suppression latch in that case so the chain can open the
+        // dock. Boot-time calls keep the latch set, preserving
+        // `params.ui.globalMenu = false`.
+        if (!this._isFlushingDeferredSync) {
+            this._sessionInitialHidden = false;
+        }
         const tab = this._menu?.tabs?.[id];
         if (!tab) return false;
 
@@ -386,6 +432,8 @@ export class MainLayout extends BaseComponent {
     }
 
     openGlobalMenuMobile() {
+        // Explicit user intent — same latch-clearing as toggleGlobalMenu().
+        this._sessionInitialHidden = false;
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
 
         if (!narrow) {
@@ -489,6 +537,16 @@ export class MainLayout extends BaseComponent {
 
     _setDockRequestedOpen(next) {
         const desired = !!next;
+
+        // While `params.ui.globalMenu === false` is still in effect (the
+        // user hasn't yet explicitly opened the dock), late programmatic
+        // opens — e.g. a docked wrapper's deferred visibility sync, a
+        // plugin calling `showTab` during init — must not pop the dock
+        // back open. Cleared by the user via toggleGlobalMenu /
+        // openGlobalMenuMobile / View-menu toggle (vm.on callback).
+        if (desired && this._sessionInitialHidden) {
+            return false;
+        }
 
         if (this._dockRequestedOpen === desired) {
             this._applyDockVisibility();
@@ -1162,7 +1220,12 @@ export class MainLayout extends BaseComponent {
             title: viewRegistration?.title || tab.title || tab.id,
             icon: viewRegistration?.icon || tab.iconName || tab.icon || "ph-frame-corners",
             visibilityManager: {
-                is: () => this._isTabVisible(tab),
+                // Reflects what the user actually sees: a tab is "on" only
+                // when the dock is currently open AND the tab itself is
+                // unhidden. Without this, a `globalMenu:false` session
+                // would render every tab row as checked even though the
+                // dock (and the tab inside it) is invisible.
+                is: () => this._isDockEffectivelyVisible() && this._isTabVisible(tab),
                 set: next => next
                     ? this.showTab(tab.id)
                     : this.hideTab(tab.id)

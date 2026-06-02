@@ -2318,6 +2318,9 @@ ${await UTILITIES.getForm()}
          * Clone the viewer to a new window, only two windows can be shown at the time.
          */
         clone: async function () {
+            console.error('This method is not working properly, exitting..');
+            return;
+
             if (window.opener) {
                 return;
             }
@@ -3671,7 +3674,7 @@ form.submit();
                 barThickness: 2,
                 destroy: false
             });
-            if (!APPLICATION_CONTEXT.getUiOption("scaleBar")) {
+            if (!APPLICATION_CONTEXT.getInitialUiOption("scaleBar")) {
                 viewer.scalebar.setActive(false);
             }
 
@@ -3689,23 +3692,11 @@ form.submit();
                 (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(scalebarChromeKey);
             });
 
-            // OSD navigator: opt into AppBar.Chrome and honor `params.ui.navigator`
-            // at boot. Per-viewer id keeps multi-viewport snapshot/restore correct.
-            const navigatorEl = (viewer as any).navigator?.element as HTMLElement | undefined;
-            if (navigatorEl) {
-                if (!APPLICATION_CONTEXT.getUiOption("navigator")) {
-                    navigatorEl.style.display = "none";
-                }
-                const navigatorChromeKey = `navigator::${(viewer as any).uniqueId ?? index}`;
-                (window as any).USER_INTERFACE?.AppBar?.Chrome?.register?.(navigatorChromeKey, {
-                    is:  () => navigatorEl.style.display !== "none",
-                    on:  () => { navigatorEl.style.display = ""; },
-                    off: () => { navigatorEl.style.display = "none"; },
-                });
-                viewer.addOnceHandler?.("destroy", () => {
-                    (window as any).USER_INTERFACE?.AppBar?.Chrome?.unregister?.(navigatorChromeKey);
-                });
-            }
+            // Navigator visibility is owned by the right-side viewer
+            // menu's "navigator" tab (rightSideViewerMenu.mjs) — closing
+            // that tab is what hides the OSD navigator element. The tab
+            // itself reads `getUiOption("navigator")` at boot for its
+            // default open/closed state. No display-style hack here.
 
             // Canvas right-click → CanvasContextMenu registry → window.DropDown.
             // Plugins/modules contribute items via CanvasContextMenu.register(...);

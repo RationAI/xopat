@@ -72,9 +72,21 @@ export class StretchGrid extends BaseComponent {
         // update model
         this.items.splice(idx, 1);
 
-        // update DOM
+        // update DOM — primary path: cell is a direct child of host.
         const host = this._host();
-        if (host && el.parentNode === host) host.removeChild(el);
+        if (host && el.parentNode === host) {
+            host.removeChild(el);
+        } else {
+            // Defensive fallback: the cell may have been reparented during
+            // viewer destruction (OSD or a viewer-wrapper can move sub-nodes),
+            // so the parentNode strict-equals check fails and the cell would
+            // stay in the DOM forever. Locate by id and detach wherever it
+            // lives now. The id space (`osd-<n>`) is owned by VIEWER_MANAGER
+            // and not reused elsewhere, so this is safe.
+            const live = el.id ? document.getElementById(el.id) : null;
+            const target = live || el;
+            target.parentNode?.removeChild(target);
+        }
 
         this._children = this.items;
         this._renderedChildren = null;

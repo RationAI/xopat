@@ -89,6 +89,12 @@ export class ApplicationLifecycleController {
                 console.error(e);
             });
             await this.appContext.openViewerWith(event.data, event.background || [], event.visualizations || []);
+            // Boot has reached the point where the first viewer is open and
+            // all initial DockableWindows/tabs have had their deferred sync
+            // run. Flip the boot-phase gate so further component/viewer
+            // creations no longer honor `params.ui.*` as a forced hide —
+            // they fall through to AppCache/defaults like a normal session.
+            (this.appContext as any).setUiBootComplete?.();
             VIEWER_MANAGER.addHandler("plugin-loaded", (e: PluginLoadedEvent) => {
                 if (!e.isInitialLoad) {
                     Dialogs.show($.t("messages.pluginLoadedNamed", { plugin: pluginRegistry[e.id]?.name }), 2500, Dialogs.MSG_INFO);

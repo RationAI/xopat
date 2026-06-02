@@ -14,16 +14,17 @@ export class AppBar {
             this.onLayoutChange?.(e.detail);
         });
         this.maxMobileWidth = APPLICATION_CONTEXT.getOption("maxMobileWidthPx");
+        // `disablePluginsUi` is read once here and reused below to gate
+        // both the plugins tab construction and the matching Plugins.init.
+        // Constructing the tab and then trying to hide it after attach
+        // (the previous approach) left a visible empty dropdown in the
+        // bar; building the tabs list without the entry is reliable.
+        const disablePluginsUi = !!window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false);
 
         // Left part of the app bar: modifiable and customizable menu
         this.context = $("#top-side-left");
-        this.menu = new MainPanel({
-                id: "visual-menu",
-                orientation: Menu.ORIENTATION.TOP,
-                buttonSide: Menu.BUTTONSIDE.LEFT,
-                rounded: Menu.ROUNDED.ENABLE,
-                extraClasses: {bg: "bg-transparent"},
-            }, {
+        const leftMenuTabs = [
+            {
                 id: "view",
                 icon: "ph-layout",
                 title: $.t('main.bar.view'),
@@ -32,7 +33,8 @@ export class AppBar {
                 // MODIFIED: Use 'min-w-max' for width and 'check' style for selection
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.View._refreshVisualDropdown()
-            }, {
+            },
+            {
                 id: "edit",
                 icon: "ph-list",
                 title: $.t('main.bar.edit'),
@@ -40,10 +42,22 @@ export class AppBar {
                 class: Dropdown,
                 extraClasses: { width: "min-w-max" },
                 onClick: e => this.Edit.refresh(true)
-            }, {
+            },
+        ];
+        if (!disablePluginsUi) {
+            leftMenuTabs.push({
                 id: "plugins", icon: "ph-puzzle-piece", title: $.t('main.bar.plugins'),
                 body: [], class: Dropdown
-            }
+            });
+        }
+        this.menu = new MainPanel({
+                id: "visual-menu",
+                orientation: Menu.ORIENTATION.TOP,
+                buttonSide: Menu.BUTTONSIDE.LEFT,
+                rounded: Menu.ROUNDED.ENABLE,
+                extraClasses: {bg: "bg-transparent"},
+            },
+            ...leftMenuTabs
         );
         this.menu.attachTo(this.context);
         this.menu.set(Menu.DESIGN.TITLEICON);
@@ -169,12 +183,13 @@ export class AppBar {
         // init submenus
         this.View.init(this.menu.getTab("view"));
         this.Edit.init(this.menu.getTab("edit"));
-        this.Plugins.init(this.menu.getTab("plugins"));
-
-        // `disablePluginsUi` also hides the top-bar plugins tab. Plugins
-        // remain loaded; they just have no entry point in the chrome.
-        if (window.APPLICATION_CONTEXT?.getOption?.("disablePluginsUi", false)) {
-            this.menu.getTab("plugins")?.setClass?.("display", "hidden");
+        // Plugins tab is only constructed when `disablePluginsUi` is unset
+        // (see the conditional `leftMenuTabs.push` above). When it is set
+        // the tab does not exist in the bar at all — Plugins.setMenu /
+        // openSubmenu still short-circuit on the same flag for any
+        // external callers that haven't been updated.
+        if (!disablePluginsUi) {
+            this.Plugins.init(this.menu.getTab("plugins"));
         }
     }
 
@@ -501,6 +516,7 @@ export class AppBar {
             this.subMenu = subMenu;
             this.otherWindows = {};
             this._visualMenuNeedsRefresh = false;
+            this._appBarKeyCounter = 0;
 
             this.structure = {
                 'sideViewerMenu': {
@@ -528,12 +544,13 @@ export class AppBar {
             if (!this._visualMenuNeedsRefresh) return;
             this.subMenu.clear();
 
-            this.subMenu.addItem({
-                id: 'clone-viewer',
-                onClick: () => UTILITIES.clone(),
-                icon: "ph-copy-simple",
-                label: $.t('main.global.clone'),
-            });
+            // TODO: does not work
+            // this.subMenu.addItem({
+            //     id: 'clone-viewer',
+            //     onClick: () => UTILITIES.clone(),
+            //     icon: "ph-copy-simple",
+            //     label: $.t('main.global.clone'),
+            // });
 
             for (let id in this.otherWindows) {
                 const item = this.otherWindows[id];
@@ -564,22 +581,36 @@ export class AppBar {
                 const subItemSpecs = this[id];
                 if (!subItemSpecs) continue;
 
-                const subChildren = [];
-                for (let subItem of subItemSpecs) {
-                    const vm = subItem.visibilityManager;
-                    if (!vm) {
+                // Group registrants by tab id so multiple viewers' tabs of the
+                // same kind (e.g. two viewports each contributing "navigator"
+                // and "shaders") render as a single row whose click toggles
+                // every registrant's VisibilityManager together.
+                const groups = new Map();
+                for (const subItem of subItemSpecs) {
+                    if (!subItem.visibilityManager) {
                         console.error(`View.registerViewComponent: "${subItem.id}" has no visibilityManager`);
                         continue;
                     }
+                    let group = groups.get(subItem.id);
+                    if (!group) {
+                        group = { spec: subItem, vms: [] };
+                        groups.set(subItem.id, group);
+                    }
+                    group.vms.push(subItem.visibilityManager);
+                }
 
+                const subChildren = [];
+                for (const { spec, vms } of groups.values()) {
+                    const allVisible = () => vms.every(vm => vm.is());
+                    const anyVisible = () => vms.some(vm => vm.is());
                     subChildren.push({
-                        id: subItem.id,
-                        icon: subItem.iconName || subItem.icon,
-                        label: subItem.title || subItem.label || subItem.id,
-                        selected: vm.is(),
+                        id: spec.id,
+                        icon: spec.iconName || spec.icon,
+                        label: spec.title || spec.label || spec.id,
+                        selected: allVisible(),
                         onClick: () => {
-                            const next = !vm.is();
-                            this._setVisibility(vm, next);
+                            const next = !anyVisible();
+                            for (const vm of vms) this._setVisibility(vm, next);
                             this._visualMenuNeedsRefresh = true;
                             return true;
                         },
@@ -654,16 +685,34 @@ export class AppBar {
                 this[category] = childList = [];
             }
 
-            const index = childList.findIndex(item => item.id === tab.id);
-            if (index < 0) {
+            // Dedupe by object identity, not by `tab.id`. Multiple viewers can
+            // each contribute a tab under the same id (e.g. "navigator",
+            // "shaders") — they must coexist in the list so the dropdown can
+            // fan a single click out to every registrant. Render-time grouping
+            // by id collapses them into one row.
+            if (!childList.includes(tab)) {
                 childList.push(tab);
-            } else {
-                childList.splice(index, 1, tab);
             }
 
             childList.sort((a, b) => (a.title || a.label || a.id).localeCompare(b.title || b.label || b.id));
             this._visualMenuNeedsRefresh = true;
-            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}`, tab.visibilityManager);
+
+            // Unique Chrome key per registration — `tab.id` alone collides
+            // when two viewers register a tab of the same kind.
+            tab.__appBarKey = ++this._appBarKeyCounter;
+            USER_INTERFACE?.AppBar?.Chrome?.register?.(`view::${category}::${tab.id}::${tab.__appBarKey}`, tab.visibilityManager);
+        },
+
+        unregisterViewComponent(category, tab) {
+            const childList = this[category];
+            if (!Array.isArray(childList)) return;
+            const idx = childList.indexOf(tab);
+            if (idx < 0) return;
+            childList.splice(idx, 1);
+            this._visualMenuNeedsRefresh = true;
+            if (tab.__appBarKey != null) {
+                USER_INTERFACE?.AppBar?.Chrome?.unregister?.(`view::${category}::${tab.id}::${tab.__appBarKey}`);
+            }
         },
 
         _findEntry(ownerPluginId) {

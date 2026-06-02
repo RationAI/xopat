@@ -67,7 +67,14 @@ export function installScalebarUtilities(): void {
             magnification: mag,
             maxMagnification: 40
         });
-        if (!APPLICATION_CONTEXT.getOption("scaleBar", true)) {
+        // Honor `params.ui.scaleBar` (and the UI-flag fallback chain) —
+        // this runs every time a slide loads, so it must match the
+        // boot-time `loader.ts` check that consults `getUiOption`.
+        // Previously read the wrong key (`params.scaleBar`), which is why
+        // session-level `params.ui.scaleBar = false` had no effect after
+        // the first `setImageMeasurements → makeScalebar` cycle reset
+        // `_active = true`.
+        if (APPLICATION_CONTEXT.getUiOption("scaleBar") === false) {
             viewer.scalebar.setActive(false);
         }
     };

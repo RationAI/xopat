@@ -202,6 +202,9 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
         defaultSetup,
         ioPipeline: IO_PIPELINE,
     });
+
+    initXOpatUI();
+
     // todo make sure our globals dont get out of hand...
     (window as any).LAYOUT = new UI.MainLayout({
         id: "viewer-container",
@@ -216,7 +219,6 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     (window as any).LAYOUT.attachTo(document.getElementById("middle-container"));
 
 
-    initXOpatUI();
     //Prepare xopat core loading utilities and interfaces
     let runLoader: (() => Promise<void> | void) | null = initXOpatLoader(ENV, PLUGINS, MODULES, PLUGINS_FOLDER, MODULES_FOLDER, POST_DATA, VERSION);
 

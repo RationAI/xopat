@@ -251,6 +251,32 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             return true;
         },
         /**
+         * Read a UI visibility flag as a persistent "default hidden" hint.
+         *
+         * Originally introduced as a boot-phase-only variant that stripped
+         * `params.ui[key]` after the first viewer opened, that design proved
+         * timing-fragile: plugin-registered components frequently construct
+         * after `setUiBootComplete()` fires, so the flag silently stopped
+         * applying. The contract is now a thin pass-through to
+         * `getUiOption(key)` — every component honors the flag at its own
+         * construction time. Manual user opening still wins for the session
+         * because `VisibilityManager` holds the live `_visible` field.
+         *
+         * The `isUiBootComplete` / `setUiBootComplete` API is retained
+         * (inert) so the lifecycle controller and type surface keep
+         * compiling — callers can drop them in a follow-up cleanup.
+         */
+        getInitialUiOption(key: keyof XOpatUiSetup): boolean {
+            return (this as unknown as ApplicationContext).getUiOption(key);
+        },
+        __uiBootComplete: false as boolean,
+        isUiBootComplete(): boolean {
+            return (this as any).__uiBootComplete === true;
+        },
+        setUiBootComplete(): void {
+            (this as any).__uiBootComplete = true;
+        },
+        /**
          * Persist a UI visibility flag. Writes to `params.ui[key]` and the
          * AppCache under the legacy flat key (matches existing scaleBar/toolBar
          * checkbox cache shape).

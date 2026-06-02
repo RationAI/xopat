@@ -15,9 +15,9 @@ describe('Correct Active Indexes', () => {
            }),
            data: config.data('tissue'),
            background: [
-               {dataReference: 0, goalIndex: 1},
-               {dataReference: 1, goalIndex: 2},
-               {dataReference: 2, goalIndex: 0}
+               {dataReference: 0, visualizationIndex: 1},
+               {dataReference: 1, visualizationIndex: 2},
+               {dataReference: 2, visualizationIndex: 0}
            ],
            visualizations: [
                config.visualization({name: "Vis 0 -> Bg 2"},
