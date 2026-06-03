@@ -2,38 +2,82 @@
 .enjoyhint_hide{display:none}
 .enjoyhint_disable_events{position:absolute;width:2000px;height:1500px;z-index:1011;pointer-events:all}
 
-/* DaisyUI-themed control buttons (Next / Prev / Skip). Class names are
-   driven by the EnjoyHint JS; we only restyle them. */
+/* DaisyUI-themed control buttons (Next / Prev). Class names are driven
+   by the EnjoyHint JS; we only restyle them. */
 .enjoyhint_next_btn,
-.enjoyhint_prev_btn,
-.enjoyhint_skip_btn{
+.enjoyhint_prev_btn{
     cursor:pointer;
     text-align:center;
-    padding:0.25rem 0.75rem;
+    padding:0.5rem 1.25rem;
+    min-width:5rem;
     background-color:hsl(var(--p));
     color:hsl(var(--pc));
     border:none;
-    border-radius:var(--rounded-btn,0.5rem);
+    border-radius:9999px;
     font-weight:600;
     font-size:0.95rem;
     line-height:1.25rem;
-    box-shadow:0 1px 2px hsl(var(--b3) / 0.4);
-    transition:background-color .15s ease-in-out,transform .05s ease-in-out;
+    box-shadow:0 6px 18px hsl(var(--p) / 0.35), 0 0 0 1px rgba(0,0,0,0.04);
+    transition:background-color .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
+    position:absolute;
+    z-index:1012;
+    pointer-events:all;
+    -o-text-overflow:clip;text-overflow:clip;
 }
 .enjoyhint_next_btn:hover,
-.enjoyhint_prev_btn:hover,
-.enjoyhint_skip_btn:hover{
-    background-color:hsl(var(--pf,var(--p)));
+.enjoyhint_prev_btn:hover{
+    background-color:hsl(var(--pf, var(--p)));
+    transform:translateY(-1px);
+    box-shadow:0 10px 26px hsl(var(--p) / 0.45), 0 0 0 1px rgba(0,0,0,0.04);
 }
 .enjoyhint_next_btn:active,
-.enjoyhint_prev_btn:active,
-.enjoyhint_skip_btn:active{
+.enjoyhint_prev_btn:active{
     transform:translateY(1px);
     transition:none;
 }
-.enjoyhint_next_btn,
-.enjoyhint_prev_btn{position:absolute;z-index:1012;pointer-events:all;-o-text-overflow:clip;text-overflow:clip;}
-.enjoyhint_skip_btn{z-index:1012;pointer-events:all;-moz-box-sizing:content-box;-o-text-overflow:clip;text-overflow:clip;right:35px;top:35px;}
+
+/* Skip / exit button — fixed top-right circular pill. Sits on the dark
+   dim overlay, so we use a white glass fill for guaranteed visibility on
+   any theme; turns danger-red on hover to telegraph the exit action. */
+.enjoyhint_skip_btn{
+    position:fixed;
+    top:1.25rem;
+    right:1.25rem;
+    z-index:1012;
+    pointer-events:all;
+    cursor:pointer;
+    width:2.75rem;
+    height:2.75rem;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:9999px;
+    background-color:rgba(255,255,255,0.95);
+    color:hsl(var(--n));
+    border:1px solid rgba(255,255,255,0.6);
+    box-shadow:0 10px 24px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.06);
+    backdrop-filter:blur(8px) saturate(140%);
+    -webkit-backdrop-filter:blur(8px) saturate(140%);
+    transition:background-color .15s ease-in-out, color .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
+}
+.enjoyhint_skip_btn:hover{
+    background-color:hsl(var(--er));
+    color:hsl(var(--erc, #ffffff));
+    transform:scale(1.06);
+    box-shadow:0 12px 28px hsl(var(--er) / 0.55);
+}
+.enjoyhint_skip_btn:active{
+    transform:scale(0.96);
+    transition:none;
+}
+.enjoyhint_skip_btn > span,
+.enjoyhint_skip_btn > i{
+    font-size:1.5rem !important;
+    line-height:1 !important;
+    color:inherit !important;
+    text-shadow:none !important;
+}
+
 .enjoyhint_close_btn{display:none}
 .enjoyhint_btn{-o-text-overflow:clip;text-overflow:clip;cursor:pointer;}
 
@@ -50,17 +94,20 @@
 .enjoyhint_svg_transparent .enjoy_hint_label,
 .enjoyhint_svg_transparent .enjoyhint_svg_wrapper{opacity:0}
 
+/* Step label: sits on top of the dark SVG dim overlay (always dark, so we
+   hard-code light text + shadow for reliable contrast across all themes). */
 .enjoy_hint_label{
     position:absolute;
     overflow:hidden;
-    color:hsl(var(--nc));
+    color:#ffffff;
     z-index:107;
     font-size:1.25rem;
-    line-height:1.4;
+    line-height:1.5;
     font-weight:500;
     text-align:center;
     max-width:80%;
     display:inline-block;
+    text-shadow:0 2px 12px rgba(0,0,0,0.75), 0 1px 2px rgba(0,0,0,0.65);
     -webkit-transition:opacity .4s cubic-bezier(.42,0,.58,1);
     -moz-transition:opacity .4s cubic-bezier(.42,0,.58,1);
     transition:opacity .4s cubic-bezier(.42,0,.58,1);
@@ -73,13 +120,17 @@
         font-size:1.25rem;
         line-height:1.2em;
         min-width:0;
-        width:2.25rem;
-        height:2.25rem;
+        width:2.75rem;
+        height:2.75rem;
         padding:0;
         -webkit-border-radius:9999px;
         border-radius:9999px;
     }
-    .enjoyhint_skip_btn{display:none}
+    .enjoyhint_skip_btn{
+        top:0.75rem;
+        right:0.75rem;
+        width:2.5rem;
+        height:2.5rem;
+    }
 }
 div.kineticjs-content{position:absolute!important}
-.enjoyhint_skip_btn{position:fixed}

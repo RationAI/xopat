@@ -168,19 +168,36 @@ export class ViewerStateBindingController {
             (() => {
                 const viewers = (window.VIEWER_MANAGER?.viewers || []).filter(Boolean);
                 const focus = this.appContext.getOption("viewport", null, true, true);
+                const applied = new Set<OpenSeadragon.Viewer>();
 
                 if (Array.isArray(focus)) {
                     for (let i = 0; i < viewers.length; i++) {
-                        if (focus[i]) applyViewport(viewers[i], focus[i]);
+                        if (focus[i] && applyViewport(viewers[i], focus[i])) applied.add(viewers[i]);
                     }
                 } else if (focus && typeof focus === "object") {
-                    for (const viewerRef of viewers) applyViewport(viewerRef, focus);
+                    for (const viewerRef of viewers) {
+                        if (applyViewport(viewerRef, focus)) applied.add(viewerRef);
+                    }
                 } else {
                     for (const viewerRef of viewers) {
                         const cached = this.appContext.AppCache.get(viewportCacheKey(viewerRef));
                         const parsed = typeof cached === "string" ? (() => { try { return JSON.parse(cached); } catch { return null; } })() : cached;
-                        if (parsed) applyViewport(viewerRef, parsed);
+                        if (parsed && applyViewport(viewerRef, parsed)) applied.add(viewerRef);
                     }
+                }
+
+                // Multi-viewport startup quirk: the first viewer is created while
+                // the stretch grid still has one cell, so its OSD containerSize
+                // gets cached at full width. Adding the second viewer reflows
+                // the grid, but OSD's built-in goHome (fired from addTiledImage
+                // success) preserves the visual scale rather than refitting,
+                // leaving viewer 0 zoomed against its pre-reflow size. Refit
+                // viewers that no session/cache focus has claimed — applied
+                // viewers keep the explicit pan/zoom set by applyViewport.
+                for (const viewerRef of viewers) {
+                    if (applied.has(viewerRef)) continue;
+                    try { viewerRef.forceResize?.(); } catch (_) {}
+                    try { viewerRef.viewport?.goHome?.(true); } catch (_) {}
                 }
 
                 for (const viewerRef of viewers) installViewportCaching(viewerRef);

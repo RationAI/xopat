@@ -1,17 +1,16 @@
 import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
-import { Modal } from "./modal.mjs";
+import { IllustratedModal } from "./illustratedModal.mjs";
 
 const { div, p, button, i: iTag, span } = van.tags;
 
 /**
  * Tutorial selection screen.
  *
- * Owns a {@link Modal} populated with a reactive grid of DaisyUI cards.
- * Each card represents one registered tutorial; clicking it invokes
- * `onSelect(index)`. The list and header text are driven by Van.js state
- * so calls to {@link setEntries}, {@link setTitle}, and {@link setDescription}
- * after mount cheaply update only what changed.
+ * Owns an {@link IllustratedModal}: left pane carries the title/description and
+ * a reactive grid of DaisyUI tutorial cards, right pane shows a themed
+ * illustration. Clicking a card invokes `onSelect(index)`. Title/description
+ * and entries are Van.js-state-driven so updates after mount stay cheap.
  */
 export class TutorialsModal extends BaseComponent {
     constructor(options = {}) {
@@ -24,86 +23,82 @@ export class TutorialsModal extends BaseComponent {
 
         this._titleState = van.state(options.title || "");
         this._descriptionState = van.state(options.description || "");
+        this._exitLabelState = van.state(this.exitLabel);
         this._entries = [];
         this._grid = null;
         this._created = false;
     }
 
     create() {
-        if (this._created) return this.modal.root;
+        if (this._created) return this._illustrated.modal.root;
 
-        const header = div({ class: "text-2xl font-light text-center" }, this._titleState);
+        const header = div({ class: "text-2xl font-light" }, this._titleState);
 
         this._grid = div({
             id: "tutorials",
-            class: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[50vh] overflow-y-auto p-1"
+            class: "grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto pr-1"
         });
 
-        const body = div(
-            { class: "flex flex-col gap-3" },
-            p({ class: "text-center text-sm opacity-70" }, this._descriptionState),
-            this._grid
+        const body = [
+            p({ class: "text-sm opacity-70" }, this._descriptionState),
+            this._grid,
+        ];
+
+        const footer = div(
+            { class: "flex justify-end" },
+            button(
+                { class: "btn btn-primary", onclick: () => this._handleExit() },
+                this._exitLabelState,
+            ),
         );
 
-        const footer = button({
-                class: "btn btn-primary",
-                onclick: () => this._handleExit()
-            },
-            this.exitLabel
-        );
-
-        this.modal = new Modal({
+        this._illustrated = new IllustratedModal({
             id: "tutorials-modal",
             header,
             body,
             footer,
-            width: "min(880px, 92vw)",
+            accent: "accent",
+            illustrationIcon: "ph-graduation-cap",
+            width: "min(960px, 94vw)",
             isBlocking: false,
             allowClose: true,
-            allowResize: false,
-            borderLess: false,
+            onClose: () => this.onClose?.(),
         });
 
-        this.modal.create();
-        if (this.modal.root && !this.modal.root.id) {
-            this.modal.root.id = "tutorials-modal";
+        this._illustrated.create();
+        if (this._illustrated.modal.root && !this._illustrated.modal.root.id) {
+            this._illustrated.modal.root.id = "tutorials-modal";
         }
-
-        const baseClose = this.modal.close.bind(this.modal);
-        this.modal.close = (...args) => {
-            const wasOpen = this.modal.isOpen;
-            const result = baseClose(...args);
-            if (wasOpen) this.onClose?.();
-            return result;
-        };
 
         this._renderEntries();
         this._created = true;
-        return this.modal.root;
+        return this._illustrated.modal.root;
     }
 
     mount(parent = document.body) {
         this.create();
-        this.modal.mount(parent);
+        this._illustrated.mount(parent);
         return this;
     }
 
     open() {
         this.create();
-        if (!this.modal.root.parentNode) {
-            document.body.appendChild(this.modal.root);
-        }
-        this.modal.open();
+        this._illustrated.open();
         return this;
     }
 
     close() {
-        this.modal?.close();
+        this._illustrated?.close();
         return this;
     }
 
     get isOpen() {
-        return !!this.modal?.isOpen;
+        return !!this._illustrated?.isOpen;
+    }
+
+    /** @deprecated Kept for legacy callers that reached into `.modal`. */
+    get modal() {
+        return this._illustrated?.modal;
     }
 
     setTitle(text) {
@@ -116,6 +111,7 @@ export class TutorialsModal extends BaseComponent {
 
     setExitLabel(text) {
         this.exitLabel = text || "Exit";
+        this._exitLabelState.val = this.exitLabel;
     }
 
     /**
