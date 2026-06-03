@@ -274,6 +274,95 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
         }
     }
 
+    async _fetchOutputValues(finalJob, appId) {
+        try {
+            const ead = await window.EmpaiaStandaloneJobs?.getEAD?.(appId) || null;
+            if (!ead?.io) {
+                console.log('[analyze] _fetchOutputValues: no EAD io, skipping');
+                return [];
+            }
+
+            const valueKeys = Object.entries(ead.io)
+                .filter(([, spec]) => spec.type === 'collection' && !spec.items?.reference)
+                .map(([key]) => key);
+
+            if (!valueKeys.length) {
+                console.log('[analyze] no value output keys in EAD for job', finalJob.id);
+                return [];
+            }
+            console.log('[analyze] value output keys:', valueKeys);
+
+            const scope = finalJob._scope;
+            if (!scope) { console.warn('[analyze] _fetchOutputValues: no scope on finalJob'); return []; }
+
+            const job = await scope.jobs.get(finalJob.id);
+            if (!job?.outputs) {
+                console.warn('[analyze] _fetchOutputValues: job has no outputs field', job);
+                return [];
+            }
+
+            const results = [];
+            for (const key of valueKeys) {
+                const collectionId = job.outputs[key];
+                if (!collectionId) {
+                    console.log('[analyze] no collection ID for value key', key);
+                    continue;
+                }
+                try {
+                    const result = await scope.collections.queryItems(collectionId, {});
+                    if (!result?.items?.length) {
+                        console.log('[analyze] empty collection for value key', key);
+                        continue;
+                    }
+                    console.log('[analyze] fetched', result.items.length, 'values for key', key);
+                    results.push({ key, items: result.items });
+                } catch (e) {
+                    console.warn('[analyze] failed to fetch values for key', key, e);
+                }
+            }
+            return results;
+        } catch (e) {
+            console.error('[analyze] _fetchOutputValues failed', e);
+            return [];
+        }
+    }
+
+    _showOutputValuesWindow(valueOutputs) {
+        const { FloatingWindow } = globalThis.UI;
+        const id = `${this.id}-output-values-window`;
+        const width = 360;
+        const height = 420;
+        const startLeft = Math.max(8, Math.round((window.innerWidth - width) / 2));
+        const startTop = Math.max(8, Math.round((window.innerHeight - height) / 2));
+
+        const fw = new FloatingWindow({ id, title: 'Job Results', width, height, startLeft, startTop });
+        fw.attachTo(document.body);
+
+        const body = document.createElement('div');
+        body.className = 'p-3 space-y-4 overflow-auto';
+        body.style.height = '100%';
+
+        for (const { key, items } of valueOutputs) {
+            const section = document.createElement('div');
+            section.className = 'mb-3';
+
+            const heading = document.createElement('div');
+            heading.className = 'text-sm font-medium mb-1';
+            heading.textContent = key;
+            section.appendChild(heading);
+
+            const pre = document.createElement('pre');
+            pre.className = 'text-xs font-mono opacity-80 whitespace-pre-wrap';
+            pre.textContent = items.map((item, i) => `${i}: ${Number(item.value).toFixed(4)}`).join('\n');
+            section.appendChild(pre);
+
+            body.appendChild(section);
+        }
+
+        fw.setBody(body);
+        fw.focus();
+    }
+
     _collapseDropdown(tab) {
         try {
             const btnId = `${tab.parentId}-b-${tab.id}`;
@@ -503,6 +592,11 @@ addPlugin('analyze-dev', class extends XOpatPlugin {
                 console.log('[analyze] Job final:', res);
                 if (isSuccess) {
                     await this._fetchAndRenderResults(res, appId, viewerId);
+                    const valueOutputs = await this._fetchOutputValues(res, appId);
+                    fw.close();
+                    if (valueOutputs.length > 0) {
+                        this._showOutputValuesWindow(valueOutputs);
+                    }
                 }
             } catch (err) {
                 console.error('[analyze] Failed to run app job', err);
