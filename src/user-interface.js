@@ -39,9 +39,24 @@ function initXOpatUI() {
             await this._scheduler.awaitHidden();
         },
 
+        /**
+         * Place the notification toast at the top or the bottom of the viewport.
+         * Persisted on the session via `APPLICATION_CONTEXT.setOption("notificationsPosition", ...)`
+         * so the choice survives serialization.
+         * @param {"top"|"bottom"} position
+         */
+        setPosition(position) {
+            const pos = position === "top" ? "top" : "bottom";
+            this._view?.setPosition(pos);
+            APPLICATION_CONTEXT.setOption("notificationsPosition", pos);
+        },
+
         init() {
             if (this._scheduler) return;
             const view = new UI.Toast();
+            const initialPosition = APPLICATION_CONTEXT.getOption("notificationsPosition", "bottom");
+            view.setPosition(initialPosition);
+            this._view = view;
             this._scheduler = new UI.Toast.Scheduler(view);
 
             (document.body || document.documentElement).appendChild(view.create());
