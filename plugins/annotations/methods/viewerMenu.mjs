@@ -259,6 +259,10 @@ export const viewerMenuMethods = {
             this._bindViewerFabricEvents(viewerId);
 
             state.enableButton = iconButton('ph-eye', this.t('annotations.viewerMenu.toggleVisibility'), (e) => this._toggleEnabled(e.currentTarget));
+            // Stable per-viewer ids so EnjoyHint tutorials can target the
+            // button via `[id$="-annotations-enable-toggle"]` (matches the
+            // active viewer's instance in multi-viewer sessions).
+            state.enableButton.id = `${viewerId}-annotations-enable-toggle`;
             state.outlineButton = iconButton('ph-rectangle-dashed', this.t('annotations.viewerMenu.outlineOnly'), () => {
                 const next = !this.context.getAnnotationCommonVisualProperty('modeOutline');
                 this.setDrawOutline(next);
@@ -272,6 +276,7 @@ export const viewerMenuMethods = {
                     .then((msg) => Dialogs.show(msg))
                     .catch((e) => Dialogs.show(`${this.t('annotations.export.saveFailed')} ${e.message}`, 5000, Dialogs.MSG_ERR));
             });
+            state.saveButton.id = `${viewerId}-annotations-save`;
             state.moreButton = iconButton('ph-dots-three-vertical', this.t('annotations.viewerMenu.moreOptions'), () => {
                 USER_INTERFACE.AppBar.Plugins.openSubmenu(this.id, 'annotations-shared');
             });

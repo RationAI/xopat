@@ -1,6 +1,6 @@
 (function () {
     const PARAM_ENUMS = {
-        theme: ["auto", "light", "dark_dimmed", "dark"],
+        theme: ["auto", "light", "dark"],
         webGlPreferredVersion: ["1.0", "2.0"]
     };
 

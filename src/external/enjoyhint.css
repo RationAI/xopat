@@ -10,14 +10,14 @@
     text-align:center;
     padding:0.5rem 1.25rem;
     min-width:5rem;
-    background-color:hsl(var(--p));
-    color:hsl(var(--pc));
+    background-color:oklch(var(--p));
+    color:oklch(var(--pc));
     border:none;
     border-radius:9999px;
     font-weight:600;
     font-size:0.95rem;
     line-height:1.25rem;
-    box-shadow:0 6px 18px hsl(var(--p) / 0.35), 0 0 0 1px rgba(0,0,0,0.04);
+    box-shadow:0 6px 18px oklch(var(--p) / 0.35), 0 0 0 1px rgba(0,0,0,0.04);
     transition:background-color .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
     position:absolute;
     z-index:1012;
@@ -26,9 +26,9 @@
 }
 .enjoyhint_next_btn:hover,
 .enjoyhint_prev_btn:hover{
-    background-color:hsl(var(--pf, var(--p)));
+    background-color:oklch(var(--pf, var(--p)));
     transform:translateY(-1px);
-    box-shadow:0 10px 26px hsl(var(--p) / 0.45), 0 0 0 1px rgba(0,0,0,0.04);
+    box-shadow:0 10px 26px oklch(var(--p) / 0.45), 0 0 0 1px rgba(0,0,0,0.04);
 }
 .enjoyhint_next_btn:active,
 .enjoyhint_prev_btn:active{
@@ -53,7 +53,7 @@
     justify-content:center;
     border-radius:9999px;
     background-color:rgba(255,255,255,0.95);
-    color:hsl(var(--n));
+    color:oklch(var(--n));
     border:1px solid rgba(255,255,255,0.6);
     box-shadow:0 10px 24px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.06);
     backdrop-filter:blur(8px) saturate(140%);
@@ -61,10 +61,10 @@
     transition:background-color .15s ease-in-out, color .15s ease-in-out, transform .1s ease-in-out, box-shadow .15s ease-in-out;
 }
 .enjoyhint_skip_btn:hover{
-    background-color:hsl(var(--er));
-    color:hsl(var(--erc, #ffffff));
+    background-color:oklch(var(--er));
+    color:oklch(var(--erc, #ffffff));
     transform:scale(1.06);
-    box-shadow:0 12px 28px hsl(var(--er) / 0.55);
+    box-shadow:0 12px 28px oklch(var(--er) / 0.55);
 }
 .enjoyhint_skip_btn:active{
     transform:scale(0.96);

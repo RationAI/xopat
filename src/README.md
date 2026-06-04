@@ -88,7 +88,7 @@ Aligned with `XOpatSetup` in `src/types/config.d.ts:53–87`. **`initXOpat` sile
 |---|---|---|---|
 | `sessionName` | string | — | Unique session id; overridable by `background[i].sessionName`. |
 | `locale` | string | `"en"` | i18next locale. |
-| `theme` | `"auto" \| "light" \| "dark_dimmed" \| "dark"` | `"auto"` | DaisyUI `data-theme`. |
+| `theme` | `"auto" \| "light" \| "dark"` | `"auto"` | DaisyUI `data-theme`; `"auto"` follows the OS preference. (`"dark_dimmed"` / `"dimmed"` were never wired up in the v3 UI.) |
 | `customBlending` | bool | `false` | Allow user-programmed blending. |
 | `debugMode` | bool | `false` | Verbose runtime instrumentation. |
 | `webglDebugMode` | bool | `false` | Debug post-processing. |

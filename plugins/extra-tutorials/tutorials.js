@@ -112,25 +112,35 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
         const accent = cfg.accent || 'primary';
         const eyebrow = cfg.eyebrow || 'Tutorial';
 
+        // Theme-reactive pastel: full-opacity pastel stops blended against
+        // `oklch(var(--b1))` via `background-blend-mode: multiply`. Light
+        // themes show the pastels untouched (white * pastel = pastel); dark
+        // themes multiply the pastels toward the dark base for a muted,
+        // gently tinted variant. Override via `confirm.gradient` for a
+        // punchier look — the multiply still applies, so custom gradients
+        // also dim naturally in dark mode.
         const gradient = cfg.gradient
-            || 'linear-gradient(135deg, #6366f1 0%, #a855f7 35%, #ec4899 70%, #f59e0b 100%)';
+            || 'linear-gradient(135deg, #c7d2fe 0%, #ddd6fe 25%, #fbcfe8 55%, #fed7aa 85%, #fef3c7 100%)';
 
+        // Illustration icon adapts too — `oklch(var(--bc))` reads as a dark
+        // glyph on the light pastel and a light glyph on the dim variant.
         const illustration = cfg.image
             ? img({
                 src: cfg.image,
                 alt: '',
-                style: 'max-width: 78%; max-height: 220px; object-fit: contain; filter: drop-shadow(0 14px 32px rgba(0,0,0,0.25));',
+                style: 'max-width: 78%; max-height: 220px; object-fit: contain; filter: drop-shadow(0 14px 32px rgba(0,0,0,0.18));',
                 onerror: (e) => e.target.remove(),
             })
             : iTag({
                 class: `ph-light ${cfg.illustrationIcon || 'ph-graduation-cap'}`,
-                style: 'font-size: 8.5rem; line-height: 1; color: #ffffff;'
-                     + ' filter: drop-shadow(0 12px 28px rgba(0,0,0,0.32));',
+                style: 'font-size: 8.5rem; line-height: 1; color: oklch(var(--bc));'
+                     + ' opacity: 0.78;'
+                     + ' filter: drop-shadow(0 10px 22px oklch(var(--bc) / 0.18));',
             });
 
         // Glass tuned so circles read through the left pane as soft blurred
         // shapes (glassmorphism) while text stays readable.
-        const glassBg = 'hsl(var(--b1) / 0.7)';
+        const glassBg = 'oklch(var(--b1) / 0.7)';
         const glassFx = 'backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%);';
 
         let modal;
@@ -164,7 +174,7 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
             },
             span({
                 style: 'display: inline-block; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;'
-                     + ' color: hsl(var(--p)); opacity: 0.85; margin-bottom: 0.5rem;',
+                     + ' color: oklch(var(--p)); opacity: 0.85; margin-bottom: 0.5rem;',
             }, eyebrow),
             div({
                 class: 'font-medium',
@@ -172,7 +182,7 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
             }, title),
             div({
                 style: 'width: 2.5rem; height: 3px; border-radius: 9999px; margin-bottom: 1rem;'
-                     + ' background: linear-gradient(90deg, hsl(var(--p)), hsl(var(--a)));',
+                     + ' background: linear-gradient(90deg, oklch(var(--p)), oklch(var(--a)));',
             }),
             (() => {
                 const node = p({ style: 'font-size: 0.95rem; line-height: 1.6; opacity: 0.82; flex: 1 1 auto;' });
@@ -195,13 +205,13 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
                 style: `position: relative; z-index: 3; display: flex; justify-content: flex-end; align-items: center; gap: 0.5rem;`
                      + ` padding: 0.875rem 1.25rem;`
                      + ` background: ${glassBg}; ${glassFx}`
-                     + ` box-shadow: inset 0 1px 0 hsl(var(--bc) / 0.06);`,
+                     + ` box-shadow: inset 0 1px 0 oklch(var(--bc) / 0.06);`,
             },
             // Skip: text-only, no background fill — even on hover/focus.
             button({
                 style: 'background: transparent; border: none; box-shadow: none;'
                      + ' min-height: 2.25rem; height: 2.25rem; padding: 0 0.875rem;'
-                     + ' color: hsl(var(--bc)); opacity: 0.7; cursor: pointer;'
+                     + ' color: oklch(var(--bc)); opacity: 0.7; cursor: pointer;'
                      + ' font-size: 0.875rem; font-weight: 500;'
                      + ' transition: opacity 0.15s ease;',
                 onmouseenter: (e) => e.currentTarget.style.opacity = '1',
@@ -212,7 +222,7 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
             // backdrop so it reads as the unmistakable primary CTA.
             button({
                 style: 'min-height: 2.25rem; height: 2.25rem; border-radius: 9999px; padding: 0 1.5rem;'
-                     + ' background: #ffffff; color: hsl(var(--p));'
+                     + ' background: #ffffff; color: oklch(var(--p));'
                      + ' border: none; cursor: pointer;'
                      + ' font-size: 0.875rem; font-weight: 600; letter-spacing: 0.01em;'
                      + ' box-shadow: 0 8px 20px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.04);'
@@ -244,15 +254,20 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
             {
                 style: `position: relative; display: flex; flex-direction: column;`
                      + ` border-radius: 1rem; overflow: hidden;`
-                     + ` background: ${gradient};`
-                     + ` box-shadow: 0 24px 60px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.10);`,
+                     + ` background-image: ${gradient};`
+                     + ` background-color: oklch(var(--b1));`
+                     + ` background-blend-mode: multiply;`
+                     + ` box-shadow: 0 22px 50px rgba(31,41,55,0.22), inset 0 0 0 1px rgba(255,255,255,0.45);`,
             },
-            circle('top: -5rem; left: -2rem; width: 16rem; height: 16rem; background: rgba(255,255,255,0.20);'),
-            circle('top: 30%; left: 18%; width: 10rem; height: 10rem; background: rgba(255,255,255,0.13);'),
-            circle('bottom: -6rem; left: 35%; width: 18rem; height: 18rem; background: rgba(255,255,255,0.14);'),
-            circle('top: -3rem; right: -4rem; width: 14rem; height: 14rem; background: rgba(255,255,255,0.18);'),
-            circle('top: 45%; right: 22%; width: 5rem; height: 5rem; background: rgba(255,255,255,0.22);'),
-            circle('bottom: -4rem; right: 20%; width: 9rem; height: 9rem; background: rgba(255,255,255,0.12);'),
+            // Soft white highlights. Higher alpha than the v1 saturated draft
+            // because pastels need the bumps to read; on a dark theme they
+            // become subtle glow spots, still on-brand.
+            circle('top: -5rem; left: -2rem; width: 16rem; height: 16rem; background: rgba(255,255,255,0.45); filter: blur(2px);'),
+            circle('top: 30%; left: 18%; width: 10rem; height: 10rem; background: rgba(255,255,255,0.30);'),
+            circle('bottom: -6rem; left: 35%; width: 18rem; height: 18rem; background: rgba(255,255,255,0.32); filter: blur(2px);'),
+            circle('top: -3rem; right: -4rem; width: 14rem; height: 14rem; background: rgba(255,255,255,0.40);'),
+            circle('top: 45%; right: 22%; width: 5rem; height: 5rem; background: rgba(255,255,255,0.50);'),
+            circle('bottom: -4rem; right: 20%; width: 9rem; height: 9rem; background: rgba(255,255,255,0.28);'),
             body,
             footer,
             closeButton,

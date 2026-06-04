@@ -19,6 +19,14 @@
         "authors": "Authors"
       }
     },
+    "tutorial": {
+      "title": "Annotations",
+      "description": "Draw, save and share annotations on the slide.",
+      "openPanel": "Open the <b>Annotations</b> tab on the right edge to access the toolbar, the class presets and the annotation list.",
+      "enable": "Toggle the whole annotations layer on/off — this also disables drawing hotkeys, so you can pan freely without accidental strokes.",
+      "save": "Export or save annotations. Depending on the session config this goes to a connected server, downloads a file, or both.",
+      "canvas": "Drawing happens directly on the slide: pick a class preset, then click-drag to outline a region. Right-click an annotation to copy / move / delete it. Hotkeys are listed under <i>More options</i> in the toolbar."
+    },
     "toolbar": {
       "title": "Annotations",
       "undo": "Undo",

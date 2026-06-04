@@ -314,7 +314,7 @@
         // can disable cache data loading
         "bypassCache": false,
         "bypassCacheLoadTime": false,
-        // can be dimmed, dark, light, auto
+        // "auto" (follows the OS preference), "dark" or "light".
         "theme": "auto",
         "maxImageCacheCount": 1200,
         // can be only 2.0 for now

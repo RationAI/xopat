@@ -43,3 +43,6 @@ used by other plugins, modules, and parts of the viewer to add and control diffe
 
 - **`GlobalTooltip`**
   A singleton tooltip service that allows components to display contextual help text without needing localized tooltip DOM structures everywhere.
+
+- **Tutorials (`USER_INTERFACE.Tutorials`)**
+  The tutorial launcher. `Tutorials.show()` opens the `UI.TutorialsModal` (an `IllustratedModal`-backed two-pane modal); each card kicks off an EnjoyHint walk through the registered steps. Author new tutorials via `USER_INTERFACE.Tutorials.add(pluginId, name, description, icon, steps, prerequisites?)` and consult `src/TUTORIALS.md` for the selector cookbook and step grammar (`next` / `click` actions, `runIf` guards, viewer-agnostic `[id$="-…"]` selectors).

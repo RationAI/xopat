@@ -91,30 +91,47 @@ export class IllustratedModal extends BaseComponent {
         if (this._created) return this.modal.root;
 
         const palette = this.palette;
+
+        // Layout uses inline styles instead of arbitrary Tailwind utilities
+        // (`md:grid-cols-[minmax…]`, `min-h-[420px]`) because the shipped
+        // tailwind.min.css doesn't include them — relying on those classes
+        // collapses the modal to a single column. The palette tint classes
+        // (bg-accent/20 etc.) are in the bundle and are kept for theme-aware
+        // colouring.
+        const hideRightPane = typeof window !== "undefined" && window.innerWidth < 768;
+
         const leftPane = div(
-            { class: "flex flex-col gap-4 p-8 md:p-10 min-h-[420px]" },
+            {
+                class: "flex flex-col gap-4",
+                style: "padding: 2.25rem 2rem; min-height: 420px;",
+            },
             this._headerSlot,
             this._bodySlot,
             this._footerSlot,
         );
 
-        // Right pane: decorative circles + centred illustration slot.
-        // The pane is purely cosmetic on < md and is hidden to give content room.
+        // Right pane: tinted background + decorative blurred circles + centred illustration.
         const rightPane = div(
             {
-                class: `relative hidden md:flex overflow-hidden rounded-r-2xl ${palette.pane}`,
+                class: `relative overflow-hidden ${palette.pane}`,
+                style: `display: ${hideRightPane ? "none" : "flex"}; border-radius: 0 1rem 1rem 0;`,
             },
-            div({ class: `absolute -top-24 -left-20 w-72 h-72 rounded-full ${palette.circleA}` }),
-            div({ class: `absolute top-1/2 -right-24 w-96 h-96 rounded-full ${palette.circleB}` }),
-            div({ class: `absolute -bottom-28 left-1/3 w-80 h-80 rounded-full ${palette.circleC}` }),
+            div({ class: `absolute rounded-full ${palette.circleA}`, style: "top: -6rem; left: -5rem; width: 18rem; height: 18rem; filter: blur(2px);" }),
+            div({ class: `absolute rounded-full ${palette.circleB}`, style: "top: 35%; right: -6rem; width: 22rem; height: 22rem; filter: blur(3px);" }),
+            div({ class: `absolute rounded-full ${palette.circleC}`, style: "bottom: -7rem; left: 30%; width: 20rem; height: 20rem; filter: blur(2px);" }),
             div(
-                { class: "relative w-full h-full flex items-center justify-center p-8" },
+                {
+                    class: "relative",
+                    style: "z-index: 1; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 2rem;",
+                },
                 this._illustrationSlot,
             ),
         );
 
         const grid = div(
-            { class: "grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] rounded-2xl overflow-hidden" },
+            {
+                style: `display: grid; grid-template-columns: ${hideRightPane ? "1fr" : "minmax(0, 1fr) minmax(0, 1fr)"}; border-radius: 1rem; overflow: hidden;`,
+            },
             leftPane,
             rightPane,
         );
