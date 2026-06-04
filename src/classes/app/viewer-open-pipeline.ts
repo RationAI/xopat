@@ -834,23 +834,32 @@ export class ViewerOpenPipeline {
         // wrappers are no longer needed in this file.
 
         const openPlaceholder = (viewer: OpenSeadragon.Viewer, errorMessage: any, index: number, originalSource: any, onOpen: (ok: boolean) => void) => {
+            // A real EmptyTileSource (rather than `{ type: "_blank" }`) so downstream
+            // code that reads `item.source.dimensions` — annotations wrapper,
+            // scalebar, navigator, etc. — sees a valid TiledImage instead of
+            // crashing on an undefined `.source`. The dimensions mirror the
+            // sentinel used by viewer-state-binding-controller.ts.
+            const errorText =
+                errorMessage ||
+                $.t("error.slide.pending") + " " + $.t("error.slide.imageLoadFail") + " " +
+                (originalSource && originalSource.toString ? originalSource.toString() : "");
             viewer.addTiledImage({
-                tileSource: {
-                    type: "_blank",
-                    error:
-                        errorMessage ||
-                        $.t("error.slide.pending") + " " + $.t("error.slide.imageLoadFail") + " " +
-                        (originalSource && originalSource.toString ? originalSource.toString() : "")
-                },
+                tileSource: new (OpenSeadragon as any).EmptyTileSource({
+                    width: 20000,
+                    height: 20000,
+                    tileSize: 512,
+                    error: errorText,
+                }),
                 opacity: 0,
                 index,
                 success: (e: any) => {
                     e.item.__targetIndex = index;
                     e.item.getConfig = (_type: string | undefined) => undefined;
+                    console.info(`[openPlaceholder] EmptyTileSource registered at index=${index}, worldCount=${viewer.world.getItemCount()}`);
                     onOpen(false);
                 },
                 error: (e: any) => {
-                    console.error(e);
+                    console.error("[openPlaceholder] EmptyTileSource failed to attach:", e);
                     onOpen(false);
                 }
             });
