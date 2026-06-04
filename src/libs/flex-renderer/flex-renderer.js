@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-06-02
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-04
+//! Git commit: --343ea79-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -6748,7 +6748,7 @@ $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIContro
                 { name: "max", type: "number", default: 1 },
                 { name: "minGap", type: "number", default: 0.05 },
                 { name: "step", type: "null|number", default: null },
-                { name: "pips", type: "object" }
+                { name: "pips", type: "object", description: "noUiSlider pips config. Extra field `labels` accepts an object map { value: 'text' } that overrides the displayed text for matching pip positions; unmatched pips keep the numeric format. When `labels` is present, pip text is rendered vertically." }
             ],
             glType: "float"
         };
@@ -6829,6 +6829,35 @@ return masked * bigger / actualLength;
             from: v => Number.parseFloat(v)
         };
 
+        // `pips.labels` is our extension over noUiSlider — a { value: "text" } map
+        // that overrides the displayed text for matching pip positions while leaving
+        // tooltips (which share `format`) numeric. Strip it from the object handed
+        // to noUiSlider so its config remains pure.
+        const pipsLabels = this.params.pips && typeof this.params.pips.labels === "object"
+            ? this.params.pips.labels : null;
+        let userPips = this.params.pips;
+        if (pipsLabels) {
+            userPips = $.extend({}, this.params.pips);
+            delete userPips.labels;
+        }
+        const pipsFormat = pipsLabels ? {
+            to: v => {
+                if (Object.prototype.hasOwnProperty.call(pipsLabels, v)) {
+                    return String(pipsLabels[v]);
+                }
+                if (Object.prototype.hasOwnProperty.call(pipsLabels, String(v))) {
+                    return String(pipsLabels[String(v)]);
+                }
+                for (const k of Object.keys(pipsLabels)) {
+                    if (Math.abs(Number(k) - v) < 1e-6) {
+                        return String(pipsLabels[k]);
+                    }
+                }
+                return format.to(v);
+            },
+            from: format.from
+        } : format;
+
         if (this.params.interactive) {
             const _this = this;
             let container = document.getElementById(this.id);
@@ -6850,8 +6879,12 @@ return masked * bigger / actualLength;
                 behaviour: 'drag',
                 tooltips: true,
                 format: format,
-                pips: $.extend({format: format}, this.params.pips)
+                pips: $.extend({format: pipsFormat}, userPips)
             });
+
+            if (pipsLabels) {
+                container.classList.add("er-slider--vertical-pips");
+            }
 
             if (this.params.pips) {
                 let pips = container.querySelectorAll('.noUi-value');
@@ -17179,7 +17212,9 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
     construct(options, dataReferences) {
         super.construct(options, dataReferences);
         //delete unused controls if applicable after initialization
-        if (this.color.getName() !== "colormap") {
+        // Any ColorMap-family control (including custom_colormap) exposes setSteps and
+        // can therefore honour `connect`. Matching the name string excluded subclasses.
+        if (typeof this.color.setSteps !== "function") {
             this.removeControl("connect");
         }
     }
@@ -17234,10 +17269,20 @@ $.FlexRenderer.ShaderLayerRegistry.register(class extends $.FlexRenderer.ShaderL
 
         // Read breaks through the same canonical accessor the coupling validator uses,
         // so validation cannot disagree with runtime coercion. Live drag updates pass
-        // their fresh values into syncColor() directly via the 'breaks' callback.
+        // their fresh values into syncColor() directly via the 'breaks' callback;
+        // other call sites (e.g. the connect toggle) get them from the slider's live
+        // state, which `params.breaks` lags behind once the user has dragged.
         const breaksOf = (override) => {
             if (Array.isArray(override)) {
                 return override.map(v => Number.parseFloat(v)).filter(v => Number.isFinite(v));
+            }
+            if (this.threshold && Array.isArray(this.threshold.raw)) {
+                const live = this.threshold.raw
+                    .map(v => Number.parseFloat(v))
+                    .filter(v => Number.isFinite(v) && v >= 0 && v <= 1);
+                if (live.length > 0) {
+                    return live;
+                }
             }
             return Configurator.resolveEffectiveBreaks(this.threshold && this.threshold.params);
         };
@@ -24918,8 +24963,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-06-02
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-04
+//! Git commit: --343ea79-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25538,8 +25583,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-02
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-04
+//! Git commit: --343ea79-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26247,8 +26292,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-02
-//! Git commit: --ad0aa5b-dirty
+//! Built on 2026-06-04
+//! Git commit: --343ea79-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

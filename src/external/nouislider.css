@@ -131,9 +131,9 @@
 }
 .noUi-handle {
     width: 12px !important;
-    height: 12px !important;
+    height: 11px !important;
     right: -5px !important;
-    top: -6px !important;
+    top: -5px !important;
     border-radius: 50% !important;
     background: oklch(var(--p)) !important; /* Use primary color */
     border: 2px solid white !important;
@@ -205,6 +205,7 @@
 .noUi-value-horizontal {
     -webkit-transform: translate(-50%, 50%);
     transform: translate(-50%, 50%);
+    top: 5px;
 }
 .noUi-rtl .noUi-value-horizontal {
     -webkit-transform: translate(50%, 50%);
@@ -219,7 +220,7 @@
     height: 10px;
 }
 .noUi-marker-horizontal.noUi-marker-large {
-    height: 15px;
+    height: 12px;
 }
 
 /* Vertical layout; */

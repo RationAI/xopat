@@ -335,7 +335,8 @@
         "isStaticPreview": false,
         "historySize": 50,
         "maxMobileWidthPx": 900,
-        "globalMenuMaxWidth": 1200
+        "globalMenuMaxWidth": 1200,
+        "notificationsPosition": "bottom"
     },
     /**
      * The Server configuration. This object is here just for the reference and

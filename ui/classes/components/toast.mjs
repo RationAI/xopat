@@ -36,6 +36,23 @@ export class Toast extends BaseComponent {
         this._onClosed = null;
         this._onPendingClick = null;
         this._hideT = null;
+        this._position = "bottom";
+    }
+
+    /**
+     * Place the toast container at the top or the bottom of the viewport.
+     * Safe to call before or after {@link create}.
+     * @param {"top"|"bottom"} position
+     */
+    setPosition(position) {
+        const pos = position === "top" ? "top" : "bottom";
+        this._position = pos;
+        if (!this.root) return;
+        this.root.classList.remove("toast-top", "toast-bottom");
+        this.root.classList.add(pos === "top" ? "toast-top" : "toast-bottom");
+        // Inline offsets sidestep Tailwind purge issues with `top-4` / `bottom-4`.
+        this.root.style.top = pos === "top" ? "1rem" : "";
+        this.root.style.bottom = pos === "top" ? "" : "1rem";
     }
 
     /**
@@ -194,13 +211,15 @@ export class Toast extends BaseComponent {
     }
 
     create() {
+        const verticalClass = this._position === "top" ? "toast-top" : "toast-bottom";
         this.root = div(
             {
                 id: this.id,
                 class:
                     "hidden opacity-0 transition-opacity duration-150 " +
-                    "fixed left-1/2 bottom-4 -translate-x-1/2 z-[5050] " +
-                    "toast toast-bottom toast-center"
+                    "fixed left-1/2 -translate-x-1/2 z-[5050] " +
+                    `toast ${verticalClass} toast-center`,
+                style: this._position === "top" ? "top:1rem" : "bottom:1rem"
             },
             div(
                 { "data-toast-card": "", class: "relative" },

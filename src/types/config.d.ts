@@ -128,6 +128,13 @@ type XOpatSetup = {
     bypassCache?: boolean | null;
     bypassCacheLoadTime?: boolean | null;
     theme?: string | null;
+    /**
+     * Vertical placement of the system notification toast (`window.Dialogs`).
+     * Default `"bottom"`. Set to `"top"` for embeddings where the bottom edge
+     * is reserved (e.g. notebook hosts with their own status bar). Runtime
+     * changes via `Dialogs.setPosition(...)` persist on this same key.
+     */
+    notificationsPosition?: "top" | "bottom" | null;
     maxImageCacheCount?: number | null;
     webGlPreferredVersion?: string | null;
     preferredFormat?: string | null;

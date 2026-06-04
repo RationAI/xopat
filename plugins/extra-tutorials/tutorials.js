@@ -1,7 +1,69 @@
+// Allowlist for text fields exposed to the embedder. Mirrors what we've been
+// using in tutorial copy (<b>, <br/>, <code>, <i>, <em>). All attributes are
+// stripped (no style/class/on*); unknown tags are unwrapped to text.
+const SANITIZE_OPTS = {
+    allowedTags: ['b','strong','i','em','u','br','code','span','sub','sup'],
+    allowedAttributes: {},
+    disallowedTagsMode: 'discard',
+    allowedSchemes: [],
+};
+
+const cleanHtml = (s) => (typeof s === 'string' ? SanitizeHtml(s, SANITIZE_OPTS) : s);
+
+// `image` is a URL, not HTML — reject javascript: schemes; allow http(s)/data/relative.
+const cleanImage = (s) => {
+    if (typeof s !== 'string') return s;
+    return /^\s*javascript:/i.test(s) ? '' : s;
+};
+
+// `gradient` is a CSS background string. Reject anything with HTML brackets or
+// a javascript: scheme; legitimate gradients have neither.
+const cleanGradient = (s) => {
+    if (typeof s !== 'string') return s;
+    if (/[<>]/.test(s) || /javascript:/i.test(s)) return '';
+    return s;
+};
+
+function sanitizeStep(step) {
+    if (!step || typeof step !== 'object') return step;
+    const out = {};
+    for (const [key, value] of Object.entries(step)) {
+        // Selector keys must never contain HTML — drop entries that do.
+        if (typeof key === 'string' && key.includes('<')) continue;
+        out[key] = (typeof value === 'string') ? cleanHtml(value) : value;
+    }
+    return out;
+}
+
+function sanitizeTutorial(t) {
+    if (!t || typeof t !== 'object') return t;
+    const out = { ...t };
+    out.title = cleanHtml(t.title);
+    out.description = cleanHtml(t.description);
+    if (Array.isArray(t.content)) out.content = t.content.map(sanitizeStep);
+    if (t.confirm && typeof t.confirm === 'object') {
+        out.confirm = {
+            ...t.confirm,
+            title: cleanHtml(t.confirm.title),
+            eyebrow: cleanHtml(t.confirm.eyebrow),
+            message: cleanHtml(t.confirm.message),
+            acceptLabel: cleanHtml(t.confirm.acceptLabel),
+            declineLabel: cleanHtml(t.confirm.declineLabel),
+            image: cleanImage(t.confirm.image),
+            gradient: cleanGradient(t.confirm.gradient),
+        };
+    }
+    return out;
+}
+
 addPlugin("extra-tutorials", class extends XOpatPlugin {
     constructor(id) {
         super(id);
-        this.tutorials = this.getOption('data', []);
+        const raw = this.getOption('data', []);
+        // External input — sanitize once at load so the render paths
+        // (innerHTML for the welcome modal, EnjoyHint .html() for step labels)
+        // never see hostile markup.
+        this.tutorials = Array.isArray(raw) ? raw.map(sanitizeTutorial) : [];
     }
 
     pluginReady() {
