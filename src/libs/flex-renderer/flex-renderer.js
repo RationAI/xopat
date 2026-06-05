@@ -20365,68 +20365,46 @@ ${this._delegateShader.htmlControls(wrapper, classes, css)}`;
 })(OpenSeadragon);
 
 (function ($) {
-/**
- * MVTTileJSONSource
- * ------------------
- * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
- * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
- * caches using the `vector-mesh` format.
- *
- * Requirements:
- *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
- *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
- *
- * Usage:
- *   const src = await OpenSeadragon.MVTTileJSONSource.from(
- *     'https://tiles.example.com/basemap.json',
- *     { style: defaultStyle() }
- *   );
- *   viewer.addTiledImage({ tileSource: src });
- *
- * Usage (local server for testing via docker):
- *     Download desired vector tiles from the server, and run:
- *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
- *
- * Alternatives (not supported):
- *      PMTiles range queries
- *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
- *
- *
- * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
- */
-$.MVTTileSource = class extends $.TileSource {
-    constructor({
-                    template,
-                    scheme = 'xyz',
-                    tileSize = 512,
-                    minLevel = 0,
-                    maxLevel = 14,
-                    width,
-                    height,
-                    extent = 4096,
-                    style,
-                    useNativeLines = false,
-                    httpAdapter = null
-                }) {
-        super({ width, height, tileSize, minLevel, maxLevel });
+// Shared MVT worker pipeline for concrete vector tile sources.
+class AbstractMVTTileSource extends $.TileSource {
+    constructor(options = {}) {
+        const normalizedOptions = {
+            tileSize: 512,
+            minLevel: 0,
+            maxLevel: 14,
+            ...options,
+        };
+
+        super(normalizedOptions);
+
+        if (normalizedOptions._isVector !== false) {
+            this._initVectorPipeline(normalizedOptions);
+        }
+    }
+
+    _initVectorPipeline({
+        template = null,
+        scheme = 'xyz',
+        extent = 4096,
+        style,
+        useNativeLines = false,
+        httpAdapter = null,
+    } = {}) {
         this.template = template;
         this.scheme = scheme;
         this.extent = extent;
         this.style = style || defaultStyle();
         this.useNativeLines = useNativeLines === true;
 
-        // Resolve adapter: explicit option wins, fall back to the drawer-level default.
+        // Shared worker HTTP bridge; also used by GeoJSONTileSource.
         this._httpAdapter = httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null;
-
         this._worker = makeWorker();
-        this._pending = new Map(); // key -> {resolve,reject}
+        this._pending = new Map();
 
-        // Install the HTTP bridge before any postMessage that may trigger fetches.
         this._httpBridge = (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function')
             ? $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter)
             : null;
 
-        // Wire worker responses
         this._worker.onmessage = (e) => {
             const msg = e.data;
             if (!msg || !msg.key) {
@@ -20457,13 +20435,72 @@ $.MVTTileSource = class extends $.TileSource {
             }
         };
 
-        // Send config once
         this._worker.postMessage({
             type: 'config',
             extent: this.extent,
             style: this.style,
-            useNativeLines: this.useNativeLines
+            useNativeLines: this.useNativeLines,
         });
+    }
+
+    downloadTileStart(context) {
+        const tile = context.tile;
+        const key = context.src;
+
+        const list = this._pending.get(key);
+        if (list) {
+            list.push(context);
+            return;
+        }
+
+        this._pending.set(key, [context]);
+
+        this._worker.postMessage({
+            type: 'tile',
+            key: key,
+            z: tile.level,
+            x: tile.x,
+            y: tile.y,
+            url: context.src,
+        });
+    }
+}
+
+$.FlexRenderer.MVT ??= {};
+$.FlexRenderer.MVT.AbstractTileSource = AbstractMVTTileSource;
+
+/**
+ * MVTTileJSONSource
+ * ------------------
+ * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
+ * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
+ * caches using the `vector-mesh` format.
+ *
+ * Requirements:
+ *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
+ *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
+ *
+ * Usage:
+ *   const src = await OpenSeadragon.MVTTileJSONSource.from(
+ *     'https://tiles.example.com/basemap.json',
+ *     { style: defaultStyle() }
+ *   );
+ *   viewer.addTiledImage({ tileSource: src });
+ *
+ * Usage (local server for testing via docker):
+ *     Download desired vector tiles from the server, and run:
+ *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
+ *
+ * Alternatives (not supported):
+ *      PMTiles range queries
+ *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
+ *
+ *
+ * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
+ */
+$.MVTTileSource = class extends $.FlexRenderer.MVT.AbstractTileSource {
+    constructor(options) {
+        super(options);
     }
 
     /**
@@ -20575,31 +20612,6 @@ $.MVTTileSource = class extends $.TileSource {
 
     getTileHashKey(level, x, y) {
         return `mvt:${this.useNativeLines ? 'native-lines' : 'stroke-lines'}:${this.getTileUrl(level, x, y)}`;
-    }
-
-    /**
-     * Return a FlexDrawer cache object directly (vector-mesh).
-     */
-    downloadTileStart(context) {
-        const tile = context.tile;
-        const key = context.src;
-
-        const list = this._pending.get(key);
-        if (list) {
-            list.push(context);
-            return;
-        }
-
-        this._pending.set(key, [ context ]);
-
-        this._worker.postMessage({
-            type: 'tile',
-            key: key,
-            z: tile.level,
-            x: tile.x,
-            y: tile.y,
-            url: context.src
-        });
     }
 };
 
@@ -25581,7 +25593,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2026-06-04
 //! Git commit: --343ea79-dirty
@@ -26290,7 +26303,8 @@ function computeAABB(f) {
 }
 
 `;
-})(typeof self !== 'undefined' ? self : window);
+})(typeof self !== 'undefined' ? self : window);
+
 //! flex-renderer 0.0.1
 //! Built on 2026-06-04
 //! Git commit: --343ea79-dirty
