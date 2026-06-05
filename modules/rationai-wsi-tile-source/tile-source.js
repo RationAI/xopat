@@ -169,9 +169,18 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                     console.error('RationaiStandaloneV3TileSource: MVT slide info missing levels', data);
                     return undefined;
                 }
+                // data.tilesUrl is set by supports() in the standard flow. In the
+                // empaia-standalone flow _getInfo calls configure() with raw server JSON
+                // that does not carry tilesUrl, so fall back to extracting it from url.
+                const tilesUrl = data.tilesUrl
+                    || url?.match(/^(\/?[^\/].*\/v3\/(?:files|slides))/i)?.[1];
+                if (!tilesUrl || !data.id) {
+                    console.error('RationaiStandaloneV3TileSource: MVT configure missing tilesUrl or id', { tilesUrl, id: data.id });
+                    return undefined;
+                }
                 const tileSize = data.tile_extent?.x || 512;
                 const maxLevel = data.levels.length - 1;
-                const template = `${data.tilesUrl}/tile/level/{z}/tile/{x}/{y}?slide_id=${data.id}`;
+                const template = `${tilesUrl}/tile/level/{z}/tile/{x}/{y}?slide_id=${data.id}`;
                 const worldSize = Math.pow(2, maxLevel) * tileSize;
                 return {
                     _isVector: true,
@@ -194,7 +203,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                     innerFormat: data.format,
                     multifetch: false,
                     fileId: data.id,
-                    tilesUrl: data.tilesUrl,
+                    tilesUrl: tilesUrl,
                     metadata: (() => {
                         const ps = data.pixel_size_nm;
                         const x = ps?.x, y = ps?.y;
