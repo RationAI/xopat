@@ -145,6 +145,17 @@ export class TutorialsModal extends BaseComponent {
             style: "position: relative; z-index: 2; padding: 1rem 1.875rem 0.75rem; max-height: 55vh;",
         });
 
+        // Mobile notice — rendered in place of the card grid when the
+        // launcher decides tutorials shouldn't run at the current viewport
+        // width. Hidden by default; toggled by setMobileNotice() /
+        // clearMobileNotice().
+        this._mobileNotice = div({
+            style: "display: none; position: relative; z-index: 2;"
+                 + " padding: 1.5rem 1.875rem 1.25rem;"
+                 + " color: oklch(var(--bc)); opacity: 0.86; line-height: 1.55;"
+                 + " font-size: 0.95rem; text-align: center;",
+        });
+
         // Custom close button — the modal-box default X has poor contrast on
         // the vibrant gradient.
         const closeButton = div(
@@ -193,6 +204,7 @@ export class TutorialsModal extends BaseComponent {
             circle("top: 10%; left: 38%; width: 6rem; height: 6rem; background: rgba(255,255,255,0.55);"),
             header,
             this._grid,
+            this._mobileNotice,
             footer,
             closeButton,
         );
@@ -280,6 +292,30 @@ export class TutorialsModal extends BaseComponent {
     setExitLabel(text) {
         this.exitLabel = text || "Exit";
         this._exitLabelState.val = this.exitLabel;
+    }
+
+    /**
+     * Replace the card grid with an info notice. Used by
+     * `USER_INTERFACE.Tutorials.show()` to explain why no tutorials can be
+     * launched at mobile widths instead of opening an empty / non-functional
+     * launcher.
+     * @param {string} text plain-text or HTML notice copy.
+     */
+    setMobileNotice(text) {
+        this.create();
+        if (!this._mobileNotice) return;
+        this._mobileNotice.innerHTML = String(text ?? "");
+        this._mobileNotice.style.display = "block";
+        if (this._grid) this._grid.style.display = "none";
+    }
+
+    /** Re-show the card grid hidden by `setMobileNotice`. */
+    clearMobileNotice() {
+        if (this._mobileNotice) {
+            this._mobileNotice.style.display = "none";
+            this._mobileNotice.replaceChildren();
+        }
+        if (this._grid) this._grid.style.display = "grid";
     }
 
     /**

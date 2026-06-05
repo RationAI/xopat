@@ -558,6 +558,20 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
             _modal: null,
             running: false,
 
+            /**
+             * Tutorials don't lay out reliably below the same threshold the
+             * MobileBottomBar / collapsed AppBar swap kicks in at — when the
+             * viewport is mobile-shaped, the launcher shows an info notice
+             * instead of cards and `run` short-circuits with a toast. The
+             * gate reads the SAME knob the rest of the mobile UI uses, so a
+             * session that bumps `maxMobileWidthPx` also moves the tutorial
+             * gate in lock-step.
+             */
+            _isMobile: function () {
+                const threshold = APPLICATION_CONTEXT.getOption("maxMobileWidthPx") || 900;
+                return window.innerWidth < threshold;
+            },
+
             _ensureModal: function () {
                 if (this._modal) return this._modal;
                 this._modal = new UI.TutorialsModal({
@@ -588,6 +602,15 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                 modal.setTitle(title);
                 modal.setDescription(description);
                 modal.setExitLabel($.t('common.Exit'));
+                // Swap the card grid for an info notice when the viewport is
+                // mobile-shaped; re-show the grid on desktop. The launcher
+                // re-evaluates on each open so resizing across the threshold
+                // and re-opening just works.
+                if (this._isMobile()) {
+                    modal.setMobileNotice($.t('tutorials.notAvailableOnMobile'));
+                } else {
+                    modal.clearMobileNotice();
+                }
                 modal.open();
                 this.running = true;
             },
@@ -672,6 +695,13 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
              *  see add(..) steps parameter
              */
             run: function(ctx) {
+                // Single gate for every EnjoyHint launch path — launcher
+                // card click, extra-tutorials auto-run, direct programmatic
+                // call. Stops the tour before any DOM is allocated.
+                if (this._isMobile()) {
+                    Dialogs.show($.t('tutorials.notAvailableOnMobile'), 4500, Dialogs.MSG_INFO);
+                    return;
+                }
                 let prereq, data;
 
                 if (Number.isInteger(ctx)) {

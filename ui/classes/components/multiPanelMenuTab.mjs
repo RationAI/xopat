@@ -99,7 +99,7 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 70px; padding-bottom: 20px; pointer-events: auto;" },
+            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 45px; padding-bottom: 20px; pointer-events: auto;" },
             onClick: () => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;

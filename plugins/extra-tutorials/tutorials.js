@@ -81,6 +81,16 @@ addPlugin("extra-tutorials", class extends XOpatPlugin {
         }
         if (!candidate) return;
 
+        // Mobile bail: skip the welcome glass modal AND the auto-run so the
+        // user doesn't see a half-flow (accept → "not available" toast).
+        // The launcher card for any `attach: true` entry is already
+        // registered above, so when the same session opens on a desktop the
+        // tutorial is still discoverable. `Tutorials.run` carries its own
+        // guard, but bailing here also keeps the welcome modal off the
+        // mobile screen.
+        const mobileThreshold = APPLICATION_CONTEXT.getOption('maxMobileWidthPx') || 900;
+        if (window.innerWidth < mobileThreshold) return;
+
         const delay = candidate.runDelay ? Math.max(candidate.runDelay, 250) : 0;
         const start = () => {
             try {

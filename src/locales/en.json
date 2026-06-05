@@ -165,12 +165,21 @@
       "enjoyhint": {
         "next": "NEXT",
         "finish": "FINISH",
-        "back": "BACK"
+        "back": "BACK",
+        "hint": {
+          "click": "Click the highlighted area to continue",
+          "dblclick": "Double-click the highlighted area to continue",
+          "key": "Press {{key}} to continue",
+          "keyAny": "Press the indicated key to continue",
+          "interact": "Interact with the highlighted area to continue",
+          "waiting": "Waiting for action…"
+        }
       },
       "menu": {
         "title": "Select a tutorial",
-        "description": "The visualization is still under development: components and features are changing. The tutorials might not work, missing or be outdated."
+        "description": "Learn the viewer functionality through interactive tours."
       },
+      "notAvailableOnMobile": "Tutorials need more screen space — please open this session on a larger viewport to take the tour.",
       "basic": {
         "title": "Basic Functionality",
         "description": "Pan, zoom, navigate and tweak the active visualisation.",

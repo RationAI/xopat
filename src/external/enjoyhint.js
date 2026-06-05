@@ -188,7 +188,8 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
 
                 that.$skip_btn = $("<div>", { class: that.cl.skip_btn })
                     .appendTo(that.enjoyhint)
-                    .html("<span class='fa-close fa-auto' style='color: white; font-size: xx-large; text-shadow: #000 0px 0px 14px;'></span>")
+                    // Phosphor X — sized + coloured by `.enjoyhint_skip_btn > i`.
+                    .html("<i class='ph-light ph-x'></i>")
                     .click(function(e) {
                         that.hide();
                         that.options.onSkipClick();
@@ -196,7 +197,10 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
 
                 that.$next_btn = $("<div>", { class: that.cl.next_btn })
                     .appendTo(that.enjoyhint)
-                    .html($.t('tutorials.enjoyhint.next'))
+                    // Directional caret + label. The label content is rewritten
+                    // per step further below (mobile / Finish / custom) so this
+                    // initial markup is just a placeholder.
+                    .html('<span>' + $.t('tutorials.enjoyhint.next') + '</span><i class="ph-light ph-caret-right"></i>')
                     .click(function(e) {
                         that.options.onNextClick();
                     });
@@ -211,10 +215,63 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
 
                 that.$prev_btn = $("<div>", { class: that.cl.previous_btn })
                     .appendTo(that.enjoyhint)
-                    .html("Previous")
+                    .html('<i class="ph-light ph-caret-left"></i><span>' + $.t('tutorials.enjoyhint.back') + '</span>')
                     .click(function(e) {
                         that.options.onPrevClick();
                     });
+
+                // Action hint — shown in place of Next whenever the engine
+                // hides Next (i.e. the user must perform the gesture on the
+                // highlighted target). Non-interactive; content swapped per
+                // step in the layout pass based on the step's action.
+                that.$action_hint = $("<div>", { class: "enjoyhint_action_hint enjoyhint_hide" })
+                    .appendTo(that.enjoyhint);
+
+                // Resolves a JS keyCode to a short, user-facing key name.
+                // Falls back to the upper-cased character.
+                that.keyCodeName = function(code) {
+                    if (code == null) return '';
+                    var map = { 8:'Backspace', 9:'Tab', 13:'Enter', 16:'Shift', 17:'Ctrl', 18:'Alt',
+                                19:'Pause', 20:'Caps Lock', 27:'Esc', 32:'Space',
+                                33:'Page Up', 34:'Page Down', 35:'End', 36:'Home',
+                                37:'←', 38:'↑', 39:'→', 40:'↓',
+                                45:'Insert', 46:'Delete' };
+                    if (map[code]) return map[code];
+                    if (code >= 48 && code <= 90) return String.fromCharCode(code);
+                    if (code >= 112 && code <= 123) return 'F' + (code - 111);
+                    return 'key ' + code;
+                };
+
+                // Returns { icon, text } for the action hint based on the
+                // active step's parsed event. Returns null when no hint
+                // should be displayed (e.g. `next` / `auto` — the engine
+                // either shows Next or advances on its own).
+                that.resolveActionHint = function() {
+                    var sd = that.stepData;
+                    if (!sd) return null;
+                    var ev = sd.event || '';
+                    if (ev === 'next' || ev === 'auto') return null;
+                    if (ev === 'click') {
+                        return { icon: 'ph-hand-pointing', text: $.t('tutorials.enjoyhint.hint.click') };
+                    }
+                    if (ev === 'dblclick') {
+                        return { icon: 'ph-cursor-click', text: $.t('tutorials.enjoyhint.hint.dblclick') };
+                    }
+                    if (ev === 'key') {
+                        var keyName = that.keyCodeName(sd.keyCode);
+                        return {
+                            icon: 'ph-keyboard',
+                            text: keyName
+                                ? $.t('tutorials.enjoyhint.hint.key', { key: keyName, defaultValue: 'Press ' + keyName })
+                                : $.t('tutorials.enjoyhint.hint.keyAny'),
+                        };
+                    }
+                    if (ev === 'custom') {
+                        return { icon: 'ph-hourglass-medium', text: $.t('tutorials.enjoyhint.hint.waiting') };
+                    }
+                    // Any other DOM event (mousedown, mouseup, mouseover, change, focus, …).
+                    return { icon: 'ph-cursor', text: $.t('tutorials.enjoyhint.hint.interact') };
+                };
 
 
                 that.$canvas.mousedown(function(e) {
@@ -944,45 +1001,161 @@ CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
                         text: data.text
                     });
 
+                    // EnjoyHint's renderLabel detaches the label and
+                    // re-appends it `animation_time/2` ms later (see
+                    // enjoyhint.js:582-587 — the fade dance). We must wait
+                    // for that re-append before reading the live rect or
+                    // setting final button positions; otherwise the label
+                    // is missing from the DOM, our clamp silently no-ops,
+                    // and the row lands on top of where the label
+                    // eventually re-appears. A small extra buffer covers
+                    // the gap between re-append and the browser settling
+                    // on a final layout.
+                    var layoutDelay = (that.options.animation_time / 2) + 60;
+
+                    // Quick synchronous placement at an approximate spot
+                    // under the engine's pre-measured label, with the row
+                    // kept invisible (.enjoyhint-prepositioned → opacity 0)
+                    // until the delayed pass below sets the real position
+                    // and removes the class. Result: no visible "jump" on
+                    // step change — the row simply fades in once it's where
+                    // it belongs.
+                    (function preplace(){
+                        var pIsMobile = window.innerWidth <= 640;
+                        var pTop  = label_y + label_height + (pIsMobile ? 16 : 24);
+                        var pMid  = label_x + label_width / 2;
+                        that.$skip_btn.css({   left: pMid - 80, top: pTop }).addClass('enjoyhint-prepositioned');
+                        that.$prev_btn.css({   left: pMid - 20, top: pTop }).addClass('enjoyhint-prepositioned');
+                        that.$next_btn.css({   left: pMid + 50, top: pTop }).addClass('enjoyhint-prepositioned');
+                        that.$action_hint.css({left: pMid + 50, top: pTop }).addClass('enjoyhint-prepositioned');
+                    })();
+
                     setTimeout(function(){
-                        //var summoryButtonWidth = that.$next_btn.width() + that.$prev_btn.width() + 30;
-                        var distance = label_x - 100;
-                        var ver_button_position = label_y + label_height + 30;
-
-                        // if (summoryButtonWidth + label_x > x_to) {
-                        //     distance = x_to >= x_from ? x_to + 20 : label_x + label_width/2;
-                        // }
-                        //
-                        // if (summoryButtonWidth + distance > window.innerWidth || distance < 0) {
-                        //     distance = 10;
-                        //     ver_button_position = y_from < y_to ? label_y - 80 : label_y + label_height + 40;
-                        // }
-
-                        if (window.innerWidth <= 640) {
-                            distance = 10;
-                            ver_button_position = 10;
-                            that.$next_btn.html('&#8250;');
-                            that.$prev_btn.html('&#8249;');
-                        } else {
-                            that.$next_btn.html(customBtnProps.nextButton && customBtnProps.nextButton.text ?
-                                customBtnProps.nextButton.text : (isLastStep() ? $.t('tutorials.enjoyhint.finish') : $.t('tutorials.enjoyhint.next')));
-                            that.$prev_btn.html(customBtnProps.prevButton && customBtnProps.prevButton.text ?
-                                customBtnProps.prevButton.text : $.t('tutorials.enjoyhint.back'));
+                        // Viewport clamp: with the label now actually in the
+                        // DOM we can read its true rect, clamp the position,
+                        // and refresh local label_* before laying out the row.
+                        var labelEl = document.getElementById('enjoyhint_label');
+                        if (labelEl) {
+                            var rect = labelEl.getBoundingClientRect();
+                            var rightOverflow = rect.right - (window.innerWidth - 16);
+                            if (rightOverflow > 0) label_x -= rightOverflow;
+                            if (label_x < 16) label_x = 16;
+                            var bottomOverflow = rect.bottom - (window.innerHeight - 16);
+                            if (bottomOverflow > 0) label_y -= bottomOverflow;
+                            if (label_y < 16) label_y = 16;
+                            labelEl.style.left = label_x + 'px';
+                            labelEl.style.top  = label_y + 'px';
+                            rect = labelEl.getBoundingClientRect();
+                            label_x = rect.left;
+                            label_y = rect.top;
+                            label_width = rect.width;
+                            label_height = rect.height;
                         }
-                        that.$prev_btn.css({
-                            left: distance + 138,
-                            top: ver_button_position,
-                            color: 'white'
-                        });
-                        that.$next_btn.css({
-                            left: distance + label_width + 22,
-                            top: ver_button_position,
-                            color: 'white'
-                        });
-                        that.$skip_btn.css({
-                           color: 'white'
-                        });
-                    }, 0)
+                        var isMobile = window.innerWidth <= 640;
+                        var finish = !!isLastStep();
+                        // The Next button is hidden (via `hide_next`) for steps
+                        // where the user advances via a gesture on the target
+                        // (`click` / `dblclick` / `key` / custom DOM events / …).
+                        // When that's the case we render an action hint pill in
+                        // Next's slot, with copy + icon matching the gesture.
+                        var nextHidden = !that.$next_btn.is(':visible');
+                        var hint = nextHidden ? that.resolveActionHint() : null;
+
+                        // Step text / mobile icon-only mode for Next + Prev.
+                        if (isMobile) {
+                            that.$next_btn.html('<i class="ph-light ph-' + (finish ? 'check' : 'caret-right') + '"></i>');
+                            that.$prev_btn.html('<i class="ph-light ph-caret-left"></i>');
+                        } else {
+                            var nextLabel = customBtnProps.nextButton && customBtnProps.nextButton.text
+                                ? customBtnProps.nextButton.text
+                                : (finish ? $.t('tutorials.enjoyhint.finish') : $.t('tutorials.enjoyhint.next'));
+                            var prevLabel = customBtnProps.prevButton && customBtnProps.prevButton.text
+                                ? customBtnProps.prevButton.text
+                                : $.t('tutorials.enjoyhint.back');
+                            // Finish step gets a check icon (no caret); regular Next keeps the right caret.
+                            var nextIcon = finish ? 'ph-check' : 'ph-caret-right';
+                            that.$next_btn.html('<span>' + nextLabel + '</span><i class="ph-light ' + nextIcon + '"></i>');
+                            that.$prev_btn.html('<i class="ph-light ph-caret-left"></i><span>' + prevLabel + '</span>');
+                        }
+
+                        // Finish-step visual accent (success gradient instead of primary).
+                        that.$next_btn.toggleClass('is-finish', finish);
+
+                        // Action hint: shown when Next is hidden AND the step
+                        // requires a user gesture (resolveActionHint returns
+                        // null for `next` / `auto` — Next stays as-is, or the
+                        // step is advancing itself, respectively).
+                        if (hint) {
+                            that.$action_hint.html(
+                                isMobile
+                                    ? '<i class="ph-light ' + hint.icon + '"></i>'
+                                    : '<i class="ph-light ' + hint.icon + '"></i><span>' + hint.text + '</span>'
+                            );
+                            that.$action_hint.removeClass(that.cl.hide);
+                        } else {
+                            that.$action_hint.addClass(that.cl.hide);
+                        }
+
+                        // Measure widths AFTER content swap so we can lay the
+                        // row out without overlap. Hidden elements report 0.
+                        var skipW  = that.$skip_btn.is(':visible')   ? (that.$skip_btn.outerWidth()   || 40) : 0;
+                        var prevW  = that.$prev_btn.is(':visible')   ? (that.$prev_btn.outerWidth()   || 96) : 0;
+                        var nextW  = that.$next_btn.is(':visible')   ? (that.$next_btn.outerWidth()   || 96) : 0;
+                        var hintW  = that.$action_hint.is(':visible')? (that.$action_hint.outerWidth()|| 180): 0;
+                        var GAP    = isMobile ? 8 : 12;
+
+                        // Build the visible row from left to right: Skip — Prev — (Next|Hint).
+                        var trailW = Math.max(nextW, hintW);
+                        var widths = [];
+                        if (skipW) widths.push(skipW);
+                        if (prevW) widths.push(prevW);
+                        if (trailW) widths.push(trailW);
+                        var rowTotal = widths.reduce(function(a,b){return a+b;}, 0)
+                                     + Math.max(0, widths.length - 1) * GAP;
+
+                        var rowLeft  = label_x + (label_width - rowTotal) / 2;
+                        if (rowLeft < 16) rowLeft = 16;
+                        if (rowLeft + rowTotal > window.innerWidth - 16) {
+                            rowLeft = Math.max(16, window.innerWidth - 16 - rowTotal);
+                        }
+
+                        // Place row immediately below the label by default. If
+                        // it would overflow the bottom of the viewport, shift
+                        // the *label* up so the (label + gap + row) stack fits;
+                        // never let the row land inside the label rect.
+                        var rowH    = 56;
+                        var rowGap  = isMobile ? 16 : 24;
+                        var rowTop  = label_y + label_height + rowGap;
+                        if (rowTop + rowH > window.innerHeight - 16 && labelEl) {
+                            var newLabelTop = window.innerHeight - 16 - rowH - rowGap - label_height;
+                            if (newLabelTop < 16) newLabelTop = 16;
+                            label_y = newLabelTop;
+                            labelEl.style.top = label_y + 'px';
+                            rowTop = label_y + label_height + rowGap;
+                        }
+                        // Final guard: if the row still somehow overlaps the
+                        // label (e.g. a label taller than the viewport), park
+                        // it as low as possible — readability of the label
+                        // text wins over a perfectly-attached row.
+                        if (rowTop < label_y + label_height + 4) {
+                            rowTop = Math.min(label_y + label_height + 4, window.innerHeight - 16 - rowH);
+                        }
+
+                        var cursor = rowLeft;
+                        if (skipW) { that.$skip_btn.css({ left: cursor, top: rowTop }); cursor += skipW + GAP; }
+                        if (prevW) { that.$prev_btn.css({ left: cursor, top: rowTop }); cursor += prevW + GAP; }
+                        // Always set positions on Next and Hint (one is visible,
+                        // the other is display:none but still positioned for the
+                        // next render where it might become visible).
+                        that.$next_btn.css({    left: cursor, top: rowTop });
+                        that.$action_hint.css({ left: cursor, top: rowTop });
+                        // Reveal the row in its final position. The CSS
+                        // transition on opacity gives a clean fade-in.
+                        that.$skip_btn.removeClass('enjoyhint-prepositioned');
+                        that.$prev_btn.removeClass('enjoyhint-prepositioned');
+                        that.$next_btn.removeClass('enjoyhint-prepositioned');
+                        that.$action_hint.removeClass('enjoyhint-prepositioned');
+                    }, layoutDelay)
 
                     that.$close_btn.css({
                         right: 10,
