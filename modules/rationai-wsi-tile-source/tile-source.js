@@ -48,6 +48,11 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      * @param {?String} options.format - image format, default undefined, 'tiff', 'jpeg', 'png', 'bmp'..
      * @param {?Number} options.quality - image quality, default undefined, 0-100
      * @param {?'all'|Array<number>} options.channels - applies only for 'tiff' format, channels to fetch
+     * @param {?String} options.plugin - name of the WSI-Service slide-reader plugin to use
+     *     (e.g. 'openslide', 'tifffile', 'wsidicom'). When unset, the server auto-detects.
+     *     Forwarded as the `plugin` query parameter on tile/thumbnail/label/ICC requests.
+     *     To also influence the initial slide-info fetch, embed `plugin=…` directly in the
+     *     `slide_protocols` URL template.
      */
     setSourceOptions(options) {
         const params = new URLSearchParams(this._qArgs || '');
@@ -65,6 +70,10 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
         if (options.quality) {
             params.set('image_quality', options.quality);
+        }
+
+        if (options.plugin) {
+            params.set('plugin', String(options.plugin));
         }
 
         const channelsOpt =
@@ -150,6 +159,8 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         if (data.type === "empaia-standalone" && !data.id) {
             // data.url is set, which will trigger getImageInfo() and call configure second time with real data
             data._handlesOwnImageLoadLogics = true;
+            // Placeholder; real slide metadata will be configured after _getInfo resolves.
+            data._isVector = false;
             return data;
         }
 
@@ -161,11 +172,63 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
                 return;
             }
 
+            if (data.format && data.format.toLowerCase().includes('mvt')) {
+                // Vector MVT path using WSI-Service tile URL conventions.
+                if (!Array.isArray(data.levels) || data.levels.length === 0) {
+                    console.error('RationaiStandaloneV3TileSource: MVT slide info missing levels', data);
+                    return undefined;
+                }
+                // data.tilesUrl is set by supports() in the standard flow. In the
+                // empaia-standalone flow _getInfo calls configure() with raw server JSON
+                // that does not carry tilesUrl, so fall back to extracting it from url.
+                const tilesUrl = data.tilesUrl
+                    || url?.match(/^(\/?[^\/].*\/v3\/(?:files|slides))/i)?.[1];
+                if (!tilesUrl || !data.id) {
+                    console.error('RationaiStandaloneV3TileSource: MVT configure missing tilesUrl or id', { tilesUrl, id: data.id });
+                    return undefined;
+                }
+                const tileSize = data.tile_extent?.x || 512;
+                const maxLevel = data.levels.length - 1;
+                const template = `${tilesUrl}/tile/level/{z}/tile/{x}/{y}?slide_id=${data.id}`;
+                const worldSize = Math.pow(2, maxLevel) * tileSize;
+                return {
+                    _isVector: true,
+                    template,
+                    scheme: 'xyz',
+                    tileSize,
+                    minLevel: 0,
+                    maxLevel,
+                    width: worldSize,
+                    height: worldSize,
+                    // MVT coordinate extent: 4096 is the Mapbox Vector Tile spec constant
+                    // (tile-internal coordinate space). WSI-Service does not expose this
+                    // separately; tile_extent is the pixel size, not the MVT extent.
+                    extent: 4096,
+                    // defaultStyle() lives in flex-renderer; null lets the MVT pipeline apply it.
+                    style: data.style || null,
+                    useNativeLines: false,
+                    // Let the MVT pipeline fall back to FlexDrawer._defaultHttpAdapter.
+                    httpAdapter: null,
+                    innerFormat: data.format,
+                    multifetch: false,
+                    fileId: data.id,
+                    tilesUrl: tilesUrl,
+                    metadata: (() => {
+                        const ps = data.pixel_size_nm;
+                        const x = ps?.x, y = ps?.y;
+                        if (x == null || y == null || x === 1000000 || y === 1000000) return {};
+                        return { micronsX: x / 1000, micronsY: y / 1000 };
+                    })(),
+                    data: data,
+                };
+            }
+
             //unset if default value
             let chosenMq = data.pixel_size_nm;
             let size = data.extent, tile = data.tile_extent;
             if (chosenMq.x === 1000000) chosenMq = null;
             return {
+                _isVector: false,
                 width: size.x,
                 height: size.y,
                 _tileWidth: tile.x,
@@ -236,6 +299,7 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         //unset if default value
         if (chosenMq.x === 1000000) chosenMq = null;
         return {
+            _isVector: false,
             width: width, /* width *required */
             height: height, /* height *required */
             _tileWidth: tileSizeX,
@@ -357,6 +421,15 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
      * @return {string}
      */
     getTileUrl( level, x, y ) {
+        if (this._isVector) {
+            // WSI-Service level 0 is the highest resolution; OSD level 0 is the lowest.
+            const wsiLevel = this.maxLevel - level;
+            const ty = this.scheme === 'tms' ? ((1 << level) - 1 - y) : y;
+            return this.template
+                .replace('{z}', wsiLevel)
+                .replace('{x}', x)
+                .replace('{y}', ty);
+        }
         return this.getUrl(level, x, y);
     }
 
@@ -423,8 +496,9 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
         };
 
         if (isMultiplex) {
-            this.__cached_downloadTileStart = this.downloadTileStart;
-            this.downloadTileStart = function(context) {
+            // Override only the raster path; downloadTileStart remains the raster/vector dispatcher.
+            this.__cached_rasterDownload = this._rasterDownloadTileStart;
+            this._rasterDownloadTileStart = function(context) {
                 const abort = context.finish.bind(context, null, undefined);
                 if (!context.loadWithAjax) {
                     abort("DeepZoomExt protocol with ZIP does not support fetching data without ajax!");
@@ -504,20 +578,20 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
             //no need to provide downloadTileAbort since we keep the meta structure
             this.__cached_downloadTileAbort = this.downloadTileAbort;
             this.downloadTileAbort = OpenSeadragon.TileSource.prototype.downloadTileAbort;
-        } else if (this.__cached_downloadTileStart) {
-            this.downloadTileStart = this.__cached_downloadTileStart;
+        } else if (this.__cached_rasterDownload) {
+            this._rasterDownloadTileStart = this.__cached_rasterDownload;
             this.downloadTileAbort = this.__cached_downloadTileAbort;
         }
         this.__configuredDownload = true;
     }
 
-    // Single-tile download path. Routes through the per-source HttpClient
+    // Single-tile raster download path. Routes through the per-source HttpClient
     // (proxy + CSRF + auth) when present, falls back to bare fetch otherwise.
-    // We override the prototype patch in `src/tile-source.ts` only because
-    // this source needs to pass `this._dataFormat` ("rawTiff" for multi-
-    // channel TIFF, "rasterBlob" otherwise) to `imageJob.finish` — the
-    // prototype unconditionally uses "rasterBlob".
-    downloadTileStart(imageJob) {
+    // Kept separate from downloadTileStart because this source needs to pass
+    // `this._dataFormat` ("rawTiff" for multi-channel TIFF, "rasterBlob"
+    // otherwise) to `imageJob.finish`; the prototype patch in `src/tile-source.ts`
+    // uses "rasterBlob" unconditionally.
+    _rasterDownloadTileStart(imageJob) {
         const controller = new AbortController();
         imageJob.userData.abortController = controller;
         this._fetch(imageJob.src, {
@@ -537,6 +611,78 @@ OpenSeadragon.RationaiStandaloneV3TileSource = class extends OpenSeadragon.TileS
 
     downloadTileAbort(imageJob) {
         imageJob.userData?.abortController?.abort();
+    }
+
+    // Lazily installs the shared MVT worker pipeline on this WSI tile source.
+    _ensureVectorPipeline() {
+        if (this._vectorPipelineInitialized) {
+            return true;
+        }
+        if (this._vectorPipelineFailed) {
+            return false;
+        }
+
+        const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+        if (!AbstractMVT) {
+            return false;
+        }
+
+        if (!this.template || !this.scheme || this.extent == null) {
+            console.error('RationaiStandaloneV3TileSource: cannot init vector pipeline — missing required fields',
+                { template: this.template, scheme: this.scheme, extent: this.extent });
+            this._vectorPipelineFailed = true;
+            return false;
+        }
+
+        try {
+            AbstractMVT.prototype._initVectorPipeline.call(this, {
+                template:       this.template,
+                scheme:         this.scheme,
+                extent:         this.extent,
+                style:          this.style || null,
+                useNativeLines: this.useNativeLines,
+                httpAdapter:    this.httpAdapter || null,
+            });
+        } catch (e) {
+            console.error('RationaiStandaloneV3TileSource: vector pipeline init failed', e);
+            this._vectorPipelineFailed = true;
+            return false;
+        }
+
+        if (!this._worker || !this._pending) {
+            console.error('RationaiStandaloneV3TileSource: vector pipeline incomplete after init',
+                { worker: !!this._worker, pending: !!this._pending });
+            this._vectorPipelineFailed = true;
+            return false;
+        }
+
+        this._vectorPipelineInitialized = true;
+        return true;
+    }
+
+    downloadTileStart(context) {
+        if (this._isVector) {
+            const AbstractMVT = OpenSeadragon.FlexRenderer?.MVT?.AbstractTileSource;
+
+            if (!AbstractMVT || !this._ensureVectorPipeline()) {
+                const message =
+                    "RationaiStandaloneV3TileSource: MVT vector tiles require " +
+                    "OpenSeadragon.FlexRenderer.MVT.AbstractTileSource. " +
+                    "Ensure flex-renderer.js is loaded.";
+
+                if (typeof context.fail === "function") {
+                    context.fail(message);
+                } else {
+                    context.finish?.(null, undefined, message);
+                }
+                return;
+            }
+
+            AbstractMVT.prototype.downloadTileStart.call(this, context);
+            return;
+        }
+
+        this._rasterDownloadTileStart(context);
     }
 
     getTileHashKey(level, x, y, url, ajaxHeaders, postData) {
