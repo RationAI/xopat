@@ -2824,9 +2824,23 @@ form.submit();
             const resolved = viewers
                 .map((viewer: OpenSeadragon.Viewer) => {
                     const bgCfg = getBackgroundConfig(viewer);
-                    const bgIndex = bgCfg
-                        ? backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.sameBackground(bg, bgCfg))
+                    // Identity first: `configureOpenedItem` stores
+                    // `cfg.background[bgIdx]` directly on the tile via
+                    // `getConfig("background")`, so the viewer's bg is a
+                    // live reference into this array. `sameBackground`
+                    // (id-equality) collapses distinct slots that share a
+                    // `dataReference` — every viewer would resolve to the
+                    // first matching index and the per-slot
+                    // `visualizationIndex` write below would overwrite
+                    // slot 0 for both. Reference equality picks the
+                    // correct slot; fall back to id-equality only if no
+                    // direct reference is found.
+                    let bgIndex = bgCfg
+                        ? backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => bg === bgCfg)
                         : -1;
+                    if (bgIndex < 0 && bgCfg) {
+                        bgIndex = backgrounds.findIndex((bg: BackgroundItem | BackgroundConfig) => APPLICATION_CONTEXT.sameBackground(bg, bgCfg));
+                    }
                     const vizIndex = findVisualizationIndex(getVisualizationConfig(viewer));
                     return {
                         bgIndex: bgIndex >= 0 ? bgIndex : undefined,

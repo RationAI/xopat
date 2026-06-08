@@ -1,6 +1,6 @@
 //! flex-renderer 0.0.1
-//! Built on 2026-06-04
-//! Git commit: --343ea79-dirty
+//! Built on 2026-06-08
+//! Git commit: --fe544b3
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -8128,6 +8128,210 @@ $.FlexRenderer.UIControls.IconLibrary = (() => {
                 return decoded;
             }
             return null;
+        },
+
+        renderIconToCanvas(spec = {}) {
+            const iconQuery = String(spec.icon || "").trim();
+            const iconSet = spec.iconSet || "fa-solid-common";
+            const size = Math.max(16, Number.parseInt(spec.size, 10) || 160);
+            const padding = Math.max(0, Number.parseInt(spec.padding, 10) || 0);
+            const color = spec.color || "#111111";
+            const backgroundColor = spec.backgroundColor || "#00000000";
+            const glyphFontFamily = spec.glyphFontFamily
+                || "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols 2','Noto Emoji',sans-serif";
+            const glyphFontWeight = spec.glyphFontWeight || "400";
+
+            if (!iconQuery) {
+                return { canvas: null, cacheKey: null, ready: false, retry: false };
+            }
+
+            const resolved = this.resolveAnyIconSpec(iconQuery, iconSet);
+            if (!resolved) {
+                return { canvas: null, cacheKey: null, ready: false, retry: false };
+            }
+
+            const renderSpec = this._resolveRenderSpec(resolved, glyphFontFamily, glyphFontWeight);
+            if (!renderSpec || !renderSpec.text) {
+                // Class probe failed — Font Awesome CSS likely not loaded yet.
+                return { canvas: null, cacheKey: null, ready: false, retry: resolved.renderMode === "class" };
+            }
+
+            const canvas = this._renderIconCanvas(renderSpec, {
+                size,
+                padding,
+                color,
+                backgroundColor,
+                glyphFontFamily
+            });
+
+            const cacheKey = JSON.stringify({
+                key: resolved.key,
+                text: renderSpec.text,
+                size,
+                padding,
+                color,
+                backgroundColor,
+                fontFamily: renderSpec.fontFamily,
+                fontWeight: renderSpec.fontWeight
+            });
+
+            return { canvas, cacheKey, ready: true, retry: false };
+        },
+
+        uploadToAtlas(atlas, canvasResult) {
+            if (!atlas || !canvasResult || !canvasResult.canvas) {
+                return -1;
+            }
+            const cacheKey = canvasResult.cacheKey;
+            atlas.__flexRendererCache = atlas.__flexRendererCache || {};
+            if (cacheKey && Number.isInteger(atlas.__flexRendererCache[cacheKey])) {
+                return atlas.__flexRendererCache[cacheKey];
+            }
+            const textureId = atlas.addImage(canvasResult.canvas, {
+                width: canvasResult.canvas.width,
+                height: canvasResult.canvas.height,
+                cacheKey
+            });
+            if (typeof atlas._commitUploads === "function") {
+                atlas._commitUploads();
+            }
+            if (cacheKey) {
+                atlas.__flexRendererCache[cacheKey] = textureId;
+            }
+            return textureId;
+        },
+
+        _resolveRenderSpec(resolved, glyphFontFamily, glyphFontWeight) {
+            if (resolved.renderMode === "glyph") {
+                return {
+                    text: resolved.glyph,
+                    fontFamily: resolved.fontFamily || glyphFontFamily,
+                    fontWeight: resolved.fontWeight || glyphFontWeight
+                };
+            }
+            if (resolved.renderMode === "class") {
+                return this._resolveFontClassRenderSpec(resolved.className, resolved, glyphFontWeight);
+            }
+            return null;
+        },
+
+        _resolveFontClassRenderSpec(className, resolved, glyphFontWeight) {
+            if (typeof document === "undefined") {
+                return null;
+            }
+
+            const probe = document.createElement("i");
+            probe.className = className;
+            probe.setAttribute("aria-hidden", "true");
+            probe.style.position = "absolute";
+            probe.style.left = "-10000px";
+            probe.style.top = "-10000px";
+            probe.style.fontSize = "34px";
+            document.body.appendChild(probe);
+
+            try {
+                const pseudo = window.getComputedStyle(probe, "::before");
+                let content = pseudo.getPropertyValue("content");
+                if (!content || content === "none" || content === "normal") {
+                    const base = window.getComputedStyle(probe);
+                    content = base.getPropertyValue("content");
+                }
+
+                const text = this._decodeCssContent(content);
+                if (!text) {
+                    return null;
+                }
+
+                return {
+                    text,
+                    fontFamily: pseudo.fontFamily || resolved.fontFamily,
+                    fontWeight: pseudo.fontWeight || resolved.fontWeight || glyphFontWeight || "900"
+                };
+            } finally {
+                probe.remove();
+            }
+        },
+
+        _decodeCssContent(content) {
+            if (!content || content === "none" || content === "normal") {
+                return null;
+            }
+
+            let value = String(content).trim();
+            if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+
+            value = value.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
+                try {
+                    return String.fromCodePoint(Number.parseInt(hex, 16));
+                } catch (_) {
+                    return "";
+                }
+            });
+
+            value = value.replace(/\\\\/g, "\\");
+            value = value.replace(/\\"/g, '"');
+            value = value.replace(/\\'/g, "'");
+
+            return value || null;
+        },
+
+        _renderIconCanvas(renderSpec, opts) {
+            const { size, padding, color, backgroundColor, glyphFontFamily } = opts;
+            const canvas = document.createElement("canvas");
+            canvas.width = size;
+            canvas.height = size;
+
+            const ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, size, size);
+
+            if (backgroundColor && backgroundColor !== "#00000000") {
+                ctx.fillStyle = backgroundColor;
+                ctx.fillRect(0, 0, size, size);
+            }
+
+            const availableSize = Math.max(8, size - (padding * 2));
+            const measureAt = (fontSize) => {
+                ctx.font = `${renderSpec.fontWeight || "400"} ${fontSize}px ${renderSpec.fontFamily || glyphFontFamily}`;
+                return ctx.measureText(renderSpec.text);
+            };
+
+            let metrics = measureAt(size);
+            const boundsWidth = Math.max(
+                1,
+                (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
+                metrics.width || 0
+            );
+            const boundsHeight = Math.max(
+                1,
+                (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
+                size * 0.7
+            );
+            const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight, 1.0);
+            const fontSize = Math.max(8, Math.floor(size * fitScale));
+            metrics = measureAt(fontSize);
+
+            ctx.fillStyle = color;
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+            ctx.lineJoin = "round";
+            ctx.miterLimit = 2;
+
+            const left = metrics.actualBoundingBoxLeft || 0;
+            const right = metrics.actualBoundingBoxRight || metrics.width || 0;
+            const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75;
+            const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25;
+            const x = (size / 2) + ((left - right) / 2);
+            const y = (size / 2) + ((ascent - descent) / 2);
+
+            const strokeWidth = Math.max(1, fontSize * 0.035);
+            ctx.lineWidth = strokeWidth;
+            ctx.strokeStyle = color;
+            ctx.strokeText(renderSpec.text, x, y);
+            ctx.fillText(renderSpec.text, x, y);
+
+            return canvas;
         }
     };
 })();
@@ -8367,140 +8571,35 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
     }
 
     _resolveRenderSpec(resolved) {
-        if (resolved.renderMode === "glyph") {
-            return {
-                text: resolved.glyph,
-                fontFamily: resolved.fontFamily || this.params.glyphFontFamily,
-                fontWeight: resolved.fontWeight || this.params.glyphFontWeight
-            };
-        }
-
-        if (resolved.renderMode === "class") {
-            return this._resolveFontClassRenderSpec(resolved.className, resolved);
-        }
-
-        return null;
+        return $.FlexRenderer.UIControls.IconLibrary._resolveRenderSpec(
+            resolved,
+            this.params.glyphFontFamily,
+            this.params.glyphFontWeight
+        );
     }
 
     _resolveFontClassRenderSpec(className, resolved) {
-        if (typeof document === "undefined") {
-            return null;
-        }
-
-        const probe = document.createElement("i");
-        probe.className = className;
-        probe.setAttribute("aria-hidden", "true");
-        probe.style.position = "absolute";
-        probe.style.left = "-10000px";
-        probe.style.top = "-10000px";
-        probe.style.fontSize = `${Math.max(16, Number.parseInt(this.params.previewSize, 10) || 34)}px`;
-        document.body.appendChild(probe);
-
-        try {
-            const pseudo = window.getComputedStyle(probe, "::before");
-            let content = pseudo.getPropertyValue("content");
-            if (!content || content === "none" || content === "normal") {
-                const base = window.getComputedStyle(probe);
-                content = base.getPropertyValue("content");
-            }
-
-            const text = this._decodeCssContent(content);
-            if (!text) {
-                return null;
-            }
-
-            return {
-                text,
-                fontFamily: pseudo.fontFamily || resolved.fontFamily,
-                fontWeight: pseudo.fontWeight || resolved.fontWeight || "900"
-            };
-        } finally {
-            probe.remove();
-        }
+        return $.FlexRenderer.UIControls.IconLibrary._resolveFontClassRenderSpec(
+            className,
+            resolved,
+            this.params.glyphFontWeight
+        );
     }
 
     _decodeCssContent(content) {
-        if (!content || content === "none" || content === "normal") {
-            return null;
-        }
-
-        let value = String(content).trim();
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-        }
-
-        value = value.replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
-            try {
-                return String.fromCodePoint(Number.parseInt(hex, 16));
-            } catch (_) {
-                return "";
-            }
-        });
-
-        value = value.replace(/\\\\/g, "\\");
-        value = value.replace(/\\"/g, '"');
-        value = value.replace(/\\'/g, "'");
-
-        return value || null;
+        return $.FlexRenderer.UIControls.IconLibrary._decodeCssContent(content);
     }
 
     _renderIconCanvas(renderSpec) {
         const size = Math.max(16, Number.parseInt(this.params.size, 10) || 160);
         const padding = Math.max(0, Number.parseInt(this.params.padding, 10) || 0);
-
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, size, size);
-
-        if (this.params.backgroundColor && this.params.backgroundColor !== "#00000000") {
-            ctx.fillStyle = this.params.backgroundColor;
-            ctx.fillRect(0, 0, size, size);
-        }
-
-        const availableSize = Math.max(8, size - (padding * 2));
-        const measureAt = (fontSize) => {
-            ctx.font = `${renderSpec.fontWeight || "400"} ${fontSize}px ${renderSpec.fontFamily || this.params.glyphFontFamily}`;
-            return ctx.measureText(renderSpec.text);
-        };
-
-        let metrics = measureAt(size);
-        let boundsWidth = Math.max(
-            1,
-            (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
-            metrics.width || 0
-        );
-        let boundsHeight = Math.max(
-            1,
-            (metrics.actualBoundingBoxAscent || 0) + (metrics.actualBoundingBoxDescent || 0),
-            size * 0.7
-        );
-        const fitScale = Math.min(availableSize / boundsWidth, availableSize / boundsHeight, 1.0);
-        const fontSize = Math.max(8, Math.floor(size * fitScale));
-        metrics = measureAt(fontSize);
-
-        ctx.fillStyle = this.currentColor;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "alphabetic";
-        ctx.lineJoin = "round";
-        ctx.miterLimit = 2;
-
-        const left = metrics.actualBoundingBoxLeft || 0;
-        const right = metrics.actualBoundingBoxRight || metrics.width || 0;
-        const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.75;
-        const descent = metrics.actualBoundingBoxDescent || fontSize * 0.25;
-        const x = (size / 2) + ((left - right) / 2);
-        const y = (size / 2) + ((ascent - descent) / 2);
-
-        const strokeWidth = Math.max(1, fontSize * 0.035);
-        ctx.lineWidth = strokeWidth;
-        ctx.strokeStyle = this.currentColor;
-        ctx.strokeText(renderSpec.text, x, y);
-        ctx.fillText(renderSpec.text, x, y);
-
-        return canvas;
+        return $.FlexRenderer.UIControls.IconLibrary._renderIconCanvas(renderSpec, {
+            size,
+            padding,
+            color: this.currentColor,
+            backgroundColor: this.params.backgroundColor,
+            glyphFontFamily: this.params.glyphFontFamily
+        });
     }
 
     _renderIconPreview(node, query) {
@@ -9255,27 +9354,6 @@ class WebGL2 extends $.FlexRenderer.WebGLImplementation {
 
     init() {
         this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
-
-        // TODO: make icons dynamic
-
-        const countryIcon = new Image();
-        countryIcon.src = "/icons/place/country-icon.png";
-        countryIcon.onload = () => {
-            this.firstAtlas.addImage(countryIcon);
-        };
-
-        const cityIcon = new Image();
-        cityIcon.src = "/icons/place/city-icon.png";
-        cityIcon.onload = () => {
-            this.firstAtlas.addImage(cityIcon);
-        };
-
-        const villageIcon = new Image();
-        villageIcon.src = "/icons/place/village-icon.png";
-        villageIcon.onload = () => {
-            this.firstAtlas.addImage(villageIcon);
-        };
-
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
         this._namedColorTargets = {};
         this._presentationTransferScratch = {
@@ -15156,6 +15234,54 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             }
         }
 
+        /**
+         * Override the image-smoothing flag for a single tiledImage. Falls back to the
+         * drawer-wide value when undefined.
+         *
+         * Note: the sampler filter is baked into prepared textures at upload time, and
+         * OpenSeadragon's tile cache is keyed by tile content, not tiledImage identity.
+         * If two tiledImages reference the same source tiles, they will share the
+         * cached prepared textures — the first uploader wins the filter. In the common
+         * case where the per-source flag matches the source's identity, this is fine;
+         * setInternalCacheNeedsRefresh() forces re-preparation when the flag flips.
+         *
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @param {Boolean|null|undefined} enabled true → gl.LINEAR, false → gl.NEAREST,
+         *     null/undefined → inherit drawer default
+         */
+        setTiledImageSmoothingEnabled(tiledImage, enabled){
+            if (!tiledImage) {
+                return;
+            }
+            const normalized = enabled === null || enabled === undefined ? undefined : !!enabled;
+            if (tiledImage.__flexImageSmoothingEnabled === normalized) {
+                return;
+            }
+            tiledImage.__flexImageSmoothingEnabled = normalized;
+            this.setInternalCacheNeedsRefresh();
+            if (typeof tiledImage.requestInvalidate === "function") {
+                tiledImage.requestInvalidate(true);
+            } else {
+                this.viewer.requestInvalidate(false);
+            }
+        }
+
+        /**
+         * Resolve the effective image-smoothing flag for a tiledImage, honoring the
+         * per-tiledImage override when present.
+         *
+         * @private
+         * @param {OpenSeadragon.TiledImage} [tiledImage]
+         * @returns {Boolean}
+         */
+        _resolveImageSmoothingEnabled(tiledImage){
+            const override = tiledImage && tiledImage.__flexImageSmoothingEnabled;
+            if (override === true || override === false) {
+                return override;
+            }
+            return !!this._imageSmoothingEnabled;
+        }
+
         internalCacheCreate(cache, tile) {
             const tiledImage = tile.tiledImage;
             const normalized = this._normalizeCacheData(cache);
@@ -15206,9 +15332,9 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
          * @private
          * @returns {RasterTileTextureOptions}
          */
-        _getPreparedTileTextureOptions() {
+        _getPreparedTileTextureOptions(tiledImage) {
             return {
-                imageSmoothingEnabled: !!this._imageSmoothingEnabled
+                imageSmoothingEnabled: this._resolveImageSmoothingEnabled(tiledImage)
             };
         }
 
@@ -15326,7 +15452,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
             if (isGpuTextureSet) {
                 const result = await this.renderer.prepareGpuTextureTile({
                     data: data,
-                    textureOptions: this._getPreparedTileTextureOptions()
+                    textureOptions: this._getPreparedTileTextureOptions(tiledImage)
                 });
 
                 if (!result.ok) {
@@ -15355,7 +15481,7 @@ return texture(u_atlasTex, vec3(st, float(packedLayer)));
 
             const result = await this.renderer.prepareBitmapTile({
                 data: data,
-                textureOptions: this._getPreparedTileTextureOptions()
+                textureOptions: this._getPreparedTileTextureOptions(tiledImage)
             });
 
             if (!result.ok) {
@@ -20365,68 +20491,54 @@ ${this._delegateShader.htmlControls(wrapper, classes, css)}`;
 })(OpenSeadragon);
 
 (function ($) {
-/**
- * MVTTileJSONSource
- * ------------------
- * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
- * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
- * caches using the `vector-mesh` format.
- *
- * Requirements:
- *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
- *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
- *
- * Usage:
- *   const src = await OpenSeadragon.MVTTileJSONSource.from(
- *     'https://tiles.example.com/basemap.json',
- *     { style: defaultStyle() }
- *   );
- *   viewer.addTiledImage({ tileSource: src });
- *
- * Usage (local server for testing via docker):
- *     Download desired vector tiles from the server, and run:
- *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
- *
- * Alternatives (not supported):
- *      PMTiles range queries
- *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
- *
- *
- * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
- */
-$.MVTTileSource = class extends $.TileSource {
-    constructor({
-                    template,
-                    scheme = 'xyz',
-                    tileSize = 512,
-                    minLevel = 0,
-                    maxLevel = 14,
-                    width,
-                    height,
-                    extent = 4096,
-                    style,
-                    useNativeLines = false,
-                    httpAdapter = null
-                }) {
-        super({ width, height, tileSize, minLevel, maxLevel });
+// Shared MVT worker pipeline for concrete vector tile sources.
+class AbstractMVTTileSource extends $.TileSource {
+    constructor(options = {}) {
+        const normalizedOptions = {
+            tileSize: 512,
+            minLevel: 0,
+            maxLevel: 14,
+            ...options,
+        };
+
+        super(normalizedOptions);
+
+        if (normalizedOptions._isVector !== false) {
+            this._initVectorPipeline(normalizedOptions);
+        }
+    }
+
+    _initVectorPipeline({
+        template = null,
+        scheme = 'xyz',
+        extent = 4096,
+        style,
+        useNativeLines = false,
+        httpAdapter = null,
+    } = {}) {
         this.template = template;
         this.scheme = scheme;
         this.extent = extent;
         this.style = style || defaultStyle();
         this.useNativeLines = useNativeLines === true;
 
-        // Resolve adapter: explicit option wins, fall back to the drawer-level default.
+        // Shared worker HTTP bridge; also used by GeoJSONTileSource.
         this._httpAdapter = httpAdapter || ($.FlexDrawer && $.FlexDrawer._defaultHttpAdapter) || null;
-
         this._worker = makeWorker();
-        this._pending = new Map(); // key -> {resolve,reject}
+        this._pending = new Map();
 
-        // Install the HTTP bridge before any postMessage that may trigger fetches.
+        // Icon resolution state. Icons are font-rendered to canvases on the
+        // main thread (the worker can't touch DOM), uploaded into firstAtlas,
+        // and reported to the worker as a class -> textureId map.
+        this._iconResolutionState = 'pending';
+        this._iconMap = {};
+        this._iconRetryAttempts = 0;
+        this._iconRetryTimer = null;
+
         this._httpBridge = (this._httpAdapter && $.FlexDrawer && typeof $.FlexDrawer.installHttpBridge === 'function')
             ? $.FlexDrawer.installHttpBridge(this._worker, this._httpAdapter)
             : null;
 
-        // Wire worker responses
         this._worker.onmessage = (e) => {
             const msg = e.data;
             if (!msg || !msg.key) {
@@ -20457,13 +20569,239 @@ $.MVTTileSource = class extends $.TileSource {
             }
         };
 
-        // Send config once
         this._worker.postMessage({
             type: 'config',
             extent: this.extent,
             style: this.style,
-            useNativeLines: this.useNativeLines
+            useNativeLines: this.useNativeLines,
         });
+    }
+
+    downloadTileStart(context) {
+        const tile = context.tile;
+        const key = context.src;
+
+        if (this._iconResolutionState === 'pending') {
+            this._resolveIconsFromContext(context);
+        }
+
+        const list = this._pending.get(key);
+        if (list) {
+            list.push(context);
+            return;
+        }
+
+        this._pending.set(key, [context]);
+
+        this._worker.postMessage({
+            type: 'tile',
+            key: key,
+            z: tile.level,
+            x: tile.x,
+            y: tile.y,
+            url: context.src,
+        });
+    }
+
+    _resolveIconsFromContext(context) {
+        // Resolve the backend lazily — TileSources are constructed before any
+        // FlexDrawer/renderer exists, so we walk up from the tile on first use.
+        const tiledImage = context && context.tile && context.tile.tiledImage;
+        const backend = tiledImage
+            && tiledImage.viewer
+            && tiledImage.viewer.drawer
+            && tiledImage.viewer.drawer.renderer
+            && tiledImage.viewer.drawer.renderer.backend;
+        if (!backend || !backend.firstAtlas) {
+            // Not a Flex-backed viewer — skip icon resolution silently.
+            this._iconResolutionState = 'unavailable';
+            return;
+        }
+        this._tiledImage = tiledImage;
+        this._iconResolutionState = 'partial';
+        this._resolveIcons(backend);
+    }
+
+    _collectIconClassSpecs() {
+        const specs = [];
+        const layers = (this.style && this.style.layers) || {};
+        for (const layerName of Object.keys(layers)) {
+            const layer = layers[layerName];
+            if (!layer || layer.type !== 'icon' || !layer.classes) {
+                continue;
+            }
+            const iconSize = Number.isFinite(layer.iconSize) ? layer.iconSize : 256;
+            for (const className of Object.keys(layer.classes)) {
+                const cls = layer.classes[className] || {};
+                specs.push({
+                    layerName,
+                    className,
+                    spec: {
+                        icon: cls.icon,
+                        iconSet: cls.iconSet || 'fa-solid-common',
+                        size: Number.isFinite(cls.iconSize) ? cls.iconSize : iconSize,
+                        padding: Number.isFinite(cls.padding) ? cls.padding : 4,
+                        color: cls.color || '#111111',
+                        backgroundColor: cls.backgroundColor || '#00000000',
+                        glyphFontFamily: cls.glyphFontFamily,
+                        glyphFontWeight: cls.glyphFontWeight
+                    }
+                });
+            }
+        }
+        return specs;
+    }
+
+    _resolveIcons(backend) {
+        const lib = $.FlexRenderer && $.FlexRenderer.UIControls && $.FlexRenderer.UIControls.IconLibrary;
+        if (!lib || typeof lib.renderIconToCanvas !== 'function') {
+            this._iconResolutionState = 'unavailable';
+            return;
+        }
+
+        const all = this._collectIconClassSpecs();
+        if (!all.length) {
+            this._iconResolutionState = 'resolved';
+            return;
+        }
+
+        const stillPending = [];
+        let changed = false;
+
+        for (const entry of all) {
+            const existing = this._iconMap[entry.layerName] && this._iconMap[entry.layerName][entry.className];
+            if (Number.isInteger(existing) && existing >= 0) {
+                continue;
+            }
+            const result = lib.renderIconToCanvas(entry.spec);
+            if (result.ready) {
+                const textureId = lib.uploadToAtlas(backend.firstAtlas, result);
+                if (Number.isInteger(textureId) && textureId >= 0) {
+                    this._iconMap[entry.layerName] = this._iconMap[entry.layerName] || {};
+                    this._iconMap[entry.layerName][entry.className] = textureId;
+                    changed = true;
+                    continue;
+                }
+            }
+            if (result.retry) {
+                stillPending.push(entry);
+            }
+        }
+
+        if (changed) {
+            this._worker.postMessage({
+                type: 'icons',
+                iconMap: this._iconMap,
+            });
+            // Force already-decoded tiles to re-emit with the new textureIds.
+            if (this._tiledImage && typeof this._tiledImage.reset === 'function') {
+                try {
+                    this._tiledImage.reset();
+                } catch (_) {
+                    // noop
+                }
+            }
+        }
+
+        if (stillPending.length && this._iconRetryAttempts < 10) {
+            this._iconResolutionState = 'partial';
+            this._scheduleIconRetry(backend);
+        } else {
+            this._iconResolutionState = 'resolved';
+            if (this._iconRetryTimer) {
+                clearTimeout(this._iconRetryTimer);
+                this._iconRetryTimer = null;
+            }
+        }
+    }
+
+    /**
+     * Re-apply the current style after a runtime icon-mapping change. Resets
+     * the resolution state, reposts the config to the worker, and forces the
+     * tiled image to re-decode so the next pass picks up new textureIds.
+     */
+    refreshIcons() {
+        this._iconResolutionState = 'pending';
+        this._iconMap = {};
+        this._iconRetryAttempts = 0;
+        if (this._iconRetryTimer && this._iconRetryTimer !== -1) {
+            clearTimeout(this._iconRetryTimer);
+        }
+        this._iconRetryTimer = null;
+
+        this._worker.postMessage({
+            type: 'config',
+            extent: this.extent,
+            style: this.style,
+            useNativeLines: this.useNativeLines,
+        });
+        // Clear the worker's accumulated iconMap so removed classes drop out.
+        this._worker.postMessage({ type: 'icons', iconMap: {}, replace: true });
+
+        if (this._tiledImage && typeof this._tiledImage.reset === 'function') {
+            try {
+                this._tiledImage.reset();
+            } catch (_) {
+                // noop
+            }
+        }
+    }
+
+    _scheduleIconRetry(backend) {
+        if (this._iconRetryTimer) {
+            return;
+        }
+        this._iconRetryAttempts += 1;
+        const fonts = typeof document !== 'undefined' && document.fonts;
+        const retry = () => {
+            this._iconRetryTimer = null;
+            this._resolveIcons(backend);
+        };
+        if (this._iconRetryAttempts === 1 && fonts && typeof fonts.ready === 'object') {
+            // First retry: wait for the browser's font-loading promise when available.
+            fonts.ready.then(retry, retry);
+            this._iconRetryTimer = -1; // sentinel: pending via promise, not timer
+        } else {
+            this._iconRetryTimer = setTimeout(retry, 250);
+        }
+    }
+}
+
+// attach to flex renderer, since OSD treats all $.XXXTileSource named children as source candidates
+$.FlexRenderer.AbstractMVTTileSource = AbstractMVTTileSource;
+
+/**
+ * MVTTileJSONSource
+ * ------------------
+ * A TileSource that reads TileJSON metadata, fetches MVT (.mvt/.pbf) tiles,
+ * decodes + tessellates them on a Web Worker, and returns FlexDrawer-compatible
+ * caches using the `vector-mesh` format.
+ *
+ * Requirements:
+ *  - flex-drawer.js patched to accept `vector-mesh` (see vector-mesh-support.patch)
+ *  - flex-webgl2.js patched to draw geometry in first pass (see flex-webgl2-vector-pass.patch)
+ *
+ * Usage:
+ *   const src = await OpenSeadragon.MVTTileJSONSource.from(
+ *     'https://tiles.example.com/basemap.json',
+ *     { style: defaultStyle() }
+ *   );
+ *   viewer.addTiledImage({ tileSource: src });
+ *
+ * Usage (local server for testing via docker):
+ *     Download desired vector tiles from the server, and run:
+ *       docker run -it --rm -p 8080:8080 -v /path/to/data:/data maptiler/tileserver-gl-light:latest
+ *
+ * Alternatives (not supported):
+ *      PMTiles range queries
+ *      Raw files: pip install mbutil && mb-util --image_format=pbf mytiles.mbtiles ./tiles
+ *
+ *
+ * TODO OSD uses // eslint-disable-next-line compat/compat to disable URL warns for opera mini - what is the purpose of supporting it at all
+ */
+$.MVTTileSource = class extends $.FlexRenderer.AbstractMVTTileSource {
+    constructor(options) {
+        super(options);
     }
 
     /**
@@ -20576,31 +20914,6 @@ $.MVTTileSource = class extends $.TileSource {
     getTileHashKey(level, x, y) {
         return `mvt:${this.useNativeLines ? 'native-lines' : 'stroke-lines'}:${this.getTileUrl(level, x, y)}`;
     }
-
-    /**
-     * Return a FlexDrawer cache object directly (vector-mesh).
-     */
-    downloadTileStart(context) {
-        const tile = context.tile;
-        const key = context.src;
-
-        const list = this._pending.get(key);
-        if (list) {
-            list.push(context);
-            return;
-        }
-
-        this._pending.set(key, [ context ]);
-
-        this._worker.postMessage({
-            type: 'tile',
-            key: key,
-            z: tile.level,
-            x: tile.x,
-            y: tile.y,
-            url: context.src
-        });
-    }
 };
 
 // ---------- Helpers ----------
@@ -20614,25 +20927,6 @@ function packMesh(m) {
         lineWidth: Number.isFinite(m.lineWidth) && m.lineWidth > 0 ? m.lineWidth : undefined,
     };
 }
-
-// TODO: make icons dynamic
-// const iconMapping = {
-//     country: {
-//         textureId: 0,
-//         width: 256,
-//         height: 256,
-//     },
-//     city: {
-//         textureId: 1,
-//         width: 256,
-//         height: 256,
-//     },
-//     village: {
-//         textureId: 2,
-//         width: 256,
-//         height: 256,
-//     },
-// };
 
 function defaultStyle() {
     // Super-minimal style mapping; replace as needed.
@@ -20651,12 +20945,22 @@ function defaultStyle() {
             aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
             poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
             housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
-            // place:          {
-            //     type: 'icon',
-            //     color: [0.80, 0.10, 0.10, 1.00],
-            //     size: 0.8,
-            //     iconMapping: iconMapping, // TODO: somehow pass a function instead?
-            // },
+            // Place labels from OpenMapTiles schema (country/city/village/...).
+            // Uses HTML-glyph icons so it works without external fonts; switch
+            // iconSet to "fa-solid-common" (etc.) to use Font Awesome.
+            place: {
+                type: 'icon',
+                size: 0.4,
+                iconSize: 256,
+                classes: {
+                    country: { icon: '⌖', iconSet: 'html-glyphs', color: '#0a3a0a' },
+                    state:   { icon: '◆', iconSet: 'html-glyphs', color: '#06366c' },
+                    city:    { icon: '●', iconSet: 'html-glyphs', color: '#c03030' },
+                    town:    { icon: '●', iconSet: 'html-glyphs', color: '#d06060' },
+                    village: { icon: '▲', iconSet: 'html-glyphs', color: '#946334' },
+                    hamlet:  { icon: '▴', iconSet: 'html-glyphs', color: '#946334' },
+                },
+            },
         },
         // Default if layer not listed
         fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
@@ -24963,8 +25267,8 @@ function resolveTileTemplate(template, dataUrl) {
 })(OpenSeadragon);
 
 //! flex-renderer 0.0.1
-//! Built on 2026-06-04
-//! Git commit: --343ea79-dirty
+//! Built on 2026-06-08
+//! Git commit: --fe544b3
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -25227,6 +25531,10 @@ let STYLE = {
 
 let USE_NATIVE_LINES = false;
 
+// className -> textureId, keyed by MVT layer name. Populated incrementally as
+// the main thread renders icons to canvases and uploads them to firstAtlas.
+let ICON_MAP = {};
+
 self.onmessage = async (e) => {
     const msg = e.data;
 
@@ -25235,6 +25543,17 @@ self.onmessage = async (e) => {
             EXTENT = msg.extent || EXTENT;
             STYLE = msg.style || STYLE;
             USE_NATIVE_LINES = msg.useNativeLines === true;
+            return;
+        }
+
+        if (msg.type === 'icons') {
+            const incoming = msg.iconMap || {};
+            if (msg.replace) {
+                ICON_MAP = {};
+            }
+            for (const layerName of Object.keys(incoming)) {
+                ICON_MAP[layerName] = Object.assign(ICON_MAP[layerName] || {}, incoming[layerName] || {});
+            }
             return;
         }
 
@@ -25397,12 +25716,17 @@ self.onmessage = async (e) => {
                     }
 
                     if (feat.type === 1 && fstyle.type === 'icon') {
-                        const size = fstyle.size || 1.0;
-                        const icon = fstyle.iconMapping[feat.properties.class] || {
-                            textureId: -1,
-                            width: 16,
-                            height: 16
-                        };
+                        const classMap = ICON_MAP[lname] || {};
+                        const textureId = classMap[feat.properties.class];
+                        if (!Number.isInteger(textureId) || textureId < 0) {
+                            continue;
+                        }
+
+                        // Quad side in extent units. iconSize defaults to 256 on the main
+                        // thread; size is a world-space scale factor.
+                        const scale = fstyle.size || 1.0;
+                        const iconSize = fstyle.iconSize || 256;
+                        const half = (scale * iconSize) / 2.0;
 
                         const verts = [];
                         const idx = [];
@@ -25414,28 +25738,22 @@ self.onmessage = async (e) => {
                             for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
 
-                                const width = size * icon.width;
-                                const height = size * icon.height;
-
-                                const xStart = (pt.x - (width / 2.0)) / lyr.extent;
-                                const xEnd = (pt.x + (width / 2.0)) / lyr.extent;
-                                const yStart = (pt.y - (height / 2.0)) / lyr.extent;
-                                const yEnd = (pt.y + (height / 2.0)) / lyr.extent;
+                                const xStart = (pt.x - half) / lyr.extent;
+                                const xEnd = (pt.x + half) / lyr.extent;
+                                const yStart = (pt.y - half) / lyr.extent;
+                                const yEnd = (pt.y + half) / lyr.extent;
+                                const w = (2 * half) / lyr.extent;
+                                const h = w;
 
                                 const base = verts.length / 4;
 
-                                verts.push(xStart, yStart, tileDepth, icon.textureId);
-                                verts.push(xEnd, yStart, tileDepth, icon.textureId);
-                                verts.push(xStart, yEnd, tileDepth, icon.textureId);
-                                verts.push(xEnd, yEnd, tileDepth, icon.textureId);
+                                verts.push(xStart, yStart, tileDepth, textureId);
+                                verts.push(xEnd, yStart, tileDepth, textureId);
+                                verts.push(xStart, yEnd, tileDepth, textureId);
+                                verts.push(xEnd, yEnd, tileDepth, textureId);
 
                                 for (let i = 0; i < 4; i += 1) {
-                                    parameters.push(
-                                        xStart,
-                                        yStart,
-                                        width / lyr.extent,
-                                        height / lyr.extent
-                                    );
+                                    parameters.push(xStart, yStart, w, h);
                                 }
 
                                 idx.push(
@@ -25453,6 +25771,7 @@ self.onmessage = async (e) => {
                             });
                         }
                     }
+
                 }
             }
 
@@ -25583,8 +25902,8 @@ function strokePoly(points, width, join, cap, miterLimit){
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-04
-//! Git commit: --343ea79-dirty
+//! Built on 2026-06-08
+//! Git commit: --fe544b3
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -26292,8 +26611,8 @@ function computeAABB(f) {
 `;
 })(typeof self !== 'undefined' ? self : window);
 //! flex-renderer 0.0.1
-//! Built on 2026-06-04
-//! Git commit: --343ea79-dirty
+//! Built on 2026-06-08
+//! Git commit: --fe544b3
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 

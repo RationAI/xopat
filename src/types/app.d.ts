@@ -36,6 +36,10 @@ interface DataOverride {
     micronsY?: number;
     protocol?: string;
     tileSource?: OpenSeadragon.TileSource;
+    /**
+     * By default enabled, allows turning off data sampling interpolation.
+     */
+    imageSmoothingEnabled?: boolean;
 }
 
 /**

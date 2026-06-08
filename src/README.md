@@ -78,6 +78,7 @@ Each entry is either a bare `DataID` (string/object the image server understands
 - **`options`** — generic map forwarded to the TileSource (`SlideSourceOptions`, `src/types/app.d.ts:46–49`). Standard keys: `format`.
 - **`microns`** / **`micronsX`** / **`micronsY`** — pixel size in micrometers.
 - **`protocol`** — **name of a registered slide protocol** (see *Slide protocols* below). In non-secure mode a backtick-template string is accepted for back-compat, but is rejected with a warning in secure mode.
+- **`imageSmoothingEnabled`** — when `false`, tiles for this data source are sampled with `gl.NEAREST` (blocky pixels at high zoom — useful for label maps or integer-coded segmentation layers). When `true` or unset (default), tiles use `gl.LINEAR`. Honored by drawers that implement `setTiledImageSmoothingEnabled` (currently FlexDrawer); silently ignored otherwise.
 - **`tileSource`** — deprecated escape hatch for code-only consumers; not serializable.
 
 ### `params` — viewer setup (optional)

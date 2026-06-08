@@ -147,7 +147,7 @@ export class ShaderSideMenu extends BaseComponent {
             {
                 id: this.id + "-shaders",
                 name: "shaders",
-                class: "select select-ghost select-sm w-full max-w-xs cursor-pointer",
+                class: "select select-md w-full bg-base-200/90 border border-base-300 text-base-content text-base font-semibold cursor-pointer",
                 "aria-label": "Visualization",
                 value: this.selectedVisualization,
                 onchange: e => {
@@ -176,7 +176,7 @@ export class ShaderSideMenu extends BaseComponent {
                     id: this.id + "-cache-snapshot",
                     tabindex: "0",
                     role: "button",
-                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-sm align-middle ml-1 pt-2",
+                    class: "ph-light ph-bookmark btn btn-ghost btn-circle btn-md align-middle ml-1 text-lg",
                     title: $.t("main.shaders.saveCookies"),
                     onclick: (e) => {
                         e.stopPropagation();
@@ -223,7 +223,7 @@ export class ShaderSideMenu extends BaseComponent {
             )
         );
 
-        return div({ class: "flex flex-row" }, this.visualizationSelect, this._cacheDropdownWrap);
+        return div({ class: "flex flex-row items-center gap-1" }, this.visualizationSelect, this._cacheDropdownWrap);
     }
 
     create() {

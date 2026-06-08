@@ -42,7 +42,7 @@ describe('Basic Tutorial Walkthrough Without Layers But With Many Backgrounds', 
         cy.get("#images-pin", {timeout: 1000}).click();
         tutorialStep(); //url
         tutorialStep(); //finish
-        cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
+        cy.get('#tutorials-modal', {timeout: 1000}).should('not.have.class', 'modal-open');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
     })
 })
@@ -69,7 +69,7 @@ describe('Basic Tutorial Walkthrough', () => {
         tutorialStep(); //navigator
         tutorialStep(); //global controls
         tutorialStep(); //url
-        cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
+        cy.get('#tutorials-modal', {timeout: 1000}).should('not.have.class', 'modal-open');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
     })
 })
@@ -116,7 +116,7 @@ describe('Basic Tutorial Walkthrough With Layer', () => {
         tutorialStep(); //url
         tutorialStep(); //finish
         tutorialStep(); //finish
-        cy.get('#tutorials-container', {timeout: 1000}).should('not.be.visible');
+        cy.get('#tutorials-modal', {timeout: 1000}).should('not.have.class', 'modal-open');
         cy.get(".enjoyhint_next_btn", {timeout: 1000}).should('not.exist');
     })
 })

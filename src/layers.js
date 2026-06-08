@@ -411,6 +411,22 @@ function initXOpatLayers() {
         }
     }
 
+    // Per-viewer shader-id namespace helpers. The open pipeline stamps a
+    // unique prefix onto each viewer's renderer shader ids (so FlexRenderer's
+    // HTML control DOM ids don't collide across viewers). External consumers
+    // of session state expect un-prefixed ids matching APPLICATION_CONTEXT.config
+    // — strip on export, re-add on import. Inlined here to avoid a JS↔TS
+    // module bridge for what is otherwise a two-line string transform; the
+    // canonical implementation lives in src/classes/visualization/shader-id-namespace.ts.
+    function stripShaderNamespaceFromPath(path, namespace) {
+        if (typeof path !== "string" || !path || !namespace) return path;
+        return path.split("/").map(seg => seg.startsWith(namespace) ? seg.slice(namespace.length) : seg).join("/");
+    }
+    function addShaderNamespaceToPath(path, namespace) {
+        if (typeof path !== "string" || !path || !namespace) return path;
+        return path.split("/").map(seg => namespace + seg).join("/");
+    }
+
     /**
      * Capture a viewer's live visualization state for cross-peer broadcast.
      * Shape contract documented in src/SESSION.md and consumed by
@@ -420,11 +436,16 @@ function initXOpatLayers() {
         const renderer = viewer?.drawer?.renderer;
         if (!renderer) return null;
 
+        const namespace = viewer?.__shaderNamespace;
         const layers = {};
         for (const entry of collectShaderEntries(viewer)) {
             const config = entry.config || {};
-            layers[entry.pathString] = {
-                id: config.id,
+            const exportedKey = namespace ? stripShaderNamespaceFromPath(entry.pathString, namespace) : entry.pathString;
+            const exportedId = namespace && typeof config.id === "string"
+                ? stripShaderNamespaceFromPath(config.id, namespace)
+                : config.id;
+            layers[exportedKey] = {
+                id: exportedId,
                 type: typeof config.type === "string" ? config.type : "",
                 cache: jsonClone(isObject(config.cache) ? config.cache : {}) || {},
                 state: extractShaderState(config),
@@ -434,7 +455,11 @@ function initXOpatLayers() {
         let layerOrder;
         if (typeof renderer.getShaderLayerOrder === "function") {
             const order = renderer.getShaderLayerOrder();
-            if (Array.isArray(order)) layerOrder = order.slice();
+            if (Array.isArray(order)) {
+                layerOrder = namespace
+                    ? order.map(id => typeof id === "string" ? stripShaderNamespaceFromPath(id, namespace) : id)
+                    : order.slice();
+            }
         }
         if (!Array.isArray(layerOrder)) layerOrder = Object.keys(layers);
 
@@ -459,14 +484,20 @@ function initXOpatLayers() {
 
         const incomingLayers = isObject(payload.layers) ? payload.layers : {};
         const navDrawer = viewer.navigator?.drawer;
+        // Incoming payloads carry un-prefixed shader paths/ids (export
+        // strips). The local renderer's lookups expect the per-viewer
+        // prefix — re-add before resolving against `getShaderLayerConfig`
+        // / `setShaderLayerOrder`.
+        const namespace = viewer?.__shaderNamespace;
         let mutated = false;
 
         for (const pathString of Object.keys(incomingLayers)) {
             const incoming = incomingLayers[pathString];
             if (!isObject(incoming)) continue;
 
+            const localPath = namespace ? addShaderNamespaceToPath(pathString, namespace) : pathString;
             const config = typeof renderer.getShaderLayerConfig === "function"
-                ? renderer.getShaderLayerConfig(pathString)
+                ? renderer.getShaderLayerConfig(localPath)
                 : null;
             if (!config) {
                 console.warn(`[layers] importLiveVisualization: missing local config for "${pathString}"`);
@@ -477,7 +508,7 @@ function initXOpatLayers() {
             if (incomingType && config.type !== incomingType) {
                 config.type = incomingType;
                 if (navDrawer && typeof navDrawer.getOverriddenShaderConfig === "function") {
-                    const navConfig = navDrawer.getOverriddenShaderConfig(pathString);
+                    const navConfig = navDrawer.getOverriddenShaderConfig(localPath);
                     if (navConfig) navConfig.type = incomingType;
                 }
             }
@@ -490,12 +521,15 @@ function initXOpatLayers() {
 
         const incomingOrder = Array.isArray(payload.layerOrder) ? payload.layerOrder : null;
         if (incomingOrder && typeof renderer.setShaderLayerOrder === "function") {
+            const localOrder = namespace
+                ? incomingOrder.map(id => typeof id === "string" ? addShaderNamespaceToPath(id, namespace) : id)
+                : incomingOrder.slice();
             const currentOrder = typeof renderer.getShaderLayerOrder === "function"
                 ? renderer.getShaderLayerOrder()
                 : null;
-            if (!Array.isArray(currentOrder) || currentOrder.join("/") !== incomingOrder.join("/")) {
+            if (!Array.isArray(currentOrder) || currentOrder.join("/") !== localOrder.join("/")) {
                 try {
-                    renderer.setShaderLayerOrder(incomingOrder.slice());
+                    renderer.setShaderLayerOrder(localOrder);
                     mutated = true;
                 } catch (e) {
                     console.warn("[layers] importLiveVisualization: setShaderLayerOrder failed:", e);

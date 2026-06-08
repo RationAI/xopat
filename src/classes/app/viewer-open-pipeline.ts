@@ -4,6 +4,7 @@ import { ViewerStateBindingController } from "./viewer-state-binding-controller"
 import { ViewerVisualizationRuntime } from "./viewer-visualization-runtime";
 import { ViewerShaderSourceController, makeXOpatSourceToken } from "./viewer-shader-source-controller";
 import { assembleBackgroundShaders, assembleVisualizationShaders } from "./assemble-render-output";
+import { buildShaderIdNamespace, renameShaderIds } from "../visualization/shader-id-namespace";
 
 export interface OpenViewerWithOptions {
     dataMode?: "replace" | "merge" | "merge-exact";
@@ -919,6 +920,14 @@ export class ViewerOpenPipeline {
             if (sourceOptions !== undefined && item?.source?.setSourceOptions) {
                 item.source.setSourceOptions(sourceOptions);
             }
+
+            if (dataSpec && typeof dataSpec === "object"
+                && typeof (dataSpec as any).imageSmoothingEnabled === "boolean") {
+                const drawer = item?.viewer?.drawer;
+                if (drawer && typeof drawer.setTiledImageSmoothingEnabled === "function") {
+                    drawer.setTiledImageSmoothingEnabled(item, (dataSpec as any).imageSmoothingEnabled);
+                }
+            }
         };
 
         const getExistingItemLoadKey = (item: any, fallbackIndex: number) => {
@@ -1552,17 +1561,36 @@ export class ViewerOpenPipeline {
                     // a parent tiledImage's already-deleted `__shaderConfig`).
                     // Drop the redundant pre-reset; the apply call handles
                     // the swap.
+
+                    // Step 1: apply cached shader state to the un-prefixed
+                    // renderOutput. `applyStoredVisualizationSnapshot` keys
+                    // its named/path lookups by structural shader id, so
+                    // the per-viewer prefix MUST NOT be visible here.
+                    UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
+
+                    // Step 2: per-viewer shader-id namespace. FlexRenderer
+                    // builds HTML control DOM ids as `${shader.id}_${ctrl}`
+                    // and looks them up via `document.getElementById` —
+                    // global. Two viewers showing the same shader id
+                    // collide on `noUiSlider.create` ("Slider was already
+                    // initialized"). Prefix the renderer's shader ids per
+                    // viewer; structural config and session payloads stay
+                    // un-prefixed via the strip path in
+                    // `UTILITIES.exportLiveVisualization`.
+                    const shaderNamespace = buildShaderIdNamespace(viewer.id ?? viewerIndex, "v");
+                    const namespacedRenderOutput = renameShaderIds(renderOutput, shaderNamespace);
+                    (viewer as any).__shaderNamespace = shaderNamespace;
+
                     const attemptApply = async () => {
-                        await viewer.drawer.overrideConfigureAll(renderOutput);
+                        await viewer.drawer.overrideConfigureAll(namespacedRenderOutput);
                         return true;
                     };
 
-                    UTILITIES.applyStoredVisualizationSnapshot(renderOutput);
                     try {
                         return await attemptApply();
                     } catch (error) {
                         console.warn("Renderer configuration failed, retrying without cached shader state.", error);
-                        if (!visualizationRuntime.clearVisualizationCaches(renderOutput)) {
+                        if (!visualizationRuntime.clearVisualizationCaches(namespacedRenderOutput)) {
                             throw error;
                         }
                         return await attemptApply();
