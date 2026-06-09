@@ -96,16 +96,18 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
         const url = new URL(window.location.href);
 
         // First priority has post (or other) data given
-        session = _parse(postData["visualization"] || postData["visualisation"]);
+        let data = postData["visualization"] || postData["visualisation"];
+        session = _parse(data);
 
         // In case we could not retrieve the session from data, we try URL
         if (!session || session.error) {
             const fromHash = !!url.hash;
-            const data = fromHash
+            const urlData = fromHash
                 ? decodeURIComponent(url.hash.substring(1))
                 : url.searchParams.get("visualization");
 
-            if (data) {
+            if (urlData) {
+                data = urlData;
                 // If it’s already in the hash, parse locally so refresh/share stays stable.
                 if (supportsPost && !fromHash) {
                     // existing POST redirect logic (unchanged)
@@ -123,17 +125,17 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     form.submit();
                 } else {
                     session = _parse(data);
-                    // Some proxies (e.g. JupyterHub's configurable-http-proxy) re-encode
-                    // query strings, so a singly-encoded `?visualization=%7B...` arrives
-                    // doubly-encoded and URLSearchParams.get() only undoes one layer.
-                    // If parsing failed and the payload still looks URL-encoded, retry.
-                    if (session && session.error && typeof data === "string" && /%[0-9A-Fa-f]{2}/.test(data)) {
-                        try {
-                            const retried = _parse(decodeURIComponent(data));
-                            if (retried && !retried.error) session = retried;
-                        } catch { /* keep original error */ }
-                    }
                 }
+            }
+            // Some proxies (e.g. JupyterHub's configurable-http-proxy) re-encode
+            // query strings, so a singly-encoded `?visualization=%7B...` arrives
+            // doubly-encoded and URLSearchParams.get() only undoes one layer.
+            // If parsing failed and the payload still looks URL-encoded, retry.
+            if (session && session.error && typeof data === "string" && /%[0-9A-Fa-f]{2}/.test(data)) {
+                try {
+                    const retried = _parse(decodeURIComponent(data));
+                    if (retried && !retried.error) session = retried;
+                } catch { /* keep original error */ }
             }
         }
 
