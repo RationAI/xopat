@@ -123,6 +123,16 @@ function xOpatParseConfiguration(postData, i18n, supportsPost) {
                     form.submit();
                 } else {
                     session = _parse(data);
+                    // Some proxies (e.g. JupyterHub's configurable-http-proxy) re-encode
+                    // query strings, so a singly-encoded `?visualization=%7B...` arrives
+                    // doubly-encoded and URLSearchParams.get() only undoes one layer.
+                    // If parsing failed and the payload still looks URL-encoded, retry.
+                    if (session && session.error && typeof data === "string" && /%[0-9A-Fa-f]{2}/.test(data)) {
+                        try {
+                            const retried = _parse(decodeURIComponent(data));
+                            if (retried && !retried.error) session = retried;
+                        } catch { /* keep original error */ }
+                    }
                 }
             }
         }
