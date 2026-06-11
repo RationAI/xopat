@@ -196,6 +196,21 @@ export function assembleVisualizationShaders(env: AssembleEnv, renderOutput: Rec
             env.expandDataSourceRef(entry, "visualization", undefined, meta),
     });
 
+    // Honor `visualization.order` for top-level layers by controlling key
+    // insertion order: `overrideConfigureAll` derives the shader layer
+    // order from `Object.keys(shaders)` when no explicit order is passed
+    // (flex-renderer drawer), and both `renameShaderIds` (per-viewer
+    // namespacing) and `applyStoredVisualizationSnapshot` preserve key
+    // order. Group-internal order rides on each group config's `order`.
+    const orderHint = env.activeVisualization.order;
+    if (Array.isArray(orderHint)) {
+        for (const shaderId of orderHint) {
+            if (typeof shaderId === "string"
+                && Object.prototype.hasOwnProperty.call(shaderConfigMap, shaderId)) {
+                renderOutput[shaderId] = shaderConfigMap[shaderId];
+            }
+        }
+    }
     Object.assign(renderOutput, shaderConfigMap);
 }
 

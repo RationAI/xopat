@@ -462,9 +462,9 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 ),
                 button({
                     class: "btn btn-ghost btn-xs",
-                    title: "Close all opened slides",
+                    title: "Close all opened viewers",
                     onclick: this._clearAll
-                }, "Close all")
+                }, "Close all opened viewers")
             );
 
             const tabs = div({ class: "flex flex-wrap gap-1 p-2 max-h-[96px] overflow-y-auto" });
@@ -474,7 +474,7 @@ export class SlideSwitcherMenu extends UI.BaseComponent {
                 tabs.appendChild(this._renderViewerTab(entry.item, entry.config, idx));
             });
 
-            this._headerHost.append(header, tabs);
+            this._headerHost.append(tabs, header);
         });
     }
 

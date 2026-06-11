@@ -589,6 +589,34 @@ await this.io.flush({ capabilityId: 'bundle-export' });
 
 `UTILITIES.export()` (the user-facing "Export" action) calls `IO_PIPELINE.flushBundleExport()` for every owner in one go.
 
+### `Save` vs `Export` (user-facing distinction)
+
+The app bar exposes two distinct verbs:
+
+| Verb | Implementation | When to use |
+|---|---|---|
+| **Save** (`UTILITIES.save()`) | Drains every CRUD outbox via `IO_PIPELINE.flushAllResources()`, then calls `flushBundleExport({ skipFileFallback: true })`. Reports outcome via toast. Falls through to **Export** when `IO_PIPELINE.hasRemoteBundleSinks()` returns `false` — i.e. only **user-recoverable** sinks count (`http-rest`, `github`, `dicom-sink`, custom remote sinks). The in-memory Rule-5 fallbacks (`post-data`, `session-memory`), `file-download`, and import-only `file-upload` are **not** counted: a deployment with only those bound for bundle-export degrades to Export instead of pretending to save. | The everyday "persist my work" button. Honours the admin's sink bindings strictly — a refusal surfaces as an error, never a silent file download. |
+| **Export** (`UTILITIES.export()`) | Calls `flushBundleExport()` with the default fallback enabled, then **always** triggers `file-download` for the serialized HTML form. | The explicit "give me a file" escape hatch. Useful for archival, debugging, or when remote persistence is unavailable. |
+
+The pipeline's hardcoded **`file-download` last-resort fallback** (inside `runOneBundleExport`) is gated by `flushBundleExport`'s new `skipFileFallback` option:
+
+- `skipFileFallback: false` (default) — when every bound sink refuses, the pipeline silently hands the payload to `file-download` so the user always walks away with their data. Used by **Export**.
+- `skipFileFallback: true` — refusals stay refusals; the caller surfaces them. Used by **Save** so a misconfigured deployment never produces a confusing local file.
+
+Programmatic equivalent:
+
+```js
+if (IO_PIPELINE.hasRemoteBundleSinks()) {
+  await IO_PIPELINE.flushAllResources();
+  const results = await IO_PIPELINE.flushBundleExport({ skipFileFallback: true });
+  // Inspect `results` for refusals.
+} else {
+  await UTILITIES.export();   // degrade to file-download
+}
+```
+
+`IO_PIPELINE.flushAllResources()` iterates every resource registered through `XOpatElement.defineResource(...)`. Resources self-register with the pipeline on construction so callers don't have to track them.
+
 ---
 
 ## Admin side: binding capabilities to sinks

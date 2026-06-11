@@ -5,11 +5,13 @@
       "toggleVisibility": "Show or hide annotations",
       "outlineOnly": "Outline only",
       "edgeNavigation": "Enable edge navigation",
-      "save": "Save",
+      "settings": "Display settings",
       "moreOptions": "More options",
       "border": "Border",
       "opacity": "Opacity",
       "editPresets": "Edit",
+      "leftClickPreset": "Left mouse button paints this class",
+      "rightClickPreset": "Right mouse button paints this class",
       "unknownPreset": "Unknown",
       "noPresetsPrefix": "No class presets available.",
       "createPresetLink": "Create a preset to annotate.",
@@ -24,7 +26,7 @@
       "description": "Draw, save and share annotations on the slide.",
       "openPanel": "Open the <b>Annotations</b> tab on the right edge to access the toolbar, the class presets and the annotation list.",
       "enable": "Toggle the whole annotations layer on/off — this also disables drawing hotkeys, so you can pan freely without accidental strokes.",
-      "save": "Export or save annotations. Depending on the session config this goes to a connected server, downloads a file, or both.",
+      "settings": "Open display settings to adjust outline-only mode, edge navigation, and the border width and opacity of annotations.",
       "canvas": "Drawing happens directly on the slide: pick a class preset, then click-drag to outline a region. Right-click an annotation to copy / move / delete it. Hotkeys are listed under <i>More options</i> in the toolbar."
     },
     "toolbar": {
@@ -212,6 +214,9 @@
       "layerName": "Layer {{name}}",
       "deleteSelection": "Delete selection",
       "refresh": "Refresh list",
+      "collapseAllLayers": "Collapse all layers",
+      "expandAllLayers": "Expand all layers",
+      "search": "Search and filter",
       "area": "Area",
       "searchPlaceholder": "Search...",
       "metricColumn": {

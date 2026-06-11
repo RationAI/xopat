@@ -420,6 +420,9 @@ ${methods}`;
 
 ### Runtime contract (read first; the runtime enforces this)
 - Your script body runs at top level inside an async wrapper. Use \`await\` directly; do not wrap in your own \`async () => { ... }\` IIFE.
+- Every namespace method call is proxied to the host and ALWAYS returns a Promise, even when its declared signature looks synchronous (e.g. \`getContextCount(): number\`). Always \`await\` every namespace call:
+  ✗  \`const info = application.getGlobalInfo(); for (const c of info) ...\`   // info is a Promise — "not iterable"
+  ✓  \`const info = await application.getGlobalInfo();\`
 - The runtime only captures the value passed to a top-level \`return\`. Anything else is dropped — including a trailing expression, a Promise that resolves to a value, or the return of an inner function.
   ✗  \`(async () => { return await visualization.getVisualizations(); })()\`     // discards the value
   ✗  \`const x = await visualization.getVisualizations(); x;\`                    // last-expression value is NOT captured

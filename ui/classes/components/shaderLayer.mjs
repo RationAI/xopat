@@ -3,7 +3,6 @@ import van from "../../vanjs.mjs";
 import { BaseComponent } from "../baseComponent.mjs";
 import { Div } from "../elements/div.mjs";
 import { Button } from "../elements/buttons.mjs";
-import { Checkbox } from "../elements/checkbox.mjs";
 import { Select } from "../elements/select.mjs";
 import { PhIcon } from "../elements/ph-icon.mjs";
 import { RawHtml } from "../elements/rawHtml.mjs";
@@ -49,7 +48,9 @@ export class ShaderLayer extends BaseComponent {
         this.isGroup = this.cfg?.type === "group" || this.hasChildren;
         this.depth = Number.isInteger(this.htmlContext.depth) ? this.htmlContext.depth : 0;
         this.isGroupChild = !!this.htmlContext.isGroupChild;
-        this.groupOpen = this.cfg._uiGroupOpen ?? true;
+        // unified collapse state: legacy group configs may still carry _uiGroupOpen
+        this.collapsed = this.cfg._uiCollapsed
+            ?? (this.hasChildren ? !(this.cfg._uiGroupOpen ?? true) : false);
         this.fixed = !!this.cfg.fixed;
         // cfg.visible can be boolean (UI toggle) or 0/1 (renderer spec / applySnapshotState).
         this.visible = this.cfg.visible !== false && this.cfg.visible !== 0;
@@ -69,6 +70,7 @@ export class ShaderLayer extends BaseComponent {
         this.cacheApplied = this.cfg._cacheApplied;
         this.childrenContainerId = this.id + "-children";
         this.bodyContainerId = this.id + "-body";
+        this.collapseContainerId = this.id + "-collapse";
         this.blendSelectId = this.id + "-blend-select";
         this.compactIndent = Math.min(this.depth, 4) * 8;
 
@@ -76,7 +78,6 @@ export class ShaderLayer extends BaseComponent {
         this.classMap.base =
             "relative shader-part card bg-base-200/90 shadow-sm mb-2 pt-1 border border-base-300";
         this.classMap.resizable = "resizable";
-        this.classMap.dim = this.visible ? "" : "brightness-50";
         this.classMap.clipNudge = this.visible && this.mode === "clip" ? "translate-x-[6px]" : "";
         this.classMap.clipActive = this.mode === "clip"
             ? "ring-2 ring-offset-1 ring-accent/60"
@@ -103,30 +104,47 @@ export class ShaderLayer extends BaseComponent {
     // ---- header
 
     _buildHeaderLeft() {
-        this.checkbox = new Checkbox({
-            label: "",
-            checked: this.visible,
-            onchange: (e) => {
-                const checked = e.target.checked;
-                this.visible = checked;
-                this.setClass("dim", checked ? "" : "brightness-50");
-                this.cb.onToggleVisible?.(checked);
-            }
-        });
-
-        const titleSpan = span(
+        this._eyeIcon = new PhIcon({ name: this.visible ? "ph-eye" : "ph-eye-slash" });
+        const eyeBtn = button(
             {
-                class: "text-sm truncate align-bottom one-liner",
-                title: this.title,
+                type: "button",
+                class: "btn btn-ghost btn-xs min-h-0 h-5 px-1",
+                title: this.visible
+                    ? $.t("main.shaders.hideLayer")
+                    : $.t("main.shaders.showLayer"),
+                onclick: (e) => {
+                    e.stopPropagation();
+                    this._setVisible(!this.visible);
+                    e.currentTarget.title = this.visible
+                        ? $.t("main.shaders.hideLayer")
+                        : $.t("main.shaders.showLayer");
+                    this.cb.onToggleVisible?.(this.visible);
+                }
+            },
+            this._eyeIcon.create()
+        );
+
+        this._titleSpan = span(
+            {
+                class: "text-sm truncate align-bottom one-liner" + (this.visible ? "" : " opacity-60"),
+                title: this.title + "\n" + $.t("main.shaders.collapseHint"),
             },
             this.shortTitle
         );
 
         return div(
-            { class: "flex items-start gap-2 flex-1 min-w-0" },
-            this.checkbox.create(),
-            titleSpan
+            { class: "flex items-center gap-1 flex-1 min-w-0" },
+            eyeBtn,
+            this._buildReorderRail(),
+            this._titleSpan
         );
+    }
+
+    _setVisible(visible) {
+        this.visible = !!visible;
+        this._eyeIcon?.changeIcon(this.visible ? "ph-eye" : "ph-eye-slash");
+        this._titleSpan?.classList.toggle("opacity-60", !this.visible);
+        this._applyCollapsed();
     }
 
     _buildRenderTypeSelector() {
@@ -139,7 +157,7 @@ export class ShaderLayer extends BaseComponent {
                 xs: "select-xs",
                 base: "select select-bordered select-xs w-full max-w-[10rem]"
             },
-            extraProperties: { value: this.type },
+            extraProperties: { value: this.type, title: $.t("main.shaders.typeSelectHint") },
             onchange: (e) => {
                 const val = e.target.value;
                 this.type = val;
@@ -156,48 +174,27 @@ export class ShaderLayer extends BaseComponent {
         );
     }
 
+    _pillTitle() {
+        const modeInfo = this.mode === "clip"
+            ? $.t("main.shaders.blendingInfoMaskClip")
+            : $.t("main.shaders.blendingInfoMask");
+        return modeInfo + "\n" + $.t("main.shaders.pillHint");
+    }
+
     _buildHeaderBadges() {
-        // compact “mode” pill, always visible
-        const modeLabelMap = {
-            show: $.t("main.shaders.modeShow"),
-            blend: $.t("main.shaders.modeBlend"),
-            clip: $.t("main.shaders.modeBlendClip"),
-        };
-        const modeColorMap = {
-            show: "badge-ghost",
-            blend: "badge-warning",
-            clip: "badge-accent",
-        };
-
-        const baseBadgeClass =
-            "badge badge-xs cursor-pointer transition-colors";
-
-        const badge = span(
+        // single mode/blend pill — pure indicator, hidden while mode is "show"
+        const pill = span(
             {
-                id: this.id + "-blend-toggle",
+                id: this.id + "-mode-pill",
                 class:
-                    `${baseBadgeClass} ${modeColorMap[this.mode] || "badge-outline"}` +
-                    (this.blendOpen ? " ring-1 ring-base-300/80" : ""),
+                    "badge badge-xs transition-colors " +
+                    (this.mode === "clip" ? "badge-accent" : "badge-warning") +
+                    (this._isModeShow() ? " hidden" : ""),
                 style: "height: 18px;",
-                title: $.t("main.shaders.blendConfigure"),
-                onclick: () => this._toggleBlendPopup(),
+                title: this._pillTitle(),
             },
-            modeLabelMap[this.mode] ?? this.mode
+            this.blendMode.toString().replace(/_/g, " ")
         );
-
-        const blendName = this.blendMode.toString().replace(/_/g, " ");
-        const blendBadge = this._isModeShow()
-            ? null
-            : span(
-                {
-                    class:
-                        "badge badge-outline badge-xs ml-1",
-                    title: $.t("main.shaders.blendMode"),
-                    style: "height: 18px;",
-                    onclick: () => !this.fixed && this._toggleBlendPopup(),
-                },
-                blendName
-            );
 
         const chevronBtn = button(
             {
@@ -205,51 +202,71 @@ export class ShaderLayer extends BaseComponent {
                 class:
                     "btn btn-ghost btn-xs min-h-0 h-5 px-1 ml-1",
                 title: $.t("main.shaders.blendConfigure"),
-                onclick: () => this._toggleBlendPopup()
+                onclick: (e) => {
+                    e.stopPropagation();
+                    this._toggleBlendPopup();
+                }
             },
             new PhIcon({name: "ph-gear"}).create()
         );
 
         return div(
             { class: "flex items-center gap-1 non-draggable" },
-            badge,
-            blendBadge,
+            pill,
             chevronBtn
         );
     }
 
-    _toggleGroupBody() {
-        if (!this.hasChildren) return;
-        this.groupOpen = !this.groupOpen;
-        this.cfg._uiGroupOpen = this.groupOpen;
+    _refreshPill() {
+        const pill = document.getElementById(this.id + "-mode-pill");
+        if (!pill) return;
+        pill.textContent = this.blendMode.toString().replace(/_/g, " ");
+        pill.title = this._pillTitle();
+        pill.classList.toggle("badge-accent", this.mode === "clip");
+        pill.classList.toggle("badge-warning", this.mode !== "clip");
+        pill.classList.toggle("hidden", this._isModeShow());
+    }
 
-        const body = document.getElementById(this.bodyContainerId);
-        if (body) {
-            body.classList.toggle("hidden", !this.groupOpen);
+    _isCollapsed() {
+        return !this.visible || this.collapsed;
+    }
+
+    _toggleCollapsed() {
+        this.collapsed = !this.collapsed;
+        this.cfg._uiCollapsed = this.collapsed;   // persist
+        if (this.hasChildren) {
+            this.cfg._uiGroupOpen = !this.collapsed;  // keep legacy flag in sync
         }
+        this._applyCollapsed();
+    }
 
-        const btn = document.getElementById(this.id + "-group-toggle");
-        if (btn) {
-            btn.classList.toggle("rotate-90", this.groupOpen);
+    _applyCollapsed() {
+        const collapsed = this._isCollapsed();
+
+        const wrapper = document.getElementById(this.collapseContainerId);
+        if (wrapper) {
+            wrapper.classList.toggle("hidden", collapsed);
         }
     }
 
-    _buildGroupToggle() {
-        if (!this.hasChildren) return null;
-
-        return button(
+    _buildReorderRail() {
+        const arrow = (dir, icon, titleKey) => button(
             {
-                id: this.id + "-group-toggle",
                 type: "button",
-                class:
-                    "btn btn-ghost btn-xs min-h-0 h-5 px-1 transition-transform " +
-                    (this.groupOpen ? "rotate-90" : ""),
-                title: this.groupOpen
-                    ? ($.t("common.Collapse") || "Collapse")
-                    : ($.t("common.Expand") || "Expand"),
-                onclick: () => this._toggleGroupBody()
+                class: "btn-ghost min-h-0 leading-[0] px-0.5",
+                title: $.t(titleKey),
+                onclick: (e) => {
+                    e.stopPropagation();
+                    this.cb.onReorder?.(dir);
+                }
             },
-            new PhIcon({ name: "ph-caret-right" }).create()
+            new PhIcon({ name: icon }).create()
+        );
+
+        return div(
+            { class: "non-draggable flex flex-col items-center shrink-0" },
+            arrow("up", "ph-caret-up", "main.shaders.moveUp"),
+            arrow("down", "ph-caret-down", "main.shaders.moveDown")
         );
     }
 
@@ -268,8 +285,13 @@ export class ShaderLayer extends BaseComponent {
         return div(
             { class: "px-2 pb-1 flex flex-col gap-0.5 truncate max-w-full select-none" },
             div(
-                { class: "flex items-center gap-2" },
-                this._buildGroupToggle(),
+                {
+                    class: "flex items-center gap-2 cursor-pointer",
+                    title: $.t("main.shaders.collapseHint"),
+                    onclick: () => {
+                        if (this.visible) this._toggleCollapsed();
+                    }
+                },
                 this._buildHeaderLeft(),
                 this._buildHeaderBadges(),
             ),
@@ -284,12 +306,6 @@ export class ShaderLayer extends BaseComponent {
         const el = document.getElementById(this.id + "-blend-controls");
         if (el) {
             el.classList.toggle("hidden", !this.blendOpen);
-        }
-
-        const hdr = document.getElementById(this.id + "-blend-toggle");
-        if (hdr) {
-            hdr.classList.toggle("ring-1", this.blendOpen);
-            hdr.classList.toggle("ring-base-300/80", this.blendOpen);
         }
     }
 
@@ -307,29 +323,14 @@ export class ShaderLayer extends BaseComponent {
             this.mode === "clip" ? "ring-2 ring-offset-1 ring-accent/60" : ""
         );
 
-        // update header pill text & color
-        const hdr = document.getElementById(this.id + "-blend-toggle");
-        if (hdr) {
-            const modeLabelMap = {
-                show: $.t("main.shaders.modeShow"),
-                blend: $.t("main.shaders.modeBlend"),
-                clip: $.t("main.shaders.modeBlendClip"),
-            };
-            const modeColorMap = {
-                show: "badge-ghost",
-                blend: "badge-warning",
-                clip: "badge-accent",
-            };
-            hdr.textContent = modeLabelMap[this.mode] ?? this.mode;
-            hdr.classList.remove("badge-ghost", "badge-warning", "badge-accent", "badge-outline");
-            hdr.classList.add(modeColorMap[this.mode] || "badge-outline");
-        }
+        this._refreshPill();
 
         this.cb.onChangeMode?.(mode, this.blendMode);
     }
 
     _setBlendMode(blend) {
         this.blendMode = blend;
+        this._refreshPill();
         this.cb.onChangeBlend?.(this.mode, blend);
     }
 
@@ -354,6 +355,7 @@ export class ShaderLayer extends BaseComponent {
                     class: modeBtnClasses("show"),
                     type: "button",
                     "data-mode": "show",
+                    title: $.t("main.shaders.blendingInfoShow"),
                     onclick: () => this._setMode("show")
                 },
                 $.t("main.shaders.modeShowShort")
@@ -363,6 +365,7 @@ export class ShaderLayer extends BaseComponent {
                     class: modeBtnClasses("blend"),
                     type: "button",
                     "data-mode": "blend",
+                    title: $.t("main.shaders.blendingInfoMask"),
                     onclick: () => this._setMode("blend")
                 },
                 $.t("main.shaders.modeBlendShort")
@@ -372,14 +375,17 @@ export class ShaderLayer extends BaseComponent {
                     class: modeBtnClasses("clip"),
                     type: "button",
                     "data-mode": "clip",
+                    title: $.t("main.shaders.blendingInfoMaskClip"),
                     onclick: () => this._setMode("clip")
                 },
                 $.t("main.shaders.modeClipShort")
             )
         );
 
+        // mark the active option as selected — assigning `value` on the select
+        // happens before options are attached, so it would reset to the first option
         const blendOptions = this.availableBlendModes.map(b =>
-            option({ value: b }, b.replace(/_/g, " "))
+            option({ value: b, selected: b === this.blendMode }, b.replace(/_/g, " "))
         );
 
         const blendDisabled = this._isModeShow() || this.fixed;
@@ -398,7 +404,11 @@ export class ShaderLayer extends BaseComponent {
                     class:
                         "flex flex-row items-center justify-between text-[0.7rem] text-base-content/70 mb-1"
                 },
-                span($.t("main.shaders.blendingTitle")),
+                div(
+                    { class: "flex items-center gap-1" },
+                    span($.t("main.shaders.blendingTitle")),
+                    this._buildCacheIcon()
+                ),
                 span(
                     { class: "italic" },
                     this._isModeShow()
@@ -417,12 +427,14 @@ export class ShaderLayer extends BaseComponent {
                         id: this.blendSelectId,
                         class: "select select-bordered select-xs w-full max-w-xs",
                         value: this.blendMode,
+                        title: $.t("main.shaders.blendSelectHint"),
                         disabled: blendDisabled ? "disabled" : undefined,
                         onchange: (e) => this._setBlendMode(e.target.value)
                     },
                     ...blendOptions
                 )
-            )
+            ),
+            this._buildCachePopup()
         );
     }
 
@@ -514,8 +526,7 @@ export class ShaderLayer extends BaseComponent {
 
     _buildCacheIcon() {
         if (!this.cacheApplied) {
-            // keep layout consistent even without cache state
-            return div({ class: "mt-2" });
+            return null;
         }
 
         // hit/stale/miss are forward-looking statuses; the actual provenance values
@@ -532,7 +543,7 @@ export class ShaderLayer extends BaseComponent {
             {
                 type: "button",
                 class:
-                    `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5 mt-1 btn-warning`,
+                    `btn btn-xs btn-ghost ${statusStyle} min-h-0 h-5 px-0.5 btn-warning`,
                 title: $.t("main.shaders.cacheInfo"),
                 onclick: () => this._toggleCachePopup()
             },
@@ -645,64 +656,21 @@ export class ShaderLayer extends BaseComponent {
             "clipNudge",
             this.visible && this.mode === "clip" ? "translate-x-[6px]" : ""
         );
-        this.setClass("dim", this.visible ? "" : "brightness-50");
         this.setClass(
             "clipActive",
             this.mode === "clip" ? "ring-2 ring-offset-1 ring-accent/60" : ""
         );
 
-        const moveUpBtn = button(
-            {
-                type: "button",
-                class:
-                    "btn-ghost btn-[10px] min-h-0 leading-[0]",
-                title: $.t("main.shaders.moveUp"),
-                onclick: () => this.cb.onReorder?.("up")
-            },
-            new PhIcon({ name: "ph-caret-up" }).create()
-        );
-
-        const moveDownBtn = button(
-            {
-                type: "button",
-                class:
-                    "btn-ghost btn-[10px] min-h-0 leading-[0]",
-                title: $.t("main.shaders.moveDown"),
-                onclick: () => this.cb.onReorder?.("down")
-            },
-            new PhIcon({ name: "ph-caret-down" }).create()
-        );
-
         const mainControls = this._buildMainControls();
-        const hasUtilityRail = !this.hasChildren;
         const bodyContent = [];
 
-        if (mainControls || hasUtilityRail) {
+        if (mainControls) {
             bodyContent.push(
                 div(
                     {
                         class:
-                            "non-draggable flex flex-row items-stretch border-t border-base-300/60 pt-1 mt-1 min-w-0"
+                            "non-draggable border-t border-base-300/60 pt-1 mt-1 min-w-0"
                     },
-                    hasUtilityRail
-                        ? div(
-                            {
-                                class:
-                                    "non-draggable flex justify-between flex-col items-center gap-1 pt-1 pb-1 px-1 mb-2"
-                            },
-                            moveUpBtn,
-                            moveDownBtn,
-                            this._buildCacheIcon(),
-                            this._buildCachePopup()
-                        )
-                        : div(
-                            {
-                                class:
-                                    "non-draggable flex flex-col items-center gap-1 pt-1 pb-1 px-1"
-                            },
-                            this._buildCacheIcon(),
-                            this._buildCachePopup()
-                        ),
                     mainControls
                 )
             );
@@ -721,35 +689,39 @@ export class ShaderLayer extends BaseComponent {
                 style: this.compactIndent > 0 ? `margin-left:${this.compactIndent}px;` : undefined
             },
             this._buildHeader(),
-            this._buildBlendControls(),
             div(
                 {
-                    id: this.bodyContainerId,
-                    class: this.groupOpen || !this.hasChildren ? "" : "hidden"
+                    id: this.collapseContainerId,
+                    class: this._isCollapsed() ? "hidden" : ""
                 },
-                ...bodyContent
+                this._buildBlendControls(),
+                div(
+                    { id: this.bodyContainerId },
+                    ...bodyContent
+                ),
             ),
         );
     }
 
     update(shaderConfig) {
         this.cfg = shaderConfig;
-        this.visible = shaderConfig?.visible !== false && shaderConfig?.visible !== 0;
         this.mode = shaderConfig?.params?.use_mode || "show";
         this.blendMode = shaderConfig?.params?.use_blend || this.blendMode;
         this.type = shaderConfig?.type || this.type;
         this.cacheApplied = shaderConfig?._cacheApplied;
+        this.collapsed = shaderConfig?._uiCollapsed ?? this.collapsed;
 
         if (this.renderTypeSelect) {
             this.renderTypeSelect.setExtraProperty("value", this.type);
         }
         this._syncBlendSelect();
+        this._refreshPill();
+        this._setVisible(shaderConfig?.visible !== false && shaderConfig?.visible !== 0);
 
         this.setClass(
             "clipNudge",
             this.visible && this.mode === "clip" ? "translate-x-[6px]" : ""
         );
-        this.setClass("dim", this.visible ? "" : "brightness-50");
         this.setClass(
             "clipActive",
             this.mode === "clip" ? "ring-2 ring-offset-1 ring-accent/60" : ""

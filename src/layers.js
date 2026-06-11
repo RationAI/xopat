@@ -542,6 +542,15 @@ function initXOpatLayers() {
             catch (e) { console.warn("[layers] importLiveVisualization: drawer.rebuild failed:", e); }
         }
 
+        // rebuild() raises no renderer event, so the live-config-sync bridge
+        // cannot observe this apply — sync the structural config explicitly
+        // (keeps session peers' config signatures converged after light-apply
+        // and history undo/redo).
+        if (mutated && typeof UTILITIES.syncViewerConfigFromRenderer === "function") {
+            try { UTILITIES.syncViewerConfigFromRenderer(viewer); }
+            catch (e) { console.warn("[layers] importLiveVisualization: config sync failed:", e); }
+        }
+
         return mutated;
     };
 
@@ -553,11 +562,32 @@ function initXOpatLayers() {
      */
     UTILITIES._emitShaderConfigUpdate = function (viewer, layerId, change) {
         if (!viewer || viewer.__sessionApplyingRemote) return;
+        // Direct call into live-config-sync (registered at its bootstrap):
+        // the structural-config write-back must not depend on the viewer
+        // event broadcast relay below.
+        try { UTILITIES._notifyShaderConfigEdited?.(viewer); }
+        catch (e) { console.warn("[shader-config-update] direct hook failed:", e); }
+        UTILITIES.scheduleSessionUrlSync();
         try {
             viewer.raiseEvent("shader-config-update", { viewer, layerId, change });
         } catch (e) {
             console.warn("[shader-config-update] dispatch failed:", e);
         }
+    };
+
+    /**
+     * Debounced URL-hash refresh: keep the address bar carrying the current
+     * serialized session so a plain reload preserves edits. Heavier than a
+     * flag flip (serializes the full app config), hence the long debounce.
+     */
+    let _sessionUrlSyncTimer = null;
+    UTILITIES.scheduleSessionUrlSync = function () {
+        if (_sessionUrlSyncTimer !== null) clearTimeout(_sessionUrlSyncTimer);
+        _sessionUrlSyncTimer = setTimeout(() => {
+            _sessionUrlSyncTimer = null;
+            try { UTILITIES.syncSessionToUrl(false); }
+            catch (e) { console.warn("[layers] session URL sync failed:", e); }
+        }, 1000);
     };
 
     /**

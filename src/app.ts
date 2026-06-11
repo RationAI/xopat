@@ -4,6 +4,7 @@ import { initXOpatLoader } from "./loader";
 import { InvertedWeakMap } from "./external/data-structures";
 import { XOpatHistory } from "./classes/history";
 import { bootstrapVisualizationHistory } from "./classes/visualization-history";
+import { bootstrapLiveConfigSync } from "./classes/app/live-config-sync";
 import { ViewerOpenPipeline } from "./classes/app/viewer-open-pipeline";
 import { ViewerStateBindingController } from "./classes/app/viewer-state-binding-controller";
 import { ViewerVisualizationRuntime } from "./classes/app/viewer-visualization-runtime";
@@ -473,6 +474,7 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
     // in findViewerUniqueId (loader.ts).
     VIEWER_MANAGER.addOnceHandler("after-open", () => {
         bootstrapVisualizationHistory(APPLICATION_CONTEXT.history);
+        bootstrapLiveConfigSync();
     });
 
     // Key event handlers - todo create shortcut manager

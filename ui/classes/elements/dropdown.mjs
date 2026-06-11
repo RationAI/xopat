@@ -98,9 +98,24 @@ class Dropdown extends BaseSelectableComponent {
         this._closeSubmenu();
         if (!this._isOpen) return;
         this._isOpen = false;
+        if (this._rootEl) this._rootEl.classList.remove("dropdown-open");
         if (this._contentEl) {
             this._contentEl.style.visibility = "hidden";
             this._contentEl.style.display = "none";
+            // Detach from DOM entirely. `place()` reparents the content out of
+            // the original `.dropdown` root into the host's offset-parent — a
+            // container that lives at the same z-index layer as the AppBar.
+            // Leaving the (display:none) content there meant the original
+            // `.dropdown` ancestor selector chain (and CSS like
+            // `.dropdown:focus-within .dropdown-content`) could still flip
+            // it back to visible on stray focus/hover events, and a stale
+            // event listener path could re-open the menu when the user
+            // pointerdown'd near the AppBar trigger trying to grab a
+            // toolbar handle directly underneath it. Removing the node
+            // makes the menu fully inert until the next explicit `_open`.
+            if (this._contentEl.parentNode) {
+                this._contentEl.parentNode.removeChild(this._contentEl);
+            }
         }
         if (this._fmToken) {
             UI.Services.FloatingManager.unregister(this._fmToken);
@@ -172,18 +187,35 @@ class Dropdown extends BaseSelectableComponent {
     }
 
     _open(trigger, place) {
+        // Re-clicking the trigger while open closes the menu (standard
+        // dropdown toggle). The previous "bring-to-front and return"
+        // branch left users with no way to dismiss an open dropdown via
+        // its own trigger, which compounded the spatial conflict between
+        // the AppBar dropdowns and the floating toolbar handles directly
+        // underneath them.
         if (this._isOpen) {
-            if (this._fmToken) UI.Services.FloatingManager.bringToFront(this._fmToken);
+            this.close();
             return;
         }
-        if (this._isOpen) { this.close(); return; }
         this._isOpen = true;
+
+        // Mark the dropdown root as open so DaisyUI's
+        // `.dropdown.dropdown-open .dropdown-content` selector flips
+        // opacity to 1 and transform to scale(1). Without this the menu
+        // looked "visually closed" after an item click (focus left the
+        // dropdown when the click side-effect toggled some other UI, so
+        // `.dropdown:focus-within` no longer matched and CSS hid the
+        // content while it was still in the DOM intercepting events).
+        if (this._rootEl) this._rootEl.classList.add("dropdown-open");
 
         if (this._contentEl && this._contentEl.parentNode !== document.body) {
             document.body.appendChild(this._contentEl);
         }
 
         this._contentEl.style.display = "block";
+        this._contentEl.style.visibility = "visible";
+        this._contentEl.style.opacity = "1";
+        this._contentEl.style.transform = "none";
         place();
 
         queueMicrotask(() => {
@@ -192,7 +224,17 @@ class Dropdown extends BaseSelectableComponent {
                 el: this._contentEl,
                 owner: this,
                 onEscape: "close",
-                onOutsideClick: "close"
+                // Custom outside-click handler: a mousedown on this
+                // dropdown's own trigger must not auto-close, otherwise
+                // the trigger's click listener (which fires later, in
+                // the bubble phase) re-opens the menu and the toggle
+                // never happens. Skipping closes for trigger-targeted
+                // mousedowns lets the trigger's click handler perform
+                // a clean toggle.
+                onOutsideClick: (e) => {
+                    if (trigger && typeof trigger.contains === "function" && trigger.contains(e.target)) return;
+                    this.close();
+                }
             });
             UI.Services.FloatingManager.bringToFront(this._fmToken);
         });
@@ -840,7 +882,8 @@ class Dropdown extends BaseSelectableComponent {
             }
         });
 
-        return div({ ...this.commonProperties, onclick: this.onClick, ...this.extraProperties }, trigger, this._contentEl);
+        this._rootEl = div({ ...this.commonProperties, onclick: this.onClick, ...this.extraProperties }, trigger, this._contentEl);
+        return this._rootEl;
     }
 }
 

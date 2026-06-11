@@ -28,6 +28,24 @@ const KV_NAMESPACE_FALLBACK: Record<string, string> = {
     "data": "post-data",
 };
 
+/**
+ * Sinks that do NOT produce a user-recoverable artefact for the Save action:
+ *  - `file-download` — local file; that's what Export is for, not Save.
+ *  - `post-data` / `session-memory` — in-memory fallbacks bound automatically
+ *    by `resolveBindings` Rule 5 so the legacy HTML-form export keeps working;
+ *    nothing in the Save flow surfaces them to the user.
+ *  - `file-upload` — import-only; can't `writeBundle`, listed for correctness.
+ *
+ * Used by `hasRemoteBundleSinks()` so a deployment with only these bound
+ * for bundle-export degrades to Export instead of pretending to persist.
+ */
+const NON_REMOTE_BUNDLE_SINKS = new Set([
+    "file-download",
+    "post-data",
+    "session-memory",
+    "file-upload",
+]);
+
 type Handler = (event: any) => void;
 
 class EventBus {
@@ -113,6 +131,9 @@ export class IOPipeline implements IOPipelineLike {
     private readonly sinks: Map<string, IOSink> = new Map();
     private readonly kvDrivers: Map<string, IOKVDriver> = new Map();
     private readonly owners: Map<string, OwnerRecord> = new Map();
+    /** Tracked CRUD resources — populated via `registerResource(...)` from
+     *  `defineResource()`. Drained collectively by `flushAllResources()`. */
+    private readonly resources: Set<IOResource<any>> = new Set();
     /** Guards keyed by resource name; `"*"` is the wildcard bucket. */
     private readonly guards: Map<string, IOGuardSpec[]> = new Map();
     /** Resolved per-owner bindings cache (invalidated on registerOwner / config change). */
@@ -187,6 +208,13 @@ export class IOPipeline implements IOPipelineLike {
 
     listSinks() { return Array.from(this.sinks.values()); }
     getSink(id: string) { return this.sinks.get(id); }
+
+    // ── resource registry ──────────────────────────────────────────────
+
+    registerResource(resource: IOResource<any>): IODisposer {
+        this.resources.add(resource);
+        return () => { this.resources.delete(resource); };
+    }
 
     // ── Guard registry (abortable CRUD pre-action hooks) ───────────────
 
@@ -505,9 +533,10 @@ export class IOPipeline implements IOPipelineLike {
 
     // ── orchestration: bundle export ───────────────────────────────────
 
-    async flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]> {
+    async flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string; skipFileFallback?: boolean }): Promise<IOResult[]> {
         const results: IOResult[] = [];
         const viewers = this.getViewers();
+        const skipFileFallback = !!scope?.skipFileFallback;
         for (const [uid, owner] of this.owners) {
             if (scope?.ownerUid && uid !== scope.ownerUid) continue;
             if (owner.disabled) continue;
@@ -523,34 +552,80 @@ export class IOPipeline implements IOPipelineLike {
                 // scoping; the explicit `backgroundId` is the previous slide id.
                 if (scope?.viewerId && scope.backgroundId !== undefined) {
                     if (!isViewerBackgroundScoped(owner.bundleScope)) continue;
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, scope.backgroundId, results, skipFileFallback);
                     continue;
                 }
 
                 // Explicit viewerId only — viewer-scoped flush (legacy path).
                 if (scope?.viewerId) {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, scope.viewerId, undefined, results, skipFileFallback);
                     continue;
                 }
 
                 if (isGlobalScoped(owner.bundleScope)) {
-                    await this.runOneBundleExport(uid, owner, cap, sinks, undefined, undefined, results);
+                    await this.runOneBundleExport(uid, owner, cap, sinks, undefined, undefined, results, skipFileFallback);
                 }
                 if (isViewerScoped(owner.bundleScope)) {
                     for (const v of viewers) {
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, undefined, results, skipFileFallback);
                     }
                 }
                 if (isViewerBackgroundScoped(owner.bundleScope)) {
                     for (const v of viewers) {
                         const bgId = this.resolveCurrentBackgroundId(v.viewer);
                         if (!bgId) continue; // no current slide → nothing to key by
-                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results);
+                        await this.runOneBundleExport(uid, owner, cap, sinks, v.uniqueId, bgId, results, skipFileFallback);
                     }
                 }
             }
         }
         return results;
+    }
+
+    /**
+     * Drain every tracked CRUD resource's outbox. Aggregates IOResults across
+     * resources so the caller can inspect refusals. Failures in any single
+     * resource do not abort the others.
+     */
+    async flushAllResources(): Promise<IOResult[]> {
+        const out: IOResult[] = [];
+        await Promise.all(Array.from(this.resources).map(async r => {
+            try {
+                const res = await r.flush();
+                if (Array.isArray(res)) out.push(...res);
+            } catch (e: any) {
+                out.push({ ok: false, code: "W_IO_RESOURCE_FLUSH_THREW", reason: e?.message ?? String(e) });
+            }
+        }));
+        return out;
+    }
+
+    /**
+     * True if any owner has at least one **user-recoverable** sink bound for a
+     * `bundle-export` capability. "User-recoverable" means a sink that
+     * persists somewhere the user can get their data back from — see
+     * `NON_REMOTE_BUNDLE_SINKS` for the exclusions (local file, in-memory
+     * Rule-5 fallbacks, import-only sinks).
+     *
+     * The Save UI uses this to decide whether to trigger a remote flush or
+     * degrade to the legacy file-download Export. Without the exclusion of
+     * `post-data` / `session-memory`, vanilla deployments would always look
+     * "remote-bound" because of the resolver's in-memory fallback, and Save
+     * would silently no-op while claiming success.
+     */
+    hasRemoteBundleSinks(ownerUid?: string): boolean {
+        for (const [uid, owner] of this.owners) {
+            if (ownerUid && uid !== ownerUid) continue;
+            if (owner.disabled) continue;
+            for (const cap of owner.capabilities.values()) {
+                if (cap.kind !== "bundle") continue;
+                if (!cap.id.includes("export")) continue;
+                for (const sid of this.bindingsFor(uid, cap.id)) {
+                    if (!NON_REMOTE_BUNDLE_SINKS.has(sid)) return true;
+                }
+            }
+        }
+        return false;
     }
 
     private resolveCurrentBackgroundId(viewer: any): string | undefined {
@@ -574,6 +649,7 @@ export class IOPipeline implements IOPipelineLike {
         viewerId: string | undefined,
         backgroundId: string | undefined,
         results: IOResult[],
+        skipFileFallback: boolean = false,
     ): Promise<void> {
         const ctx: IOContext = {
             direction: "export",
@@ -621,13 +697,18 @@ export class IOPipeline implements IOPipelineLike {
                 dispatchResults.push(r);
             }
         }
-        if (sinks.length > 0 && succeeded === 0) {
+        if (sinks.length > 0 && succeeded === 0 && !skipFileFallback) {
             // Last-resort: if every bound sink for a bundle-export refused,
             // hand the payload to the built-in `file-download` sink so the
             // user always walks away with their data. Skipped if file-
             // download was already among the bindings (no point retrying it)
             // or if it isn't registered. Failures here surface like any
             // other refusal but don't loop back into this fallback.
+            //
+            // The user-facing **Save** action passes `skipFileFallback: true`
+            // so that a silent local download never substitutes for the
+            // remote persistence the deployment is configured for. **Export**
+            // (the explicit "give me a file" action) leaves it default-false.
             const FALLBACK_ID = "file-download";
             const isExport = cap.id.includes("export");
             const fallback = isExport && !sinks.includes(FALLBACK_ID)

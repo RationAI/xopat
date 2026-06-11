@@ -541,9 +541,43 @@ interface IOPipelineLike {
      * `bundleScope` is not `per-viewer-background` (or `all`) ignore
      * `backgroundId` and are dispatched per their own scope semantics.
      */
-    flushBundleExport(scope?: { ownerUid?: string; viewerId?: string; backgroundId?: string }): Promise<IOResult[]>;
+    /**
+     * Trigger bundle export for matching owners.
+     *
+     * Options:
+     *  - `skipFileFallback` (default `false`): when every bound sink for a
+     *    bundle-export refuses, the pipeline normally hands the payload to the
+     *    `file-download` sink so the user always walks away with their data.
+     *    The user-facing **Save** action sets this to `true` so a remote
+     *    refusal surfaces as an error toast instead of producing an unwanted
+     *    file. **Export** (the explicit "give me a file" action) leaves it
+     *    `false`.
+     */
+    flushBundleExport(scope?: {
+        ownerUid?: string;
+        viewerId?: string;
+        backgroundId?: string;
+        skipFileFallback?: boolean;
+    }): Promise<IOResult[]>;
     importBundle(rawData: unknown, scope?: { ownerUid?: string }): Promise<IOResult[]>;
     dispatch(ctx: IOContext, payload?: unknown): Promise<IOResult>;
+
+    /**
+     * Drain every registered CRUD resource's outbox. Awaits each
+     * `IOResource.flush()` so callers can be sure all in-flight `create` /
+     * `update` / `delete` operations have settled with their sinks before
+     * proceeding. Used by `UTILITIES.save()` so a Save click never returns
+     * before pending edits are persisted.
+     */
+    flushAllResources(): Promise<IOResult[]>;
+
+    /**
+     * True if any owner has at least one **non-`file-download`** sink bound to
+     * a `bundle-export` capability (i.e. a real persistence destination, not
+     * just the local-file fallback). The Save UI calls this to decide between
+     * a remote flush and degrading to the legacy Export flow.
+     */
+    hasRemoteBundleSinks(ownerUid?: string): boolean;
     /**
      * Stream raw items from the first bound sink whose `query` method
      * exists and `accepts(ctx)` (if defined) passes. `ctx.direction` is
@@ -562,6 +596,13 @@ interface IOPipelineLike {
     runGuards(ctx: IOContext, payload?: unknown): IOResult;
     /** All currently registered guards (for admin/debug UIs). */
     listGuards(): IOGuardSpec[];
+
+    // ── resource registry (for flushAllResources) ───────────────────────
+    /**
+     * Track a CRUD resource so the pipeline can drain its outbox from
+     * `flushAllResources()`. Called by `XOpatElement.defineResource(...)`.
+     */
+    registerResource(resource: IOResource<any>): IODisposer;
 
     // ── KV (key/value storage) ──────────────────────────────────────────
     registerKVDriver(d: IOKVDriver): IODisposer;

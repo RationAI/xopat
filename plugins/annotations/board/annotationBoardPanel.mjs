@@ -1,4 +1,4 @@
-const { div, style, input } = globalThis.van.tags;
+const { div, style, input, span, button } = globalThis.van.tags;
 
 // Auto-grouping replaces row-virtualization. When a single preset has
 // ≥ THRESHOLD annotations on the same level (root or one specific layer),
@@ -39,7 +39,10 @@ function faIcon(name, extraClasses = '') {
         el.className = `ph-light ${key} ${extraClasses}`.trim();
     } else {
         const mapped = FA_ICON_MAP[key] || (key.startsWith('fa-') ? key : 'fa-tag');
-        el.className = `fa-solid ${mapped} ${extraClasses}`.trim();
+        // FA_ICON_MAP values are Phosphor glyphs — they need the `ph-light`
+        // font family, not `fa-solid`, or the codepoint renders blank.
+        const family = mapped.startsWith('ph-') ? 'ph-light' : 'fa-solid';
+        el.className = `${family} ${mapped} ${extraClasses}`.trim();
     }
     el.setAttribute('aria-hidden', 'true');
     return el;
@@ -143,13 +146,34 @@ export class AnnotationBoardPanel {
 
         const UI = globalThis.UI;
 
-        this.deleteButton = new UI.Button({
-            id: `${this.containerId}-delete-selection`,
-            type: UI.Button.TYPE.NONE,
-            extraClasses: 'btn btn-ghost btn-xs',
-            extraProperties: { title: this.plugin.t('annotations.board.deleteSelection') },
-            onClick: () => this.fabric?.deleteSelection()
-        }, new UI.PhIcon({ name: 'ph-trash' }));
+        // Toggled search + filter panel (hidden by default), opened by the
+        // header search button — same inline-expand idiom as the viewer-menu
+        // settings cog. Hosts the free-text search box and the annotation
+        // filter controls (button + active-filter badges).
+        this.filterBadgesEl = div({ class: 'flex flex-wrap gap-1 mt-2 min-h-6' });
+        this.searchPanelEl = div({
+                id: `${this.containerId}-search-panel`,
+                class: 'hidden px-2 py-2 border-b border-base-300 bg-base-100/40'
+            },
+            input({
+                type: 'search',
+                placeholder: this.plugin.t?.('annotations.board.searchPlaceholder') || 'Search annotations…',
+                class: 'input input-xs input-bordered w-full',
+                oninput: (e) => this._onSearchInput(e.target.value)
+            }),
+            div({ class: 'flex items-center justify-between gap-2 mt-2' },
+                span({ class: 'text-[10px] uppercase font-bold opacity-50' }, this.plugin.t('annotations.filters.title')),
+                button({
+                    type: 'button',
+                    class: 'btn btn-ghost btn-xs',
+                    onclick: () => this.plugin._openAnnotationFilterModal?.(this.viewerId)
+                },
+                    span({ class: 'ph-light ph-funnel mr-1 text-xs' }),
+                    this.plugin.t('annotations.filters.button')
+                )
+            ),
+            this.filterBadgesEl
+        );
 
         this.rootComponent = new UI.Div({
                 id: this.containerId,
@@ -159,43 +183,135 @@ export class AnnotationBoardPanel {
                     id: this.headerId,
                     extraClasses: 'flex items-center gap-2 px-2 py-2 border-b border-base-300 sticky top-0 bg-base-100 z-10'
                 },
-                new UI.Div({ extraClasses: 'font-medium text-sm flex-1 min-w-0 truncate' }, this.plugin.t('annotations.board.title')),
+                new UI.Div({ extraClasses: 'text-sm flex-1 min-w-0 truncate uppercase font-bold opacity-50' }, this.plugin.t('annotations.board.title')),
                 new UI.Div({ extraClasses: 'flex items-center gap-1' },
                     new UI.Button({
                         id: `${this.containerId}-create-layer`,
                         type: UI.Button.TYPE.NONE,
-                        extraClasses: 'btn btn-ghost btn-xs',
+                        extraClasses: 'btn btn-ghost btn-xs btn-square',
                         extraProperties: { title: this.plugin.t('annotations.board.createLayer') },
                         onClick: () => this.fabric?.createLayer()
-                    }, this.plugin.t('annotations.board.layer'),new UI.PhIcon({ name: 'ph-plus-circle' })),
-                    this.deleteButton,
+                    }, new UI.PhIcon({ name: 'ph-stack-plus' })),
                     new UI.Button({
                         id: `${this.containerId}-refresh`,
                         type: UI.Button.TYPE.NONE,
-                        extraClasses: 'btn btn-ghost btn-xs',
+                        extraClasses: 'btn btn-ghost btn-xs btn-square',
                         extraProperties: { title: this.plugin.t('annotations.board.refresh') },
                         onClick: () => this.requestRender(true)
-                    }, new UI.PhIcon({ name: 'ph-arrows-clockwise' }))
+                    }, new UI.PhIcon({ name: 'ph-arrows-clockwise' })),
+                    new UI.Button({
+                        id: `${this.containerId}-collapse-all`,
+                        type: UI.Button.TYPE.NONE,
+                        extraClasses: 'btn btn-ghost btn-xs btn-square',
+                        extraProperties: { title: this.plugin.t('annotations.board.collapseAllLayers') },
+                        onClick: () => this._toggleAllLayersCollapse()
+                    }, new UI.PhIcon({ name: 'ph-arrows-in-line-vertical' })),
+                    new UI.Button({
+                        id: `${this.containerId}-search-toggle`,
+                        type: UI.Button.TYPE.NONE,
+                        extraClasses: 'btn btn-ghost btn-xs btn-square',
+                        extraProperties: { title: this.plugin.t('annotations.board.search') },
+                        onClick: () => this._toggleSearchPanel()
+                    }, new UI.PhIcon({ name: 'ph-magnifying-glass' }))
                 )
             ),
-            new UI.Div({
-                    extraClasses: 'px-2 py-1 border-b border-base-300 sticky top-[42px] z-10 flex gap-2 items-center'
-                },
-                input({
-                    type: 'search',
-                    placeholder: this.plugin.t?.('annotations.board.searchPlaceholder') || 'Search annotations…',
-                    class: 'input input-xs input-bordered flex-1',
-                    oninput: (e) => this._onSearchInput(e.target.value)
-                })
-            ),
+            this.searchPanelEl,
             new UI.Div({
                 id: this.bodyId,
                 extraClasses: 'flex-1 overflow-y-auto px-0 py-2 min-h-0'
-            }, div({ id: this.layerLogsId, class: 'h-full cursor-pointer pb-4' }))
+            }, div({ id: this.layerLogsId, class: 'h-full overflow-auto cursor-pointer pb-4' }))
         );
 
         this.root = this.rootComponent.create();
         return this.root;
+    }
+
+    /**
+     * Collapse every layer if any is currently expanded; otherwise expand all.
+     * Acts on the same `_collapsedLayers` set the per-layer caret toggles, so
+     * the two stay in sync. The header button's icon/tooltip flips to advertise
+     * the next action.
+     */
+    _toggleAllLayersCollapse() {
+        const layers = this.fabric?.getAllLayers?.() || [];
+        const ids = layers.map(l => String(l.id)).filter(Boolean);
+        if (!ids.length) return;
+
+        const allCollapsed = ids.every(id => this._collapsedLayers.has(id));
+        if (allCollapsed) {
+            for (const id of ids) this._collapsedLayers.delete(id);
+        } else {
+            for (const id of ids) this._collapsedLayers.add(id);
+        }
+        this._syncCollapseAllButton(!allCollapsed);
+
+        this._dataVersion++;
+        this.requestRender(true);
+    }
+
+    /** Reflect collapsed/expanded-all state on the header toggle button. */
+    _syncCollapseAllButton(nowCollapsed) {
+        const btn = this.root?.querySelector(`#${CSS.escape(`${this.containerId}-collapse-all`)}`);
+        const icon = btn?.querySelector('i');
+        if (icon) {
+            icon.classList.toggle('ph-arrows-in-line-vertical', !nowCollapsed);
+            icon.classList.toggle('ph-arrows-out-line-vertical', nowCollapsed);
+        }
+        if (btn) {
+            btn.title = this.plugin.t(nowCollapsed
+                ? 'annotations.board.expandAllLayers'
+                : 'annotations.board.collapseAllLayers');
+        }
+    }
+
+    /** Toggle the inline search + filter panel; refresh filter badges on open. */
+    _toggleSearchPanel() {
+        if (!this.searchPanelEl) return;
+        const opening = this.searchPanelEl.classList.contains('hidden');
+        this.searchPanelEl.classList.toggle('hidden', !opening);
+        if (opening) {
+            this.renderFilterBadges();
+            this.searchPanelEl.querySelector('input[type="search"]')?.focus();
+        }
+    }
+
+    /**
+     * Render active annotation-filter badges into the search panel. Called by
+     * the plugin's `_refreshAnnotationFilterBadges` and on panel open. Each
+     * badge carries an inline remove (×) that drops that filter.
+     */
+    renderFilterBadges() {
+        const host = this.filterBadgesEl;
+        if (!host) return;
+
+        const filters = this.context.getAnnotationFilters?.() || [];
+        const badges = filters.map(filter => {
+            const description = this.context.describeAnnotationFilter?.(filter);
+            const node = document.createElement('span');
+            node.className = 'badge badge-outline badge-sm gap-1';
+            node.textContent = description?.text || filter.id;
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn btn-ghost btn-xs btn-square min-h-0 h-4 w-4 ml-1';
+            remove.title = this.plugin.t('annotations.filters.remove');
+            remove.appendChild(document.createTextNode('×'));
+            remove.onclick = (e) => {
+                e.stopPropagation();
+                this.context.removeAnnotationFilter?.(filter.id);
+            };
+            node.appendChild(remove);
+            return node;
+        });
+
+        if (!badges.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs opacity-50';
+            empty.textContent = this.plugin.t('annotations.filters.empty');
+            host.replaceChildren(empty);
+            return;
+        }
+        host.replaceChildren(...badges);
     }
 
     mount() {

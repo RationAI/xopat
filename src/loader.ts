@@ -6,7 +6,7 @@ import { HTTPError, createHttpClientAdapter } from "./classes/http-client";
 import { BackgroundConfig } from "./classes/background-config";
 import { ViewerShaderSourceController } from "./classes/app/viewer-shader-source-controller";
 import { CanvasContextMenu } from "./classes/app/canvas-context-menu";
-import { serializeScene } from "./classes/app/canonical-scene";
+import { serializeScene, mergeViewerLiveIntoConfig } from "./classes/app/canonical-scene";
 import type { IOPipeline } from "./classes/io";
 import { IOResourceImpl } from "./classes/io";
 
@@ -1051,13 +1051,17 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
                 schema: def.schema,
                 label: def.name,
             });
-            return new IOResourceImpl<T>({
+            const resource = new IOResourceImpl<T>({
                 ownerUid: this.__uid,
                 ownerId: this.__id,
                 xoType: this.__xoContext,
                 pipeline: IO_PIPELINE,
                 def,
             });
+            // Track in the pipeline so `flushAllResources()` (used by the
+            // Save action) can drain every CRUD outbox in one call.
+            IO_PIPELINE.registerResource(resource);
+            return resource;
         }
 
         /**
@@ -2290,6 +2294,10 @@ export function initXOpatLoader(ENV: XOpatCoreConfig, PLUGINS: Record<string, XO
         /**
          * Export the current viewer session as a self-contained HTML file.
          * When opened, it automatically loads the saved session.
+         *
+         * This is the explicit "give me a file" action. For the adaptive
+         * persistence flow (remote sinks when configured, file when not),
+         * see `UTILITIES.save()`.
          */
         export: async function () {
             // `getForm()` awaits `IO_PIPELINE.flushBundleExport()` which can
@@ -2309,6 +2317,69 @@ ${await UTILITIES.getForm()}
 
                 UTILITIES.downloadAsFile("export.html", doc);
                 APPLICATION_CONTEXT.__cache.dirty = false;
+            } finally {
+                try { showLoading?.(false); } catch (_) { /* no-op */ }
+            }
+        },
+
+        /**
+         * Persist the current viewer session to **configured backends** when
+         * any remote sink is bound for `bundle-export`. If nothing remote is
+         * configured, falls back to `UTILITIES.export()` so the user is never
+         * left without a way to keep their work.
+         *
+         * Flow:
+         *   1. Emit `save-all` on `VIEWER_MANAGER` so plugins can hook last-
+         *      minute persistence (mirror of the per-viewer `save-annotations`
+         *      pattern).
+         *   2. Drain every CRUD resource's outbox via
+         *      `IO_PIPELINE.flushAllResources()` so pending per-element edits
+         *      settle before we snapshot bundles.
+         *   3. Dispatch bundles via
+         *      `flushBundleExport({ skipFileFallback: true })` so a remote
+         *      refusal surfaces as an error instead of silently producing a
+         *      local file (that's what Export is for).
+         *   4. Surface the outcome via the global toast / notifier.
+         */
+        save: async function () {
+            // Case A — nothing configured remotely. Auto-degrade to Export
+            // (the user wanted a "save" verb and otherwise gets nothing
+            // visible), but tell them what we're doing so the file download
+            // isn't a surprise.
+            if (!IO_PIPELINE.hasRemoteBundleSinks()) {
+                Dialogs.show($.t("main.bar.saveDegradedToExport"), 5000, Dialogs.MSG_INFO);
+                return UTILITIES.export();
+            }
+
+            const showLoading = USER_INTERFACE?.Loading?.show;
+            try { showLoading?.(true); } catch (_) { /* no-op */ }
+            try {
+                try {
+                    VIEWER_MANAGER?.raiseEvent?.("save-all", { source: "global-save" });
+                } catch (_) { /* best-effort lifecycle hook */ }
+
+                const crudResults = await IO_PIPELINE.flushAllResources();
+                const bundleResults = await IO_PIPELINE.flushBundleExport({ skipFileFallback: true });
+
+                const all = [...crudResults, ...bundleResults];
+                const refused = all.filter(r => !r.ok);
+                if (refused.length === 0) {
+                    // Case B — happy path, everything persisted.
+                    Dialogs.show($.t("main.bar.saveOk"), 3000, Dialogs.MSG_SUCCESS);
+                    APPLICATION_CONTEXT.__cache.dirty = false;
+                } else if (refused.length === all.length) {
+                    // Case C — every destination refused. Don't silently fall
+                    // back to file-download (that's Export's job), but DO
+                    // remind the user that Export is their escape hatch.
+                    Dialogs.show($.t("main.bar.saveFailed"), 8000, Dialogs.MSG_ERR);
+                } else {
+                    // Case D — some destinations refused. The other ones got
+                    // through; mark the session clean BUT recommend Export so
+                    // the user has a complete local copy of whatever the
+                    // remote refused to take.
+                    Dialogs.show($.t("main.bar.savePartial"), 6000, Dialogs.MSG_WARN);
+                    APPLICATION_CONTEXT.__cache.dirty = false;
+                }
             } finally {
                 try { showLoading?.(false); } catch (_) { /* no-op */ }
             }
@@ -2706,6 +2777,20 @@ ${await UTILITIES.getForm()}
         },
 
         /**
+         * Merge one viewer's live renderer state (shader type/cache/state,
+         * layer order) back into APPLICATION_CONTEXT.config, scoped to the
+         * bg entry + visualization that viewer renders. Used by code paths
+         * that mutate renderer configs without firing renderer events
+         * (e.g. importLiveVisualization's rebuild) so the structural config
+         * keeps mirroring the renderer; live-config-sync.ts covers evented
+         * edits automatically.
+         * @param {OpenSeadragon.Viewer} viewer
+         */
+        syncViewerConfigFromRenderer: function (viewer: OpenSeadragon.Viewer) {
+            mergeViewerLiveIntoConfig(viewer, APPLICATION_CONTEXT._dangerouslyAccessConfig());
+        },
+
+        /**
          * Get an auto-submitting HTML form+script that redirects to the viewer with current session data.
          * @param customAttributes - Extra raw HTML attributes or inputs to include in the form.
          * @param includedPluginsList - Plugin IDs to include; defaults to current active set.
@@ -2859,13 +2944,23 @@ form.submit();
             );
 
             // Per-viewer viz selection lives on each background entry as
-            // `visualizationIndex`. Write each slot's resolved viz index onto
-            // its corresponding bg entry; null clears it.
+            // `visualizationIndex`. Sync ONLY positive findings: the absence
+            // of a viz-tagged world item is NOT evidence of "no
+            // visualization" — a visualization whose shaders reference only
+            // data the background already opened shares the bg tiled image,
+            // so no separate viz tile ever exists. Writing `null` on absence
+            // clobbered the freshly-applied selection at the end of every
+            // open, which made the next viz-switch diff a noop and left the
+            // old shader stack rendering (sticky-shader bug). The bg entry's
+            // `visualizationIndex` is maintained authoritatively by the open
+            // pipeline's vizSpec fold; clearing it is the fold's job.
             resolved.forEach(({ bgIndex, vizIndex }: { bgIndex: number | undefined, vizIndex: number | undefined }) => {
                 if (!Number.isInteger(bgIndex)) return;
                 const bg: any = backgrounds[bgIndex as number];
                 if (!bg) return;
-                bg.visualizationIndex = Number.isInteger(vizIndex) ? vizIndex as number : null;
+                if (Number.isInteger(vizIndex)) {
+                    bg.visualizationIndex = vizIndex as number;
+                }
             });
         },
 
@@ -3373,9 +3468,22 @@ form.submit();
 
             //todo maybe rely on OSD events. Also, prevent changing the focus when a mouse is dragged and exits the area
             const set = () => this.setActive(v, 'interaction');
-            el.addEventListener("pointerdown", set);
+            // Side menus (and other UI overlays) are appended to the same cell
+            // as the OSD container, so DOM gestures on them bubble up to
+            // v.container. On mobile the side menu lives over the viewer and
+            // taps on its controls would otherwise be captured as "focus this
+            // viewer" — swallowing the click before the menu can act on it.
+            // OSD's canvas-enter/canvas-press still cover real canvas gestures.
+            const setFromDom = (e: Event) => {
+                const target = e.target;
+                if (target instanceof Element && target.closest('.ui-menu, .right-side-menu')) {
+                    return;
+                }
+                set();
+            };
+            el.addEventListener("pointerdown", setFromDom);
             el.addEventListener("mouseenter", set);
-            el.addEventListener("focusin", set);
+            el.addEventListener("focusin", setFromDom);
             v.addHandler("canvas-enter", set);
             v.addHandler("canvas-press", set);
 

@@ -23,6 +23,11 @@ const { div, span, i } = van.tags;
  *                                             where the bar flips vertical.
  */
 class Toolbar extends BaseComponent {
+    // Monotonic counter used to cascade-stagger the default position of
+    // freshly-created toolbars that have no persisted AppCache position.
+    // Without this every new toolbar lands on the same default coordinates.
+    static _spawnIndex = 0;
+
     constructor(options = undefined, ...args) {
         options = super(options, ...args).options;
         args = this._children;
@@ -171,8 +176,9 @@ class Toolbar extends BaseComponent {
     }
 
     create() {
-        const left = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50));
-        const top  = Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50));
+        const pos = this._resolveFloatingPosition(null, null);
+        const left = pos.left;
+        const top  = pos.top;
 
         this._outerEl = div(
             {
@@ -383,14 +389,61 @@ class Toolbar extends BaseComponent {
         wrap.classList.add("flex", "flex-row", "items-center", "max-w-full");
     }
 
+    // Resolve where this toolbar should be placed when entering floating mode.
+    // Priority: existing inline position (authoritative runtime state — keeps
+    // drag-in-progress and post-snap positions stable across re-applies) →
+    // persisted AppCache position → per-instance cascading default that
+    // staggers fresh toolbars so they don't pile on top of each other.
+    _resolveFloatingPosition(currentLeftStr, currentTopStr) {
+        let left = null;
+        let top  = null;
+
+        if (typeof currentLeftStr === "string" && currentLeftStr !== "") {
+            const cur = parseFloat(currentLeftStr);
+            if (Number.isFinite(cur)) left = cur;
+        }
+        if (typeof currentTopStr === "string" && currentTopStr !== "") {
+            const cur = parseFloat(currentTopStr);
+            if (Number.isFinite(cur)) top = cur;
+        }
+
+        if (left === null) {
+            const rawL = APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`);
+            const cachedL = (rawL !== null && rawL !== undefined && rawL !== "") ? Number(rawL) : null;
+            if (Number.isFinite(cachedL)) left = cachedL;
+        }
+        if (top === null) {
+            const rawT = APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`);
+            const cachedT = (rawT !== null && rawT !== undefined && rawT !== "") ? Number(rawT) : null;
+            if (Number.isFinite(cachedT)) top = cachedT;
+        }
+
+        if (left === null || top === null) {
+            // Allocate a per-instance cascade slot exactly once, so embedded ↔
+            // floating toggles that clear inline left/top recover the same
+            // default position without bumping the global spawn counter again
+            // and without writing to AppCache for an un-dragged toolbar.
+            if (!this._cascadePos) {
+                const idx = Toolbar._spawnIndex++;
+                const v = 50 + idx * 28;
+                this._cascadePos = { left: v, top: v };
+            }
+            if (left === null) left = this._cascadePos.left;
+            if (top === null) top = this._cascadePos.top;
+        }
+
+        return { left, top };
+    }
+
     _applyFloatingStyles() {
         const root = this.getRootNode();
         const wrap = this._rootWrap;
         if (!root || !wrap) return;
 
         root.style.position = "fixed";
-        root.style.left = `${Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionLeft`, 50))}px`;
-        root.style.top = `${Number(APPLICATION_CONTEXT.AppCache.get(`${this.id}-PositionTop`, 50))}px`;
+        const pos = this._resolveFloatingPosition(root.style.left, root.style.top);
+        root.style.left = `${pos.left}px`;
+        root.style.top = `${pos.top}px`;
         root.style.maxWidth = "";
         root.style.width = "";
 
@@ -487,9 +540,22 @@ class Toolbar extends BaseComponent {
             }));
         };
 
+        const seedLastBox = () => {
+            const r = root.getBoundingClientRect();
+            this._lastBox = `${Math.round(r.left)}:${Math.round(r.top)}`;
+        };
+
         const onViewportChange = () => {
-            this._updateOrientationFromPosition();
+            // Window resize / scroll re-snaps the toolbar to the nearest edge
+            // but MUST NOT persist that position — otherwise the side effect
+            // of any layout-shift (including another toolbar opening and
+            // triggering FloatingManager's _clampAll) overwrites every
+            // already-visible toolbar's saved coordinates.
+            this._updateOrientationFromPosition(false, { persist: false });
             notifyMeasure();
+            // Reset the rect baseline so the next mouseup doesn't mistake a
+            // resize-induced move for a user drag and persist it.
+            seedLastBox();
         };
 
         const checkRect = () => {
@@ -497,7 +563,16 @@ class Toolbar extends BaseComponent {
             const key = `${Math.round(r.left)}:${Math.round(r.top)}`;
             if (this._lastBox !== key) {
                 this._lastBox = key;
-                this._updateOrientationFromPosition();
+                // Canonical end-of-interaction persist. The snap branch in
+                // _updateOrientationFromPosition only writes when the toolbar
+                // lands near an edge; mid-screen drops would otherwise depend
+                // solely on FM's per-pointermove writes, which can be lost
+                // when the pointermove stream is throttled or interrupted by
+                // a scroll/resize. Writing here gives every user-initiated
+                // rect change exactly one guaranteed AppCache write.
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, Math.round(r.left));
+                APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  Math.round(r.top));
+                this._updateOrientationFromPosition(false, { persist: true });
                 notifyMeasure();
             }
         };
@@ -513,6 +588,10 @@ class Toolbar extends BaseComponent {
         root.addEventListener("touchend", checkRect);
         root.querySelector(".handle")?.addEventListener("pointerup", () => setTimeout(checkRect, 0));
 
+        // Seed the baseline so a click on a tool button (mouseup with the
+        // toolbar at its already-correct position) is not interpreted as a
+        // user move.
+        seedLastBox();
         notifyMeasure();
     }
 
@@ -556,7 +635,14 @@ class Toolbar extends BaseComponent {
         const distT = rect.top;
         const distB = vh - (rect.top + rect.height);
 
-        if (!dragging) {
+        // The edge-snap branch only runs on user-initiated calls
+        // (post-drag mouseup / pointerup paths, signalled by
+        // `opts.persist === true`). Init, window-resize, scroll, and
+        // setEmbeddedMode/onLayoutChange paths must NOT yank the toolbar
+        // to a corner — that's how staggered cascade defaults survive and
+        // how an already-visible toolbar keeps its position when another
+        // toolbar is opened.
+        if (!dragging && opts.persist === true) {
             // --- snap to left/right ---
             if (distL <= snapDist) {
                 left = 0;
@@ -581,7 +667,6 @@ class Toolbar extends BaseComponent {
                 this._outerEl.style.left = `${l}px`;
                 this._outerEl.style.top  = `${t}px`;
 
-                // remember snapped pos
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionLeft`, l);
                 APPLICATION_CONTEXT.AppCache.set(`${this.id}-PositionTop`,  t);
 

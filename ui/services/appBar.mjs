@@ -85,6 +85,11 @@ export class AppBar {
             },
             { id: "settings", icon: "ph-gear", title: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} },
             { id: "tutorial", icon: "ph-graduation-cap", title: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} },
+            // Adaptive persistence: writes through to admin-bound sinks
+            // (github / dicom / http) when configured, falls back to file-
+            // download Export otherwise. See `UTILITIES.save()` in src/loader.ts.
+            // Distinct from the per-viewer annotation Save in viewerMenu.mjs.
+            { id: "save", icon: "ph-floppy-disk", title: $.t('main.bar.save'), body: undefined, onClick: function () { UTILITIES.save(); } },
             { id: "share", icon: "ph-share-network", title: $.t('main.bar.share'), items: [
                     {
                         id: "global-export",
@@ -481,6 +486,7 @@ export class AppBar {
             this.subMenu = subMenu;
             this.subMenu.addItem({ id: "settings", icon: "ph-gear", label: $.t('main.bar.settings'), body: undefined, onClick: function () {UI.Services.FullscreenMenus.focus("settings-menu")} })
             this.subMenu.addItem({ id: "tutorial", icon: "ph-graduation-cap", label: $.t('main.bar.tutorials'), body: undefined, onClick: function () {USER_INTERFACE.Tutorials.show();} });
+            this.subMenu.addItem({ id: "save", icon: "ph-floppy-disk", label: $.t('main.bar.save'), body: undefined, onClick: function () { UTILITIES.save(); } });
             this.subMenu.addItem({
                 id: 'share',
                 label: $.t('main.bar.share'),
@@ -570,7 +576,6 @@ export class AppBar {
                         const next = !vm.is();
                         this._setVisibility(vm, next);
                         this._visualMenuNeedsRefresh = true;
-                        return true;
                     },
                     section: 'global-windows',
                 });
@@ -612,7 +617,6 @@ export class AppBar {
                             const next = !anyVisible();
                             for (const vm of vms) this._setVisibility(vm, next);
                             this._visualMenuNeedsRefresh = true;
-                            return true;
                         },
                     });
                 }
@@ -760,11 +764,11 @@ export class AppBar {
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history) return true;
+                    if (!history) return;
 
                     if (this._isBusy(history) || !history.canUndo?.()) {
                         this.refresh();
-                        return true;
+                        return;
                     }
 
                     this._localBusy = true;
@@ -778,7 +782,6 @@ export class AppBar {
                         this._localBusy = false;
                         this.refresh();
                     }
-                    return true;
                 }
             });
 
@@ -789,11 +792,11 @@ export class AppBar {
                 disabled: true,
                 onClick: async () => {
                     const history = APPLICATION_CONTEXT.history;
-                    if (!history) return true;
+                    if (!history) return;
 
                     if (this._isBusy(history) || !history.canRedo?.()) {
                         this.refresh();
-                        return true;
+                        return;
                     }
 
                     this._localBusy = true;
@@ -807,7 +810,6 @@ export class AppBar {
                         this._localBusy = false;
                         this.refresh();
                     }
-                    return true;
                 }
             });
 
@@ -823,7 +825,6 @@ export class AppBar {
                 onClick: () => {
                     UTILITIES.toggleValueInspector();
                     this.refresh();
-                    return true;
                 },
             });
 
@@ -840,7 +841,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.toggleVisualizationInspector();
                             this.refresh();
-                            return true;
                         }
                     },
                     {
@@ -856,7 +856,6 @@ export class AppBar {
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-inside');
                                     this.refresh();
-                                    return true;
                                 }
                             },
                             {
@@ -866,7 +865,6 @@ export class AppBar {
                                 onClick: () => {
                                     UTILITIES.setVisualizationInspectorMode('reveal-outside');
                                     this.refresh();
-                                    return true;
                                 }
                             }
                         ]
@@ -878,7 +876,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(-24);
                             this.refresh();
-                            return true;
                         }
                     },
                     {
@@ -888,7 +885,6 @@ export class AppBar {
                         onClick: () => {
                             UTILITIES.adjustVisualizationInspectorRadius(24);
                             this.refresh();
-                            return true;
                         }
                     }
                 ],

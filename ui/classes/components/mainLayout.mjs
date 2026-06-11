@@ -61,7 +61,11 @@ export class MainLayout extends BaseComponent {
         this.widthPx = this._clampDockWidth(
             APPLICATION_CONTEXT.AppCache.get(this._widthCacheKey, options.initialWidth ?? 360)
         );
-        this.collapsed = false;
+        this._collapsedCacheKey = `${this.id}-dock-collapsed`;
+        // user-intent collapse (drag-to-close / collapse()) persisted separately
+        // from the transient responsive collapse on narrow viewports
+        this._userCollapsed = APPLICATION_CONTEXT.AppCache.get(this._collapsedCacheKey, false) === true;
+        this.collapsed = this._userCollapsed;
 
         // fullscreen-on-narrow state
         this._isFullscreen = false;
@@ -71,7 +75,7 @@ export class MainLayout extends BaseComponent {
         this._tabsArr = [];
         this._menu = options.menu || null;
 
-        this._shellEl = this._viewerEl = this._dockEl = this._handleEl = null;
+        this._shellEl = this._viewerEl = this._dockEl = this._handleEl = this._knobEl = null;
         this._dockViewItemId = `${this.id}-global-menu`;
         this._dockViewTabCategory = "globalMenuTabs";
         this._registeredTabViewIds = new Set();
@@ -331,9 +335,9 @@ export class MainLayout extends BaseComponent {
     }
 
     /** Collapse the dock. */
-    collapse() { this.collapsed = true; this._applyVisibility(); }
+    collapse() { this._setUserCollapsed(true); }
     /** Expand the dock. */
-    expand() { this.collapsed = false; this._applyVisibility(); }
+    expand() { this._setUserCollapsed(false); }
     /** Toggle the dock collapsed/expanded state. */
     toggle() {
         const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
@@ -351,6 +355,13 @@ export class MainLayout extends BaseComponent {
             return false;
         }
 
+        // explicit show intent must also undo a drag-collapsed dock,
+        // otherwise the dock stays at 0px and the call looks like a no-op;
+        // boot-time deferred-sync calls keep the persisted collapse intact
+        const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+        if (!narrow && this.collapsed && !this._isFlushingDeferredSync) {
+            this._setUserCollapsed(false);
+        }
         this._setDockRequestedOpen(true);
         return this._isDockEffectivelyVisible();
     }
@@ -728,6 +739,7 @@ export class MainLayout extends BaseComponent {
         if (!showDock) {
             this._dockEl.style.display = "none";
             this._handleEl.style.display = "none";
+            this._setKnobVisible(false);
             this._viewerEl.style.flex = "1 1 100%";
             return;
         }
@@ -763,6 +775,22 @@ export class MainLayout extends BaseComponent {
         APPLICATION_CONTEXT.AppCache.set(this._widthCacheKey, this.widthPx);
     }
 
+    /** @private threshold below which a resize drag snaps to fully collapsed */
+    _collapseThresholdPx() {
+        return this.minWidth * 0.5;
+    }
+
+    /** @private user-intent collapse: persisted, unlike the responsive narrow-viewport collapse */
+    _setUserCollapsed(value, persist = true) {
+        value = !!value;
+        this.collapsed = value;
+        this._userCollapsed = value;
+        if (persist) {
+            APPLICATION_CONTEXT.AppCache.set(this._collapsedCacheKey, value);
+        }
+        this._applyVisibility();
+    }
+
     /** @private */
     _applyVisibility() {
         if (!this._dockEl || !this._dockRequestedOpen || !this._hasVisibleTabs()) return;
@@ -771,12 +799,23 @@ export class MainLayout extends BaseComponent {
             this._dockEl.style.width = "0px";
             this._dockEl.style.height = "0px";
             this._handleEl.style.display = "none";
+            // reopen knob only makes sense on wide layouts — narrow viewports
+            // use the fullscreen overlay / mobile bottom bar instead
+            const narrow = typeof window !== "undefined" && window.innerWidth < this.collapseBreakpointPx;
+            this._setKnobVisible(!narrow);
         } else {
             this.widthPx = this._clampDockWidth(this.widthPx);
             this._dockEl.style.width = `${this.widthPx}px`;
             this._dockEl.style.height = "";
             this._handleEl.style.display = "";
+            this._setKnobVisible(false);
         }
+    }
+
+    /** @private */
+    _setKnobVisible(visible) {
+        if (!this._knobEl) return;
+        this._knobEl.style.display = visible ? "" : "none";
     }
 
     /** @private */
@@ -797,7 +836,8 @@ export class MainLayout extends BaseComponent {
         } else {
             // leaving narrow viewport: ensure any fullscreen overlay is closed and viewer restored
             if (this._isFullscreen) this._closeFullscreen();
-            this.collapsed = false;
+            // restore the user's persisted collapse instead of force-expanding
+            this.collapsed = this._userCollapsed;
         }
 
         this._applyDockVisibility();
@@ -1301,21 +1341,35 @@ export class MainLayout extends BaseComponent {
     /** @private */
     _wireResize() {
         if (!this._handleEl) return;
-        let drag = false, startX = 0, startW = 0;
+        let drag = false, startX = 0, startW = 0, previewCollapsed = false;
 
         const onMove = e => {
             if (!drag) return;
             const dx = e.clientX - startX;
             const newW = this.position === "left" ? startW + dx : startW - dx;
-            this.widthPx = this._clampDockWidth(newW);
-            this._dockEl.style.width = `${this.widthPx}px`;
+            if (newW < this._collapseThresholdPx()) {
+                // dragged well past the minimum: snap-preview the fully
+                // collapsed state; widthPx keeps the last real width so
+                // reopening restores it
+                previewCollapsed = true;
+                this._dockEl.style.width = "0px";
+            } else {
+                previewCollapsed = false;
+                this.widthPx = this._clampDockWidth(newW);
+                this._dockEl.style.width = `${this.widthPx}px`;
+            }
             e.preventDefault();
         };
         const onUp = () => {
             drag = false;
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
-            this._persistDockWidth();
+            if (previewCollapsed) {
+                previewCollapsed = false;
+                this._setUserCollapsed(true);
+            } else {
+                this._persistDockWidth();
+            }
         };
 
         this._handleEl.addEventListener("mousedown", e => {
@@ -1323,6 +1377,61 @@ export class MainLayout extends BaseComponent {
             drag = true;
             startX = e.clientX;
             startW = this._dockEl.getBoundingClientRect().width;
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+            e.preventDefault();
+        });
+    }
+
+    /**
+     * Wire the collapsed-state edge knob: click reopens at the persisted
+     * width, dragging it inward live-resizes and snaps open past the
+     * collapse threshold (mirror of the handle's snap-close).
+     * @private
+     */
+    _wireKnob() {
+        if (!this._knobEl) return;
+        let drag = false, startX = 0, moved = false;
+
+        const onMove = e => {
+            if (!drag) return;
+            if (Math.abs(e.clientX - startX) > 3) moved = true;
+            const shellRect = this._shellEl.getBoundingClientRect();
+            const candidate = this.position === "left"
+                ? e.clientX - shellRect.left
+                : shellRect.right - e.clientX;
+            if (candidate >= this._collapseThresholdPx()) {
+                if (this.collapsed) {
+                    // live-expand; persisted on mouseup
+                    this.collapsed = false;
+                    this._applyVisibility();
+                }
+                this.widthPx = this._clampDockWidth(candidate);
+                this._dockEl.style.width = `${this.widthPx}px`;
+            } else if (!this.collapsed) {
+                // dragged back into the collapse zone
+                this.collapsed = true;
+                this._applyVisibility();
+            }
+            e.preventDefault();
+        };
+        const onUp = () => {
+            drag = false;
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+            if (!moved) {
+                this._setUserCollapsed(false);
+            } else {
+                this._setUserCollapsed(this.collapsed);
+                if (!this.collapsed) this._persistDockWidth();
+            }
+        };
+
+        this._knobEl.addEventListener("mousedown", e => {
+            if (!this._isDockEffectivelyVisible()) return;
+            drag = true;
+            moved = false;
+            startX = e.clientX;
             window.addEventListener("mousemove", onMove);
             window.addEventListener("mouseup", onUp);
             e.preventDefault();
@@ -1399,13 +1508,28 @@ origin-center
             this.position === "left" ? [dockNode, handle, viewerWrap] : [viewerWrap, handle, dockNode]
         );
 
+        // edge knob shown while the dock is drag-collapsed; click or drag it
+        // inward to reopen (inline positioning — the purged tailwind build
+        // lacks translate/fractional utilities)
+        const knobOnLeft = this.position === "left";
+        const knob = div({
+            id: `${this.id}-knob`,
+            class: "flex items-center justify-center bg-base-200 border border-base-300 hover:bg-base-300 shadow cursor-col-resize select-none",
+            style: `display:none; position:absolute; top:50%; transform:translateY(-50%); ${knobOnLeft ? "left" : "right"}:0;`
+                + ` width:18px; height:64px; z-index:30; border-radius:${knobOnLeft ? "0 6px 6px 0" : "6px 0 0 6px"}; touch-action:none;`,
+            title: $.t("main.globalMenu.dragToOpen"),
+        }, new RawHtml(null, `<i class="ph-light ${knobOnLeft ? "ph-caret-right" : "ph-caret-left"}"></i>`).create());
+
         this._shellEl = shell;
         this._viewerEl = viewerWrap;
         this._handleEl = handle;
+        this._knobEl = knob;
         shell.appendChild(this._toolbarPeekEl);
+        shell.appendChild(knob);
 
         this._syncMenuTabs();
         this._wireResize();
+        this._wireKnob();
         this._applyResponsiveLayout();
         this._updateDockVisibility();
         this._syncToolbars();

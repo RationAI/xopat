@@ -21,6 +21,18 @@ export type CreateApplicationContextOptions = {
     ioPipeline: any;
 };
 
+/**
+ * Options that define the SESSION STRUCTURE (viewer count, slot layout,
+ * which background each slot shows). These must always come from the
+ * session itself (params / defaults) — never from AppCache, which is
+ * keyed per origin and would leak one session's layout into the next
+ * (e.g. a cached `activeBackgroundIndex = [0,1]` opening a phantom
+ * second viewer for a 1-background session). getOption skips the cache
+ * read; setOption skips the cache write AND deletes any stale persisted
+ * value so existing installs self-clean.
+ */
+const SESSION_SCOPED_OPTIONS = new Set<string>(["activeBackgroundIndex"]);
+
 export function createApplicationContext(opts: CreateApplicationContextOptions): ApplicationContext {
     const { ENV, CONFIG, PLUGINS, sessionName, viewerSecureMode, defaultSetup, ioPipeline } = opts;
 
@@ -154,7 +166,7 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
             if (self.config.params[name] !== undefined) {
                 return normalize(self.config.params[name]);
             }
-            if (cache && self.AppCache) {
+            if (cache && self.AppCache && !SESSION_SCOPED_OPTIONS.has(name)) {
                 let cached = self.AppCache.get(name);
                 if (parse && typeof cached === "string") {
                     const trimmed = cached.trim();
@@ -201,7 +213,13 @@ export function createApplicationContext(opts: CreateApplicationContextOptions):
                     console.warn("Failed to stringify option value", value);
                 }
             }
-            if (cache && self.AppCache) self.AppCache.set(name, value);
+            if (SESSION_SCOPED_OPTIONS.has(name)) {
+                // Session-structure option: never persist, and scrub any
+                // stale value an older build may have cached.
+                if (self.AppCache) self.AppCache.delete(name);
+            } else if (cache && self.AppCache) {
+                self.AppCache.set(name, value);
+            }
             if (value === "false") value = false;
             else if (value === "true") value = true;
             self.config.params[name] = value;

@@ -271,11 +271,21 @@ const _pendingCalls = new Map();
 const API_TIMEOUT = ${apiTimeout};
 let _finished = false;
 
+// Capture the native postMessage before the hardening block below shadows it
+// on 'self' (postMessage is in the _lockGlobal list). The finishers are the
+// only legitimate path that delivers the script result/error back to the main
+// thread; if they used 'self.postMessage' after the lock it would be undefined
+// and the call would throw — silently swallowed by the try/catch — leaving the
+// host's executeScript promise pending forever. This captured reference keeps
+// result delivery working while the global lock still neutralises postMessage
+// for any code that looks it up at runtime.
+const _postToMain = self.postMessage.bind(self);
+
 const finishWithResult = (result) => {
     if (_finished) return;
     _finished = true;
     try {
-        self.postMessage({ result });
+        _postToMain({ result });
     } catch (_) {}
 };
 
@@ -284,7 +294,7 @@ const finishWithError = (err) => {
     _finished = true;
     const message = err instanceof Error ? err.message : String(err);
     try {
-        self.postMessage({ error: message });
+        _postToMain({ error: message });
     } catch (_) {}
 };
 

@@ -136,6 +136,12 @@ export const globalPluginWindowMethods = {
         this.context.addFabricHandler('annotation-edit', refreshBoardForViewer);
         this.context.addFabricHandler('annotation-edit-end', refreshBoardForViewer);
 
+        // Common visual properties (border width, opacity, outline mode) are
+        // global — changing them in one viewer's settings updates every fabric
+        // instance. Re-sync ALL viewer-menu controls so each window's sliders /
+        // checkboxes reflect the new shared value, not just the one touched.
+        this.context.addFabricHandler('visual-property-changed', () => this._updateViewerControls());
+
         const globalSideRefresh = () => {
             this._refreshAllBoardPanels();
             this._refreshAllPresetLists();

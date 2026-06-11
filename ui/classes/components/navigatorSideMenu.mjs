@@ -88,7 +88,7 @@ export class NavigatorSideMenu extends BaseComponent {
             style: Join.STYLE.HORIZONTAL,
             extraClasses: {
                 width: "w-full",
-                padding: "px-2 py-1",
+                padding: "px-2 py-0",
                 bg: "bg-base-200/90",
                 border: "border-b border-base-300",
                 items: "items-center",

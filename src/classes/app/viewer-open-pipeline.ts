@@ -676,6 +676,27 @@ export class ViewerOpenPipeline {
             appContext.setOption("activeBackgroundIndex", activeBg);
         }
 
+        // Defense in depth: a selection carried over from another context
+        // (stale cache, hand-edited URL) may reference bg indices that don't
+        // exist in THIS session. Clamp invalid entries and trim trailing
+        // empty slots so they can't inflate the viewer count with phantom
+        // empty viewers.
+        if (Array.isArray(activeBg)) {
+            const clamped = activeBg.map((i: any) =>
+                Number.isInteger(i) && i >= 0 && i < bgs.length ? i : undefined);
+            while (clamped.length > 1 && clamped[clamped.length - 1] === undefined) {
+                clamped.pop();
+            }
+            if (bgs.length > 0 && !clamped.some((i: any) => Number.isInteger(i))) {
+                clamped.length = 0;
+                clamped.push(0);
+            }
+            if (JSON.stringify(clamped) !== JSON.stringify(activeBg)) {
+                activeBg = clamped;
+                appContext.setOption("activeBackgroundIndex", activeBg);
+            }
+        }
+
         // Fold the `vizSpec` parameter (back-compat) into bg entries. Modern
         // callers should mutate `background[i].visualizationIndex` directly;
         // `vizSpec` remains accepted so existing scripting/session-restore
@@ -1163,6 +1184,25 @@ export class ViewerOpenPipeline {
                 changeKind = "content";
             } else {
                 changeKind = "visualization";
+            }
+
+            if (appContext.getOption("webglDebugMode")) {
+                console.log(`[pipeline] plan v=${viewerIndex}`, {
+                    changeKind,
+                    previousBgSelection, nextBgSelection,
+                    previousVizSelection, nextVizSelection,
+                    prevBgEntryViz: Number.isInteger(previousBgSelection)
+                        ? (previousSnapshot?.background?.[previousBgSelection as number] as any)?.visualizationIndex
+                        : "(no bg)",
+                    nextBgEntryViz: Number.isInteger(nextBgSelection)
+                        ? (effectiveSnapshot?.background?.[nextBgSelection as number] as any)?.visualizationIndex
+                        : "(no bg)",
+                    liveBgEntryViz: Number.isInteger(nextBgSelection)
+                        ? (bgs[nextBgSelection as number] as any)?.visualizationIndex
+                        : "(no bg)",
+                    prevActiveBg: previousSnapshot?.activeBackgroundIndex,
+                    nextActiveBg: effectiveSnapshot?.activeBackgroundIndex,
+                });
             }
 
             return {

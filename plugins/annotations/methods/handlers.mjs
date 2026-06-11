@@ -90,7 +90,7 @@ export const handlerMethods = {
             [
                 { 'click [id$="-right-menu-menu-b-opened-gui_annotations"]': this.t('annotations.tutorial.openPanel') },
                 { 'next [id$="-annotations-enable-toggle"]': this.t('annotations.tutorial.enable') },
-                { 'next [id$="-annotations-save"]': this.t('annotations.tutorial.save') },
+                { 'next [id$="-annotations-settings"]': this.t('annotations.tutorial.settings') },
                 { 'next #viewer-container': this.t('annotations.tutorial.canvas') },
             ]
         );

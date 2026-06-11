@@ -189,6 +189,14 @@ export class ViewerInspectorController {
             return false;
         }
 
+        // Idempotent: __xopatInspectorLastClientPoint is set only while inspector
+        // state is active. If there's no point recorded, the drawer state is
+        // already cleared and re-calling clearInspectorState would trigger a
+        // redrawCallback on every mouse move while the inspector is disabled.
+        if (!(viewer as any).__xopatInspectorLastClientPoint) {
+            return false;
+        }
+
         delete (viewer as any).__xopatInspectorLastClientPoint;
         if (typeof (viewer!.drawer as any).clearInspectorState === "function") {
             (viewer!.drawer as any).clearInspectorState();
@@ -281,6 +289,13 @@ export class ViewerInspectorController {
         (viewer as any).__xopatInspectorTracker = new OpenSeadragon.MouseTracker({
             element: viewer.container,
             moveHandler: (event: any) => {
+                // Hot path — fires per mouse move. Skip all work when the
+                // inspector is disabled so we don't keep nudging the drawer's
+                // redrawCallback (which would re-render the whole viewer).
+                if (!this.appContext.getOption("visualizationInspectorEnabled", false, true)) {
+                    return;
+                }
+
                 const original = event?.originalEvent as MouseEvent | undefined;
                 if (!original) return;
 

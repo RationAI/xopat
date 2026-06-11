@@ -112,14 +112,17 @@ class MultiPanelMenuTab extends MenuTab {
         const openDivOptions = {
             id: this.parent.id + "-opendiv-" + item.id,
             // Removed background and radius from here to apply to wrapper
-            extraClasses: {display: "display-none", flex: "flex flex-row"},
+            extraClasses: {display: "display-none", flex: "flex flex-row flex-1 min-w-0"},
             extraProperties: {style: "margin-top: 5px; margin-bottom: 5px;"},
         };
 
+        // Content fills the panel width minus the vertical tab strip;
+        // height is capped so overly long panels scroll internally.
+        const contentStyle = "flex: 1 1 auto; min-width: 0; max-height: 80vh; overflow-y: auto; overflow-x: hidden;";
         if (typeof content !== 'string' && typeof content?.[Symbol.iterator] === 'function') {
-            this.openDiv = new Div(openDivOptions, new Div({ extraProperties: {style: "width: 360px;"} }, ...content));
+            this.openDiv = new Div(openDivOptions, new Div({ extraProperties: {style: contentStyle} }, ...content));
         } else {
-            this.openDiv = new Div(openDivOptions, new Div({ extraProperties: {style: "width: 360px;"} }, content));
+            this.openDiv = new Div(openDivOptions, new Div({ extraProperties: {style: contentStyle} }, content));
         }
 
         this.fullId = this.parent.id + "-c-" + item.id;

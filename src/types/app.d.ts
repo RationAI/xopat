@@ -490,6 +490,11 @@ interface XOpatUtilities {
 
     applyStoredVisualizationSnapshot(renderOutput: Record<string, any>): void;
 
+    syncViewerConfigFromRenderer(viewer: OpenSeadragon.Viewer): void;
+
+    /** Debounced (~1s) UTILITIES.syncSessionToUrl so reload preserves edits. */
+    scheduleSessionUrlSync(): void;
+
     setImageMeasurements(
         viewer: OpenSeadragon.Viewer,
         microns: number | undefined,

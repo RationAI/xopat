@@ -235,13 +235,19 @@ export class RightSideViewerMenu extends BaseComponent {
     }
 
     create() {
-        return div(
+        const root = div(
             {
                 ...this.commonProperties, onclick: this.options.onClick, ...this.extraProperties,
                 style: "position: absolute; width: 400px; overflow-y: auto; overflow-x: visible;"
             },
             this.menu.create()
         );
+        // MobileBottomBar's _handleCanvasTap / _showViewerMenu / _hideViewerMenu
+        // dereference menu.context to detect taps inside the menu and to toggle
+        // display styles. BaseComponent doesn't auto-populate context, so set it
+        // here — otherwise every tap inside the side menu collapses it on mobile.
+        this.context = root;
+        return root;
     }
 
     onLayoutChange(details) {

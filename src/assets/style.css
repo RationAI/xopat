@@ -532,6 +532,7 @@ input.selectable-image-row-context:checked + div {
     width: 100%;
     max-width: 100%;
 }
+.er-control input[type="number"] { width: 100%; }
 
 /* Small screens: stack vertically */
 @media (max-width: 560px) {

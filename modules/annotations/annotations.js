@@ -270,6 +270,21 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
     }
 
     /**
+     * Apply cursor styles to every viewer's fabric canvas so the cursor stays
+     * consistent across a multi-viewport grid, regardless of which viewport is
+     * hovered. Mode activation must use this rather than `this.context.fabric`
+     * (which only targets the active viewer).
+     * @param {string} defaultCursor cursor used over empty canvas
+     * @param {string} [hoverCursor=defaultCursor] cursor used over annotations
+     */
+    setCursors(defaultCursor, hoverCursor = defaultCursor) {
+        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
+            instance.canvas.defaultCursor = defaultCursor;
+            instance.canvas.hoverCursor = hoverCursor;
+        }
+    }
+
+    /**
      * Get actual active viewer instance the user interacts with.
      * @return {OpenSeadragon.Viewer}
      */
@@ -1556,6 +1571,7 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         this.cursor = {
 			mouseTime: Infinity, //OSD handler click timer
 			isDown: false,  //FABRIC handler click down recognition
+			rightClickHandled: false, //last right-release consumed by a mode → suppress context menu
 		};
 		this.strokeStyling = false;
 
@@ -1723,10 +1739,7 @@ in order to work. Did you maybe named the ${type} factory implementation differe
 			this.raiseEvent('mode-changed', {mode: this.Modes.AUTO});
 
 			this.mode = this.Modes.AUTO;
-            for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-                instance.canvas.hoverCursor = "pointer";
-                instance.canvas.defaultCursor = "grab";
-            }
+			this.setCursors("grab", "pointer");
 		}
 	}
 
@@ -2400,8 +2413,7 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
-		this.context.fabric.canvas.hoverCursor = "crosshair";
-		this.context.fabric.canvas.defaultCursor = "crosshair";
+		this.context.setCursors("crosshair");
 		this.context.freeFormTool.recomputeRadius();
 		this.context.freeFormTool.showCursor();
 		return true;
@@ -2651,8 +2663,7 @@ OSDAnnotations.StateCustomCreate = class extends OSDAnnotations.AnnotationState 
 	setFromAuto() {
 		this.context.setOSDTracking(false);
 		//deselect active if present
-		this.context.fabric.canvas.hoverCursor = "crosshair";
-		this.context.fabric.canvas.defaultCursor = "crosshair";
+		this.context.setCursors("crosshair");
 		return true;
 	}
 

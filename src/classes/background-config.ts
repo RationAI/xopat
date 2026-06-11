@@ -220,6 +220,11 @@ export class BackgroundConfig implements BackgroundItem {
      *   2. top-level `activeVisualizationIndex` (number | number[]) → distributed onto
      *      `background[activeBackgroundIndex[k]].visualizationIndex` for slots that
      *      don't already carry an explicit `visualizationIndex`.
+     *   3. default selection: an UNSET (`undefined`) `visualizationIndex` defaults
+     *      to the first visualization when the session defines any. Explicit
+     *      `null` means "no visualization" and is preserved — so a user's
+     *      [no overlays] choice survives re-runs, while fresh sessions render
+     *      their first visualization out of the box.
      *
      * Mutates the passed config in place. Idempotent — running twice is safe.
      */
@@ -240,7 +245,12 @@ export class BackgroundConfig implements BackgroundItem {
         const legacy = params.activeVisualizationIndex !== undefined
             ? params.activeVisualizationIndex
             : config.activeVisualizationIndex;
-        if (legacy === undefined || legacy === null) return;
+        if (legacy === undefined || legacy === null) {
+            // No legacy distribution to fold — apply the default selection
+            // (step 3) and finish.
+            BackgroundConfig._applyDefaultVisualizationIndex(config, backgrounds);
+            return;
+        }
 
         const activeBg = Array.isArray(params.activeBackgroundIndex)
             ? params.activeBackgroundIndex
@@ -274,6 +284,28 @@ export class BackgroundConfig implements BackgroundItem {
         // Consume — never re-emit. The pipeline / readers now go via bg entries.
         if (params.activeVisualizationIndex !== undefined) delete params.activeVisualizationIndex;
         if (config.activeVisualizationIndex !== undefined) delete config.activeVisualizationIndex;
+
+        // Slots the legacy distribution left untouched still get the default.
+        BackgroundConfig._applyDefaultVisualizationIndex(config, backgrounds);
+    }
+
+    /**
+     * Step 3 of {@link migrateLegacyConfig}: sessions that define
+     * visualizations but leave a bg entry's `visualizationIndex` UNSET
+     * render the first visualization by default. Explicit `null`
+     * ("no visualization", written by the UI's [no overlays] selection)
+     * is preserved. Runs after legacy folding so distributed legacy
+     * values win over the default.
+     */
+    private static _applyDefaultVisualizationIndex(config: any, backgrounds: any[]): void {
+        const visualizations = config?.visualizations;
+        if (!Array.isArray(visualizations) || visualizations.length === 0) return;
+        for (const bg of backgrounds) {
+            if (!bg || typeof bg !== "object") continue;
+            if (bg.visualizationIndex === undefined) {
+                bg.visualizationIndex = 0;
+            }
+        }
     }
 }
 (window as any).BackgroundConfig = BackgroundConfig;

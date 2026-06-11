@@ -31,6 +31,47 @@
         maxRenderedReal: 800          // hard cap: if the would-be unclustered set exceeds this even at max zoom, keep clustering on. Bounds Skia per-frame work so dense scenes can't crash the renderer.
     };
 
+    /**
+     * Screen-space half of the rotated-viewport visibility test.
+     *
+     * Under rotation, `canvas.vptCoords` is the axis-aligned bbox of the
+     * rotated viewport in image space — conservative, up to ~2x the real
+     * visible area at 45°. Anything that only checks against that AABB
+     * (rbush queries, cell culls) admits content sitting in the inflated
+     * corners that is actually off screen.
+     *
+     * This returns a test(minX, minY, maxX, maxY) that forward-projects the
+     * image-space box's 4 corners through the viewport transform and rejects
+     * it when all of them fall beyond one screen edge. The image of a screen
+     * rect in image space is a parallelogram whose SAT axes are the box's
+     * image-space x/y axes plus the screen x/y axes; the AABB check covers
+     * the former, this test the latter — together they are exact.
+     *
+     * CONTRACT: callers must have already verified overlap against the
+     * image-space viewport AABB before consulting this test.
+     *
+     * Returns null when the transform is axis-aligned (incl. pure flip) —
+     * the AABB check alone is exact there, keeping the common unrotated
+     * path free of any extra per-hit work.
+     */
+    function makeScreenClipper(canvas) {
+        const vt = canvas.viewportTransform;
+        if (!vt || (vt[1] === 0 && vt[2] === 0)) return null;
+        const a = vt[0], b = vt[1], c = vt[2], d = vt[3], e = vt[4], f = vt[5];
+        const w = canvas.width, h = canvas.height;
+        return (minX, minY, maxX, maxY) => {
+            const x0 = a * minX + c * minY + e, y0 = b * minX + d * minY + f;
+            const x1 = a * maxX + c * minY + e, y1 = b * maxX + d * minY + f;
+            const x2 = a * minX + c * maxY + e, y2 = b * minX + d * maxY + f;
+            const x3 = a * maxX + c * maxY + e, y3 = b * maxX + d * maxY + f;
+            if (Math.max(x0, x1, x2, x3) <= 0) return false;
+            if (Math.min(x0, x1, x2, x3) >= w) return false;
+            if (Math.max(y0, y1, y2, y3) <= 0) return false;
+            if (Math.min(y0, y1, y2, y3) >= h) return false;
+            return true;
+        };
+    }
+
     class AnnotationSpatialIndex {
         constructor(wrapper, options = {}) {
             this.wrapper = wrapper;
@@ -198,8 +239,10 @@
         }
 
         /**
-         * Returns objects intersecting the viewport bbox, in canvas z-order.
-         * @param {object} vptCoords fabric.Canvas#vptCoords (axis-aligned tl/br points in image space)
+         * Returns objects intersecting the viewport, in canvas z-order.
+         * @param {object} vptCoords fabric.Canvas#vptCoords (axis-aligned tl/br points
+         *      in image space; under rotation this is the conservative AABB of the
+         *      rotated viewport — hits are additionally screen-clipped to the true view)
          * @param {fabric.Canvas} canvas needed to recover z-order from canvas._objects
          */
         visibleObjects(vptCoords, canvas) {
@@ -216,8 +259,13 @@
             const maxY = vptCoords.br.y;
 
             const hits = this._tree.search({minX, minY, maxX, maxY});
+            const clip = makeScreenClipper(canvas);
             const set = new Set();
-            for (let i = 0; i < hits.length; i++) set.add(hits[i]._obj);
+            for (let i = 0; i < hits.length; i++) {
+                const b = hits[i];
+                if (clip && !clip(b.minX, b.minY, b.maxX, b.maxY)) continue;
+                set.add(b._obj);
+            }
             for (let i = 0; i < this._oversized.length; i++) set.add(this._oversized[i]);
             for (const obj of this._dirty) set.add(obj);
 
@@ -242,7 +290,7 @@
             const c = this.canvas;
             const vt = c.viewportTransform;
             return vptCoords.tl.x + ',' + vptCoords.tl.y + ',' + vptCoords.br.x + ',' + vptCoords.br.y +
-                '|' + vt[0] + ',' + vt[3] + ',' + vt[4] + ',' + vt[5] +
+                '|' + vt[0] + ',' + vt[1] + ',' + vt[2] + ',' + vt[3] + ',' + vt[4] + ',' + vt[5] +
                 '|' + this.size() + '|' + this.selectionVersion;
         }
 
@@ -329,9 +377,18 @@
             // defaults slightly above 1.0 so items right at the cell boundary
             // (which already overlap pill regions in dense scenes) join the
             // cluster instead of dragging Skia.
-            const screenZoom = Math.sqrt(vt[0] * vt[0] + vt[1] * vt[1]) || 1;
+            // Basis scales of the viewport transform: exact under rotation +
+            // uniform scale + flip (sx === sy there), and still sane should a
+            // non-uniform scale ever appear. Image-space lengths times these
+            // give true on-screen lengths regardless of rotation.
+            const sx = Math.sqrt(vt[0] * vt[0] + vt[1] * vt[1]) || 1;
+            const sy = Math.sqrt(vt[2] * vt[2] + vt[3] * vt[3]) || 1;
+            const screenZoom = sx;
             const itemCapPx = opts.clusterMinCellPx * opts.clusterMaxItemFactor;
             const itemCapImg = itemCapPx / screenZoom;
+            // Under rotation, vpt above is the inflated AABB of the rotated
+            // viewport; clip narrows hits/cells to the true visible quad.
+            const clip = makeScreenClipper(canvas);
             // Selection / highlight / explicit-exempt objects always render
             // individually — the user is interacting with them and must see them
             // even when the surrounding region clusters into a pill.
@@ -358,25 +415,36 @@
             // and sparse ones produce none — which matches the user's mental model.
             const threshold = opts.clusterMinThreshold;
 
-            // forward-project image rect → screen rect using vt (no rotation in our
-            // pipeline; uniform-ish affine works as a 4-corner transform anyway).
+            // forward-project image rect → screen-space AABB of all 4 corners
+            // (under rotation the image rect maps to a parallelogram; a 2-corner
+            // diagonal degenerates — zero width for a square cell at 45°).
             const projectImgRect = (rect) => {
                 const x0 = vt[0] * rect.minX + vt[2] * rect.minY + vt[4];
                 const y0 = vt[1] * rect.minX + vt[3] * rect.minY + vt[5];
-                const x1 = vt[0] * rect.maxX + vt[2] * rect.maxY + vt[4];
-                const y1 = vt[1] * rect.maxX + vt[3] * rect.maxY + vt[5];
-                const sx = Math.min(x0, x1);
-                const sy = Math.min(y0, y1);
-                return { x: sx, y: sy, w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+                const x1 = vt[0] * rect.maxX + vt[2] * rect.minY + vt[4];
+                const y1 = vt[1] * rect.maxX + vt[3] * rect.minY + vt[5];
+                const x2 = vt[0] * rect.minX + vt[2] * rect.maxY + vt[4];
+                const y2 = vt[1] * rect.minX + vt[3] * rect.maxY + vt[5];
+                const x3 = vt[0] * rect.maxX + vt[2] * rect.maxY + vt[4];
+                const y3 = vt[1] * rect.maxX + vt[3] * rect.maxY + vt[5];
+                const px = Math.min(x0, x1, x2, x3);
+                const py = Math.min(y0, y1, y2, y3);
+                return {
+                    x: px, y: py,
+                    w: Math.max(x0, x1, x2, x3) - px,
+                    h: Math.max(y0, y1, y2, y3) - py
+                };
             };
 
             const rects = [];
             const suppressed = new Set();
 
             const rec = (minX, minY, maxX, maxY, depth) => {
-                // cull cells that don't intersect the viewport
+                // cull cells that don't intersect the viewport AABB...
                 if (maxX <= vpt.minX || minX >= vpt.maxX
                     || maxY <= vpt.minY || minY >= vpt.maxY) return;
+                // ...nor the true (possibly rotated) on-screen quad
+                if (clip && !clip(minX, minY, maxX, maxY)) return;
 
                 // query intersected with viewport so off-screen items don't count
                 const qMinX = Math.max(minX, vpt.minX);
@@ -388,7 +456,12 @@
                 });
                 let clusterMembers = null;
                 for (let i = 0; i < hits.length; i++) {
-                    const o = hits[i]._obj;
+                    const b = hits[i];
+                    // under rotation, drop items in the AABB inflation zones —
+                    // counts then change only at true screen edges, keeping
+                    // pills stable while panning a rotated viewport
+                    if (clip && !clip(b.minX, b.minY, b.maxX, b.maxY)) continue;
+                    const o = b._obj;
                     if (!isClusterable(o)) continue;
                     if (!clusterMembers) clusterMembers = [];
                     clusterMembers.push(o);
@@ -396,11 +469,12 @@
                 const count = clusterMembers ? clusterMembers.length : 0;
                 if (count <= threshold) return; // render normally
 
-                const screenRect = projectImgRect({ minX, minY, maxX, maxY });
-                const minSide = Math.min(screenRect.w, screenRect.h);
-                if (minSide <= opts.clusterMinCellPx || depth >= opts.clusterMaxDepth) {
+                // rotation-invariant on-screen side lengths of the cell —
+                // a projected-AABB minSide would inflate under rotation
+                const minSidePx = Math.min(sx * (maxX - minX), sy * (maxY - minY));
+                if (minSidePx <= opts.clusterMinCellPx || depth >= opts.clusterMaxDepth) {
                     rects.push({
-                        screen: screenRect,
+                        screen: projectImgRect({ minX, minY, maxX, maxY }),
                         image: { x: qMinX, y: qMinY, w: qMaxX - qMinX, h: qMaxY - qMinY },
                         count,
                         members: clusterMembers

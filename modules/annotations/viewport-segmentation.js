@@ -184,8 +184,7 @@ OSDAnnotations.ViewportSegmentation = class extends OSDAnnotations.AnnotationSta
         this.prepareViewportScreenshot();
 
         this.context.setOSDTracking(false);
-        this.context.fabric.canvas.hoverCursor = "crosshair";
-        this.context.fabric.canvas.defaultCursor = "crosshair";
+        this.context.setCursors("crosshair");
         return true;
     }
 
