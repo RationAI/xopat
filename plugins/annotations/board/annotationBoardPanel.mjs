@@ -75,7 +75,10 @@ export class AnnotationBoardPanel {
         this.plugin = plugin;
         this.context = plugin.context;
         this.viewer = viewer;
-        this.viewerId = viewer.uniqueId;
+        // Slot id (e.g. "osd-0"), unique per viewport even when two viewports
+        // share a background id / uniqueId. Drives getFabric() and all board DOM
+        // ids below, so two same-background viewports get independent boards.
+        this.viewerId = viewer.id;
         this.uid = sanitizeId(this.viewerId);
 
         this.containerId = `history-board-for-annotations-${this.uid}`;

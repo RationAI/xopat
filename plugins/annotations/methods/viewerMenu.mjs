@@ -28,8 +28,13 @@ export const viewerMenuMethods = {
     },
 
     _resolveViewerId(viewerOrId = undefined) {
-        if (!viewerOrId) return VIEWER?.uniqueId;
-        return typeof viewerOrId === 'object' ? viewerOrId.uniqueId : viewerOrId;
+        // Per-viewer UI/runtime state is keyed by the collision-free slot id
+        // (viewer.id, e.g. "osd-0"), NOT the data-derived viewer.uniqueId. Two
+        // viewports sharing the same background id share a uniqueId, so keying
+        // UI by it collapses them onto one context store and duplicates DOM ids.
+        // IO/persistence keeps using uniqueId (see io.mjs) — that is intentional.
+        if (!viewerOrId) return VIEWER?.id;
+        return typeof viewerOrId === 'object' ? viewerOrId.id : viewerOrId;
     },
 
     _getViewerUI(viewerOrId = undefined) {
@@ -197,10 +202,10 @@ export const viewerMenuMethods = {
 
     initViewerMenu() {
         this.registerViewerMenu((viewer) => {
-            const viewerId = viewer.uniqueId;
-            // viewer-reset fires with the world momentarily empty; uniqueId is
-            // documented to be transiently undefined in that window. Same bail
-            // pattern as _getViewerUI above.
+            // Key per-viewer UI by the slot id (viewer.id, e.g. "osd-0"), which is
+            // unique per viewport even when two viewports share a background id /
+            // uniqueId. The guard stays defensive against a half-constructed viewer.
+            const viewerId = viewer.id;
             if (!viewerId) return null;
             const state = this.getViewerContext(viewerId);
             if (!state) return null;
@@ -616,9 +621,9 @@ export const viewerMenuMethods = {
             const lastSelected = selected.length ? selected[selected.length - 1] : null;
 
             if (lastSelected) {
-                this._annotationSelected(lastSelected);
+                this._annotationSelected(lastSelected, fabric);
             } else if (deselected.length) {
-                this._annotationDeselected(deselected[deselected.length - 1]);
+                this._annotationDeselected(deselected[deselected.length - 1], fabric);
             }
 
             const panel = this._getViewerUI(viewerId)?.boardPanel;
@@ -652,11 +657,13 @@ export const viewerMenuMethods = {
         // Canvas right-click menu provider. Registered with the global
         // CanvasContextMenu registry so all providers (annotations, playground,
         // future plugins) aggregate into a single DropDown opened by loader.ts.
-        // Returns null to opt out (drawing-with-right-click mode, long-press drag,
-        // or wrong viewer in a multi-viewport layout).
+        // Returns null to opt out (wrong viewer in a multi-viewport layout,
+        // interaction disabled) and false to VETO the whole menu — the
+        // right-click was consumed by an annotation interaction, so no other
+        // provider (e.g. playground) may open the menu either.
         const contextMenuProviderId = `annotations-${viewerId}`;
         const contextMenuProvider = (ctx) => {
-            if (ctx.viewer?.uniqueId !== viewerId) return null;
+            if (ctx.viewer?.id !== viewerId) return null;
             if (this.context.disabledInteraction) return null;
             // Right-click drawing/drag suppressions only apply when the menu
             // was actually opened by a right-click. Callers that supply
@@ -669,12 +676,15 @@ export const viewerMenuMethods = {
                 // the menu must NOT open. Set by handleRightClickUp in
                 // annotations-canvas.js (parity with the legacy
                 // nonprimary-release-not-handled behavior).
-                if (cursor?.rightClickHandled) return null;
-                if (this.context.presets.right) return null;
+                if (cursor?.rightClickHandled) return false;
+                // Right button is bound to drawing — right-clicks annotate.
+                // In auto (navigation) mode the binding is inert (right-click
+                // does not draw), so the menu may still open there.
+                if (this.context.presets.right && !this.context.isModeAuto()) return false;
                 // Suppress on right-click drag: cursor.mouseTime is set on press by
                 // annotations-canvas.js handleRightClickDown and not reset on the
                 // typical release path, so press-duration is still measurable here.
-                if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return null;
+                if (cursor && cursor.mouseTime > 0 && (Date.now() - cursor.mouseTime) > 250) return false;
             }
 
             // Prefer a pre-resolved target (set by callers that open the menu
@@ -815,7 +825,7 @@ export const viewerMenuMethods = {
 
         if (!nextEnabled) {
             for (const viewer of VIEWER_MANAGER.viewers || []) {
-                this._getViewerUI(viewer.uniqueId)?.boardPanel?.commitEdit?.();
+                this._getViewerUI(viewer)?.boardPanel?.commitEdit?.();
             }
         }
 
@@ -865,20 +875,20 @@ export const viewerMenuMethods = {
 
     _refreshAllBoardPanels() {
         for (const viewer of VIEWER_MANAGER.viewers || []) {
-            this._getViewerUI(viewer.uniqueId)?.boardPanel?.requestRender();
+            this._getViewerUI(viewer)?.boardPanel?.requestRender();
         }
     },
 
     _refreshAllAnnotationFilterBadges() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._refreshAnnotationFilterBadges(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._refreshAnnotationFilterBadges(viewer);
     },
 
     _refreshAllPresetLists() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._renderPresetList(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._renderPresetList(viewer);
     },
 
     _refreshAllAuthorLists() {
-        for (const viewer of VIEWER_MANAGER.viewers || []) this._populateAuthorsList(viewer.uniqueId);
+        for (const viewer of VIEWER_MANAGER.viewers || []) this._populateAuthorsList(viewer);
     },
 
     _updateViewerControls(viewerOrId = undefined) {
@@ -915,6 +925,6 @@ export const viewerMenuMethods = {
         };
 
         if (viewerOrId) return apply(this._getViewerUI(viewerOrId));
-        for (const viewer of VIEWER_MANAGER.viewers || []) apply(this._getViewerUI(viewer.uniqueId));
+        for (const viewer of VIEWER_MANAGER.viewers || []) apply(this._getViewerUI(viewer));
     },
 };

@@ -78,6 +78,11 @@ class AnnotationsGUI extends XOpatPlugin {
         this._copiedAnnotation = null;
         this._copiedPos = { x: 0, y: 0 };
         this._selectedAnnot = null;
+        // Fabric that owns _selectedAnnot. The comments window is a single global
+        // window, but in a multi-viewport session the selected annotation may live
+        // on a non-active viewer's fabric — comment mutations must target this
+        // fabric, not this.context.fabric (the active viewer's).
+        this._selectedAnnotFabric = null;
         this._refreshCommentsInterval = null;
     }
 

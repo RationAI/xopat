@@ -57,8 +57,8 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraClasses: { display: "display-none" },
-            extraProperties: { title: $.t('menu.bar.pinFullscreen'), style: "position: absolute; top: 30px;"},
+            extraClasses: { reveal: "menu-strip-hover-item" },
+            extraProperties: { title: $.t('main.bar.pinFullscreen'), style: "position: absolute; top: 30px; writing-mode: horizontal-tb;"},
             onClick: (event) => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;
@@ -84,7 +84,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: $.t('menu.bar.close'), style: "position: absolute; top: 0px;"},
+            extraProperties: { title: $.t('main.bar.close'), style: "position: absolute; top: 0px;"},
             onClick: (event) => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;
@@ -95,18 +95,45 @@ class MultiPanelMenuTab extends MenuTab {
             }
         }, crossIcon)
 
+        if (this.parent.supportsTabReorder) {
+            const reorderButton = (direction, icon, titleKey, bottom) => new Button({
+                id: this.parent.id + "-b-move-" + direction + "-" + item.id,
+                type: Button.TYPE.NONE,
+                size: Button.SIZE.TINY,
+                orientation: Button.ORIENTATION.HORIZONTAL,
+                extraClasses: { reveal: "menu-strip-hover-item" },
+                // horizontal-tb: undo the strip's sideways writing-mode so carets point up/down
+                extraProperties: { title: $.t(titleKey), style: `position: absolute; bottom: ${bottom}; writing-mode: horizontal-tb;` },
+                onClick: (event) => {
+                    event.stopPropagation();
+                    if (window.innerWidth < this.maxMobileWidth) {
+                        return;
+                    }
+                    this.parent.reorderTab(this.id, direction);
+                }
+            }, new PhIcon({ name: icon }));
+            this.moveUpButton = reorderButton("up", "ph-caret-up", "main.bar.moveUp", "30px");
+            this.moveDownButton = reorderButton("down", "ph-caret-down", "main.bar.moveDown", "5px");
+        }
+
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            extraProperties: { title: inText, style: "margin-left: auto; padding-top: 45px; padding-bottom: 20px; pointer-events: auto;" },
+            // hover host: pin + reorder arrows inside reveal on strip hover (custom.css)
+            extraClasses: { reveal: "menu-strip-hover-host" },
+            extraProperties: {
+                title: inText,
+                style: "margin-left: auto; padding-top: 45px; padding-bottom: 20px; pointer-events: auto;",
+            },
             onClick: () => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;
                 }
                 this.focus();
             },
-        }, inIcon, span(inText), this.pin, this.closeButton);
+        }, inIcon, span(inText), this.pin, this.closeButton,
+            ...(this.moveUpButton ? [this.moveUpButton, this.moveDownButton] : []));
 
         // Define content div options without background/radius (now moved to mainDiv)
         const openDivOptions = {
@@ -129,7 +156,7 @@ class MultiPanelMenuTab extends MenuTab {
         this.mainDiv = new Div({
             id: this.fullId,
             extraClasses: {display: "", flex: "flex flex-row", position: "relative"},
-            extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;" }
+            extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;", "data-tab-id": item.id }
         }, this.openDiv, this.openButton);
 
         if (APPLICATION_CONTEXT.AppCache.get(`${this.id}-pinned`, false)){
@@ -168,7 +195,6 @@ class MultiPanelMenuTab extends MenuTab {
         this._focused = true;
         this.openDiv.setClass("display", "");
         this.mainDiv.setClass("pointer-events", "pointer-events-auto");
-        this.pin.setClass("display", "");
 
         // Apply background and radius to the wrapper to encompass both button and content
         this.mainDiv.setClass("background", this._bgClass);
@@ -180,7 +206,6 @@ class MultiPanelMenuTab extends MenuTab {
 
         this.openDiv.setClass("display", "hidden");
         this.mainDiv.setClass("pointer-events", "pointer-events-none");
-        this.pin.setClass("display","display-none");
 
         // Remove background and radius from wrapper
         this.mainDiv.setClass("background", "");

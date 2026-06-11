@@ -107,6 +107,9 @@
       },
       "bar": {
         "pinFullscreen": "Pin to Fullscreen Menu",
+        "close": "Close menu",
+        "moveUp": "Move menu up",
+        "moveDown": "Move menu down",
         "copy": "Copy",
         "edit": "Edit",
         "view": "View",
@@ -154,6 +157,7 @@
       "pluginsWelcome": "It looks like this is your first time here",
       "pluginsWelcomeDescription": "Please, go through <b>{{tutorial}}</b> tutorial to familiarize yourself with the environment.",
       "valueCopied": "The value was copied to your clipboard.",
+      "viewerDuplicateDataSource": "Two viewports ({{slots}}) display the same data source. Saving or exporting targets this data once — actions from either viewport write to the same output and may overwrite each other.",
       "scrollRequiresCtrl": "Hold Ctrl (or Cmd) and scroll to zoom the viewer.",
       "warnPageReload": "It seems you've made some work already. It might be wise to <a onclick=\"{{onExport}}\" class='btn-pointer'>export</a> your setup first. <a onclick=\"{{onRefresh}}\" class='btn-pointer'>Reload now.</a>",
       "warnPageReloadFailed": "There was an error when storing the viewer workspace. The viewer will reload, but please, notify the administrator.",

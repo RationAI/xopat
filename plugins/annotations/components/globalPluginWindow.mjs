@@ -157,8 +157,11 @@ export const globalPluginWindowMethods = {
         }, null, -Infinity);
 
         VIEWER_MANAGER.addHandler('viewer-destroy', (e) => {
-            this._unbindViewerFabricEvents(e.uniqueId);
-            const state = this._getViewerUI(e.uniqueId);
+            // Resolve by the viewer object (→ slot id). Using e.uniqueId would
+            // collide when two viewports share a background id and tear down the
+            // wrong viewport's board.
+            this._unbindViewerFabricEvents(e.viewer);
+            const state = this._getViewerUI(e.viewer);
             state?.boardPanel?.destroy?.();
         });
     },

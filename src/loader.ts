@@ -3399,6 +3399,24 @@ form.submit();
             this.active = null;
             this._singletonsKey = Symbol('singletons');
 
+            // uniqueIds we have already warned about sharing across viewports.
+            // See _warnOnDuplicateUniqueId — keyed by uniqueId, cleared on destroy
+            // once fewer than two viewports share it so re-duplication re-warns.
+            this._dupWarnedUids = new Set();
+            // Generic, viewer-wide IO-collision guard. Two viewports opened on the
+            // same data source share a uniqueId, and the IO pipeline scopes
+            // per-viewer state by uniqueId — so both write to the same sink. Warn
+            // once when that happens (affects any IO-capable plugin, not just one).
+            this.addHandler('viewer-create', (e: any) => this._warnOnDuplicateUniqueId(e?.viewer));
+            this.addHandler('viewer-destroy', (e: any) => {
+                const uid = e?.uniqueId;
+                if (!uid) return;
+                // viewer-destroy fires before the viewer leaves this.viewers, so
+                // exclude the departing one when counting the survivors.
+                const remaining = this.viewers.filter((v: any) => v && v !== e.viewer && v.uniqueId === uid).length;
+                if (remaining < 2) this._dupWarnedUids.delete(uid);
+            });
+
             // layout container
             this.layout = new UI.StretchGrid({ cols: "auto", gap: "2px" });
             this.layout.attachTo(document.getElementById("osd")); // attach once
@@ -3414,6 +3432,25 @@ form.submit();
             if (typeof v === "number") return this.viewers[v] || null;
             if (typeof v === "string") return this.getViewer(v) || null;
             return v || null;
+        }
+
+        /**
+         * Warn (once) when a viewer shares its data-derived uniqueId with another
+         * open viewport. Because the IO pipeline scopes per-viewer persistence by
+         * uniqueId, two such viewports auto-save/export to the same sink and can
+         * overwrite each other — a viewer-wide problem for any IO-capable plugin.
+         * @param {OpenSeadragon.Viewer} viewer the freshly-created viewer
+         */
+        _warnOnDuplicateUniqueId(viewer: OpenSeadragon.Viewer | undefined | null) {
+            const uid = (viewer as any)?.uniqueId;
+            if (!uid || uid === '__empty__') return;
+            const sharing = this.viewers.filter((v: any) => v && v.uniqueId === uid);
+            if (sharing.length < 2) return;
+            if (this._dupWarnedUids.has(uid)) return;
+            this._dupWarnedUids.add(uid);
+
+            const slots = sharing.map((v: any) => v.id).filter(Boolean).join(', ');
+            Dialogs.show($.t('messages.viewerDuplicateDataSource', { slots }), 12000, Dialogs.MSG_WARN);
         }
 
         _syncActiveViewState() {

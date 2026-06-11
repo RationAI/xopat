@@ -48,6 +48,16 @@ export class RightSideViewerMenu extends BaseComponent {
 
         this.menu = new MultiPanelMenu({
                 id: this.id + "-menu",
+                // global key: tab ids are stable across viewer cells, so all grid
+                // cells share one consistent, persisted panel order
+                orderCacheKey: "sideViewerMenu-tab-order",
+                onOrderChange: () => {
+                    for (const viewerMenu of Object.values(window.VIEWER_MANAGER?.viewerMenus || {})) {
+                        if (viewerMenu !== this) {
+                            viewerMenu?.menu?.applyTabOrder?.();
+                        }
+                    }
+                },
             }
         );
 

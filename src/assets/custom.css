@@ -196,6 +196,14 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     height: 0;
 }
 
+/* Side-menu vertical tab strip: pin + reorder arrows reveal on strip hover only */
+.menu-strip-hover-host .menu-strip-hover-item {
+    display: none;
+}
+.menu-strip-hover-host:hover .menu-strip-hover-item {
+    display: inline-flex;
+}
+
 .form-control {
     display: flex;
     flex-direction: column;

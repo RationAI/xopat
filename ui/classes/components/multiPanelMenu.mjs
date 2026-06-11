@@ -28,21 +28,89 @@ const { div } = van.tags
 class MultiPanelMenu extends Menu {
     /**
      * @param {*} options
+     * @param {string} [options.orderCacheKey] - AppCache key for persisting the user-chosen tab order;
+     *   enables arrow-based tab reordering when set
+     * @param {(ids: string[]) => void} [options.onOrderChange] - called after the order is persisted
      * @param  {...any} args - items to be added to the menu in format {id: string, icon: string or faIcon, title: string, body: string}
      */
     constructor(options = undefined, ...args) {
         super(options, ...args);
         this.classMap["base"] = "flex gap-1 h-full";
         this.classMap["flex"] = "flex-col";
+        this._orderCacheKey = options?.orderCacheKey;
+        this._onOrderChange = options?.onOrderChange;
     }
 
     create() {
         this.body.attachTo(this);
-        return div(
+        const node = div(
             { ...this.commonProperties, ...this.extraProperties },
             ...this.children
         );
+        if (this.supportsTabReorder) {
+            requestAnimationFrame(() => this.applyTabOrder());
+        }
+        return node;
     }
+
+    get supportsTabReorder() {
+        return !!this._orderCacheKey;
+    }
+
+    _cachedTabOrder() {
+        if (!this._orderCacheKey) return [];
+        const order = APPLICATION_CONTEXT.AppCache.get(this._orderCacheKey, []);
+        return Array.isArray(order) ? order : [];
+    }
+
+    _persistOrder() {
+        if (!this._orderCacheKey) return;
+        const body = this.getBodyDomNode();
+        if (!body) return;
+        const ids = Array.prototype.map.call(body.children, child => child.dataset.tabId).filter(Boolean);
+        APPLICATION_CONTEXT.AppCache.set(this._orderCacheKey, ids);
+        this._onOrderChange?.(ids);
+    }
+
+    /**
+     * Reorder the tab panels in the DOM to match the cached order. Tabs without
+     * a cached position keep their relative insertion order at the end, so
+     * late-loading plugin tabs slot in without disturbing the rest.
+     */
+    applyTabOrder() {
+        if (!this._orderCacheKey) return;
+        const body = this.getBodyDomNode();
+        if (!body) return;
+        const order = this._cachedTabOrder();
+        const rank = (node) => {
+            const index = order.indexOf(node.dataset.tabId);
+            return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+        };
+        const children = Array.from(body.children);
+        const sorted = [...children].sort((a, b) => rank(a) - rank(b));
+        if (sorted.some((node, i) => node !== children[i])) {
+            sorted.forEach(node => body.appendChild(node));
+        }
+    }
+
+    /**
+     * Move a tab panel one position up or down and persist the new order.
+     * @param {string} id tab id
+     * @param {"up"|"down"} direction
+     */
+    reorderTab(id, direction) {
+        const body = this.getBodyDomNode();
+        if (!body) return;
+        const node = Array.prototype.find.call(body.children, child => child.dataset.tabId === id);
+        if (!node) return;
+        if (direction === "up") {
+            if (node.previousElementSibling) body.insertBefore(node, node.previousElementSibling);
+        } else {
+            if (node.nextElementSibling) body.insertBefore(node.nextElementSibling, node);
+        }
+        this._persistOrder();
+    }
+
 
     /**
      *
@@ -85,6 +153,11 @@ class MultiPanelMenu extends Menu {
         }
 
         tab.contentDiv.attachTo(this.body);
+
+        if (this.supportsTabReorder) {
+            // slot late-added (plugin) tabs into their cached position
+            requestAnimationFrame(() => this.applyTabOrder());
+        }
         return tab;
     }
 

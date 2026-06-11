@@ -2124,9 +2124,9 @@ OSDAnnotations.AnnotationState = class {
 		this.context.cursor.mouseTime = Infinity;
 		this.context.cursor.isDown = false;
 
-		// if user selects mode by other method than hotkey, do not fire error on right click
-		// todo consider OSD filter event implementation and letting others decide whether to warn or not
-		if (noPresetError && (isLeftClick || !this.context._wasModeFiredByKey)) {
+		// warn only for left click: right click without a preset falls through to the
+		// canvas context menu, where a warning dialog would just fight the menu
+		if (noPresetError && isLeftClick) {
 			// todo outdated usage
 			this.context.viewer.raiseEvent('warn-user', {
 				originType: "module",

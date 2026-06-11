@@ -53,6 +53,15 @@ export interface CanvasContextMenuItem {
     children?: CanvasContextMenuItem[];
 }
 
+/**
+ * Return values:
+ * - item array — entries to aggregate into the menu;
+ * - `[]` / `null` / `undefined` — this provider has nothing to add, other
+ *   providers may still open the menu;
+ * - `false` — veto: the right-click was consumed by an interaction (drawing,
+ *   drag, control manipulation, …) and NO menu must open at all, regardless
+ *   of what other providers would contribute.
+ */
 export type CanvasContextProvider = (
     ctx: CanvasContextMenuContext
 ) => CanvasContextMenuItem[] | null | undefined | false;
@@ -112,7 +121,10 @@ class CanvasContextMenuRegistry {
         return true;
     }
 
-    /** Aggregate all provider items, separated by visual dividers. */
+    /**
+     * Aggregate all provider items, separated by visual dividers. Returns `[]`
+     * (so no menu opens) as soon as any provider vetoes by returning `false`.
+     */
     collect(ctx: CanvasContextMenuContext): CanvasContextMenuItem[] {
         const items: CanvasContextMenuItem[] = [];
         const sorted = [...this.providers.entries()]
@@ -126,6 +138,7 @@ class CanvasContextMenuRegistry {
                 console.error(`[CanvasContextMenu] provider "${id}" threw`, e);
                 continue;
             }
+            if (got === false) return [];
             if (Array.isArray(got) && got.length) {
                 if (items.length) {
                     // visual separator: window.DropDown renders entries with no `action` as headers

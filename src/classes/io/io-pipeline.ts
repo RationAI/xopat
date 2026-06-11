@@ -467,19 +467,26 @@ export class IOPipeline implements IOPipelineLike {
 
         // Rule 5: built-in fallback.
         if (cap?.kind === "bundle") {
-            // Slide-aware owners need a sink that keys by ctx.key. `post-data`
-            // (the legacy bundle default) is a single global slot — using it
-            // for per-viewer-background would collapse every slide's bundle
-            // into one blob and silently overwrite on each slide change.
-            // `session-memory` keys by ctx.key (= "<viewerId>::<backgroundId>")
-            // and is registered automatically by the bootstrap layer.
+            // Slide-aware owners key bundles by ctx.key ("<viewerId>::<backgroundId>").
+            // `session-memory` carries them across in-session slide switches;
+            // `post-data` ALSO keys by (viewer, background) (see post-data.ts
+            // keyFor), so it carries the bundle into the legacy HTML-form session
+            // export — without it, slide-aware owners (e.g. annotations) are
+            // silently dropped from file export (see IO_PIPELINE.md). `session-memory`
+            // is listed FIRST so that on a fresh load its empty read (which clears
+            // local state) runs before `post-data` restores the saved payload;
+            // reversed, the empty read would wipe the just-restored data.
             if (isViewerBackgroundScoped(owner.bundleScope)) {
-                if (this.sinks.has("session-memory")) return ["session-memory"];
-                console.warn(
-                    `[IO] owner "${ownerId}" uses bundleScope "${owner.bundleScope}" but the ` +
-                    `"session-memory" sink is not registered; bundle export/import will be inert.`,
-                );
-                return [];
+                const list: string[] = [];
+                if (this.sinks.has("session-memory")) list.push("session-memory");
+                if (this.sinks.has("post-data")) list.push("post-data");
+                if (!list.length) {
+                    console.warn(
+                        `[IO] owner "${ownerId}" uses bundleScope "${owner.bundleScope}" but neither ` +
+                        `"session-memory" nor "post-data" sink is registered; bundle export/import will be inert.`,
+                    );
+                }
+                return list;
             }
             return this.sinks.has("post-data") ? ["post-data"] : [];
         }
