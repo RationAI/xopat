@@ -1,0 +1,78 @@
+name: Build and deploy documentation site
+
+# Builds the Docusaurus site (docs/site) together with the JSDoc API
+# reference (served under /api/) and deploys both as the single GitHub
+# Pages site. Domain configuration comes from repository variables —
+# see docs/site/README.md for the full runbook:
+#   DOCS_URL  e.g. https://xopat.example.com  (custom domain; also drives CNAME)
+#   BASE_URL  '/' for a custom domain, '/xopat/' when on rationai.github.io/xopat
+#   DEMO_URL  e.g. https://demo.xopat.example.com (empty = demo page shows a notice)
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    paths:
+      - "docs/site/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Build JSDoc API reference
+        run: |
+          npm ci --ignore-scripts
+          npx grunt jsdoc --force
+
+      - name: Build documentation site
+        env:
+          DOCS_URL: ${{ vars.DOCS_URL }}
+          BASE_URL: ${{ vars.BASE_URL }}
+          DEMO_URL: ${{ vars.DEMO_URL }}
+        run: |
+          mkdir -p docs/site/static/api
+          cp -r docs/build/. docs/site/static/api/
+          cd docs/site
+          npm ci
+          npm run build
+          if [ -n "$DOCS_URL" ]; then
+            DOMAIN="${DOCS_URL#https://}"
+            DOMAIN="${DOMAIN#http://}"
+            echo "${DOMAIN%/}" > build/CNAME
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site/build
+
+  deploy:
+    # PR runs only validate the build; deployment happens from master pushes
+    # and manual dispatches.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

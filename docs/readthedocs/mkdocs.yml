@@ -1,3 +1,6 @@
+# DEPRECATED: this MkDocs/ReadTheDocs site is superseded by the Docusaurus
+# site in docs/site/ (deployed via .github/workflows/docs.yml). It is kept
+# only until the new docs domain is verified live, then it will be removed.
 site_name: xOpat - Explainable Open Pathology Analysis Tool
 repo_url: https://github.com/RationAI/xopat
 repo_name: RationAI/xopat

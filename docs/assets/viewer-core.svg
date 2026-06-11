@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 360" font-family="'Inter','Segoe UI',system-ui,sans-serif">
+  <!-- ============ TOP LABEL ============ -->
+  <text x="550" y="26" text-anchor="middle" font-size="11" font-weight="700" fill="#FF8B7A" letter-spacing="3">VIEWER CORE · BUILT-IN CAPABILITIES</text>
+
+  <!-- ============ ROW 1 ============ -->
+  <!-- 1. HTTP + RPC -->
+  <g>
+    <rect x="25" y="55" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="43" y1="77" x2="73" y2="77" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="43" y="108" font-size="16" font-weight="700" fill="#E2E8F5">HTTP + RPC</text>
+    <text x="43" y="132" font-size="11" fill="#9B7CFF">Unified upstream client</text>
+    <text x="43" y="148" font-size="11" fill="#9B7CFF">auth · CSRF · retries</text>
+  </g>
+
+  <!-- 2. Proxy Routing -->
+  <g>
+    <rect x="285" y="55" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="303" y1="77" x2="333" y2="77" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="303" y="108" font-size="16" font-weight="700" fill="#E2E8F5">Proxy Routing</text>
+    <text x="303" y="132" font-size="11" fill="#9B7CFF">Named server-side aliases</text>
+    <text x="303" y="148" font-size="11" fill="#9B7CFF">credentials never hit the browser</text>
+  </g>
+
+  <!-- 3. Scripting API -->
+  <g>
+    <rect x="545" y="55" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="563" y1="77" x2="593" y2="77" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="563" y="108" font-size="16" font-weight="700" fill="#E2E8F5">Scripting API</text>
+    <text x="563" y="132" font-size="11" fill="#9B7CFF">Sandboxed worker runtime</text>
+    <text x="563" y="148" font-size="11" fill="#9B7CFF">safe for LLM &amp; user code</text>
+  </g>
+
+  <!-- 4. UI System -->
+  <g>
+    <rect x="805" y="55" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="823" y1="77" x2="853" y2="77" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="823" y="108" font-size="16" font-weight="700" fill="#E2E8F5">UI System</text>
+    <text x="823" y="132" font-size="11" fill="#9B7CFF">Van.js · DaisyUI · BaseComponent</text>
+    <text x="823" y="148" font-size="11" fill="#9B7CFF">reactive · themed · consistent</text>
+  </g>
+
+  <!-- ============ ROW 2 ============ -->
+  <!-- 5. Event System -->
+  <g>
+    <rect x="25" y="180" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="43" y1="202" x2="73" y2="202" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="43" y="233" font-size="16" font-weight="700" fill="#E2E8F5">Event System</text>
+    <text x="43" y="257" font-size="11" fill="#9B7CFF">Lifecycle events &amp; broadcasts</text>
+    <text x="43" y="273" font-size="11" fill="#9B7CFF">wire into init · open · load</text>
+  </g>
+
+  <!-- 6. History Stack -->
+  <g>
+    <rect x="285" y="180" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="303" y1="202" x2="333" y2="202" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="303" y="233" font-size="16" font-weight="700" fill="#E2E8F5">History Stack</text>
+    <text x="303" y="257" font-size="11" fill="#9B7CFF">Undo/redo with providers</text>
+    <text x="303" y="273" font-size="11" fill="#9B7CFF">auto-recorded from IO</text>
+  </g>
+
+  <!-- 7. Multi-Viewport -->
+  <g>
+    <rect x="545" y="180" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="563" y1="202" x2="593" y2="202" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="563" y="233" font-size="16" font-weight="700" fill="#E2E8F5">Multi-Viewport</text>
+    <text x="563" y="257" font-size="11" fill="#9B7CFF">Concurrent OSD viewers</text>
+    <text x="563" y="273" font-size="11" fill="#9B7CFF">per-viewer singletons &amp; scope</text>
+  </g>
+
+  <!-- 8. Storage Middleware -->
+  <g>
+    <rect x="805" y="180" width="250" height="100" rx="12" fill="#1A2160" stroke="#7C5CFF" stroke-width="1.5"/>
+    <line x1="823" y1="202" x2="853" y2="202" stroke="#FF8B7A" stroke-width="2"/>
+    <text x="823" y="233" font-size="16" font-weight="700" fill="#E2E8F5">Storage Middleware</text>
+    <text x="823" y="257" font-size="11" fill="#9B7CFF">Pluggable persistence</text>
+    <text x="823" y="273" font-size="11" fill="#9B7CFF">cache · cookies · data</text>
+  </g>
+
+  <!-- ============ FOOTER ============ -->
+  <text x="550" y="320" text-anchor="middle" font-size="11" fill="#9B7CFF" font-style="italic">the core is a broker · plugins focus on features</text>
+</svg>

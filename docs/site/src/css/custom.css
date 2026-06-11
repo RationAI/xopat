@@ -1,0 +1,34 @@
+/**
+ * xOpat docs theme overrides. Palette echoes the previous MkDocs Material site
+ * (blue-grey primary, deep-orange accent).
+ */
+
+:root {
+  --ifm-color-primary: #546e7a;
+  --ifm-color-primary-dark: #4b6370;
+  --ifm-color-primary-darker: #475d69;
+  --ifm-color-primary-darkest: #3a4d57;
+  --ifm-color-primary-light: #5d7986;
+  --ifm-color-primary-lighter: #627f8c;
+  --ifm-color-primary-lightest: #748f9c;
+  --ifm-link-color: #ff5722;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #90a4ae;
+  --ifm-color-primary-dark: #7f96a1;
+  --ifm-color-primary-darker: #768f9b;
+  --ifm-color-primary-darkest: #5d7682;
+  --ifm-color-primary-light: #a1b2bb;
+  --ifm-color-primary-lighter: #aab9c1;
+  --ifm-color-primary-lightest: #c5cfd5;
+  --ifm-link-color: #ff8a65;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Catalogue badges spacing */
+.badge + .badge {
+  margin-left: 0.35rem;
+}
