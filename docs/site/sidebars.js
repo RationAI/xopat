@@ -16,16 +16,35 @@ const sidebars = {
       type: 'category',
       label: 'Getting Started',
       items: [
-        'generated/getting-started/overview',
         'generated/getting-started/quick-start',
+        'generated/getting-started/glossary',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Showcases',
+      // Landing page for now; concrete showcase pages will be added under
+      // generated/showcases/ (mirror new entries in scripts/lib/manifest.mjs).
+      items: [
+        'generated/showcases/overview',
       ],
     },
     {
       type: 'category',
       label: 'Deployment',
       items: [
-        'generated/deployment/image-server',
-        'generated/deployment/xopat-deployment',
+        'generated/deployment/overview',
+        {
+          type: 'category',
+          label: 'Custom Docker Compose',
+          items: [
+            'generated/deployment/image-server',
+            'generated/deployment/xopat-deployment',
+          ],
+        },
+        'generated/deployment/jupyter',
+        'generated/deployment/collab-notebook',
+        'generated/deployment/generic',
         'generated/deployment/integration',
       ],
     },
@@ -34,7 +53,8 @@ const sidebars = {
       label: 'Configuration',
       items: [
         'generated/configuration/viewer-configuration',
-        'generated/configuration/session',
+        // Live Sessions hidden until live-collaboration is developed (see manifest.mjs).
+        // 'generated/configuration/session',
       ],
     },
     {
@@ -55,15 +75,15 @@ const sidebars = {
         'generated/developer-guides/user-roles',
         'generated/developer-guides/auth-proxy-users',
         'generated/developer-guides/npm-modules-plugins',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'UI System',
-      items: [
-        'generated/ui/overview',
-        'generated/ui/classes',
-        'generated/ui/services',
+        {
+          type: 'category',
+          label: 'UI System',
+          items: [
+            'generated/ui/overview',
+            'generated/ui/classes',
+            'generated/ui/services',
+          ],
+        },
       ],
     },
     {

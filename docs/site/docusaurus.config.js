@@ -108,7 +108,7 @@ const config = {
           {
             title: 'Documentation',
             items: [
-              {label: 'Getting Started', to: '/generated/getting-started/overview'},
+              {label: 'Getting Started', to: '/generated/getting-started/quick-start'},
               {label: 'Changelog', to: '/generated/intro/changelog'},
               {label: 'API Reference', href: `pathname://${BASE_URL}api/`, target: '_self'},
             ],

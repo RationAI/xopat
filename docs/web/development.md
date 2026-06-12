@@ -46,9 +46,10 @@ or modules only
 This will create ``index.min.js`` files in respective directories. The viewer core recognizes
 existence of these files and loads them instead of all the source scripts.
 
-!!! warning
-    For development, you
-    must set `production: false` static client configuration so that these files are ignored.
+:::warning
+For development, you
+must set `production: false` static client configuration so that these files are ignored.
+:::
 
 More documentation is coming. For more details on components, see README files in respective directories.
 For details on integration, see ``INTEGRATION.md``.

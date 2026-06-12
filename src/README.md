@@ -256,11 +256,11 @@ Established by `src/app.ts` and `src/loader.ts`. These are the supported, ambien
 | `singletonModule(id)` | `src/loader.ts:313` | Returns (and lazily instantiates) the module singleton. |
 | `viewerSingletonModule(className, viewerLike)` | `src/loader.ts:330` | Returns a per-viewer `XOpatViewerSingleton`. |
 
-> `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
+> `window.VIEWER` is **not** a stable handle — it tracks whichever viewer most recently took focus, which is the wrong instance whenever multi-view is active. Resolve the right viewer with `VIEWER_MANAGER.get(...)`, with `viewerSingletonModule(...)`, or from `e.eventSource` on broadcast events. Likewise, do **not** store long-lived `TiledImage` references unless you own them, and prefer `VIEWER_MANAGER` events over reaching for the focused viewer. When you only need to retarget one viewer, use `updateViewerSelection(...)` instead of rebuilding the whole session. See [`MULTI_VIEWPORTS.md`](MULTI_VIEWPORTS.md).
 
 ### Viewer Open API
 
-The runtime opening pipeline is class-based and lives under `src/classes/app/`. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
+xOpat treats viewer opening as an **explicit transaction** rather than a loose mix of config mutation and OpenSeadragon world edits. The runtime opening pipeline is class-based and lives under `src/classes/app/` — viewer rebinding, visualization runtime checks, synthetic-open handling, inspector integration, and session lifecycle all stay there, and `src/app.ts` is intentionally reduced to bootstrap/composition. The public entrypoints exposed to plugins/modules remain global through `window.APPLICATION_CONTEXT`.
 
 - `APPLICATION_CONTEXT.openViewerWith(data?, background?, visualizations?, bgSpec?, vizSpec?, opts?)`
     - Main transaction entrypoint.

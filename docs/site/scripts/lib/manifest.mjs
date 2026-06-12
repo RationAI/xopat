@@ -28,15 +28,22 @@ export const MANIFEST = [
   {src: 'README.md', dest: 'generated/intro/about.md', title: 'About xOpat', label: 'About'},
   {src: 'CHANGELOG.md', dest: 'generated/intro/changelog.md', title: 'Changelog'},
 
-  {src: 'docs/web/overview.md', dest: 'generated/getting-started/overview.md', title: 'Overview'},
   {src: 'docs/web/quick_start.md', dest: 'generated/getting-started/quick-start.md', title: 'Quick Start'},
+  {src: 'docs/web/glossary.md', dest: 'generated/getting-started/glossary.md', title: 'Glossary'},
 
+  {src: 'docs/web/showcases.md', dest: 'generated/showcases/overview.md', title: 'Showcases', label: 'Overview'},
+
+  {src: 'docs/web/deployment.md', dest: 'generated/deployment/overview.md', title: 'Deployment Overview', label: 'Overview'},
   {src: 'docs/web/image_server_deployment.md', dest: 'generated/deployment/image-server.md', title: 'Image Server Deployment'},
   {src: 'docs/web/xopat_deployment.md', dest: 'generated/deployment/xopat-deployment.md', title: 'xOpat Deployment'},
-  {src: 'INTEGRATION.md', dest: 'generated/deployment/integration.md', title: 'Integration'},
+  {src: 'docs/web/jupyter_deployment.md', dest: 'generated/deployment/jupyter.md', title: 'Jupyter Integration'},
+  {src: 'docs/web/collab_notebook_deployment.md', dest: 'generated/deployment/collab-notebook.md', title: 'Collaboratory Notebook Integration', label: 'Collaboratory Notebook'},
+  {src: 'docs/web/generic_deployment.md', dest: 'generated/deployment/generic.md', title: 'Generic Deployment'},
+  {src: 'INTEGRATION.md', dest: 'generated/deployment/integration.md', title: 'Administration & Integration', label: 'Administration & Integration'},
 
   {src: 'docs/web/xopat_configuration.md', dest: 'generated/configuration/viewer-configuration.md', title: 'Viewer Configuration'},
-  {src: 'src/SESSION.md', dest: 'generated/configuration/session.md', title: 'Live Sessions'},
+  // Live Sessions (src/SESSION.md) — live-collaboration is not yet developed/shipped; hidden until ready.
+  // {src: 'src/SESSION.md', dest: 'generated/configuration/session.md', title: 'Live Sessions'},
 
   {src: 'DEVELOPMENT.md', dest: 'generated/developer-guides/development-setup.md', title: 'Development Setup'},
   {src: 'docs/web/development.md', dest: 'generated/developer-guides/development-tasks.md', title: 'Development Tasks'},
