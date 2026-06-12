@@ -20,13 +20,6 @@ export const viewerMenuMethods = {
         this._updateViewerControls();
     },
 
-    setEdgeCursorNavigate(enable, viewerId) {
-        enable = this.context.getFabric(viewerId)?.setCloseEdgeMouseNavigation(enable) || false;
-        this.setOption('edgeCursorNavigate', enable);
-        this._updateViewerControls(viewerId);
-        return enable;
-    },
-
     _resolveViewerId(viewerOrId = undefined) {
         // Per-viewer UI/runtime state is keyed by the collision-free slot id
         // (viewer.id, e.g. "osd-0"), NOT the data-derived viewer.uniqueId. Two
@@ -230,12 +223,6 @@ export const viewerMenuMethods = {
                 checked: !!this.context.getAnnotationCommonVisualProperty('modeOutline'),
                 onchange: (e) => this.setDrawOutline(e.currentTarget.checked)
             });
-            state.edgeButton = input({
-                type: 'checkbox',
-                class: 'checkbox checkbox-sm checkbox-primary',
-                checked: !!this.getOption('edgeCursorNavigate', true),
-                onchange: (e) => this.setEdgeCursorNavigate(e.currentTarget.checked, viewerId)
-            });
             state.settingsButton = iconButton('ph-gear', this.t('annotations.viewerMenu.settings'), () => {
                 document.getElementById(`${viewerId}-annotations-settings-panel`)?.classList.toggle('hidden');
             });
@@ -295,10 +282,6 @@ export const viewerMenuMethods = {
                     label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
                         state.outlineButton,
                         span(this.t('annotations.viewerMenu.outlineOnly'))
-                    ),
-                    label({ class: 'flex items-center gap-2 cursor-pointer text-sm' },
-                        state.edgeButton,
-                        span(this.t('annotations.viewerMenu.edgeNavigation'))
                     )
                 ),
                 div({ class: 'flex flex-col gap-2.5 pt-2 border-t border-base-300/60' },
@@ -899,14 +882,12 @@ export const viewerMenuMethods = {
 
             state.enableButton?.classList.toggle('btn-active', enabled);
             if (state.outlineButton) state.outlineButton.checked = !!this.context.getAnnotationCommonVisualProperty('modeOutline');
-            if (state.edgeButton) state.edgeButton.checked = !!this.getOption('edgeCursorNavigate', true);
 
             if (state.borderInput) state.borderInput.value = String(this.context.getAnnotationCommonVisualProperty('originalStrokeWidth'));
             if (state.opacityInput) state.opacityInput.value = String(this.context.getAnnotationCommonVisualProperty('opacity'));
 
             const disableTargets = [
                 state.outlineButton,
-                state.edgeButton,
                 state.borderInput,
                 state.opacityInput,
                 state.presetClasses,

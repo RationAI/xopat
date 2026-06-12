@@ -175,9 +175,6 @@ class AnnotationsGUI extends XOpatPlugin {
         }
 
         this.enablePresetModify = this.getOptionOrConfiguration('enablePresetModify', 'enablePresetModify', true);
-        if (this.getOption('edgeCursorNavigate', true)) {
-            this.context.setCloseEdgeMouseNavigation(true);
-        }
     }
 
     setupActiveTissue(bgImageConfigObject) {

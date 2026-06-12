@@ -528,6 +528,18 @@ export function initXOpat(PLUGINS: Record<string, XOpatElementItem>, MODULES: Re
                 el instanceof HTMLSelectElement || (el as any).isContentEditable);
         }
 
+        // Ctrl/Cmd+S => global save. Handled on key-down (not key-up) so
+        // preventDefault() suppresses the browser's native "Save page" dialog,
+        // which fires on keydown.
+        VIEWER_MANAGER.addHandler('key-down', function (e: KeyboardEvent & { focusCanvas: boolean }) {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
+                if (isEditableTarget(e.target)) return;
+                e.preventDefault();
+                // Async; fire-and-forget — save() manages its own loading UI and toasts.
+                UTILITIES.save();
+            }
+        });
+
         VIEWER_MANAGER.addHandler('key-up', function (e: KeyboardEvent & { focusCanvas: boolean }) {
             if (e.focusCanvas) {
                 if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {

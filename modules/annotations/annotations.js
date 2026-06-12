@@ -807,11 +807,6 @@ window.OSDAnnotations = class extends XOpatModuleSingleton {
         object.zooming(graphicZoom, zoom);
 	}
 
-    setCloseEdgeMouseNavigation(enabled) {
-        for (let instance of OSDAnnotations.FabricWrapper.instances()) {
-            instance.setCloseEdgeMouseNavigation(enabled);
-        }
-    }
 	/************************ Canvas object modification utilities *******************************/
 
     _generateInternalId() {
@@ -2228,14 +2223,6 @@ OSDAnnotations.AnnotationState = class {
     }
 
 	/**
-	 * Determines if edge mouse navigation is supported
-	 * @returns {boolean} true if edge navigation is supported
-	 */
-	supportsEdgeNavigation() {
-		return true;
-	}
-
-	/**
 	 * Determines whether zoom animation is supported
 	 * @returns {boolean} true if zoom animation is supported
 	 */
@@ -2426,10 +2413,6 @@ OSDAnnotations.StateFreeFormTool = class extends OSDAnnotations.AnnotationState 
 		this.context.setOSDTracking(true);
 		this.context.fabric.rerender();
 		return true;
-	}
-
-	supportsEdgeNavigation() {
-		return false;
 	}
 
 	supportsZoomAnimation() {
@@ -2774,10 +2757,6 @@ OSDAnnotations.StateEditSelection = class extends OSDAnnotations.AnnotationState
     }
 
     rejects(e) {
-        return false;
-    }
-
-    supportsEdgeNavigation() {
         return false;
     }
 
