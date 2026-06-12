@@ -1647,7 +1647,7 @@
             {
                 class: () => [
                     "btn btn-xs border-none px-1",
-                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : "bg-base-content/10 hover:bg-base-content/20"
+                    enabled.val ? (isRef.val ? "btn-primary" : "btn-success") : ""
                 ].join(" "),
                 onclick: onClick,
                 title: () => (busy.val ? "Cancel calibration" : (enabled.val ? "Disable sync" : "Enable sync"))
@@ -1724,7 +1724,7 @@
         // 1) Collapse / expand chevron — leftmost.
         const toggle = document.createElement("button");
         toggle.type = "button";
-        toggle.className = "btn btn-xs border-none px-0.5 bg-base-content/10 hover:bg-base-content/20";
+        toggle.className = "btn btn-xs border-none px-0.5";
         toggle.title = "Minimize";
         toggle.innerHTML = '<span class="font-bold" style="font-size:10px;line-height:1">▾</span>';
         header.appendChild(toggle);

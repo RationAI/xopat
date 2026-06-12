@@ -57,8 +57,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraClasses: { reveal: "menu-strip-hover-item" },
-            extraProperties: { title: $.t('main.bar.pinFullscreen'), style: "position: absolute; top: 30px; writing-mode: horizontal-tb;"},
+            extraProperties: { title: $.t('main.bar.pinFullscreen') },
             onClick: (event) => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;
@@ -84,7 +83,7 @@ class MultiPanelMenuTab extends MenuTab {
             type: Button.TYPE.NONE,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.HORIZONTAL,
-            extraProperties: { title: $.t('main.bar.close'), style: "position: absolute; top: 0px;"},
+            extraProperties: { title: $.t('main.bar.close') },
             onClick: (event) => {
                 if (window.innerWidth < this.maxMobileWidth) {
                     return;
@@ -96,14 +95,12 @@ class MultiPanelMenuTab extends MenuTab {
         }, crossIcon)
 
         if (this.parent.supportsTabReorder) {
-            const reorderButton = (direction, icon, titleKey, bottom) => new Button({
+            const reorderButton = (direction, icon, titleKey) => new Button({
                 id: this.parent.id + "-b-move-" + direction + "-" + item.id,
                 type: Button.TYPE.NONE,
                 size: Button.SIZE.TINY,
                 orientation: Button.ORIENTATION.HORIZONTAL,
-                extraClasses: { reveal: "menu-strip-hover-item" },
-                // horizontal-tb: undo the strip's sideways writing-mode so carets point up/down
-                extraProperties: { title: $.t(titleKey), style: `position: absolute; bottom: ${bottom}; writing-mode: horizontal-tb;` },
+                extraProperties: { title: $.t(titleKey) },
                 onClick: (event) => {
                     event.stopPropagation();
                     if (window.innerWidth < this.maxMobileWidth) {
@@ -112,19 +109,21 @@ class MultiPanelMenuTab extends MenuTab {
                     this.parent.reorderTab(this.id, direction);
                 }
             }, new PhIcon({ name: icon }));
-            this.moveUpButton = reorderButton("up", "ph-caret-up", "main.bar.moveUp", "30px");
-            this.moveDownButton = reorderButton("down", "ph-caret-down", "main.bar.moveDown", "5px");
+            this.moveUpButton = reorderButton("up", "ph-caret-up", "main.bar.moveUp");
+            this.moveDownButton = reorderButton("down", "ph-caret-down", "main.bar.moveDown");
         }
 
+        // Clickable header (icon + title). The sideways writing-mode comes from
+        // VERTICAL_RIGHT; it lives in the middle flex region so it can never be
+        // overlapped by the control buttons regardless of panel height.
         this.openButton = new Button({
             id: this.parent.id + "-b-opened-" + item.id,
             size: Button.SIZE.TINY,
             orientation: Button.ORIENTATION.VERTICAL_RIGHT,
-            // hover host: pin + reorder arrows inside reveal on strip hover (custom.css)
-            extraClasses: { reveal: "menu-strip-hover-host" },
+            extraClasses: { strip: "menu-strip-header" },
             extraProperties: {
                 title: inText,
-                style: "margin-left: auto; padding-top: 45px; padding-bottom: 20px; pointer-events: auto;",
+                style: "margin-left: auto; padding-top: 20px; padding-bottom: 20px; pointer-events: auto;",
             },
             onClick: () => {
                 if (window.innerWidth < this.maxMobileWidth) {
@@ -132,8 +131,33 @@ class MultiPanelMenuTab extends MenuTab {
                 }
                 this.focus();
             },
-        }, inIcon, span(inText), this.pin, this.closeButton,
-            ...(this.moveUpButton ? [this.moveUpButton, this.moveDownButton] : []));
+        }, inIcon, span(inText));
+
+        // Hover flyout: pin + reorder arrows form a second column beside the
+        // always-visible close button. It is absolutely positioned, so
+        // revealing it on hover never reflows the strip (no layout jump), and
+        // it is a descendant of the hover host so moving the cursor from the
+        // strip onto it keeps it open.
+        const flyoutChildren = [this.pin];
+        if (this.moveUpButton) {
+            flyoutChildren.push(this.moveUpButton, this.moveDownButton);
+        }
+        const flyout = new Div(
+            { extraClasses: { reveal: "menu-strip-hover-item", base: "menu-strip-flyout flex flex-col items-center" } },
+            ...flyoutChildren
+        );
+
+        // The strip is a plain div (not a button) so the control buttons are
+        // siblings of the header button rather than invalid nested <button>s,
+        // and it is the hover host that reveals the flyout. The close button
+        // stays visible at the top; the header fills the middle.
+        this.strip = new Div(
+            {
+                id: this.parent.id + "-strip-" + item.id,
+                extraClasses: { reveal: "menu-strip-hover-host", base: "menu-strip flex flex-col items-center" },
+            },
+            this.closeButton, this.openButton, flyout
+        );
 
         // Define content div options without background/radius (now moved to mainDiv)
         const openDivOptions = {
@@ -157,7 +181,7 @@ class MultiPanelMenuTab extends MenuTab {
             id: this.fullId,
             extraClasses: {display: "", flex: "flex flex-row", position: "relative"},
             extraProperties: { style: "margin-top: 5px; margin-bottom: 5px;", "data-tab-id": item.id }
-        }, this.openDiv, this.openButton);
+        }, this.openDiv, this.strip);
 
         if (APPLICATION_CONTEXT.AppCache.get(`${this.id}-pinned`, false)){
             this.parent._pinnedTabs[this.id] = true;
@@ -176,9 +200,9 @@ class MultiPanelMenuTab extends MenuTab {
     }
 
     removeTab() {
-        this.contentDiv.remove();
-        this.openButton.remove();
-        this.openDiv.remove();
+        // mainDiv is the true root (wraps content + strip); removing it detaches
+        // the whole subtree, so the individual child removals are unnecessary.
+        this.mainDiv.remove();
     }
 
     focus() {

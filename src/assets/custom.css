@@ -204,6 +204,46 @@ body:has(#fullscreen-menu-content:not(.hidden)) .draggable {
     display: inline-flex;
 }
 
+/* Side-menu vertical tab strip: the always-visible close button sits at the
+   top and the clickable header fills the middle (clipping its sideways title).
+   The hover-only controls live in an absolutely-positioned flyout (below), so
+   revealing them never reflows the strip. */
+.menu-strip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 2.2rem;
+    margin-left: auto;
+    pointer-events: auto;
+}
+.menu-strip-header {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+/* reconcile the sideways header button with the flex middle region */
+.menu-strip-header.b-vertical-right {
+    width: 100%;
+    height: auto;
+}
+/* Hover flyout: a second control column (pin + reorder arrows) beside the
+   close button, revealed on strip hover. Absolutely positioned just left of
+   the strip so it never reflows it, and a descendant of the hover host so the
+   cursor can move from the strip onto it without it disappearing. */
+.menu-strip-flyout {
+    position: absolute;
+    top: 0;
+    right: 100%;
+    z-index: 30;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.125rem;
+    border-radius: var(--rounded-btn, 0.5rem) 0 0 var(--rounded-btn, 0.5rem);
+    background-color: var(--fallback-b2, oklch(var(--b2) / 1));
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
 .form-control {
     display: flex;
     flex-direction: column;
