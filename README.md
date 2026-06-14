@@ -3,7 +3,12 @@
   <sup>A web-based <b>whole-slide imaging framework</b> — not a viewer, but the viewer you configure to your use-case.</sup>
 </p>
 
-![The xOpat Viewer](docs/assets/xopat-banner.png)
+![The xOpat Viewer](docs/assets/xopat-banner-v3.png)
+
+> ⚠️ **This is xOpat v3 — an alpha release.** APIs and configuration are still
+> evolving and may change without notice. For production use, the older but
+> stable **v2** line lives on the [`archive/v2`](https://github.com/RationAI/xopat/tree/archive/v2)
+> branch.
 
 ## What is xOpat?
 
@@ -65,8 +70,8 @@ annotations plugin. Add a plugin to wire up whatever else you need.
 | **Build a plugin or module** | [plugins/README.md](plugins/README.md) · [modules/README.md](modules/README.md) |
 | **Understand the core** | [Core architecture](src/README.md) |
 
-📚 **Full documentation:** <https://rationai.github.io/xopat> &nbsp;·&nbsp;
-🔎 **API reference:** <https://rationai.github.io/xopat/api/>
+📚 **Full documentation:** <https://xopat.org> &nbsp;·&nbsp;
+🔎 **API reference:** <https://xopat.org/api/>
 
 ## Sponsors
 
