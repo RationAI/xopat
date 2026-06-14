@@ -31,7 +31,7 @@ if (!fs.existsSync(apiIndex)) {
     '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>xOpat API Reference</title></head>' +
     '<body><p>The API reference is generated from JSDoc during the CI build. ' +
     'Run <code>npm run build-docs-api</code> in the repository root and copy <code>docs/build/</code> here, ' +
-    'or browse it at <a href="https://rationai.github.io/xopat/">rationai.github.io/xopat</a>.</p></body></html>'
+    'or browse it at <a href="https://xopat.org/api/">xopat.org/api</a>.</p></body></html>'
   );
   console.log('[sync-docs] wrote placeholder static/api/index.html (JSDoc is built in CI)');
 }

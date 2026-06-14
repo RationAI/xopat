@@ -5,7 +5,7 @@ xOpat is a JavaScript application. Two reference backends ship in the repo and e
 - **`server/node/`** — canonical Node.js backend (see `server/node/README.md`). Started with `npm run s-node` (production) or `npm run dev` (`server/utils/node/dev-mode.js`).
 - **`server/php/`** — legacy PHP backend (entrypoint `server/php/index.php` → `server/php/init.php`).
 
-Both backends inject the same runtime configuration into the browser and provide the proxy/auth/storage endpoints the client expects. A high-level integration story lives in [`../INTEGRATION.md`](../INTEGRATION.md); operational/deployment docs at <https://xopat.readthedocs.io>.
+Both backends inject the same runtime configuration into the browser and provide the proxy/auth/storage endpoints the client expects. A high-level integration story lives in [`../INTEGRATION.md`](../INTEGRATION.md); operational/deployment docs at <https://xopat.org>.
 
 ## Configuration
 

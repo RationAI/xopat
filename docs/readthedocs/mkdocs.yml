@@ -33,7 +33,7 @@ nav:
   #- 'Deployment':
   #- 'User guide':
   - 'Changelog': 'CHANGELOG.md'
-  - 'API': 'https://rationai.github.io/xopat/'
+  - 'API': 'https://xopat.org/api/'
 
 markdown_extensions:
   - attr_list
