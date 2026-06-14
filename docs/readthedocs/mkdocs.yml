@@ -50,6 +50,7 @@ markdown_extensions:
   - admonition
   - pymdownx.details
 theme:
+  custom_dir: overrides   # path is relative to this mkdocs.yml; holds the "outdated" announcement bar
   logo: src/assets/android-chrome-512x512.png
   favicon: src/assets/favicon-32x32.png
   icon:
