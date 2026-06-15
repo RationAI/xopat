@@ -48,10 +48,12 @@ export function makeElement(kind: QuestionnaireElement["kind"]): QuestionnaireEl
   if (kind === "select" || kind === "multiselect" || kind === "radio") {
     return { ...base, kind, options: [{ value: "option_1", label: "Option 1" }, { value: "option_2", label: "Option 2" }] } as QuestionnaireSelectElement;
   }
-  if (kind === "content") return { ...base, kind, html: "<p>Informational content</p>" } as QuestionnaireContentElement;
+  if (kind === "content") return { ...base, kind, variant: "text", text: "Informational content" } as QuestionnaireContentElement;
   if (kind === "checkbox" || kind === "toggle") base.defaultValue = false;
   if (kind === "rating") return { ...base, kind, maxRating: 5 } as QuestionnaireRatingElement;
   if (kind === "file") return { ...base, kind, accept: "", multiple: false } as QuestionnaireElement;
+  if (kind === "measurement") return { ...base, kind, units: ["mm", "µm", "%", "count"] } as QuestionnaireElement;
+  if (kind === "roi") return { ...base, kind, shape: "rect" } as QuestionnaireElement;
   if (kind === "repeat") {
     return { ...base, kind, addLabel: "Add item", minItems: 0, maxItems: 10, elements: [{ id: uid("repeat_text"), kind: "text", name: sanitizeName(uid("repeat_text")), label: "Item", width: "full", validation: {} }] } as QuestionnaireRepeatElement;
   }
@@ -110,7 +112,7 @@ function normalizePageAnimation(value: any) {
 }
 
 function normalizeElement(value: any, pageId: string, index: number): QuestionnaireElement {
-  const allowed: QuestionnaireElement["kind"][] = ["text","textarea","number","email","date","tel","url","select","multiselect","checkbox","radio","toggle","content","rating","file","repeat","matrix"];
+  const allowed: QuestionnaireElement["kind"][] = ["text","textarea","number","email","date","tel","url","select","multiselect","checkbox","radio","toggle","content","rating","file","repeat","matrix","measurement","roi"];
   const kind = allowed.includes(value?.kind) ? value.kind : "text";
   const base: QuestionnaireBaseElement = {
     id: typeof value?.id === "string" ? value.id : `${pageId}_element_${index + 1}`,
@@ -128,9 +130,19 @@ function normalizeElement(value: any, pageId: string, index: number): Questionna
   if (kind === "select" || kind === "multiselect" || kind === "radio") {
     return { ...base, kind, options: Array.isArray(value?.options) ? value.options.filter(Boolean).map((option: any, optionIndex: number) => ({ value: String(option?.value ?? `option_${optionIndex + 1}`), label: String(option?.label ?? option?.value ?? `Option ${optionIndex + 1}`) })) : [] };
   }
-  if (kind === "content") return { ...base, kind, html: typeof value?.html === "string" ? value.html : "" } as QuestionnaireContentElement;
+  if (kind === "content") {
+    const variant = value?.variant === "header" ? "header" : "text";
+    // Migrate legacy raw `html` to plain `text` (strips tags) — content is now
+    // rendered with textContent, never innerHTML. See plugin.ts renderElement.
+    const text = typeof value?.text === "string"
+      ? value.text
+      : typeof value?.html === "string" ? value.html.replace(/<[^>]*>/g, "").trim() : "";
+    return { ...base, kind, variant, text } as QuestionnaireContentElement;
+  }
   if (kind === "rating") return { ...base, kind, maxRating: Math.max(1, Number(value?.maxRating || 5)) } as QuestionnaireRatingElement;
   if (kind === "file") return { ...base, kind, accept: typeof value?.accept === "string" ? value.accept : "", multiple: !!value?.multiple } as QuestionnaireElement;
+  if (kind === "measurement") return { ...base, kind, units: Array.isArray(value?.units) && value.units.length ? value.units.map(String) : ["mm", "µm", "%", "count"] } as QuestionnaireElement;
+  if (kind === "roi") return { ...base, kind, shape: value?.shape === "polygon" ? "polygon" : "rect" } as QuestionnaireElement;
   if (kind === "repeat") {
     return {
       ...base,

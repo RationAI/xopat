@@ -4,8 +4,8 @@
     "includes" : [
         "profile.js"
     ],
-    "version": "1.0.0",
-    "modules": ["snapshots", "menu-pages"],
+    "version": "2.0.0",
+    "modules": ["recorder", "menu-pages"],
     "hidden": true,
-    "permaLoad": false
+    "permaLoad": true
 }

@@ -3,84 +3,122 @@ window.AdvancedMenuPages = class extends XOpatModule {
     vegaInit = {};
 
     /**
-     * Create AdvancedMenuPages instance
-     * @param {string} moduleId unique id of this module instance.
+     * Create AdvancedMenuPages instance.
+     * @param {string} ownerId id of the owning element (e.g. the plugin id). Pages
+     *   are mounted under this element's plugin menu entry via
+     *   `AppBar.Plugins.setMenu`, and all generated menu IDs are scoped to it.
+     *   This is distinct from `this.uid`, which is the shared module identity
+     *   ("module.menu-pages") and is the same for every owner using this module.
      * @param {function|string} strategy builder strategy, renderUIFromJson or guessUIFromJson
      */
-    constructor(moduleId, strategy='renderUIFromJson') {
+    constructor(ownerId, strategy='renderUIFromJson') {
         super()
-        this.__uids = moduleId; // todo consider doing this in some standard way... we need to inherit the identity to e.g. crash together with the owner
+        this.ownerId = ownerId;
         this._count = 0;
         this.strategy = typeof strategy === "string" ? this[strategy] : strategy;
     }
 
     loadVega(initialized=false) {
-        for (let id in this.vegaInit) {
-            const object = this.vegaInit[id];
-            if (object.view) continue;
+        const pending = Object.keys(this.vegaInit).filter(id => !this.vegaInit[id].view);
+        if (!pending.length) return;
 
-            if (!window.vega || !window.vega.View) {
-                if (initialized) {
-                    console.warn("Could not load vega: ignoring vega components.");
-                    delete this.vegaInit[id];
-                    continue;
-                }
-                const _this = this;
-                UTILITIES.loadModules(function() {
-                    // If the loader fails (e.g., integrity error), we just retry once; otherwise warn out
-                    // TODO (optional): draw an error placeholder image/canvas here
-                    _this.loadVega(true);
-                }, APPLICATION_CONTEXT.secure ? "vega-secure" : "vega");
+        if (!window.vega || !window.vega.View) {
+            if (initialized) {
+                // If the loader fails (e.g., integrity error), we drop the components.
+                // TODO (optional): draw an error placeholder image/canvas here
+                console.warn("Could not load vega: ignoring vega components.");
+                for (const id of pending) delete this.vegaInit[id];
+                this._disconnectVegaObserver();
                 return;
             }
+            const _this = this;
+            UTILITIES.loadModules(function() {
+                _this.loadVega(true);
+            }, APPLICATION_CONTEXT.secure ? "vega-secure" : "vega");
+            return;
+        }
 
-            delete this.vegaInit[id];
-            try {
-                object.view = new vega.View(
-                    vega.parse(object.vega),
-                    { renderer: "canvas", container: `#${id}`, hover: true }
-                );
-                object.view.runAsync();
-            } catch (err) {
-                console.warn("Vega failed to initialize for", id, err);
-            }
+        // Initialise any container that is already attached; observe the DOM for the
+        // rest. Menu bodies (fullscreen plugin tabs / per-viewer panels) are mounted
+        // lazily when first shown, so a container often is not connected yet at build
+        // time — initialising on a missing container would silently drop the chart.
+        const stillPending = pending.filter(id => !this._initVega(id));
+        if (stillPending.length) this._observeVega();
+        else this._disconnectVegaObserver();
+    }
+
+    /**
+     * Initialise a single pending vega view if its container is connected.
+     * @return {boolean} true if handled (initialised, already done, or gone), false
+     *   if the container is not in the DOM yet and should be retried later.
+     */
+    _initVega(id) {
+        const object = this.vegaInit[id];
+        if (!object) return true;
+        if (object.view) { delete this.vegaInit[id]; return true; }
+
+        const container = document.getElementById(id);
+        if (!container || !container.isConnected) return false;
+
+        delete this.vegaInit[id];
+        try {
+            object.view = new vega.View(
+                vega.parse(object.vega),
+                { renderer: "canvas", container, hover: true }
+            );
+            object.view.runAsync();
+        } catch (err) {
+            console.warn("Vega failed to initialize for", id, err);
+        }
+        return true;
+    }
+
+    /** Watch the DOM so charts in lazily-mounted menu tabs initialise once attached. */
+    _observeVega() {
+        if (this._vegaObserver) return;
+        this._vegaObserver = new MutationObserver(() => {
+            for (const id of Object.keys(this.vegaInit)) this._initVega(id);
+            if (!Object.keys(this.vegaInit).length) this._disconnectVegaObserver();
+        });
+        this._vegaObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    _disconnectVegaObserver() {
+        if (this._vegaObserver) {
+            this._vegaObserver.disconnect();
+            this._vegaObserver = null;
         }
     }
 
-    builderInstance(id, counter=undefined) {
-        if (id) return `__builder-${id}`;
-        if (!Number.isNaN(counter))  return `__builder-${counter}`;
-        throw "Cannot create builder ID: either valid ID or counter value must be supplied!";
-    }
-
     getMenuId(id, counter=undefined) {
-        if (id) return `pages-menu-root-${this.uid}-${id}`;
-        if (!Number.isNaN(counter)) return `pages-menu-root-${this.uid}-${counter}`;
+        if (id) return `pages-menu-root-${this.ownerId}-${id}`;
+        if (!Number.isNaN(counter)) return `pages-menu-root-${this.ownerId}-${counter}`;
         throw "Cannot create menu ID: either valid ID or counter value must be supplied!";
     }
 
     getSubMenuId(id, counter=undefined) {
-        if (id) return `pages-menu-item-${this.uid}-${id}`;
-        if (!Number.isNaN(counter)) return `pages-menu-item-${this.uid}-${counter}`;
+        if (id) return `pages-menu-item-${this.ownerId}-${id}`;
+        if (!Number.isNaN(counter)) return `pages-menu-item-${this.ownerId}-${counter}`;
         throw "Cannot create submenu ID: either valid ID or counter value must be supplied!";
     }
 
     openMenu(id) {
-        USER_INTERFACE.AppBar.Plugins.openMenu(this.getMenuId(id));
+        USER_INTERFACE.AppBar.Plugins.openSubmenu(this.ownerId, this.getSubMenuId(id));
     }
 
     openSubMenu(id) {
-        USER_INTERFACE.AppBar.Plugins.openSubmenu(this.getMenuId(id), this.getSubMenuId(id));
+        USER_INTERFACE.AppBar.Plugins.openSubmenu(this.ownerId, this.getSubMenuId(id));
     }
 
     /**
      * @typedef JSONHtmlConfig
      * @type object
-     * @property {string} id - id to reference the menu with
-     * @property {string} title
-     * @property {[object]} page
-     * @property {boolean} main
-     * todo docs
+     * @property {string} [id] - id to reference the menu with; if omitted a
+     *   non-traceable generated id is used
+     * @property {string} title - required; submenu title shown in the Plugins menu
+     * @property {string} [subtitle] - optional tooltip subtitle
+     * @property {string} [icon] - optional Font Awesome icon class
+     * @property {[object]} page - array of element specifications
      */
 
     /**
@@ -95,8 +133,6 @@ window.AdvancedMenuPages = class extends XOpatModule {
         if (!config) return;
 
         const build = (config, sanitizer) => {
-            let parent, parentUnique;
-
             for (let data of config) {
                 const html = [];
 
@@ -109,25 +145,16 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     html.push(this.strategy(element, sanitizer));
                 }
 
-                // count is generated ID, if not supplied use generic ID that is not traceable
-                if (!parent || data.main) {
-                    parentUnique = this.getMenuId(data.id, this._count++);
-                    parent = this.builderInstance(data.id, this._count);
-                }
-
+                // Each page becomes a submenu under the owning element's plugin
+                // entry (keyed by the owner id passed to the constructor, not the
+                // shared module uid). FullscreenMenus groups all pages together.
                 const unique = this.getSubMenuId(data.id, this._count++);
-                USER_INTERFACE.AppBar.Plugins._buildMenu(
-                    this,
-                    parent,
-                    parentUnique,
+                USER_INTERFACE.AppBar.Plugins.setMenu(
+                    this.ownerId,
+                    unique,
                     data.title,
-                    unique,
-                    unique,
-                    data.subtitle || data.title,
                     html.join(""),
-                    data.icon || "",
-                    true,
-                    true
+                    data.icon || "fa-fw"
                 );
             }
             this._count += config.length;
@@ -199,16 +226,45 @@ window.AdvancedMenuPages = class extends XOpatModule {
     }
 
     /**
+     * Render a single page config into a viewer-menu item (the shape expected by
+     * `registerViewerMenu`). Shared by `buildViewerMenu` and `buildMetaDataViewerMenu`.
+     * @param {JSONHtmlConfig} data page config
+     * @param {function|false} sanitizer
+     * @param {string} id stable menu id (pass the same id across re-renders so the
+     *   per-viewer menu updates in place instead of duplicating)
+     * @return {{id: string, title: string, icon: string, body: string}}
+     */
+    _pageToViewerItem(data, sanitizer, id = this.getMenuId(data.id, this._count++)) {
+        const html = [];
+        for (let element of (data.page || [])) {
+            html.push(this.strategy(element, sanitizer));
+        }
+        // Vega views must initialise after the body is inserted into the DOM.
+        setTimeout(() => this.loadVega());
+        return {
+            id,
+            title: data.title,
+            icon: data.icon || "fa-cog",
+            body: html.join("")
+        };
+    }
+
+    /**
      * @typedef {function} ViewerHtmlConfigGetter
      * @param {OpenSeadragon.Viewer} viewer - viewer that is the config meant for
      * @return JSONHtmlConfig
      */
 
     /**
+     * Register a dynamic, per-viewer menu in the global viewer (right-side) menu.
+     * The getter is re-invoked per viewer and on content change.
      * @param {ViewerHtmlConfigGetter} getter
      * @param sanitizeConfig
      */
     buildViewerMenu(getter, sanitizeConfig=false) {
+        // Allocate a stable fallback id once so re-invocations of the getter for
+        // id-less configs update the same menu rather than spawning new ones.
+        const fallbackId = this._count++;
         const build = (viewer, sanitizer) => {
             let config = null;
             try {
@@ -218,22 +274,7 @@ window.AdvancedMenuPages = class extends XOpatModule {
             }
 
             if (!config) return;
-
-            const html = [];
-            for (let element of (config.page || [])) {
-                html.push(this.strategy(element, sanitizer));
-            }
-
-            // todo vega might be problematic -> we don't know WHEN it gets updated, we need callback to execute when inserted
-            setTimeout(() => this.loadVega());
-
-            // todo icon
-            return {
-                id: this.getMenuId(config.id, this._count++),
-                title: config.title,
-                icon: "fa-cog",
-                body: html.join("")
-            }
+            return this._pageToViewerItem(config, sanitizer, this.getMenuId(config.id, fallbackId));
         };
 
         if (typeof sanitizeConfig === "object") {
@@ -246,6 +287,39 @@ window.AdvancedMenuPages = class extends XOpatModule {
             }, "sanitize-html");
         } else {
             this.registerViewerMenu(viewer => build(viewer, false));
+        }
+    }
+
+    /**
+     * Like {@link buildMetaDataMenu}, but mounts each page as a tab in the global
+     * per-viewer (right-side) menu instead of the fullscreen Plugins menu. The
+     * content is static — the same for every viewer. Use this for the "viewer"
+     * placement target; use `buildMetaDataMenu` for the "plugins" target.
+     * @param {JSONHtmlConfig|[JSONHtmlConfig]} config
+     * @param {boolean|object} sanitizeConfig sanitize-html config, or on/off flag
+     */
+    buildMetaDataViewerMenu(config, sanitizeConfig=false) {
+        if (!config) return;
+        if (!Array.isArray(config)) config = [config];
+
+        const register = (sanitizer) => {
+            for (let data of config) {
+                if (!data.title || !data.page) {
+                    console.warn("Config for advanced menu pages missing title or page props - skipping!", data);
+                    continue;
+                }
+                // Resolve the id once so the per-viewer menu is stable across re-renders.
+                const id = this.getMenuId(data.id, this._count++);
+                this.registerViewerMenu(() => this._pageToViewerItem(data, sanitizer, id));
+            }
+        };
+
+        if (typeof sanitizeConfig === "object") {
+            UTILITIES.loadModules(() => register(str => SanitizeHtml(str, sanitizeConfig)), "sanitize-html");
+        } else if (sanitizeConfig) {
+            UTILITIES.loadModules(() => register(str => SanitizeHtml(str)), "sanitize-html");
+        } else {
+            register(false);
         }
     }
 
@@ -380,8 +454,14 @@ window.AdvancedMenuPages = class extends XOpatModule {
                     const Cls = this.resolveUIClass(jsonNode.type);
                     if (!Cls) return "";
 
-                    // Sanitize the options object (strings-only) if a sanitizer is provided
-                    const safeOptions = this.sanitizeDeep({ ...jsonNode }, sanitizer);
+                    // `type` (the element discriminator) and `children` are not component
+                    // options — strip them before forwarding. This must happen regardless
+                    // of sanitization: e.g. Button has its own `type` option whose value
+                    // must be a function (Button.TYPE.*), so leaking the string discriminator
+                    // throws in BaseComponent._applyOptions.
+                    const { type, children, ...optionData } = jsonNode;
+                    // Sanitize the remaining options (strings-only) if a sanitizer is provided
+                    const safeOptions = this.sanitizeDeep(optionData, sanitizer);
 
                     // Render children: allow strings/HTML or nested {type:...}
                     const kids = [];

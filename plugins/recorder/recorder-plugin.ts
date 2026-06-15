@@ -2,6 +2,9 @@
 /// <reference path="../../src/types/loader.d.ts" />
 /// <reference path="../../modules/recorder/recorder.d.ts" />
 
+import { OverlayRenderer } from "./overlay-renderer";
+import { OverlayEditor } from "./overlay-editor";
+
 type Params={delay:number;duration:number;transition:number};
 type AnnObj={presenterSids?:string[];visible?:boolean;dirty?:boolean;canvas?:AnnCanvas;set(v:Record<string,unknown>):void;toObject(k?:string):Record<string,unknown>};
 type AnnCanvas={forEachObject(cb:(o:AnnObj)=>void):void;renderAll():void};
@@ -26,10 +29,18 @@ class RecorderPlugin extends XOpatPlugin{
     private captureAnnotations=true;
     private smoothPath=false;
     private annotations:AnnModule|null=null;
-    private navSession:NavSession|null=null;
+    /** Active navigation-recording sessions, one per armed viewer (synchronized). */
+    private navSessions:Map<UniqueViewerId,NavSession>=new Map();
+    private _navRafId=0;
+    private _navStartedAt=0;
     private annotationRefs:Record<string,AnnObj[]>={};
     private oldHighlight:HTMLElement|null=null;
     private selectedIndex:number|null=null;
+    private selectedViewerId:UniqueViewerId|null=null;
+    /** Viewers armed for capture (explicit, sticky — independent of hover). */
+    private armed:Set<UniqueViewerId>=new Set();
+    /** Explicit current/primary viewer for editing context (NOT hover-driven). */
+    private currentViewerId:UniqueViewerId|null=null;
     private isPlaying=false;
     private measureNode:HTMLSpanElement|null=null;
     private measureLoop:number|undefined;
@@ -39,6 +50,10 @@ class RecorderPlugin extends XOpatPlugin{
     private measureRealtimeOffset=0;
     private measureDuration=0;
     recorder!:RecorderModule; track!:HTMLDivElement; recordPathButton!:HTMLButtonElement; playButton!:HTMLButtonElement; defaultsButton!:HTMLButtonElement;
+    recordingsButton!:HTMLButtonElement;
+    private _recordingsModal:InstanceType<typeof UI.Modal>|null=null;
+    private _recordingsBodyHost:HTMLDivElement|null=null;
+    overlayRenderer!:OverlayRenderer;
 
 
     constructor(id:string){super(id); const v=Number(this.getOption("playEnterDelay",-1)); this.playOnEnter=Number.isFinite(v)?v:-1; this.smoothPath=!!this.getOption("smoothPath",false);}
@@ -46,8 +61,12 @@ class RecorderPlugin extends XOpatPlugin{
     pluginReady():void{
         this.recorder=OpenSeadragon.Recorder.instance();
         this.recorder.setCapturesVisualization(true);
+        this.overlayRenderer=new OverlayRenderer(this.recorder);
         USER_INTERFACE.Tools.setMenu(this.id,this._toolsMenuId,"Timeline",this._timelineComponent(),"play_circle",true);
-        this._renderSlideRows();
+        // Seed the explicit current viewer once from the active viewer, and arm it.
+        const initId=this._currentViewerId(); if(initId) this.armed.add(initId);
+        this._resetAllUISteps();
+        this._syncRecordingsButton();
         this._syncPlayButton();
         this._syncInputs();
         this._initSortableTimeline(); this._handleInitAnnotationsModule(); this._initEvents();
@@ -57,10 +76,14 @@ class RecorderPlugin extends XOpatPlugin{
     private _timelineComponent():any{
         const self=this; class Panel extends UI.BaseComponent{create(){
             const {button,span,div}=van.tags;
-            const icon=(i:string)=>({play:"fa-auto fa-play",stop:"fa-auto fa-stop",trash:"fa-auto fa-trash-can",frame:"fa-auto fa-camera",path:"fa-auto fa-circle-dot",prev:"fa-auto fa-backward",next:"fa-auto fa-forward",defaults:"fa-auto fa-sliders"}[i]||"fa-auto fa-question");
+            const icon=(i:string)=>({play:"fa-auto fa-play",stop:"fa-auto fa-stop",trash:"fa-auto fa-trash-can",frame:"fa-auto fa-camera",path:"fa-auto fa-circle-dot",prev:"fa-auto fa-backward",next:"fa-auto fa-forward",defaults:"fa-auto fa-sliders",export:"fa-auto fa-download",recordings:"fa-auto fa-film"}[i]||"fa-auto fa-question");
             const btn=(id:string,title:string,ic:string,click:()=>void,extra="")=>button({id,onclick:click,type:"button",class:`btn btn-ghost btn-square btn-sm ${extra}`,title},span({class:icon(ic)}));
             self.recordPathButton=btn("recorder-path-toggle","Record path","path",()=>self.toggleNavigationRecording());
+            // Labeled entry point to the Recordings manager (switch / new / rename
+            // / duplicate / delete / export live in the modal, not the toolbar).
+            self.recordingsButton=button({id:"recorder-recordings",onclick:()=>self._openRecordingsModal(),type:"button",class:"btn btn-ghost btn-sm gap-1",title:"Manage recordings"},span({class:icon("recordings")}),span({id:"recorder-active-name"},"Recording"),span({class:"fa-auto fa-angle-down opacity-60"})) as HTMLButtonElement;
             const controls=div({class:"flex items-center gap-2 flex-wrap"},
+                self.recordingsButton,
                 btn("recorder-add-frame","Capture frame","frame",()=>self.addFrame(),"text-info"),
                 self.recordPathButton,
                 btn("presenter-prev-icon","Previous","prev",()=>self.recorder.previous()),
@@ -71,7 +94,10 @@ class RecorderPlugin extends XOpatPlugin{
                 new UI.Input({legend:"Delay",suffix:"s",id:"point-delay",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("delay",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0",step:"0.1",value:self._capture.delay.toString(),style:"width:3.5rem;"}}).create(),
                 new UI.Input({legend:"Duration",suffix:"s",id:"point-duration",size:UI.Input.SIZE.SMALL,onChange:(e:Event)=>self.setValue("duration",parseFloat((e.target as HTMLInputElement).value)),extraProperties:{type:"number",min:"0.1",step:"0.1",value:self._capture.duration.toString(),style:"width:3.5rem;"}}).create(),
             );
-            self.track=div({id:"presenter-timeline-track",class:"inline-block align-top relative flex-1 px-3 bg-base-200 rounded-sm w-full overflow-x-auto overflow-y-auto",style:"white-space:nowrap;height:48px;min-width:100px;"}) as HTMLDivElement;
+            // One lane (a block child) per viewer; each lane flows its steps
+            // independently from x=0 so equal per-index timing column-aligns
+            // across lanes. The track scrolls all lanes horizontally together.
+            self.track=div({id:"presenter-timeline-track",class:"relative flex-1 px-3 bg-base-200 rounded-sm w-full overflow-x-auto overflow-y-auto flex flex-col items-start gap-1",style:"min-height:48px;min-width:100px;"}) as HTMLDivElement;
             return div({class:"flex flex-col gap-2"},self.track,controls);
         }} return new Panel();
     }
@@ -79,20 +105,58 @@ class RecorderPlugin extends XOpatPlugin{
     private _initSortableTimeline():void{
         const tl=this.track; let dragId:string|null=null;
         tl.addEventListener("click",(e:MouseEvent)=>{if(e.target===tl) this.clearSelection();});
-        tl.addEventListener("dragstart",(e:DragEvent)=>{const el=(e.target as Element|null)?.closest?.("[data-id]") as HTMLElement|null; if(!el) return; if(this.isPlaying||this.navSession) return void e.preventDefault(); dragId=el.dataset.id||null; if(e.dataTransfer&&dragId){e.dataTransfer.effectAllowed="move"; e.dataTransfer.setData("text/plain",dragId);} el.classList.add("dragging");});
+        tl.addEventListener("dragstart",(e:DragEvent)=>{const el=(e.target as Element|null)?.closest?.("[data-id]") as HTMLElement|null; if(!el) return; if(this.isPlaying||this.navSessions.size) return void e.preventDefault(); dragId=el.dataset.id||null; if(e.dataTransfer&&dragId){e.dataTransfer.effectAllowed="move"; e.dataTransfer.setData("text/plain",dragId);} el.classList.add("dragging");});
         tl.addEventListener("dragend",(e:DragEvent)=>{((e.target as Element|null)?.closest?.("[data-id]") as HTMLElement|null)?.classList.remove("dragging"); dragId=null;});
-        tl.addEventListener("dragover",(e:DragEvent)=>{e.preventDefault(); const after=this._getDragAfterElement(tl,e.clientX),dragging=tl.querySelector<HTMLElement>(".dragging"); if(!dragging) return; if(!after) tl.appendChild(dragging); else tl.insertBefore(dragging,after);});
-        tl.addEventListener("drop",(e:DragEvent)=>{e.preventDefault(); const order=Array.from(tl.querySelectorAll<HTMLElement>("[data-id]")).map(n=>n.dataset.id).filter((id):id is string=>!!id); this.recorder.sortWithIdList(order); if(!dragId) return; const el=tl.querySelector<HTMLElement>(`[data-id="${dragId}"]`); if(el) this.selectPoint(el);});
+        tl.addEventListener("dragover",(e:DragEvent)=>{e.preventDefault(); const dragging=tl.querySelector<HTMLElement>(".dragging"); if(!dragging) return; const lane=dragging.closest("[data-lane]") as HTMLElement|null; if(!lane) return; const after=this._getDragAfterElement(lane,e.clientX); if(!after) lane.appendChild(dragging); else lane.insertBefore(dragging,after);});
+        tl.addEventListener("drop",(e:DragEvent)=>{e.preventDefault(); if(!dragId) return; const el=tl.querySelector<HTMLElement>(`[data-id="${dragId}"]`); if(!el) return; const viewerId=(el.dataset.group||"") as UniqueViewerId;
+            // Reorder only within the dragged step's own lane (its recording).
+            const order=Array.from(tl.querySelectorAll<HTMLElement>(`[data-id][data-group="${viewerId}"]`)).map(n=>n.dataset.id).filter((id):id is string=>!!id); this.recorder.sortWithIdList(order,false,viewerId); this.selectPoint(el);});
     }
 
     private _getDragAfterElement(container:HTMLElement,x:number):HTMLElement|null{
         return Array.from(container.querySelectorAll<HTMLElement>("[data-id]:not(.dragging)")).reduce<{offset:number;element:HTMLElement|null}>((res,child)=>{const box=child.getBoundingClientRect(),off=x-box.left-box.width/2; return off<0&&off>res.offset?{offset:off,element:child}:res;},{offset:Number.NEGATIVE_INFINITY,element:null}).element;
     }
 
-    private _getActiveViewer():Viewer|null{return (VIEWER_MANAGER.get?.()||VIEWER_MANAGER.viewers?.[0]||window.VIEWER||null) as Viewer|null;}
-    private _resolveActiveViewerId():UniqueViewerId|null{return VIEWER_MANAGER.getActiveUniqueId?.()||this._getActiveViewer()?.uniqueId||null;}
+    /**
+     * The recorder's explicit current/primary viewer — drives the Recordings
+     * modal, delay/duration inputs, step selection and toolbar name. Unlike
+     * VIEWER_MANAGER's active viewer it is NOT changed by hover; it only seeds
+     * from the active viewer once (or when the current one is destroyed).
+     */
+    private _currentViewerId():UniqueViewerId|null{
+        const id=this.currentViewerId;
+        if(id&&VIEWER_MANAGER.getViewer(id,false)) return id;
+        const fallback=(VIEWER_MANAGER.getActiveUniqueId?.()||((VIEWER_MANAGER.viewers||[])[0] as Viewer|undefined)?.uniqueId)||null;
+        this.currentViewerId=fallback;
+        return fallback;
+    }
+    private _currentViewer():Viewer|null{const id=this._currentViewerId(); return id?(VIEWER_MANAGER.getViewer(id,false) as Viewer|undefined)||null:null;}
+    /** Back-compat aliases kept for existing call sites (now hover-independent). */
+    private _getActiveViewer():Viewer|null{return this._currentViewer();}
+    private _resolveActiveViewerId():UniqueViewerId|null{return this._currentViewerId();}
+    private _setCurrentViewer(id:UniqueViewerId):void{
+        if(!id||this.currentViewerId===id) return;
+        this.currentViewerId=id;
+        this._refreshLaneChrome();
+        this._syncRecordingsButton();
+        this._refreshRecordingsModal();
+        this._syncInputs();
+    }
+    /** Viewers a capture/path-record should target: the armed set, else current. */
+    private _recordTargets():UniqueViewerId[]{
+        const open=new Set(((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean).map(v=>v.uniqueId));
+        const targets=[...this.armed].filter(id=>open.has(id));
+        if(targets.length) return targets;
+        const cur=this._currentViewerId();
+        return cur?[cur]:[];
+    }
     private _viewerRowHeight():number{return 48;}
-    private _insertionIndex():number{return this.selectedIndex===null?this.recorder.snapshotCount():this.selectedIndex+1;}
+    private _insertionIndex(viewerId:UniqueViewerId):number{
+        // Honour the highlighted step only when it belongs to the viewer we are
+        // capturing into; otherwise append to that viewer's recording.
+        if(this.selectedIndex===null||this.selectedViewerId!==viewerId) return this.recorder.snapshotCount(viewerId);
+        return this.selectedIndex+1;
+    }
     private _getViewerContext(viewerOrId:Viewer|UniqueViewerId):ViewerContextMeta|undefined{
         return (UTILITIES as typeof UTILITIES&{getViewerIOContext?:(viewerOrUniqueId:Viewer|UniqueViewerId,stripSuffix?:boolean)=>ViewerContextMeta|undefined}).getViewerIOContext?.(viewerOrId,true);
     }
@@ -109,10 +173,137 @@ class RecorderPlugin extends XOpatPlugin{
     }
     private _shortLabel(value:string,max=18):string{return value.length<=max?value:`${value.slice(0,Math.max(0,max-1)).trimEnd()}…`;}
 
+    /** Reflect the active viewer's active recording name on the toolbar button. */
+    private _syncRecordingsButton():void{
+        const nameEl=document.getElementById("recorder-active-name");
+        if(!nameEl) return;
+        const viewerId=this._resolveActiveViewerId();
+        const active=viewerId?this.recorder.getActiveRecording(viewerId):undefined;
+        nameEl.textContent=active?active.name:"Recording";
+    }
+
+    /** Open (or focus) the Recordings manager modal for the active viewer. */
+    private _openRecordingsModal():void{
+        const host=document.createElement("div");
+        host.className="flex flex-col gap-3 min-w-[22rem]";
+        this._recordingsBodyHost=host;
+        this._refreshRecordingsModal();
+
+        let modal:InstanceType<typeof UI.Modal>;
+        modal=new UI.Modal({
+            id:`${this.id}-recorder-recordings-modal`,
+            header:"Recordings",
+            body:host,
+            footer:(()=>{
+                const f=document.createElement("div"); f.className="flex w-full justify-between gap-2";
+                const exportAll=document.createElement("button"); exportAll.type="button"; exportAll.className="btn btn-ghost btn-sm gap-1";
+                exportAll.innerHTML=`<span class="fa-auto fa-download"></span> Export all recordings`;
+                exportAll.onclick=()=>{void this.export();};
+                const close=document.createElement("button"); close.type="button"; close.className="btn btn-primary btn-sm"; close.textContent="Close"; close.onclick=()=>modal.close();
+                f.append(exportAll,close); return f;
+            })()
+        }).mount();
+        const origClose=modal.close.bind(modal);
+        modal.close=()=>{this._recordingsModal=null; this._recordingsBodyHost=null; return origClose();};
+        this._recordingsModal=modal;
+        modal.open();
+    }
+
+    /** Rebuild the modal body (recording list) — called on lifecycle changes while open. */
+    private _refreshRecordingsModal():void{
+        const host=this._recordingsBodyHost; if(!host) return;
+        host.innerHTML="";
+        const viewerId=this._resolveActiveViewerId();
+        if(!viewerId){host.appendChild(Object.assign(document.createElement("div"),{className:"opacity-70 text-sm",textContent:"No active viewer."})); return;}
+        const viewer=this._getActiveViewer();
+        const caption=document.createElement("div");
+        caption.className="text-xs uppercase opacity-60";
+        caption.textContent=`Viewer: ${viewer?this._viewerLabel(viewer,Math.max(0,VIEWER_MANAGER.getViewerSlotIndex(viewer))):String(viewerId)}`;
+        host.appendChild(caption);
+
+        const recordings=this.recorder.listRecordings(viewerId);
+        const activeId=this.recorder.getActiveRecording(viewerId)?.id;
+        const mkIconBtn=(title:string,faIcon:string,click:()=>void,extra=""):HTMLButtonElement=>{
+            const b=document.createElement("button"); b.type="button"; b.className=`btn btn-ghost btn-square btn-sm ${extra}`; b.title=title;
+            b.innerHTML=`<span class="fa-auto ${faIcon}"></span>`; b.onclick=click; return b;
+        };
+        recordings.forEach(rec=>{
+            const row=document.createElement("label");
+            row.className="flex items-center gap-2 rounded-sm px-2 py-1 hover:bg-base-200 cursor-pointer";
+            const radio=document.createElement("input");
+            radio.type="radio"; radio.name=`${this.id}-rec-active`; radio.className="radio radio-sm"; radio.checked=rec.id===activeId;
+            radio.onchange=()=>this.recorder.setActiveRecording(rec.id,viewerId);
+            const name=document.createElement("span"); name.className="flex-1 truncate"; name.textContent=rec.name;
+            const count=document.createElement("span"); count.className="text-xs opacity-50"; count.textContent=`${rec.steps.length} step${rec.steps.length===1?"":"s"}`;
+            row.append(radio,name,count,
+                mkIconBtn("Rename","fa-pen",()=>this._renameRecordingPrompt(viewerId,rec.id)),
+                mkIconBtn("Duplicate","fa-copy",()=>this.recorder.duplicateRecording(rec.id,viewerId)),
+                mkIconBtn("Export this recording","fa-download",()=>{this.recorder.setActiveRecording(rec.id,viewerId); this.recorder.downloadActiveRecording(viewerId);}),
+                mkIconBtn("Delete","fa-trash-can",()=>this.recorder.deleteRecording(rec.id,viewerId),"text-warning"),
+            );
+            host.appendChild(row);
+        });
+
+        const add=document.createElement("button");
+        add.type="button"; add.className="btn btn-ghost btn-sm gap-1 self-start";
+        add.innerHTML=`<span class="fa-auto fa-plus text-success"></span> New recording`;
+        add.onclick=()=>this.recorder.createRecording(viewerId);
+        host.appendChild(add);
+    }
+
+    private _renameRecordingPrompt(viewerId:UniqueViewerId,recordingId?:string):void{
+        const target=recordingId?this.recorder.listRecordings(viewerId).find(r=>r.id===recordingId):this.recorder.getActiveRecording(viewerId);
+        if(!target) return;
+        const body=document.createElement("div"); body.className="flex flex-col gap-3";
+        const input=document.createElement("input"); input.type="text"; input.className="input input-bordered input-sm w-full"; input.value=target.name;
+        body.appendChild(input);
+        let modal:InstanceType<typeof UI.Modal>;
+        modal=new UI.Modal({
+            id:`${this.id}-recorder-rename-modal`,
+            header:"Rename recording",
+            body,
+            footer:(()=>{
+                const f=document.createElement("div"); f.className="flex w-full justify-end gap-2";
+                const c=document.createElement("button"); c.type="button"; c.className="btn btn-ghost"; c.textContent="Cancel"; c.onclick=()=>modal.close();
+                const s=document.createElement("button"); s.type="button"; s.className="btn btn-primary"; s.textContent="Save";
+                s.onclick=()=>{const v=input.value.trim(); if(v) this.recorder.renameRecording(target.id,v,viewerId); modal.close();};
+                f.append(c,s); return f;
+            })()
+        }).mount();
+        modal.open();
+    }
+
     addFrame():void{
         if(this.isPlaying) return;
-        const viewerId=this._resolveActiveViewerId(); if(!viewerId) return void Dialogs.show("No active viewer is available for recording.",2500,Dialogs.MSG_WARN);
-        this.recorder.create(viewerId,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
+        const targets=this._recordTargets(); if(!targets.length) return void Dialogs.show("Arm a viewer (● on its lane) to record into.",2500,Dialogs.MSG_WARN);
+        if(targets.length===1){
+            // Single armed viewer: honour selection-based mid-insert.
+            const only=targets[0]!;
+            this.recorder.create(only,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex(only));
+            return;
+        }
+        // Simultaneous: align lanes to a common index, then append one step to
+        // each. The module collapses an unchanged viewer's frame to an empty
+        // spacer (a hold), so non-recording viewers just get a space.
+        this._alignArmedLanes(targets);
+        for(const viewerId of targets) this.recorder.create(viewerId,this._capture.delay,this._capture.duration,this._capture.transition);
+    }
+
+    /**
+     * Pad every target's active recording with empty spacers up to the longest
+     * one, so a subsequent append lands at the same index in every lane (keeps
+     * simultaneous lanes index- and time-aligned, incl. late-armed viewers).
+     */
+    private _alignArmedLanes(targets:UniqueViewerId[]):void{
+        const counts=targets.map(v=>this.recorder.snapshotCount(v));
+        const T=Math.max(0,...counts);
+        const refV=targets[counts.indexOf(T)];
+        for(const v of targets){
+            for(let i=this.recorder.snapshotCount(v); i<T; i++){
+                const ref=refV?this.recorder.getStep(i,refV):undefined;
+                this.recorder.createEmpty(v, ref?.delay??0, ref?.duration??this._capture.duration, ref?.transition??this._capture.transition);
+            }
+        }
     }
 
     togglePlayback():void{
@@ -120,40 +311,66 @@ class RecorderPlugin extends XOpatPlugin{
         else this.recorder.play();
     }
 
-    toggleNavigationRecording():void{ if(this.navSession) this.stopNavigationRecording(true); else this.startNavigationRecording(); }
+    toggleNavigationRecording():void{ if(this.navSessions.size) this.stopNavigationRecording(true); else this.startNavigationRecording(); }
 
     private startNavigationRecording():void{
         if(this.isPlaying) return;
-        const viewer=this._getActiveViewer(); if(!viewer) return void Dialogs.show("No active viewer is available for path recording.",2500,Dialogs.MSG_WARN);
-        const renderer=this._getRenderer(viewer);
-        const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:performance.now(),samples:[],visualizationSamples:[],rafId:0,lastVisualizationSignature:null};
-        if(renderer&&this.recorder.capturesVisualization){
-            s.visualizationHandler=()=>this._captureNavigationVisualizationSample(s);
-        }
-        this.navSession=s;
-        // Continuous rAF sampling: every frame is recorded so playback timing
-        // matches wall clock 1:1, including idle holds. Event-driven capture
-        // dropped frames during pauses, smearing motion across silent gaps.
-        const tick=()=>{
-            if(this.navSession!==s) return;
+        const targets=this._recordTargets()
+            .map(id=>VIEWER_MANAGER.getViewer(id,false) as Viewer|undefined)
+            .filter((v):v is Viewer=>!!v?.viewport);
+        if(!targets.length) return void Dialogs.show("Arm a viewer (● on its lane) to record a path.",2500,Dialogs.MSG_WARN);
+        // All armed viewers share one start clock so their paths replay in sync,
+        // preserving cross-viewer choreography (A moves while B holds, etc.).
+        this._navStartedAt=performance.now();
+        this.navSessions.clear();
+        for(const viewer of targets){
+            const s:NavSession={viewer,viewerId:viewer.uniqueId,startedAt:this._navStartedAt,samples:[],visualizationSamples:[],rafId:0,lastVisualizationSignature:null};
+            const renderer=this._getRenderer(viewer);
+            if(renderer&&this.recorder.capturesVisualization){
+                s.visualizationHandler=()=>this._captureNavigationVisualizationSample(s);
+                renderer.addHandler("visualization-change",s.visualizationHandler);
+            }
             this._captureNavigationSample(s);
-            s.rafId=window.requestAnimationFrame(tick);
+            this.navSessions.set(viewer.uniqueId,s);
+        }
+        // Single shared rAF samples every armed viewer each frame so wall-clock
+        // timing (including idle holds) is captured identically across lanes.
+        const tick=()=>{
+            if(!this.navSessions.size) return;
+            for(const s of this.navSessions.values()) this._captureNavigationSample(s);
+            this._navRafId=window.requestAnimationFrame(tick);
         };
-        this._captureNavigationSample(s);
-        s.rafId=window.requestAnimationFrame(tick);
-        if(renderer&&s.visualizationHandler) renderer.addHandler("visualization-change",s.visualizationHandler);
+        this._navRafId=window.requestAnimationFrame(tick);
         this._syncRecordPathButton();
     }
 
     private stopNavigationRecording(save:boolean):void{
-        const s=this.navSession; if(!s) return;
-        const renderer=this._getRenderer(s.viewer);
-        if(s.rafId) window.cancelAnimationFrame(s.rafId);
-        if(renderer&&s.visualizationHandler) renderer.removeHandler("visualization-change",s.visualizationHandler);
-        this._captureNavigationSample(s); this.navSession=null; this._syncRecordPathButton();
+        if(!this.navSessions.size) return;
+        if(this._navRafId) window.cancelAnimationFrame(this._navRafId);
+        this._navRafId=0;
+        const sessions=[...this.navSessions.values()];
+        for(const s of sessions){
+            const renderer=this._getRenderer(s.viewer);
+            if(renderer&&s.visualizationHandler) renderer.removeHandler("visualization-change",s.visualizationHandler);
+            this._captureNavigationSample(s);
+        }
+        this.navSessions.clear();
+        this._syncRecordPathButton();
         if(!save) return;
-        if(s.samples.length<2) return void Dialogs.show("Recorded path is too short.",2000,Dialogs.MSG_WARN);
-        this.recorder.createNavigation(s.viewerId,s.samples,s.visualizationSamples,this._capture.delay,this._capture.duration,this._capture.transition,this._insertionIndex());
+        const multi=sessions.length>1;
+        if(multi) this._alignArmedLanes(sessions.map(s=>s.viewerId));
+        let saved=0;
+        for(const s of sessions){
+            if(s.samples.length<2){
+                // Keep alignment: an untouched lane still gets a hold of matching length.
+                if(multi) this.recorder.createEmpty(s.viewerId,this._capture.delay,this._capture.duration,this._capture.transition);
+                continue;
+            }
+            // createNavigation collapses a motionless path to an empty hold itself.
+            this.recorder.createNavigation(s.viewerId,s.samples,s.visualizationSamples,this._capture.delay,this._capture.duration,this._capture.transition,multi?undefined:this._insertionIndex(s.viewerId));
+            saved++;
+        }
+        if(!saved&&!multi) Dialogs.show("Recorded path is too short.",2000,Dialogs.MSG_WARN);
     }
 
     private _captureNavigationSample(s:NavSession):void{
@@ -211,21 +428,32 @@ class RecorderPlugin extends XOpatPlugin{
         s.lastVisualizationSignature=signature;
         s.visualizationSamples.push({
             at: performance.now()-s.startedAt,
-            visualization: {
-                backgrounds: this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.background)?APPLICATION_CONTEXT.config.background:[]) as BackgroundItem[],
-                activeBackgroundIndex: this._cloneRecorderValue(APPLICATION_CONTEXT.getOption("activeBackgroundIndex",undefined,true,true)) as number|number[]|undefined,
-                visualizations: this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.visualizations)?APPLICATION_CONTEXT.config.visualizations:[]) as VisualizationItem[],
-                activeVisualizationIndex: this._cloneRecorderValue(APPLICATION_CONTEXT.getOption("activeVisualizationIndex",undefined,true,true)) as number|number[]|undefined,
-                renderer: this._cloneRecorderValue(snapshot) as RecorderVisualizationSnapshot,
-            },
+            visualization: (() => {
+                const backgrounds = this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.background)?APPLICATION_CONTEXT.config.background:[]) as BackgroundItem[];
+                const activeBackgroundIndex = this._cloneRecorderValue(APPLICATION_CONTEXT.getOption("activeBackgroundIndex",undefined,true,true)) as number|number[]|undefined;
+                const visualizations = this._cloneRecorderValue(Array.isArray(APPLICATION_CONTEXT.config.visualizations)?APPLICATION_CONTEXT.config.visualizations:[]) as VisualizationItem[];
+                const bgArr = Array.isArray(activeBackgroundIndex) ? activeBackgroundIndex : (Number.isInteger(activeBackgroundIndex) ? [activeBackgroundIndex as number] : []);
+                const activeVisualizationIndex = bgArr.map((bgIdx: any) => {
+                    const v = Number.isInteger(bgIdx) ? (backgrounds[bgIdx as number] as any)?.visualizationIndex : undefined;
+                    return Number.isInteger(v) ? v as number : undefined;
+                });
+                return {
+                    backgrounds,
+                    activeBackgroundIndex,
+                    visualizations,
+                    activeVisualizationIndex: activeVisualizationIndex as unknown as number|number[]|undefined,
+                    renderer: this._cloneRecorderValue(snapshot) as RecorderVisualizationSnapshot,
+                };
+            })(),
         });
     }
 
     private _syncRecordPathButton():void{
         if(!this.recordPathButton) return;
-        this.recordPathButton.classList.toggle("btn-error",!!this.navSession);
-        this.recordPathButton.classList.toggle("text-error",!!this.navSession);
-        this.recordPathButton.title=this.navSession?"Stop path recording":"Record path";
+        const recording=this.navSessions.size>0;
+        this.recordPathButton.classList.toggle("btn-error",recording);
+        this.recordPathButton.classList.toggle("text-error",recording);
+        this.recordPathButton.title=recording?`Stop path recording (${this.navSessions.size} viewer${this.navSessions.size===1?"":"s"})`:"Record path";
     }
 
     private _syncPlayButton():void{
@@ -366,14 +594,18 @@ class RecorderPlugin extends XOpatPlugin{
     }
 
     selectPoint(node:HTMLElement):void{
-        const index=Array.from(this.track.querySelectorAll<HTMLElement>("[data-id]")).indexOf(node);
+        const viewerId=(node.dataset.group||"") as UniqueViewerId;
+        const index=this._groupNodes(viewerId).indexOf(node);
         if(index<0) return;
-        this.recorder.goToIndex(index);
-        this._highlight(this.recorder.getStep(index),index);
+        // Clicking a step focuses its lane (becomes the current/editing viewer).
+        if(viewerId&&this.currentViewerId!==viewerId){this.currentViewerId=viewerId; this._refreshLaneChrome(); this._syncRecordingsButton(); this._refreshRecordingsModal();}
+        this.recorder.goToIndex(index,viewerId);
+        this._highlight(this.recorder.getStep(index,viewerId),index,viewerId);
     }
 
     clearSelection():void{
         this.selectedIndex=null;
+        this.selectedViewerId=null;
         this.track.querySelectorAll<HTMLElement>("[data-id]").forEach(node=>node.classList.remove("outline","outline-2","outline-error"));
         this.oldHighlight=null;
         this._syncInputs();
@@ -381,10 +613,10 @@ class RecorderPlugin extends XOpatPlugin{
 
     setValue(key:keyof Params,value:number):void{
         if(!Number.isFinite(value)) return;
-        const step=this.selectedIndex===null?undefined:this.recorder.getStep(this.selectedIndex);
+        const step=this.selectedIndex===null?undefined:this.recorder.getStep(this.selectedIndex,this.selectedViewerId??undefined);
         if(step&&this.selectedIndex!==null){
             step[key]=value;
-            const node=this._findUIStep(this.selectedIndex);
+            const node=this._findUIStep(this.selectedIndex,this.selectedViewerId??undefined);
             if(node) this._refreshStepNode(node,step);
             this._syncInputs(step);
             return;
@@ -396,9 +628,9 @@ class RecorderPlugin extends XOpatPlugin{
     removeHighlightedRecord():void{
         const index=this.selectedIndex;
         if(index===null) return;
-        const child=this._findUIStep(index);
+        const child=this._findUIStep(index,this.selectedViewerId??undefined);
         if(!child) return;
-        this.recorder.remove(index);
+        this.recorder.remove(index,this.selectedViewerId??undefined);
         child.remove();
         this.clearSelection();
     }
@@ -416,35 +648,77 @@ class RecorderPlugin extends XOpatPlugin{
         await io.flushBundleExport({ownerUid:"recorder"});
     }
 
-    private _highlight(step:RecorderSnapshotStep|undefined,index:number):void{
+    private _highlight(step:RecorderSnapshotStep|undefined,index:number,viewerId?:UniqueViewerId):void{
         this.oldHighlight?.classList.remove("outline","outline-2","outline-error");
         this.selectedIndex=index;
-        const node=this._findUIStep(index); this.oldHighlight=node||null; if(!step||!node) return;
+        this.selectedViewerId=(viewerId??(step?.viewerId as UniqueViewerId|undefined))??this.selectedViewerId;
+        const node=step?(this.track.querySelector<StepNode>(`[data-id="${step.id}"]`)||null):this._findUIStep(index,viewerId);
+        this.oldHighlight=node||null; if(!step||!node) return;
         node.classList.add("outline","outline-2","outline-error"); this._syncInputs(step);
     }
 
     private _resetAllUISteps():void{
+        // Preserve the measure node (playback cursor) across rebuilds.
+        const measure=this.measureNode; if(measure&&measure.parentElement===this.track) this.track.removeChild(measure);
         this.track.innerHTML="";
-        this._renderSlideRows();
-        this.recorder.getSteps().forEach(step=>this._addUIStepFrom(step.viewerId,step,false));
+        if(measure) this.track.appendChild(measure);
+        this._renderLanes();
+        // One lane per viewer: render each viewer's active recording into its
+        // own lane container. Hitting Play runs all of these in parallel, so the
+        // lanes mirror playback and column-align by index.
+        ((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean).forEach(viewer=>{
+            this.recorder.getSteps(viewer.uniqueId).forEach(step=>this._addUIStepFrom(viewer.uniqueId,step,false));
+        });
+        // Reapply selection outline after a full rebuild.
+        if(this.selectedIndex!==null&&this.selectedViewerId){
+            const st=this.recorder.getStep(this.selectedIndex,this.selectedViewerId);
+            const n=st?this.track.querySelector<StepNode>(`[data-id="${st.id}"]`):null;
+            this.oldHighlight=n||null;
+            n?.classList.add("outline","outline-2","outline-error");
+        }
+    }
+
+    private _groupNodes(viewerId:UniqueViewerId):HTMLElement[]{
+        return Array.from(this.track.querySelectorAll<HTMLElement>(`[data-lane="${viewerId}"] [data-id]`));
+    }
+
+    private _laneEl(viewerId:UniqueViewerId):HTMLElement|null{
+        return this.track.querySelector<HTMLElement>(`[data-lane="${viewerId}"]`);
     }
 
     private _addUIStepFrom(viewerId:UniqueViewerId,step:RecorderSnapshotStep,withNav=true,atIndex?:number):void{
-        const viewer=this._resolveViewerForStep(step); if(!viewer) return;
+        const viewer=this._resolveViewerForStep(step)||(VIEWER_MANAGER.getViewer(viewerId,false) as Viewer|undefined); if(!viewer) return;
+        const lane=this._laneEl(viewer.uniqueId); if(!lane) return;
         const node=(step.kind==="navigation"?document.createElement("canvas"):document.createElement("span")) as StepNode;
         node.id=`step-timeline-${step.id}`; node.dataset.id=step.id; node.dataset.group=viewer.uniqueId; node.draggable=true; node.className="inline-block rounded-sm cursor-pointer align-top";
         node.style.position="relative";
         node.style.zIndex="1";
         this._refreshStepNode(node,step,viewer);
-        if(typeof atIndex==="number"){const children=Array.from(this.track.querySelectorAll<HTMLElement>("[data-id]")); const before=children[atIndex]; if(before) this.track.insertBefore(node,before); else this.track.appendChild(node);} else this.track.appendChild(node);
-        if(withNav&&typeof atIndex==="number"){this.recorder.goToIndex(atIndex); this._highlight(step,atIndex);}
+        // Append into the viewer's own lane; ordering within a lane is DOM order
+        // and each lane flows independently from x=0.
+        if(typeof atIndex==="number"){const children=this._groupNodes(viewer.uniqueId); const before=children[atIndex]; if(before) lane.insertBefore(node,before); else lane.appendChild(node);} else lane.appendChild(node);
+        if(withNav&&typeof atIndex==="number"){this.recorder.goToIndex(atIndex,viewer.uniqueId); this._highlight(step,atIndex,viewer.uniqueId);}
         node.addEventListener("click",(e)=>this.selectPoint(e.currentTarget as HTMLElement));
+        node.addEventListener("contextmenu",(e)=>{e.preventDefault(); this._openOverlayEditor(step);});
+        node.title=node.title?`${node.title} · Right-click to edit overlays`:"Right-click to edit overlays";
+    }
+
+    private _openOverlayEditor(step:RecorderSnapshotStep):void{
+        new OverlayEditor(this.recorder,step,this.overlayRenderer).open();
     }
 
     private _refreshStepNode(node:StepNode,step:RecorderSnapshotStep,viewer?:Viewer):void{
         const v=viewer||VIEWER_MANAGER.getViewer(step.viewerId) as Viewer|undefined; if(!v) return;
         const size=this._getStepSize(step,v), ratio=Math.max(1,Math.floor(window.devicePixelRatio||1));
         node.style.width=`${size.width}px`; node.style.height=`${size.height}px`; node.style.marginLeft=`${size.marginLeft}px`; node.style.marginTop=`${size.marginTop}px`; node.style.borderBottomLeftRadius=`${size.radius}px`;
+        if(step.kind==="empty"){
+            // Spacer/hold: render as faint empty space (occupies width=duration).
+            node.style.background="transparent";
+            node.style.display="inline-block";
+            node.style.border="1px dashed rgba(148,163,184,0.45)";
+            node.style.borderBottomLeftRadius="0";
+            return;
+        }
         if(node instanceof HTMLCanvasElement){
             node.width=Math.max(1,Math.round(size.width*ratio)); node.height=Math.max(1,Math.round(size.height*ratio)); this._drawStepCanvas(node,step,size,ratio,v);
         }else{
@@ -455,10 +729,13 @@ class RecorderPlugin extends XOpatPlugin{
     }
 
     private _getStepSize(step:RecorderSnapshotStep,viewer:Viewer){
-        const idx=Math.max(0,VIEWER_MANAGER.getViewerIndex(viewer.uniqueId,false)), zoom=this._representativeZoom(step)??1;
+        const zoom=this._representativeZoom(step)??1;
         const maxHeight=Math.max(7,Math.log(viewer.viewport.getMaxZoom())/Math.log(viewer.viewport.getMaxZoom()+1)*18+14);
         const normalHeight=Math.max(7,Math.log(zoom)/Math.log(viewer.viewport.getMaxZoom()+1)*18+14);
-        return {width:this._durationWidth(step.duration),height:step.kind==="navigation"?maxHeight:normalHeight,marginLeft:this._delayWidth(step.delay),marginTop:this._viewerRowHeight()*idx,radius:this._metric("transition",step.transition)};
+        const height=step.kind==="navigation"?maxHeight:(step.kind==="empty"?Math.max(7,normalHeight*0.5):normalHeight);
+        // Steps live inside their lane container now; centre vertically within it.
+        const marginTop=Math.max(2,Math.floor((this._viewerRowHeight()-height)/2));
+        return {width:this._durationWidth(step.duration),height,marginLeft:this._delayWidth(step.delay),marginTop,radius:this._metric("transition",step.transition)};
     }
 
     private _drawStepCanvas(node:HTMLCanvasElement,step:RecorderSnapshotStep,size:{width:number;height:number;radius:number},ratio:number,viewer:Viewer):void{
@@ -494,7 +771,7 @@ class RecorderPlugin extends XOpatPlugin{
 
     private _stepColor(step:RecorderSnapshotStep):string{ if(this.recorder.stepCapturesVisualization(step)) return this.recorder.stepCapturesViewport(step)||this.recorder.stepCapturesNavigation(step)?"#ffd500":"#9dff00"; if(this.recorder.stepCapturesNavigation(step)||this.recorder.stepCapturesViewport(step)) return "#00d0ff"; return "#000"; }
     private _representativeZoom(step:RecorderSnapshotStep):number|undefined{return typeof step.zoomLevel==="number"?step.zoomLevel:step.navigation?.samples?.[step.navigation.samples.length-1]?.zoomLevel;}
-    private _findUIStep(index:number):StepNode|undefined{const step=this.recorder.getStep(index); return step?this.track.querySelector<StepNode>(`[data-id="${step.id}"]`)||undefined:undefined;}
+    private _findUIStep(index:number,viewerId?:UniqueViewerId):StepNode|undefined{const step=this.recorder.getStep(index,viewerId); return step?this.track.querySelector<StepNode>(`[data-id="${step.id}"]`)||undefined:undefined;}
     private _delayWidth(value:number):number{return Math.max(0,value)*DELAY_PX_PER_SECOND;}
     private _durationWidth(value:number):number{return Math.max(MIN_DURATION_WIDTH,MIN_DURATION_WIDTH+Math.max(0,value)*DURATION_PX_PER_SECOND);}
     private _durationOffset(elapsed:number,total:number):number{
@@ -518,36 +795,80 @@ class RecorderPlugin extends XOpatPlugin{
         return raw&&raw.trim()?raw.trim():`Slide ${index+1}`;
     }
 
-    private _renderSlideRows():void{
-        this.track.querySelectorAll<HTMLElement>("[data-slide-row='true']").forEach(node=>node.remove());
+    /**
+     * Build one lane container per viewer (a block child of the track). Steps
+     * are appended INTO their viewer's lane and flow inline from x=0, so step i
+     * in every lane lands at the same x (given equal per-index timing) — i.e.
+     * simultaneously-captured frames column-align. Does NOT add step nodes.
+     */
+    private _renderLanes():void{
         const viewers=((VIEWER_MANAGER.viewers||[]) as Viewer[]).filter(Boolean);
         const rowHeight=this._viewerRowHeight();
-        this.track.style.minHeight=`${rowHeight*Math.min(3, Math.max(1,viewers.length))}px`;
+        this.track.style.minHeight=`${rowHeight*Math.max(1,viewers.length)}px`;
+        const currentId=this._currentViewerId();
         viewers.forEach((viewer,index)=>{
-            const row=document.createElement("div");
-            row.dataset.slideRow="true";
-            row.className="absolute left-0 right-0 rounded-sm border border-base-300 pointer-events-none";
-            row.style.top=`${index*rowHeight}px`;
-            row.style.height=`${rowHeight}px`;
-            row.style.zIndex="0";
-            row.style.backgroundColor="rgba(255,255,255,0.03)";
+            const isCurrent=viewer.uniqueId===currentId;
+            const isArmed=this.armed.has(viewer.uniqueId);
+            const lane=document.createElement("div");
+            lane.dataset.lane=viewer.uniqueId;
+            lane.className=`relative rounded-sm border ${isCurrent?"border-info":"border-base-300"}`;
+            lane.style.height=`${rowHeight}px`;
+            lane.style.boxSizing="border-box";
+            lane.style.whiteSpace="nowrap";
+            lane.style.width="max-content";
+            lane.style.minWidth="100%";
+            lane.style.paddingLeft="30px"; // room for the arm toggle; equal across lanes → still aligned
+            lane.style.backgroundColor=isCurrent?"rgba(56,189,248,0.07)":"rgba(255,255,255,0.03)";
+            lane.style.boxShadow=isArmed?"inset 3px 0 0 rgb(220 38 38)":"none";
+
+            // Record-arm toggle (explicit capture target, independent of hover).
+            const arm=document.createElement("button");
+            arm.type="button";
+            arm.dataset.laneChrome="true";
+            arm.className=`btn btn-ghost btn-xs btn-square absolute ${isArmed?"text-error":"opacity-50"}`;
+            arm.style.left="2px"; arm.style.top="2px"; arm.style.zIndex="3"; arm.style.pointerEvents="auto";
+            arm.title=isArmed?"Armed for recording — click to disarm":"Arm this viewer for recording";
+            arm.innerHTML=`<span class="fa-auto ${isArmed?"fa-circle-dot":"fa-circle"}"></span>`;
+            arm.onclick=(event)=>{event.stopPropagation(); this._toggleArm(viewer.uniqueId);};
+            lane.appendChild(arm);
 
             const label=document.createElement("span");
+            label.dataset.laneChrome="true";
             label.className="absolute right-2 bottom-1 text-xs uppercase opacity-60 bg-base-100 px-1 rounded";
+            label.style.zIndex="3"; label.style.pointerEvents="auto"; label.style.cursor="pointer";
             const fullLabel=this._viewerLabel(viewer,index);
             label.textContent=this._shortLabel(fullLabel);
-            label.title=fullLabel;
-            label.style.pointerEvents="auto";
-            label.style.cursor="pointer";
-            label.onclick=(event)=>{
-                event.stopPropagation();
-                const expanded=label.dataset.expanded==="true";
-                label.dataset.expanded=expanded?"false":"true";
-                label.textContent=expanded?this._shortLabel(fullLabel):fullLabel;
-            };
-            row.appendChild(label);
-            this.track.appendChild(row);
+            label.title=`${fullLabel} — click to make current`;
+            label.onclick=(event)=>{event.stopPropagation(); this._setCurrentViewer(viewer.uniqueId);};
+            lane.appendChild(label);
+
+            this.track.appendChild(lane);
         });
+    }
+
+    /** Update lane tint / armed indicator in place (no step rebuild). */
+    private _refreshLaneChrome():void{
+        const currentId=this._currentViewerId();
+        this.track.querySelectorAll<HTMLElement>("[data-lane]").forEach(lane=>{
+            const vid=(lane.dataset.lane||"") as UniqueViewerId;
+            const isCurrent=vid===currentId, isArmed=this.armed.has(vid);
+            lane.classList.toggle("border-info",isCurrent);
+            lane.classList.toggle("border-base-300",!isCurrent);
+            lane.style.backgroundColor=isCurrent?"rgba(56,189,248,0.07)":"rgba(255,255,255,0.03)";
+            lane.style.boxShadow=isArmed?"inset 3px 0 0 rgb(220 38 38)":"none";
+            const arm=lane.querySelector<HTMLElement>("button[data-lane-chrome]");
+            if(arm){
+                arm.classList.toggle("text-error",isArmed);
+                arm.classList.toggle("opacity-50",!isArmed);
+                const s=arm.querySelector("span"); if(s) s.className=`fa-auto ${isArmed?"fa-circle-dot":"fa-circle"}`;
+                arm.title=isArmed?"Armed for recording — click to disarm":"Arm this viewer for recording";
+            }
+        });
+    }
+
+    private _toggleArm(viewerId:UniqueViewerId):void{
+        if(this.armed.has(viewerId)) this.armed.delete(viewerId); else this.armed.add(viewerId);
+        this._refreshLaneChrome();
     }
 
     private _getAnnotationsWrapper(viewerLike?:OpenSeadragon.Viewer):AnnWrap|null{
@@ -605,6 +926,7 @@ class RecorderPlugin extends XOpatPlugin{
     private _initEvents():void{
         this.recorder.addHandler("play",()=>{
             this.stopNavigationRecording(false);
+            if(this.isPlaying) return; // fan-out fires `play` once per viewer
             this.isPlaying=true;
             $("#presenter-play-icon span").addClass("timeline-play");
             this._syncPlayButton();
@@ -616,16 +938,21 @@ class RecorderPlugin extends XOpatPlugin{
             this.measureDelayPhase=true;
         });
         this.recorder.addHandler("stop",()=>{
+            if(this.recorder.isPlaying()) return; // other viewers still playing
             this.isPlaying=false;
             $("#presenter-play-icon span").removeClass("timeline-play");
             this._syncPlayButton();
             this._clearMeasureLoop();
         });
 
-        this.recorder.addHandler("enter",(e:{step:RecorderSnapshotStep;index:number;prevStep?:RecorderSnapshotStep})=>{
-            this._highlight(e.step,e.index);
-            const currentNode=this._findUIStep(e.index);
-            if(this.isPlaying&&currentNode){
+        this.recorder.addHandler("enter",(e:{viewerId?:UniqueViewerId;step:RecorderSnapshotStep;index:number;prevStep?:RecorderSnapshotStep})=>{
+            const activeId=this._resolveActiveViewerId();
+            const isActiveLane=!e.viewerId||!activeId||e.viewerId===activeId;
+            // Outline the entered step in its own lane (all viewers play in
+            // parallel); but only the active lane drives the single measure bar.
+            this._highlight(e.step,e.index,e.viewerId);
+            const currentNode=this.track.querySelector<StepNode>(`[data-id="${e.step.id}"]`)||undefined;
+            if(this.isPlaying&&isActiveLane&&currentNode){
                 this._ensureMeasureNode();
                 this._startMeasureLoop();
                 this.measureDelayPhase=false;
@@ -642,13 +969,38 @@ class RecorderPlugin extends XOpatPlugin{
         this.recorder.addHandler("create",(e:{viewerId:UniqueViewerId;step:RecorderSnapshotStep;index:number})=>{
             this._captureAnnotationsForStep(e.viewerId,e.step.id);
             USER_INTERFACE.Tools.notify(this._toolsMenuId);
+            // Each viewer's lane shows its own active recording; render the new
+            // step into the lane it was captured in.
             this._addUIStepFrom(e.viewerId,e.step,false,e.index);
-            this._highlight(e.step,e.index);
+            this._highlight(e.step,e.index,e.viewerId);
         });
         this.recorder.addHandler("remove",(e:{step:RecorderSnapshotStep})=>{const refs=this.annotationRefs[e.step.id]; refs?.forEach(o=>{const i=o.presenterSids?.indexOf(e.step.id)??-1; if(i>=0) o.presenterSids!.splice(i,1);});});
-        VIEWER_MANAGER.addHandler("viewer-create",()=>{this._resetAllUISteps();});
-        VIEWER_MANAGER.addHandler("viewer-destroy",()=>{this._resetAllUISteps();});
-        VIEWER_MANAGER.addHandler("viewer-reset",()=>this._resetAllUISteps());
+        // Recording lifecycle / switch → refresh button label, modal list, timeline.
+        const refreshRecordings=()=>{this._syncRecordingsButton(); this._refreshRecordingsModal(); this._resetAllUISteps();};
+        this.recorder.addHandler("recording-create",refreshRecordings);
+        this.recorder.addHandler("recording-delete",refreshRecordings);
+        this.recorder.addHandler("recording-rename",()=>{this._syncRecordingsButton(); this._refreshRecordingsModal();});
+        this.recorder.addHandler("recording-active",refreshRecordings);
+        // NOTE: intentionally NOT bound to `active-viewer-changed` — the recorder's
+        // current/armed viewers are explicit (lane click / arm toggle) and must not
+        // follow hover/focus. We only react to viewers appearing/disappearing.
+        VIEWER_MANAGER.addHandler("viewer-create",(e:any)=>{
+            const id=(e?.uniqueId||e?.viewer?.uniqueId) as UniqueViewerId|undefined;
+            if(id&&!this.currentViewerId) this.currentViewerId=id;
+            if(this.armed.size===0){const cur=this._currentViewerId(); if(cur) this.armed.add(cur);}
+            refreshRecordings();
+        });
+        VIEWER_MANAGER.addHandler("viewer-destroy",(e:any)=>{
+            const id=(e?.uniqueId||e?.viewer?.uniqueId) as UniqueViewerId|undefined;
+            if(id){
+                this.armed.delete(id);
+                const s=this.navSessions.get(id);
+                if(s){const r=this._getRenderer(s.viewer); if(r&&s.visualizationHandler) r.removeHandler("visualization-change",s.visualizationHandler); this.navSessions.delete(id); this._syncRecordPathButton();}
+                if(this.currentViewerId===id) this.currentViewerId=null; // reseeds on next read
+            }
+            refreshRecordings();
+        });
+        VIEWER_MANAGER.addHandler("viewer-reset",refreshRecordings);
         VIEWER_MANAGER.addHandler("module-loaded",(e:{id:string})=>{if(e.id==="annotations") this._handleInitAnnotationsModule();});
         VIEWER_MANAGER.addHandler("key-down",(e:KeyboardEvent&{focusCanvas?:boolean})=>{if(!e.focusCanvas) return; if(e.code==="KeyN") this.recorder.goToIndex(this.recorder.currentStepIndex()+1); else if(e.code==="KeyS") this.recorder.goToIndex(0);});
     }

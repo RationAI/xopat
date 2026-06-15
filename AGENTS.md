@@ -221,6 +221,8 @@ Lessons learned the hard way across past sessions. Each rule includes the *why* 
 ### Lifecycle / module wiring
 
 - **Eager-init singletons via `addModule(id, Class, true)`.** Calling `Class.instance()` before `addModule(id, Class)` throws `"no id given"` because `$id` is assigned inside `addModule`. If another module's constructor calls your `instance()`, register eagerly with the third argument.
+- **`data` / `cache` / `cookies` are reserved getter-only accessors on `XOpatElement`.** They expose the IO KV stores (`kv:data` / `kv:cache` / `kv:cookies`, see §3). Assigning `this.data = ...` in a plugin/module constructor throws `Cannot set property data of #<XOpatElement> which has only a getter`. Name your own fields something else.
+- **A directly-`new`ed `XOpatModule`'s `uid` is the *class* identity, not the owner's.** `super()` resolves the id from the class `$id` (e.g. `"module.menu-pages"`), shared by every owner that instantiates the module (e.g. `new AdvancedMenuPages(this.id)`). To scope menus/DOM ids/IO to the owning plugin, store and use the id passed to the constructor — don't key off `this.uid`.
 - **Key per-source state by `tiledImage.source.tileSourceId`, not `source.url`.** DICOMweb shares `baseUrl` across slides; URL keys collide silently and you'll see one slide's state leak onto another.
 - **`BackgroundConfig` snapshots `_rawValue` at construction.** Mid-flight mutations of `config.data[i]` do **not** propagate. Put custom tile sources on `background.dataReference`, never on `evt.data` after the fact.
 

@@ -196,6 +196,9 @@ export class AppBar {
         if (!disablePluginsUi) {
             this.Plugins.init(this.menu.getTab("plugins"));
         }
+        // Tools is a lazily-created category: it has no tab in the bar until
+        // something registers into it (and the tab is removed when emptied).
+        this.Tools.init(this);
     }
 
     /**
@@ -750,6 +753,120 @@ export class AppBar {
             }
             return true;
         },
+    }
+
+    /**
+     * App-bar "Tools" category — a generic, multi-owner registry for utility
+     * actions (profilers, inspectors, dev tools …). Unlike View/Edit/Plugins,
+     * the tab is **not** created at boot: it is added on the first
+     * `register(...)`. The Dropdown rebuilds its rows from `tab.items` on every
+     * open, so entries are added/removed incrementally; the whole tab is hidden
+     * (not destroyed — Dropdown tabs have no removeTab) once it is emptied, so
+     * the category only appears when something actually lives in it.
+     *
+     * @example
+     * USER_INTERFACE.AppBar.Tools.register('profiler.run', {
+     *     section: 'profile', sectionTitle: 'Profile',
+     *     label: 'Profile a recording', icon: 'ph-film-strip',
+     *     onClick: () => {...}
+     * });
+     * USER_INTERFACE.AppBar.Tools.setLabel('profiler.run', 'Stop profiling');
+     * USER_INTERFACE.AppBar.Tools.unregister('profiler.run');
+     */
+    Tools = {
+        init(appBar) {
+            this._appBar = appBar;
+            // Insertion order is preserved by Map and drives item/section order.
+            this._entries = new Map();
+            this._tab = null;
+        },
+
+        // Reuse an existing "tools" tab when present (survives plugin hot-reload
+        // without an AppBar rebuild); only create it on genuine first use.
+        _ensureTab() {
+            if (this._tab) return this._tab;
+            this._tab = this._appBar.menu.getTab('tools')
+                || this._appBar.addTab('tools', $.t('main.bar.tools'), 'ph-wrench');
+            return this._tab;
+        },
+
+        _ensureSection(tab, e) {
+            const section = e.section || 'default';
+            if (!tab.sections?.some(s => s.id === section)) {
+                tab.addSection({ id: section, title: e.sectionTitle || '', order: e.order ?? 0 });
+            }
+            return section;
+        },
+
+        _removeItem(id) {
+            const tab = this._tab;
+            const item = tab?.items?.[id];
+            if (item) {
+                item._node?.remove?.();
+                delete tab.items[id];
+            }
+        },
+
+        // Hide the whole tab (its root div) when empty, without destroying it.
+        _updateVisibility() {
+            this._tab?.setClass?.('toolsEmpty', this._entries.size ? '' : 'hidden');
+        },
+
+        /**
+         * Register (or replace) a tool entry. Missing keys on replace are kept.
+         * @param {string} id unique entry id (namespace by owner, e.g. "profiler.run")
+         * @param {object} opts {section, sectionTitle, label, icon, hint, disabled, children, onClick, order}
+         * @returns {string} the id
+         */
+        register(id, opts = {}) {
+            if (!id || typeof id !== 'string') throw new Error('AppBar.Tools.register: id required');
+            const prev = this._entries.get(id);
+            const e = { ...prev, ...opts };
+            this._entries.set(id, e);
+
+            const tab = this._ensureTab();
+            const section = this._ensureSection(tab, e);
+            if (prev) this._removeItem(id); // replace cleanly on re-register
+            tab.addItem({
+                id, section,
+                icon: e.icon || 'ph-wrench',
+                label: e.label,
+                hint: e.hint,
+                disabled: e.disabled,
+                children: e.children,
+                onClick: e.onClick,
+            });
+            this._updateVisibility();
+            return id;
+        },
+
+        /** Remove an entry; hides the whole Tools tab when the last one goes. */
+        unregister(id) {
+            if (!this._entries.delete(id)) return false;
+            this._removeItem(id);
+            this._updateVisibility();
+            return true;
+        },
+
+        /** Relabel an entry in place. */
+        setLabel(id, label) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.label = label;
+            this._tab?.setItemLabel?.(id, label);
+            return true;
+        },
+
+        /** Enable/disable an entry in place. */
+        setDisabled(id, disabled) {
+            const e = this._entries.get(id);
+            if (!e) return false;
+            e.disabled = !!disabled;
+            this._tab?.setItemDisabled?.(id, disabled);
+            return true;
+        },
+
+        has(id) { return this._entries.has(id); },
     }
 
     Edit = {

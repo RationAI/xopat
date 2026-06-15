@@ -1,6 +1,6 @@
 {
   "id": "youtrack-feedback",
-  "name": "Feedback Form for xOpat",
+  "name": "Youtrack Feedback Form",
   "description": "Provide direct feedback about xOpat to YouTrack Dashboard",
   "includes" : [
     "feedback-form.js"

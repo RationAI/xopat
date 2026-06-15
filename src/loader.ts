@@ -3142,14 +3142,57 @@ form.submit();
     //     VIEWER.raiseEvent('mouse-up', e);
     // });
 
+    /**
+     * Resolve the explicit, author-given background id for a viewer's SLOT,
+     * i.e. `config.background[activeBackgroundIndex[slot]].id`. This is the
+     * authoritative identity: two viewports backed by the same data but mounted
+     * on distinct background entries (distinct `id`s) must get distinct unique
+     * ids, regardless of which `getConfig("background")` happens to be attached
+     * to the (potentially shared) world item. Returns undefined when the slot
+     * or the per-slot selection can't be resolved yet (boot/transient), so the
+     * caller falls back to the world-item lookup.
+     */
+    function explicitSlotBackgroundId(viewer: OpenSeadragon.Viewer): string | undefined {
+        try {
+            const vm: any = (window as any).VIEWER_MANAGER;
+            const slot: number = vm?.viewers?.indexOf?.(viewer) ?? -1;
+            if (!(slot >= 0)) return undefined;
+            const sel = APPLICATION_CONTEXT.getOption("activeBackgroundIndex", undefined, true, true);
+            const arr: any[] | null = Array.isArray(sel) ? sel : (Number.isInteger(sel) ? [sel] : null);
+            if (!arr) return undefined;
+            const idx = arr[slot];
+            const backgrounds: any[] = Array.isArray(APPLICATION_CONTEXT.config.background) ? APPLICATION_CONTEXT.config.background : [];
+            const bg = Number.isInteger(idx) ? backgrounds[idx as number] : undefined;
+            return bg && typeof bg.id === "string" ? bg.id : undefined;
+        } catch (_e) {
+            return undefined;
+        }
+    }
+
     function findViewerUniqueId(viewer: OpenSeadragon.Viewer): UniqueViewerId | undefined {
-        let result = viewer.__cachedUUID;
-        if (result) return result;
+        // Once we've locked the authoritative (explicit per-slot) id, reuse it.
+        if (viewer.__cachedUUID && viewer.__uuidExplicit) return viewer.__cachedUUID;
 
         // Empty world is transient during reset/boot — return undefined
         // silently instead of the warn+auto-generate path below.
-        if (!viewer.world || viewer.world.getItemCount() === 0) return undefined;
+        if (!viewer.world || viewer.world.getItemCount() === 0) return viewer.__cachedUUID || undefined;
 
+        // Authoritative: the explicit per-slot background id. Honours distinct
+        // author-assigned `id`s even when two slots share the same data (whose
+        // shared world-item config would otherwise collapse both to one id).
+        // Re-attempted until it resolves (the per-slot selection may commit
+        // slightly after the first read), then locked via `__uuidExplicit` so
+        // a transient boot-time fallback id cannot shadow it.
+        const explicit = explicitSlotBackgroundId(viewer);
+        if (explicit) {
+            viewer.__uuidExplicit = true;
+            return (viewer.__cachedUUID = explicit);
+        }
+
+        // Non-authoritative fallback (kept cached as before for stability).
+        if (viewer.__cachedUUID) return viewer.__cachedUUID;
+
+        let result = viewer.__cachedUUID;
         let firstItem = null;
         for (let itemIndex = 0; itemIndex < viewer.world.getItemCount(); itemIndex++) {
             const item: OpenSeadragon.TiledImage = viewer.world.getItemAt(itemIndex);
@@ -4220,6 +4263,7 @@ form.submit();
 
             try {
                 delete viewer.__cachedUUID;
+                delete viewer.__uuidExplicit;
                 (viewer as any).__managerDeleting = true;
                 viewer.destroy();
             } catch (e) {
@@ -4263,6 +4307,16 @@ form.submit();
             const viewer = this.viewers[index];
             if (!viewer) return;
 
+            // Suspend the flex-drawer (depth-counted, so it nests safely inside
+            // an open-pipeline transaction) before removing world items: each
+            // remove-item schedules an async rebuild, and running it against a
+            // half-torn-down world crashes `runRebuild`. Any reset path is now
+            // protected, not only those wrapped by `beginViewerRenderTransaction`.
+            const drawer: any = (viewer as any).drawer;
+            const navigatorDrawer: any = (viewer as any).navigator?.drawer;
+            try { drawer?.suspendRendering?.("xopat-reset"); } catch (e) { console.warn("Flex drawer suspendRendering failed.", e); }
+            try { navigatorDrawer?.suspendRendering?.("xopat-reset"); } catch (e) { console.warn("Navigator flex drawer suspendRendering failed.", e); }
+
             try {
                 // Clear all items
                 if (viewer.world && viewer.world.getItemCount() > 0) {
@@ -4284,9 +4338,13 @@ form.submit();
                 } // else no need to call reset, not opened
 
                 delete viewer.__cachedUUID;
+                delete viewer.__uuidExplicit;
             } catch (e) {
                 console.warn("Viewer reset failed - will recreate. Cause:", e);
                 this.add(index); //recreate force
+            } finally {
+                try { navigatorDrawer?.resumeRendering?.("xopat-reset"); } catch (e) { console.warn("Navigator flex drawer resumeRendering failed.", e); }
+                try { drawer?.resumeRendering?.("xopat-reset"); } catch (e) { console.warn("Flex drawer resumeRendering failed.", e); }
             }
         };
     }

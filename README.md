@@ -5,10 +5,9 @@
 
 ![The xOpat Viewer](docs/assets/xopat-banner-v3.png)
 
-> ⚠️ **This is xOpat v3 — an alpha release.** APIs and configuration are still
-> evolving and may change without notice. For production use, the older but
+> ⚠️ **This is xOpat v3 — an alpha release.** The older but
 > stable **v2** line lives on the [`archive/v2`](https://github.com/RationAI/xopat/tree/archive/v2)
-> branch.
+> branch. If you experience anny issues, please, let us know.
 
 ## What is xOpat?
 
