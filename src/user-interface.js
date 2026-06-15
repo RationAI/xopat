@@ -511,7 +511,11 @@ onclick="window.DropDown._calls[${i}]();">${icon}${opts.title}</a></li>`);
                     this._textTimeout = setTimeout(() => {
                         this._textTimeout = null;
                         this._allowDescription = true;
-                        if (this.isVisible()) loader.text(true);
+                        // Use the namespace's own text() — NOT jQuery's
+                        // loader.text(true), which would overwrite the loader's
+                        // children (spinner + title nodes) with the literal
+                        // string "true", leaving the overlay up with no spinner.
+                        if (this.isVisible()) this.text(true);
                     }, 3000);
                 } else {
                     if (this._textTimeout) {
